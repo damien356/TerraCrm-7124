@@ -79,8 +79,18 @@
           "defaultChannel": "default"
         }
       ],
-      "expo-splash-screen"
+      "expo-splash-screen",
+      "expo-updates"
     ],
-    "owner": "terra-flooring"
+    "owner": "terra-flooring",
+    "updates": {
+      "enabled": true,
+      "url": "https://u.expo.dev/b38734e2-f558-43ce-86f4-a6ea2cafa28b",
+      "fallbackToCacheTimeout": 0,
+      "checkAutomatically": "ON_LOAD"
+    },
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    }
   }
 }

@@ -12,7 +12,7 @@ import {
   Poppins_500Medium,
   Poppins_600SemiBold,
 } from "@expo-google-fonts/poppins";
-import { ActivityIndicator, View } from "react-native";
+import { ActivityIndicator, AppState, View } from "react-native";
 import { ErrorBoundary } from "../components/__ErrorBoundary";
 import { OneDollarStatsProvider } from "../lib/__analytics";
 import { isWeb, startWebSafeArea } from "../lib/__web-safe-area";
@@ -24,6 +24,7 @@ import {
   pushSupported,
   registerForPush,
 } from "../lib/push";
+import { stageUpdate, updatesSupported } from "../lib/updates";
 import { useWhoami } from "../queries/session";
 import { Colors } from "../constants/theme";
 import appJson from "../app.json";
@@ -72,6 +73,18 @@ function Navigation() {
     });
     void clearBadge();
   }, [session.data]);
+
+  // Look for a new over-the-air build when the app comes back to the front, and
+  // stage it quietly. It takes effect on the next cold start, so nobody loses
+  // what they were typing. Phones that sit open for days still catch up.
+  useEffect(() => {
+    if (!updatesSupported) return;
+    void stageUpdate();
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") void stageUpdate();
+    });
+    return () => sub.remove();
+  }, []);
 
   // Tapping an alert opens the job it is about.
   useEffect(() => {

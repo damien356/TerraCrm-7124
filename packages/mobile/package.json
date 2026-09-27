@@ -33,6 +33,7 @@
     "expo-secure-store": "~57.0.3",
     "expo-splash-screen": "~57.0.8",
     "expo-status-bar": "~57.0.1",
+    "expo-updates": "~57.0.23",
     "expo-web-browser": "~57.0.2",
     "hono": "^4.12.10",
     "onedollarstats": "^0.0.23",

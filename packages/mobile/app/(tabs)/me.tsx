@@ -6,8 +6,19 @@ import { Colors, Fonts, tintFor } from "@/constants/theme";
 import { authClient } from "@/lib/auth";
 import { crewLabel, daysUntil, fmtDateTime, fmtDayLabel, fmtMoney } from "@/lib/format";
 import { useHistory, useMe, useSetLocationConsent } from "@/queries/field";
+import { currentUpdate, updatesSupported } from "@/lib/updates";
+import appJson from "@/app.json";
 
 const c = Colors.light;
+
+/** One line naming the exact build, so a support call can start with facts. */
+function buildLine() {
+  const version = appJson.expo.version;
+  if (!updatesSupported) return `Terra ${version}`;
+  const u = currentUpdate();
+  const build = u.isEmbedded ? "store build" : `update ${(u.updateId ?? "").slice(0, 8)}`;
+  return `Terra ${version} · ${u.channel} · ${build}`;
+}
 
 function Tile({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
@@ -335,6 +346,21 @@ export default function MeScreen() {
             >
               <Text style={{ fontFamily: Fonts.medium, fontSize: 15, color: c.destructive }}>Sign out</Text>
             </Pressable>
+
+            {/* Which build this phone is on. Read it out when reporting a problem,
+                and use it to confirm an update or a rollback actually landed. */}
+            <Text
+              style={{
+                fontFamily: Fonts.sans,
+                fontSize: 11,
+                color: c.mutedForeground,
+                textAlign: "center",
+                marginTop: 16,
+                marginBottom: 8,
+              }}
+            >
+              {buildLine()}
+            </Text>
           </>
         )}
       </ScrollView>

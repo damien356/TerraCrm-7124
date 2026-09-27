@@ -59,7 +59,7 @@ export default function LoginScreen() {
               style={{ width: 128, height: 160, marginBottom: 20 }}
             />
             <Text style={{ fontFamily: Fonts.bold, fontSize: 28, color: "#FFFFFF", lineHeight: 34 }}>
-              Terra Ops
+              Terra
             </Text>
             <Text style={{ fontFamily: Fonts.sans, fontSize: 14, color: "rgba(255,255,255,0.55)", marginTop: 6 }}>
               Your work for the day, your offers, and your pay. Nothing else.
