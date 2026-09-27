@@ -12,6 +12,10 @@ export const ping = base.handler(() => ({ message: `Pong! ${Date.now()}` }));
  * value. Safe to leave in place: it exposes no data and no credentials.
  */
 export const diag = base.handler(async () => {
+  // Bumped whenever this check changes, so the live answer says which build is
+  // actually running rather than leaving us to guess whether a publish landed.
+  const diagVersion = 3;
+
   const env = {
     databaseUrl: Boolean(process.env.DATABASE_URL),
     databaseAuthToken: Boolean(process.env.DATABASE_AUTH_TOKEN),
@@ -58,8 +62,10 @@ export const diag = base.handler(async () => {
   const steps = {
     selectProfiles: await step(() => db.select().from(schema.profiles).limit(1)),
     selectUsers: await step(() => db.run(sql`select count(*) from "user"`)),
+    selectSessions: await step(() => db.run(sql`select count(*) from "session"`)),
+    writeProbe: await step(() => db.run(sql`create temporary table __probe (x integer)`)),
     getSession: await step(() => auth.api.getSession({ headers: new Headers() })),
   };
 
-  return { env, databaseHost, database, steps };
+  return { diagVersion, env, databaseHost, database, steps };
 });
