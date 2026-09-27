@@ -17,7 +17,7 @@ Lives entirely in `packages/web`. The phone already knows how to ask for it.
 - Database columns and tables, migrations
 - Who can see what (roles and permissions, server side)
 - Push notification wording and when one fires
-- Emails, SMS, ServiceM8 sync, supplier imports
+- Emails, SMS, supplier price imports
 - Anything the app only ever displays from a server response
 
 Nothing is sent to the phone. No app update of any kind. This is the cheapest
