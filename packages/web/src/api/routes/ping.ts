@@ -1,8 +1,10 @@
+import { ORPCError } from "@orpc/server";
 import { sql } from "drizzle-orm";
 import { base } from "../__core/app";
 import { auth } from "../auth";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { withUser } from "../middleware/auth";
 
 export const ping = base.handler(() => ({ message: `Pong! ${Date.now()}` }));
 
@@ -14,7 +16,7 @@ export const ping = base.handler(() => ({ message: `Pong! ${Date.now()}` }));
 export const diag = base.handler(async () => {
   // Bumped whenever this check changes, so the live answer says which build is
   // actually running rather than leaving us to guess whether a publish landed.
-  const diagVersion = 3;
+  const diagVersion = 4;
 
   const env = {
     databaseUrl: Boolean(process.env.DATABASE_URL),
@@ -69,3 +71,22 @@ export const diag = base.handler(async () => {
 
   return { diagVersion, env, databaseHost, database, steps };
 });
+
+/**
+ * Does this build still answer "not signed in" properly? A plain 401 here means
+ * error handling is intact; a 500 means the deployed bundle cannot report a
+ * normal refusal, which is what makes every gated route look broken.
+ */
+export const diagThrow = base.handler(() => {
+  throw new ORPCError("UNAUTHORIZED", { message: "Deliberate probe" });
+});
+
+/**
+ * Runs the real auth middleware against the real request headers, with no
+ * session attached. Reports what it resolved instead of refusing, so a failure
+ * inside the middleware is visible rather than hidden behind a 500.
+ */
+export const diagActor = withUser.handler(({ context }) => ({
+  resolved: context.actor !== null,
+  role: context.actor?.role ?? null,
+}));

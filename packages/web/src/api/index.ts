@@ -1,7 +1,7 @@
 import type { RouterClient } from "@orpc/server";
 import { createApp } from "./__core/app";
 import { auth } from "./auth";
-import { ping, diag } from "./routes/ping";
+import { ping, diag, diagThrow, diagActor } from "./routes/ping";
 import { settings } from "./routes/settings";
 import { contacts } from "./routes/contacts";
 import { companies, sites } from "./routes/companies";
@@ -37,6 +37,8 @@ export const router = {
   ping,
   /** Deploy check: can the live server reach the database. No data, no secrets. */
   diag,
+  diagThrow,
+  diagActor,
   settings,
   contacts,
   companies,
