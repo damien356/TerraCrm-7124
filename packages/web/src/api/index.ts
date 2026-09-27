@@ -1,7 +1,7 @@
 import type { RouterClient } from "@orpc/server";
 import { createApp } from "./__core/app";
 import { auth } from "./auth";
-import { ping } from "./routes/ping";
+import { ping, diag } from "./routes/ping";
 import { settings } from "./routes/settings";
 import { contacts } from "./routes/contacts";
 import { companies, sites } from "./routes/companies";
@@ -35,6 +35,8 @@ import { devices } from "./routes/devices";
 // signed-in installer). Pricing never leaves the admin routes.
 export const router = {
   ping,
+  /** Deploy check: can the live server reach the database. No data, no secrets. */
+  diag,
   settings,
   contacts,
   companies,
