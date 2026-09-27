@@ -1,6 +1,8 @@
 import { sql } from "drizzle-orm";
 import { base } from "../__core/app";
+import { auth } from "../auth";
 import { db } from "../database";
+import * as schema from "../database/schema";
 
 export const ping = base.handler(() => ({ message: `Pong! ${Date.now()}` }));
 
@@ -39,5 +41,25 @@ export const diag = base.handler(async () => {
     };
   }
 
-  return { env, databaseHost, database };
+  // Each step a real request takes, tried on its own so the first failure is
+  // named instead of collapsing into a bare 500.
+  const step = async (run: () => Promise<unknown>) => {
+    try {
+      await run();
+      return { ok: true as const };
+    } catch (error) {
+      return {
+        ok: false as const,
+        error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      };
+    }
+  };
+
+  const steps = {
+    selectProfiles: await step(() => db.select().from(schema.profiles).limit(1)),
+    selectUsers: await step(() => db.run(sql`select count(*) from "user"`)),
+    getSession: await step(() => auth.api.getSession({ headers: new Headers() })),
+  };
+
+  return { env, databaseHost, database, steps };
 });
