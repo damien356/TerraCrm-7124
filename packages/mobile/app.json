@@ -1,0 +1,86 @@
+{
+  "expo": {
+    "icon": "./assets/icon.png",
+    "android": {
+      "package": "au.com.terraflooring.terra",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#1C1B1A"
+      },
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.CALL_PHONE",
+        "android.permission.VIBRATE"
+      ]
+    },
+    "extra": {
+      "apiUrl": "https://terraop-l8jfdfu-preview-4200.runable.site/",
+      "applicationId": "terraop-l8jfdfu",
+      "runableAuthIssuer": "https://api.runable.com/api/auth",
+      "router": {},
+      "eas": {
+        "projectId": "b38734e2-f558-43ce-86f4-a6ea2cafa28b"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "au.com.terraflooring.terra",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Terra uses the camera for job photos: the damage walk before you start, progress shots, and the completion photos the office needs to invoice.",
+        "NSPhotoLibraryUsageDescription": "Terra needs your photo library so you can attach existing job photos and site plans.",
+        "NSPhotoLibraryAddUsageDescription": "Terra saves job photos back to your camera roll so you keep your own copy.",
+        "NSLocationWhenInUseUsageDescription": "Terra shares your location with the office only while you have a job running, so they can see the crew on the map. It stops when you mark the job complete."
+      }
+    },
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "cover",
+      "backgroundColor": "#1C1B1A"
+    },
+    "name": "Terra",
+    "slug": "terra",
+    "version": "1.0.0",
+    "scheme": "runable-terraop-l8jfdfu",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-web-browser",
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Terra shares your location with the office only while you have a job running, so they can see the crew on the map. It stops when you mark the job complete."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Terra needs your photo library so you can attach existing job photos and site plans.",
+          "cameraPermission": "Terra uses the camera for job photos: the damage walk before you start, progress shots, and the completion photos the office needs to invoice."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#1C1B1A",
+          "defaultChannel": "default"
+        }
+      ],
+      "expo-splash-screen"
+    ],
+    "owner": "terra-flooring"
+  }
+}

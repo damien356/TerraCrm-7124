@@ -1,0 +1,714 @@
+import * as React from "react";
+import { useLocation } from "wouter";
+import { AlertTriangle, Check, HardHat, Plus, Star, Trash2 } from "lucide-react";
+import { Page } from "../components/layout";
+import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
+import { Modal } from "../components/ui/modal";
+import { InstallerRatesTab } from "../components/labour";
+import {
+  useCreateInstaller,
+  useInstaller,
+  useInstallers,
+  useSetInstallerSkill,
+  useUpdateInstaller,
+} from "../queries/installers";
+import { useBootstrap } from "../queries/settings";
+import {
+  useAddUnavailabilityFromText,
+  useRemoveUnavailability,
+  useUnavailability,
+} from "../queries/availability";
+
+const CREW_CAPACITY: Record<string, string> = {
+  solo: "Works solo",
+  own_offsider: "Brings his own offsider",
+  needs_partner: "Needs a partner",
+};
+
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
+
+function dateInput(value: Date | string | null) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toISOString().slice(0, 10);
+}
+
+function expiryTone(value: Date | string | null) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  const days = Math.round((d.getTime() - Date.now()) / 86_400_000);
+  if (days < 0) return { colour: "#B4342A", label: `expired ${Math.abs(days)}d ago` };
+  if (days <= 30) return { colour: "#D08A1E", label: `${days}d left` };
+  return { colour: "#3F7D3A", label: d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "2-digit" }) };
+}
+
+/* ---------------------------- new installer ---------------------------- */
+
+function NewInstallerModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const create = useCreateInstaller();
+  const [form, setForm] = React.useState({
+    name: "",
+    mobile: "",
+    email: "",
+    crewCapacity: "solo" as "solo" | "own_offsider" | "needs_partner",
+    serviceArea: "",
+    abn: "",
+    colour: "#4A7FA5",
+    notes: "",
+  });
+  const [error, setError] = React.useState<string | null>(null);
+
+  function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
+    setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  async function submit() {
+    setError(null);
+    try {
+      await create.mutateAsync({
+        name: form.name,
+        mobile: form.mobile || null,
+        email: form.email || null,
+        crewCapacity: form.crewCapacity,
+        serviceArea: form.serviceArea || null,
+        abn: form.abn || null,
+        colour: form.colour,
+        notes: form.notes || null,
+      });
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="New installer"
+      subtitle="Add the man first, then tick the skills he's allowed to be dispatched for."
+      width="max-w-xl"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={!form.name || create.isPending}>
+            {create.isPending ? <Spinner className="border-white/40 border-t-white" /> : null}
+            Add installer
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Name" className="sm:col-span-2">
+          <Input value={form.name} onChange={(e) => set("name", e.target.value)} />
+        </Field>
+        <Field label="Mobile">
+          <Input value={form.mobile} onChange={(e) => set("mobile", e.target.value)} placeholder="0412 345 678" />
+        </Field>
+        <Field label="Email" hint="Used for their app invite later">
+          <Input value={form.email} onChange={(e) => set("email", e.target.value)} />
+        </Field>
+        <Field label="Crew capacity" hint="Decides who can take a 2-man task alone">
+          <Select
+            value={form.crewCapacity}
+            onChange={(e) => set("crewCapacity", e.target.value as typeof form.crewCapacity)}
+          >
+            <option value="solo">Works solo</option>
+            <option value="own_offsider">Brings his own offsider</option>
+            <option value="needs_partner">Needs a partner</option>
+          </Select>
+        </Field>
+        <Field label="Service area">
+          <Input
+            value={form.serviceArea}
+            onChange={(e) => set("serviceArea", e.target.value)}
+            placeholder="Gold Coast, Tweed"
+          />
+        </Field>
+        <Field label="ABN">
+          <Input value={form.abn} onChange={(e) => set("abn", e.target.value)} />
+        </Field>
+        <Field label="Board colour">
+          <input
+            type="color"
+                aria-label="Colour"
+            value={form.colour}
+            onChange={(e) => set("colour", e.target.value)}
+            className="h-9 w-full cursor-pointer rounded-md border border-border bg-card px-1"
+          />
+        </Field>
+        <Field label="Notes" className="sm:col-span-2">
+          <Textarea rows={2} value={form.notes} onChange={(e) => set("notes", e.target.value)} />
+        </Field>
+      </div>
+      {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
+    </Modal>
+  );
+}
+
+/* ------------------------- skills + card editor ------------------------- */
+
+function SkillRow({
+  installerId,
+  skill,
+  link,
+}: {
+  installerId: number;
+  skill: { id: number; name: string; groupName: string; defaultCrewSize: number };
+  link?: { rateType: string; rate: number | null; canLead: boolean };
+}) {
+  const setSkill = useSetInstallerSkill();
+  const enabled = !!link;
+
+  function save(patch: { enabled?: boolean; rateType?: string; rate?: number | null; canLead?: boolean }) {
+    setSkill.mutate({
+      installerId,
+      skillId: skill.id,
+      enabled: patch.enabled ?? enabled,
+      rateType: (patch.rateType ?? link?.rateType ?? "per_m2") as "per_m2" | "hourly" | "per_job" | "day_rate",
+      rate: patch.rate !== undefined ? patch.rate : (link?.rate ?? null),
+      canLead: patch.canLead ?? link?.canLead ?? true,
+    });
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 last:border-0">
+      <label htmlFor={`installers_cb1`} className="flex min-w-[190px] flex-1 items-center gap-2 text-sm">
+        <Checkbox id={`installers_cb1`} checked={enabled} onChange={(e) => save({ enabled: e.target.checked })} />
+        <span className={enabled ? "font-medium" : "text-muted-foreground"}>{skill.name}</span>
+        {skill.defaultCrewSize > 1 ? <Badge>2 man</Badge> : null}
+      </label>
+
+      {/* Pay used to be typed here, one rate per skill. It now lives on the
+          Rates tab: per work item, effective dated, and it keeps its history. */}
+      <label htmlFor={`installers_cb2`} className="flex w-[92px] items-center gap-1.5 text-xs text-muted-foreground">
+        <Checkbox id={`installers_cb2`}
+          checked={link?.canLead ?? false}
+          disabled={!enabled}
+          onChange={(e) => save({ canLead: e.target.checked })}
+        />
+        Can lead
+      </label>
+    </div>
+  );
+}
+
+const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function prettyRange(from: string | null, to: string | null) {
+  if (!from) return "";
+  const fmt = (d: string) =>
+    new Date(`${d}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+  return from === to ? fmt(from) : `${fmt(from)} → ${fmt(to ?? from)}`;
+}
+
+/**
+ * Blackout dates. He types it how he'd say it and we parse it into real blocked
+ * dates — the booking check is server-side, not a warning on the screen.
+ */
+function BlackoutCard({ installerId }: { installerId: number }) {
+  const rows = useUnavailability(installerId);
+  const addFromText = useAddUnavailabilityFromText();
+  const remove = useRemoveUnavailability();
+  const [text, setText] = React.useState("");
+  const [error, setError] = React.useState<string | null>(null);
+
+  async function submit() {
+    if (text.trim().length < 2) return;
+    setError(null);
+    try {
+      await addFromText.mutateAsync({ installerId, text });
+      setText("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-border">
+      <CardHeader
+        title="Days he can't work"
+        subtitle="Type it how you'd say it. He won't be offered or booked on these days."
+      />
+      <div className="flex flex-col gap-2 px-4 pb-3">
+        <div className="flex gap-2">
+          <Input
+            value={text}
+            placeholder="off Dec 1-17, Japan trip"
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void submit();
+            }}
+          />
+          <Button variant="secondary" onClick={submit} disabled={addFromText.isPending}>
+            {addFromText.isPending ? <Spinner /> : null}
+            Block it
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Works with "never works weekends", "no Mondays", "away 24 Dec - 5 Jan", "off 3/12".
+        </p>
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      </div>
+      {rows.isLoading ? (
+        <Loading />
+      ) : (rows.data ?? []).length === 0 ? (
+        <p className="px-4 pb-4 text-sm text-muted-foreground">Nothing blocked — available any working day.</p>
+      ) : (
+        <ul className="border-t border-border">
+          {(rows.data ?? []).map((r) => {
+            const days = (() => {
+              try {
+                const parsed: unknown = JSON.parse(r.weekdayMask);
+                return Array.isArray(parsed) ? parsed.filter((n): n is number => typeof n === "number") : [];
+              } catch {
+                return [];
+              }
+            })();
+            return (
+              <li key={r.id} className="flex items-center gap-3 border-b border-border px-4 py-2 last:border-b-0">
+                <div className="flex-1">
+                  <p className="text-sm font-medium">
+                    {r.kind === "recurring"
+                      ? `Never works ${days.map((d) => WEEKDAY_SHORT[d]).join(", ")}`
+                      : prettyRange(r.fromDate, r.toDate)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {r.reason || "No reason given"}
+                    {r.rawText ? ` · you typed: "${r.rawText}"` : ""}
+                  </p>
+                </div>
+                <Badge colour={r.kind === "recurring" ? "#7A736D" : "#C0603F"}>
+                  {r.kind === "recurring" ? "Standing rule" : "Blocked"}
+                </Badge>
+                <button
+                  type="button"
+                  aria-label="Remove"
+                  onClick={() => remove.mutate({ id: r.id })}
+                  className="text-muted-foreground hover:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function InstallerPanel({ id, onClose }: { id: number; onClose: () => void }) {
+  const [panel, setPanel] = React.useState<"card" | "rates">("card");
+  const detail = useInstaller(id);
+  const bootstrap = useBootstrap();
+  const update = useUpdateInstaller();
+  const [error, setError] = React.useState<string | null>(null);
+  const [form, setForm] = React.useState<{
+    name: string;
+    mobile: string;
+    email: string;
+    crewCapacity: "solo" | "own_offsider" | "needs_partner";
+    serviceArea: string;
+    abn: string;
+    colour: string;
+    insuranceExpiry: string;
+    licenceExpiry: string;
+    unavailableDays: number[];
+    starRating: number;
+    creditLimit: string;
+    notes: string;
+    active: boolean;
+  } | null>(null);
+
+  const installer = detail.data?.installer;
+
+  React.useEffect(() => {
+    if (!installer) return;
+    setForm({
+      name: installer.name,
+      mobile: installer.mobile ?? "",
+      email: installer.email ?? "",
+      crewCapacity: installer.crewCapacity as "solo" | "own_offsider" | "needs_partner",
+      serviceArea: installer.serviceArea ?? "",
+      abn: installer.abn ?? "",
+      colour: installer.colour,
+      insuranceExpiry: dateInput(installer.insuranceExpiry),
+      licenceExpiry: dateInput(installer.licenceExpiry),
+      unavailableDays: installer.unavailableDays,
+      starRating: installer.starRating,
+      creditLimit: String(installer.creditLimit ?? 0),
+      notes: installer.notes ?? "",
+      active: installer.active,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- hydrate the form only when a different installer is opened
+  }, [installer?.id]);
+
+  function set<K extends keyof NonNullable<typeof form>>(key: K, value: NonNullable<typeof form>[K]) {
+    setForm((f) => (f ? { ...f, [key]: value } : f));
+  }
+
+  async function save() {
+    if (!form) return;
+    setError(null);
+    try {
+      await update.mutateAsync({
+        id,
+        name: form.name,
+        mobile: form.mobile || null,
+        email: form.email || null,
+        crewCapacity: form.crewCapacity,
+        serviceArea: form.serviceArea || null,
+        abn: form.abn || null,
+        colour: form.colour,
+        insuranceExpiry: form.insuranceExpiry ? new Date(`${form.insuranceExpiry}T00:00:00`) : null,
+        licenceExpiry: form.licenceExpiry ? new Date(`${form.licenceExpiry}T00:00:00`) : null,
+        unavailableDays: form.unavailableDays,
+        starRating: form.starRating,
+        creditLimit: Number(form.creditLimit) || 0,
+        notes: form.notes || null,
+        active: form.active,
+      });
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  const skills = bootstrap.data?.allSkills ?? [];
+  const linkBySkill = new Map((detail.data?.skills ?? []).map((s) => [s.skillId, s]));
+  const groups = Array.from(new Set(skills.map((s) => s.groupName)));
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={installer?.name ?? "Installer"}
+      subtitle="Skills, rates and availability. He can only ever be offered a task he's ticked for."
+      width={panel === "rates" ? "max-w-5xl" : "max-w-3xl"}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+          {panel === "card" ? (
+            <Button onClick={save} disabled={!form || update.isPending}>
+              {update.isPending ? <Spinner className="border-white/40 border-t-white" /> : null}
+              Save card
+            </Button>
+          ) : null}
+        </>
+      }
+    >
+      {/* Two views on the one man: his details, and what Terra pays him. */}
+      <div className="mb-4 flex gap-1 rounded-lg border border-border bg-background p-1">
+        {([
+          { id: "card", label: "His card" },
+          { id: "rates", label: "Rates" },
+        ] as const).map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setPanel(t.id)}
+            className={
+              panel === t.id
+                ? "rounded-md bg-[var(--sidebar)] px-3 py-1.5 text-sm font-medium text-white"
+                : "rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+            }
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {panel === "rates" ? <InstallerRatesTab installerId={id} /> : null}
+
+      {panel === "card" && (detail.isLoading || !form) ? <Loading /> : null}
+      {panel === "card" && !(detail.isLoading || !form) ? (
+        <div className="flex flex-col gap-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Name">
+              <Input value={form.name} onChange={(e) => set("name", e.target.value)} />
+            </Field>
+            <Field label="Mobile">
+              <Input value={form.mobile} onChange={(e) => set("mobile", e.target.value)} />
+            </Field>
+            <Field label="Email">
+              <Input value={form.email} onChange={(e) => set("email", e.target.value)} />
+            </Field>
+            <Field label="Crew capacity">
+              <Select
+                value={form.crewCapacity}
+                onChange={(e) => set("crewCapacity", e.target.value as typeof form.crewCapacity)}
+              >
+                <option value="solo">Works solo</option>
+                <option value="own_offsider">Brings his own offsider</option>
+                <option value="needs_partner">Needs a partner</option>
+              </Select>
+            </Field>
+            <Field label="Service area">
+              <Input value={form.serviceArea} onChange={(e) => set("serviceArea", e.target.value)} />
+            </Field>
+            <Field label="ABN">
+              <Input value={form.abn} onChange={(e) => set("abn", e.target.value)} />
+            </Field>
+            <Field label="Insurance expiry">
+              <Input
+                type="date"
+                value={form.insuranceExpiry}
+                onChange={(e) => set("insuranceExpiry", e.target.value)}
+              />
+            </Field>
+            <Field label="Licence expiry">
+              <Input type="date" value={form.licenceExpiry} onChange={(e) => set("licenceExpiry", e.target.value)} />
+            </Field>
+            <Field label="Board colour">
+              <input
+                type="color"
+                aria-label="Colour"
+                value={form.colour}
+                onChange={(e) => set("colour", e.target.value)}
+                className="h-9 w-full cursor-pointer rounded-md border border-border bg-card px-1"
+              />
+            </Field>
+            <Field label="On the tools?">
+              <Select
+                value={form.active ? "active" : "inactive"}
+                onChange={(e) => set("active", e.target.value === "active")}
+              >
+                <option value="active">Active</option>
+                <option value="inactive">Not working for us</option>
+              </Select>
+            </Field>
+            <Field label="Star rating" hint="5 and 4 star can take a job on the spot. 3 and under sits on hold for 2 hours first.">
+              <div className="flex items-center gap-1 pt-1">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    aria-label={`${n} star`}
+                    onClick={() => set("starRating", n)}
+                    className="p-0.5 text-lg leading-none"
+                  >
+                    <Star
+                      className={
+                        n <= form.starRating
+                          ? "h-5 w-5 fill-warning text-warning"
+                          : "h-5 w-5 text-muted-foreground/40"
+                      }
+                    />
+                  </button>
+                ))}
+                <span className="ml-2 text-xs text-muted-foreground">{form.starRating} of 5</span>
+              </div>
+            </Field>
+            <Field label="Materials credit limit" hint="Dollar ceiling on account. Blocked once he hits it. 0 = no account.">
+              <Input
+                type="number"
+                min="0"
+                step="50"
+                value={form.creditLimit}
+                onChange={(e) => set("creditLimit", e.target.value)}
+              />
+            </Field>
+            <Field label="Days he doesn't work" className="sm:col-span-2">
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {DAYS.map((d, i) => {
+                  const off = form.unavailableDays.includes(i);
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() =>
+                        set(
+                          "unavailableDays",
+                          off ? form.unavailableDays.filter((n) => n !== i) : [...form.unavailableDays, i],
+                        )
+                      }
+                      className={
+                        off
+                          ? "rounded-md bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive"
+                          : "rounded-md border border-border px-2.5 py-1 text-xs text-muted-foreground hover:bg-secondary"
+                      }
+                    >
+                      {d}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+            <Field label="Notes" className="sm:col-span-2">
+              <Textarea rows={2} value={form.notes} onChange={(e) => set("notes", e.target.value)} />
+            </Field>
+          </div>
+
+          <div className="rounded-lg border border-border">
+            <CardHeader
+              title="Skills he's ticked for"
+              subtitle="What he can be sent to. Saves as you tick. His pay is on the Rates tab."
+            />
+            {groups.map((group) => (
+              <div key={group}>
+                <p className="label-xs bg-secondary/60 px-4 py-1.5">{group.replace(/_/g, " ")}</p>
+                {skills
+                  .filter((s) => s.groupName === group)
+                  .map((s) => (
+                    <SkillRow key={s.id} installerId={id} skill={s} link={linkBySkill.get(s.id)} />
+                  ))}
+              </div>
+            ))}
+          </div>
+
+          <BlackoutCard installerId={id} />
+
+          {detail.data ? (
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="card-surface px-3 py-2">
+                <p className="label-xs">Tasks done</p>
+                <p className="tabular mt-0.5 text-lg font-semibold">{detail.data.stats.completed}</p>
+              </div>
+              <div className="card-surface px-3 py-2">
+                <p className="label-xs">Tasks all up</p>
+                <p className="tabular mt-0.5 text-lg font-semibold">{detail.data.stats.total}</p>
+              </div>
+              <div className="card-surface px-3 py-2">
+                <p className="label-xs">Pay booked</p>
+                <p className="tabular mt-0.5 text-lg font-semibold">{money(detail.data.stats.payTotal)}</p>
+              </div>
+            </div>
+          ) : null}
+
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        </div>
+      ) : null}
+    </Modal>
+  );
+}
+
+/* -------------------------------- page -------------------------------- */
+
+export default function InstallersPage() {
+  const [location] = useLocation();
+  const [showInactive, setShowInactive] = React.useState(false);
+  const [creating, setCreating] = React.useState(false);
+  const [openId, setOpenId] = React.useState<number | null>(null);
+  const installers = useInstallers(showInactive);
+
+  // The schedule board links here with ?open=<id>.
+  React.useEffect(() => {
+    const q = window.location.search;
+    const match = /[?&]open=(\d+)/.exec(q);
+    if (match) setOpenId(Number(match[1]));
+  }, [location]);
+
+  const rows = installers.data ?? [];
+
+  return (
+    <Page
+      title="Installers"
+      subtitle="Tick a skill and he becomes dispatchable for it. Nothing else can be offered to him."
+      actions={
+        <>
+          <label htmlFor={`installers_cb3`} className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Checkbox id={`installers_cb3`} checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
+            Show inactive
+          </label>
+          <Button onClick={() => setCreating(true)}>
+            <Plus className="size-4" />
+            New installer
+          </Button>
+        </>
+      }
+    >
+      {installers.isLoading ? (
+        <Card>
+          <Loading />
+        </Card>
+      ) : rows.length === 0 ? (
+        <Card>
+          <Empty>No installers yet.</Empty>
+        </Card>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {rows.map((i) => {
+            const ins = expiryTone(i.insuranceExpiry);
+            const lic = expiryTone(i.licenceExpiry);
+            return (
+              <button
+                key={i.id}
+                type="button"
+                onClick={() => setOpenId(i.id)}
+                className="card-surface flex flex-col gap-2.5 px-4 py-3 text-left transition-shadow hover:shadow-md"
+              >
+                <div className="flex items-start gap-2.5">
+                  <span
+                    className="mt-0.5 size-8 shrink-0 rounded-md"
+                    style={{ backgroundColor: i.colour }}
+                    aria-hidden
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold">{i.name}</p>
+                    <p className="tabular truncate text-xs text-muted-foreground">
+                      {i.mobile ?? "No mobile"} · {CREW_CAPACITY[i.crewCapacity] ?? i.crewCapacity}
+                    </p>
+                  </div>
+                  {!i.active ? <Badge colour="#7A736D">Inactive</Badge> : null}
+                </div>
+
+                <div className="flex flex-wrap gap-1">
+                  {i.skills.length === 0 ? (
+                    <span className="inline-flex items-center gap-1 text-xs text-destructive">
+                      <AlertTriangle className="size-3.5" />
+                      No skills ticked — can't be dispatched
+                    </span>
+                  ) : (
+                    i.skills.slice(0, 6).map((s) => (
+                      <Badge key={s.id}>
+                        <Check className="size-3" />
+                        {s.name}
+                      </Badge>
+                    ))
+                  )}
+                  {i.skills.length > 6 ? <Badge>+{i.skills.length - 6} more</Badge> : null}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-xs text-muted-foreground">
+                  <span className="tabular">
+                    <span className="font-medium text-foreground">{i.openTaskCount}</span> open task
+                    {i.openTaskCount === 1 ? "" : "s"}
+                  </span>
+                  {i.serviceArea ? <span>{i.serviceArea}</span> : null}
+                  {i.unavailableDays.length ? (
+                    <span>Off {i.unavailableDays.map((d) => DAYS[d]).join(", ")}</span>
+                  ) : null}
+                  {ins ? <Badge colour={ins.colour}>Insurance {ins.label}</Badge> : null}
+                  {lic ? <Badge colour={lic.colour}>Licence {lic.label}</Badge> : null}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {rows.length > 0 ? (
+        <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <HardHat className="size-3.5" />
+          Installers never see customer pricing, quotes, invoices or each other's tasks — that's enforced on the
+          server, not just hidden in the app.
+        </p>
+      ) : null}
+
+      <NewInstallerModal open={creating} onClose={() => setCreating(false)} />
+      {openId !== null ? <InstallerPanel id={openId} onClose={() => setOpenId(null)} /> : null}
+    </Page>
+  );
+}

@@ -1,0 +1,173 @@
+import { z } from "zod";
+import { asc, eq } from "drizzle-orm";
+import { db } from "../database";
+import * as schema from "../database/schema";
+import { adminOnly, authed } from "../middleware/auth";
+
+/**
+ * Skills, job statuses and key/value settings are editable DATA, never hardcoded
+ * enums — Damien adds/renames them in the app after testing without a rebuild.
+ */
+export const settings = {
+  /** Everything the admin UI needs to render pickers, in one round trip. */
+  bootstrap: authed.handler(async ({ context }) => {
+    const [skills, statuses, kv] = await Promise.all([
+      db.select().from(schema.skills).orderBy(asc(schema.skills.sortOrder), asc(schema.skills.name)),
+      db.select().from(schema.jobStatuses).orderBy(asc(schema.jobStatuses.sortOrder)),
+      db.select().from(schema.settings),
+    ]);
+    return {
+      actor: context.actor,
+      skills: skills.filter((s) => s.active),
+      allSkills: skills,
+      statuses: statuses.filter((s) => s.active),
+      allStatuses: statuses,
+      settings: Object.fromEntries(kv.map((r) => [r.key, r.value])) as Record<string, string>,
+    };
+  }),
+
+  /* ----------------------------- skills ----------------------------- */
+  skillCreate: adminOnly
+    .input(
+      z.object({
+        name: z.string().min(1),
+        groupName: z.string().default("other"),
+        defaultCrewSize: z.number().int().min(1).max(2).default(1),
+        /** How the job gets crewed and how fast it goes, for duration maths. */
+        minCrew: z.number().int().min(1).max(10).default(1),
+        recommendedCrew: z.number().int().min(1).max(10).default(1),
+        productionRate: z.number().min(0).nullable().default(null),
+        productionUnit: z.string().default("m2"),
+        sortOrder: z.number().int().default(0),
+      }),
+    )
+    .handler(async ({ input }) => {
+      const [row] = await db.insert(schema.skills).values(input).returning();
+      return row;
+    }),
+
+  skillUpdate: adminOnly
+    .input(
+      z.object({
+        id: z.number(),
+        name: z.string().min(1).optional(),
+        groupName: z.string().optional(),
+        defaultCrewSize: z.number().int().min(1).max(2).optional(),
+        minCrew: z.number().int().min(1).max(10).optional(),
+        recommendedCrew: z.number().int().min(1).max(10).optional(),
+        productionRate: z.number().min(0).nullable().optional(),
+        productionUnit: z.string().optional(),
+        sortOrder: z.number().int().optional(),
+        active: z.boolean().optional(),
+      }),
+    )
+    .handler(async ({ input }) => {
+      const { id, ...rest } = input;
+      const [row] = await db
+        .update(schema.skills)
+        .set({ ...rest, updatedAt: new Date() })
+        .where(eq(schema.skills.id, id))
+        .returning();
+      return row;
+    }),
+
+  /* --------------------------- job statuses -------------------------- */
+  statusCreate: adminOnly
+    .input(
+      z.object({
+        name: z.string().min(1),
+        colour: z.string().default("#7A736D"),
+        stage: z.string().default("open"),
+        sortOrder: z.number().int().default(0),
+      }),
+    )
+    .handler(async ({ input }) => {
+      const [row] = await db.insert(schema.jobStatuses).values(input).returning();
+      return row;
+    }),
+
+  statusUpdate: adminOnly
+    .input(
+      z.object({
+        id: z.number(),
+        name: z.string().min(1).optional(),
+        colour: z.string().optional(),
+        stage: z.string().optional(),
+        sortOrder: z.number().int().optional(),
+        active: z.boolean().optional(),
+      }),
+    )
+    .handler(async ({ input }) => {
+      const { id, ...rest } = input;
+      const [row] = await db
+        .update(schema.jobStatuses)
+        .set({ ...rest, updatedAt: new Date() })
+        .where(eq(schema.jobStatuses.id, id))
+        .returning();
+      return row;
+    }),
+
+  /* ------------------------------ kv -------------------------------- */
+  set: adminOnly
+    .input(z.object({ key: z.string().min(1), value: z.string() }))
+    .handler(async ({ input }) => {
+      await db
+        .insert(schema.settings)
+        .values({ key: input.key, value: input.value, updatedAt: new Date() })
+        .onConflictDoUpdate({
+          target: schema.settings.key,
+          set: { value: input.value, updatedAt: new Date() },
+        });
+      return { ok: true };
+    }),
+
+  /* ---------------------------- products ---------------------------- */
+  products: adminOnly.handler(() =>
+    db.select().from(schema.products).orderBy(asc(schema.products.brand), asc(schema.products.range)),
+  ),
+
+  productCreate: adminOnly
+    .input(
+      z.object({
+        supplier: z.string().default(""),
+        brand: z.string().default(""),
+        range: z.string().default(""),
+        colour: z.string().default(""),
+        category: z.string().default("carpet"),
+        unit: z.string().default("m2"),
+        costPrice: z.number().nullable().optional(),
+        sellPrice: z.number().nullable().optional(),
+        sku: z.string().nullable().optional(),
+      }),
+    )
+    .handler(async ({ input }) => {
+      const [row] = await db.insert(schema.products).values(input).returning();
+      return row;
+    }),
+
+  productUpdate: adminOnly
+    .input(
+      z.object({
+        id: z.number(),
+        supplier: z.string().optional(),
+        brand: z.string().optional(),
+        range: z.string().optional(),
+        colour: z.string().optional(),
+        category: z.string().optional(),
+        unit: z.string().optional(),
+        costPrice: z.number().nullable().optional(),
+        sellPrice: z.number().nullable().optional(),
+        sku: z.string().nullable().optional(),
+        active: z.boolean().optional(),
+      }),
+    )
+    .handler(async ({ input }) => {
+      const { id, ...rest } = input;
+      const [row] = await db
+        .update(schema.products)
+        .set({ ...rest, updatedAt: new Date() })
+        .where(eq(schema.products.id, id))
+        .returning();
+      return row;
+    }),
+};

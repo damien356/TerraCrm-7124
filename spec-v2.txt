@@ -1,0 +1,1541 @@
+Terra Ops — Full Build Spec &
+Outstanding Backlog
+Owner: Damien Lacey, Terra Flooring (Gold Coast, AU)
+Date: 4 September 2026
+Purpose of this document: a complete, self-contained brief on what Terra Ops is, what already exists,
+and every single thing still to be built. Written so it can be handed to another AI or developer cold, with no
+prior conversation, and they can add detail or complexity to any section without breaking what's already
+there.
+
+
+
+
+  1. Executive summary
+Terra Ops is one platform replacing ServiceM8 + ActiveCampaign + the phone system for a flooring
+business. Website feeds leads in, Xero takes the accounting, Stripe takes payments, an AI agent writes in
+the owner's voice, and installers work from a restricted mobile app that never shows them customer
+pricing.
+
+Roughly 45% of the intended platform is built and working. The core job system, dispatch, tiering,
+availability, geo-tracking and the job-file media system are live. Still to build: a forms engine, financial
+integrations, CRM and email campaigns, SMS/voice with an AI agent, materials ledger with barcode
+scanning, and website lead capture.
+
+Three hard constraints that must never be broken:
+
+ 1. Terra Flooring, Floors by You and JSL Energy are 100% separate businesses. Never combine,
+    link, cross-reference or merge them. This spec is Terra Flooring only. Do not propose consolidation —
+    the answer is permanently no.
+
+ 2. Installers must never see customer pricing, margins, quotes, invoices, supplier costs, or other
+    installers' tasks and rates. Enforced server-side, not in the UI.
+ 3. Installers on a lower rating tier are never told a job went to a higher tier. They only ever see
+    "Sorry, this job was already accepted."
+
+
+
+
+  2. Tech stack (fixed — do not substitute)
+Monorepo, Bun workspaces + Turborepo.
+ Layer                   Technology
+
+
+ API                     oRPC procedures on Hono, served at /api/rpc/*
+
+
+ Database                Drizzle ORM over Turso (SQLite)
+
+ Web frontend            React 19 + Wouter + Tailwind CSS 4, bundled by Vite 7
+
+
+ Mobile                  Expo + React Native + expo-router (SDK 54)
+
+ Desktop                 Electron shell loading the web app
+
+ Storage                 Tigris (S3-compatible), private objects with signed GET/PUT
+
+ Auth                    Better Auth — email/password + Google
+
+ Runtime                 Bun
+
+
+One codebase, one database. packages/web is the office system and the API. packages/mobile is
+the installer app ("Terra Crew"). They share one database. Mobile only ever calls orpc.field.* and
+orpc.upload.presign .
+
+Fixed ports: web 4200, mobile 4300, desktop 4400.
+
+
+
+
+  3. Design direction
+Approved direction: dark and high-end — charcoal sidebar and headers, gold accents, like a
+premium dashboard. Explicit instruction: no cartoon-looking figures or avatars anywhere (a criticism of
+ServiceM8's dispatch board). Crew map pins are coloured circles with initials, never illustrated people.
+ Token                                          Value
+
+
+ Font                                           Manrope
+
+  --gold                                         #bc9558
+
+
+  --gold-deep                                    #906f3c
+
+
+  --gold-pale                                    #c4b99f
+
+
+  --gold-wash                                    #f6f1e8
+
+
+  --charcoal                                     #161513
+
+
+  --background                                   #f4f2ef
+
+
+  --primary                                      #bc9558 on #171614
+
+
+
+The overall feel should read "a bit like ServiceM8 but not exactly" — same density and speed of a trade
+dispatch tool, but premium rather than utilitarian.
+
+Open decision: the mobile app is still terracotta ( #C05A2B ) and clashes with the gold/charcoal web
+system. Whether to retheme mobile to match is unresolved.
+
+
+
+
+  4. Data model — the locked-in decisions
+These were decided deliberately and should be treated as fixed foundations. Add to them; don't rewrite
+them.
+
+
+Contacts and companies
+    Contacts are people. They exist once, forever. No duplicate contact per job.
+
+    Companies are an optional wrapper over contacts ( company_contacts join). A person can belong
+    to a company or stand alone.
+    Billing is set per job: jobs.billToType = "company" | "contact" .
+    Jobs have many contacts with roles ( job_contacts ), each with their own flags: receivesSms ,
+    receivesEmail , canApproveQuote , onSiteContact . So a builder, a tenant and a strata manager
+    can all sit on one job with different permissions.
+
+
+Jobs and tasks
+
+    Tasks are the dispatch unit, not jobs. One job produces many dispatches. Each task carries its own
+    skill, crew size, assigned installer and pay. A single job might be "screed Monday, lay Tuesday, cove
+   Thursday" — three tasks, potentially three different installers.
+   Job statuses, skills and rates are editable data in Settings, never hardcoded enums.
+
+
+Installers and skills
+
+   Skills are ticks on the installer card ( installer_skills ), each with a per-skill rate and a
+    canLead flag.
+
+   Tasks are only ever offered to installers ticked for that skill.
+   Crew capacity per installer: solo / own_offsider / needs_partner .
+
+   A furniture flag on a task forces crew size 2.
+   Installers always see the customer's name and phone — except in tender mode.
+   One pricing tier for customers.
+
+
+Dispatch and tiering
+
+   Dispatch is direct (to one installer) or broadcast (to everyone with the skill).
+   Broadcast: first accept wins, all other offers auto-close to "filled" .
+
+   Offers expire after 2 hours, then escalate to the owner.
+    INSTANT_ACCEPT_MIN_STARS = 4 . Installers rated 3 stars and under get a provisional accept held
+   for 2 hours, letting a higher-rated installer take it first.
+   Losing installers only ever see "Sorry, this job was already accepted."
+
+
+Auth and roles
+
+   Roles: admin | installer .
+
+   The first user ever to sign in is auto-promoted to admin; everyone after defaults to installer and must
+   be linked to an installer record by an admin.
+   Disabled accounts are refused at the middleware.
+   Self-protection: an admin can't demote or disable their own login.
+
+
+
+
+  5. What is already built and working
+
+Phase 1 — core job system             DELIVERED
+
+Contacts, companies, sites, jobs, tasks, installers, skills, quotes, quote builder, a drag-and-drop schedule
+board with a dispatch panel, offers, a dashboard, settings, logins/team management, and database
+backups.
+Installer app: login, Today / Coming up / Offers (with badge) / Me tabs, task detail with start/stop, checklist
+ticking, field notes, and own-pay display.
+
+
+Phase 2 — in progress
+
+
+ Feature                                         Status
+
+
+ Rating tiers + 2-hour provisional hold + day-     Done
+ lock
+
+ Blackout dates / installer unavailability         Done
+
+
+ On-shift geo location + live crew map             Done
+
+ Job file — 7 media buckets + gates                Done, just shipped
+
+ Plan-on-job-card                                ⚠️Schema only — superseded by the plan bucket, needs
+                                                 reconciling
+
+ Tender mode                                     ⚠️Flag only, no enforcement
+
+ Materials / barcode / installer account         ⚠️Schema only
+
+ Date-window fields on the office task form      ❌ API accepts them, no admin UI
+
+
+Geo location (done — the rules matter)
+
+Tracking runs only between "Start job" and "Mark complete". Each installer opts in themselves on the Me
+tab. Switching it off deletes their entire history. History auto-deletes after 14 days. A pin goes stale after 45
+minutes. Nobody appears on the office map until an installer has opted in and started a job.
+
+The job file (done — the model to extend)
+
+Replaces ServiceM8's diary feed, which was described as "messy and all over the place". Seven fixed
+named buckets, not a chronological feed:
+ Bucket                  Purpose
+
+
+  plan                   Plans — office uploads, crew read-only
+
+
+  access                 Site access — parking, lift, gate code, stairs
+
+
+  area                   Areas we're doing — room by room
+
+
+  damage                 Existing damage — before anything starts
+
+
+  found                  What we found — subfloor, moisture, nasties. Variation trigger.
+
+
+  completion             Finished work
+
+
+  defect                 Defects and callbacks
+
+
+Rules in force:
+
+    Photos, video up to 60 seconds, and PDFs in any bucket.
+    Crew can add, never delete. The office archives instead of deleting, so the record survives a dispute.
+    Cannot start a job until damage photos are added or "nothing found" is ticked — that tick is stamped
+    with who and when.
+    Cannot mark complete until completion photos meet the per-skill minimum (default 4, editable in
+    Settings).
+    Everything auto-stamped: uploader, timestamp, GPS, task, area. Nobody names a file.
+    Anything dropped in found writes a site_finding activity entry against the job — the hook the
+    variation form plugs into.
+    Files go phone/browser straight to Tigris, never through the API. Links are signed on read; nothing
+    sits on a public URL.
+
+Note: signature-on-completion was deliberately not made a blocker.
+
+
+
+
+  6. THE BACKLOG — everything still to build
+This is the part to expand. Ordered by the sequence agreed with the owner.
+
+
+6.1 Forms engine + variation form 🔜 NEXT
+
+Stated need: "we need forms like variation one."
+
+Proposed tables:
+
+    formTemplates — name, kind, active
+    formFields — templateId, label, type ( text / number / select / checkbox / photo /
+    signature ), required, options JSON, sortOrder
+
+    formSubmissions — templateId, jobId, taskId, installerId, submittedAt, status
+
+    formAnswers — submissionId, fieldId, label, value
+
+First template — Variation: what changed, why, extra m² or hours, photos auto-linked to the found
+bucket. It lands in the office as a pending variation the admin prices. Crew describe the work; they
+never see or enter a customer price.
+
+Hooks into the existing site_finding activity entry. The form builder lives in Settings, following the
+existing "editable data, never hardcoded enums" pattern.
+
+Obvious follow-on templates once the engine exists: pre-start site check, moisture/subfloor report, defect
+report, safety/SWMS, toolbox talk, vehicle check.
+
+
+6.2 Tender mode lockdown
+
+A tendered task shows the installer plan, their pay, and photos only — no address, no customer name,
+no phone. It unlocks the moment they win the job. Must be enforced server-side in the field routes, not
+just hidden in the UI. The newly built jobFile procedure currently returns everything and must be made
+tender-aware.
+
+
+6.3 Office task form gaps
+
+The API already accepts scheduledFrom , scheduledTo and tenderMode , but no admin screen sets
+them. This is an outstanding promise.
+
+
+6.4 Reconcile plans
+
+jobs.planUrl / planName / planMime and the per-task overrides predate the plan media bucket and
+
+now overlap. Pick one source of truth and migrate.
+
+
+6.5 Offline capture queue
+
+Sites frequently have no signal. Photos and form submissions need to queue on the device and sync
+when back in range, with visible pending state. Already promised to the owner.
+
+
+6.6 Customer pack (before/after)
+
+One tap turns damage + area photos into "before" and completion into "after", producing a shareable
+pack for the customer. The API endpoint exists ( media.customerPack ); the UI does not.
+6.7 Auto job cover photo
+
+Each job picks a hero image automatically from its media so the job list reads visually.
+
+
+6.8 Materials, barcode scanning and installer accounts
+
+The owner scans a product barcode (Sika self-leveller, glue) and sets an installer price. The installer
+scans it in the app, sees the price, and either pays on the spot (Stripe, later) or puts it on account.
+
+    Invoiced weekly and paid separately — never deducted from installer pay.
+    Per-installer dollar credit limit; blocked at the limit.
+    Running balance visible to both sides.
+     installer_account_entries , products.barcode and products.installerPrice already exist in
+    the schema.
+    Needs expo-camera for the scanner.
+
+
+6.9 Payments and accounting — Stripe + Xero
+
+Explicitly deferred: "build everything else now, wire Stripe in later."
+
+    Stripe for deposits, progress claims and final invoices.
+
+    One-way push into Xero — Terra Ops is the system of record, Xero is the ledger. No two-way sync.
+    The owner has said he wants control over what the customer-facing invoice looks like, rather
+    than accepting a default Stripe-hosted page.
+
+
+6.10 CRM + email campaigns (ActiveCampaign replacement)
+
+Lists, segments, templates, sends, opens and clicks. Built on the existing contact model — contacts
+already exist once and forever, which is the right base for segmentation. Needs automation/sequence
+logic (trigger → wait → send → branch), not just broadcasts.
+
+
+6.11 SMS, voice and the AI agent
+
+    Per-contact receivesSms / receivesEmail flags already exist on job_contacts and should drive
+    all sending.
+
+    An AI agent that writes in the owner's voice — quotes, follow-ups, replies.
+    Phone strategy is parked: whether to port the existing mobile number or take a new Twilio number.
+    Note for planning: an alphanumeric sender ID like TERRAFLOOR is one-way only and requires ACMA
+    Sender ID Register approval as of 1 July 2026. Recommendation on the table was a new number
+    now, port later.
+    Considered but undecided: a 1300 number plus a mobile for "test us and we'll come back with a
+    quote".
+6.12 Website lead capture
+
+Landing pages feed straight into Terra Ops as leads, replacing the current arrangement where lead pages
+sit outside the system and get pushed into ServiceM8. Several landing pages already exist as separate
+projects and would become sources.
+
+
+
+
+  7. Cross-cutting things not yet designed
+Areas where added complexity would genuinely help, and where nothing has been decided:
+
+   Notifications — who gets told what, on which channel, and how alerts escalate when an offer expires
+   or a variation lands.
+   Reporting — job profitability, installer performance, m² per day, defect rate by installer or product,
+   lead source ROI.
+   Ratings — the tiering system consumes a star rating, but how ratings are actually earned and
+   updated is not defined.
+   Warranty and defect lifecycle — a defect bucket exists, but there's no callback workflow, SLA or
+   warranty period tracking.
+
+   Scheduling intelligence — travel time, geographic clustering, capacity forecasting, weather.
+   Document generation — quotes, variations, completion certificates as branded PDFs.
+   Audit trail — an activity log exists per job, but there's no global immutable audit view.
+   Permissions granularity — only two roles today. An office admin vs. an estimator vs. the owner may
+   eventually need different access.
+   Customer-facing portal — customers currently have no login. Approving a quote or variation online
+   is unbuilt.
+
+
+
+
+  8. Housekeeping and outstanding items from the owner
+   Private GitHub repo terra-ops and its URL — not yet created.
+
+   Real installer names and rates; the real job status list; a genuine quote/invoice sample to model
+   documents on.
+   Decision on whether the gold retheme carries into the mobile app.
+   Phone strategy decision.
+9. Notes for whoever picks this up
+ Read requests literally and narrowly before widening scope. Scope creep is not welcome.
+ When the owner answers a question with "No Preference" or "Yes", that means you decide — make
+ the call and move on rather than asking again.
+ Ship each piece as it's finished rather than batching. Lint and build after every change.
+ Skills, statuses and rates are configuration, never code constants. Follow that pattern for anything
+ new.
+ Nothing that reveals price, margin or another installer's business ever crosses into the mobile app,
+ and the enforcement lives on the server.
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+10. Admin-only estimating, price book & quote
+automation
+This section adds a fast on-site estimating system to the Terra Ops admin job card. It replaces the slow spreadsheet workflow while
+preserving a reliable, auditable calculation engine. It is part of the core backlog and must be built without weakening the existing
+server-side installer restrictions.
+
+     Locked decision - AI assists retrieval, never arithmetic
+     The AI bar may understand natural-language searches and synonyms, but every quantity, rate, pack calculation,
+     supplier fee, trim cut, GST amount and margin is calculated deterministically from stored structured data. The AI
+     must never invent a product, price or measurement.
+
+
+
+
+10.1 Outcomes
+ - An admin can build a complete estimate on site from one responsive section of the job card.
+
+ - Common measurements are entered directly: m2, lineal metres, each, hours, bags, rolls, packs, boxes and custom units.
+
+ - Commercial vinyl captures floor area, coving, internal and external corners, weld length, skim/levelling, stairs and other preparation.
+
+ - Customer selling prices, installer rates, supplier costs and job-specific overrides remain separate.
+
+ - Products and rooms stay attached to the correct work package so descriptions never mix carpet areas with vinyl or timber areas.
+
+ - The completed estimate generates a branded quote draft that remains fully editable before sending.
+
+
+10.2 Non-negotiable security
+ - The estimator, supplier costs, selling prices, margins, quote editor and price book are admin-only and enforced server-side.
+
+ - Installers receive only their own assigned pay line items and their own total pay.
+
+ - No installer route or API response may include customer selling prices, margins, supplier costs or another installer's rates.
+
+ - All price and margin overrides record admin, time, previous value, new value and reason.
+
+
+10.3 Core pricing model
+ Layer                             Purpose                                        Change behaviour
+
+ Master suggested sell price       Default customer charge per item               Affects new jobs created after the change only
+
+ Highest eligible installer        Protected labour cost used while quoting       Calculated per estimate item from eligible installers
+ rate
+
+ Installer-specific rate           Actual planned subcontract labour cost         Snapshots when installer is assigned/accepted
+
+ Supplier/material cost            Expected product and delivery cost             Snapshots into the job estimate
+
+ Job override                      Admin-only exception for one job               Never writes back to the master price book
+
+
+
+     Snapshot rule
+     When a new job is created it receives the current price-book version. Later master changes apply to newly created
+     jobs only. Existing jobs and quotes never change automatically. An admin may optionally preview and apply newer
+     rates to a draft job, with a line-by-line difference report and audit record.
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                                 Page 11
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+10.4 One-screen estimating workflow
+Location: Admin job card > Estimate & Quote. The page is designed for a tablet or phone on site and desktop in the office. It
+autosaves as a draft.
+
+ Step           Admin action                                 System response
+
+ 1              Search or browse a trade group               Returns exact price-book items, products and synonyms
+
+ 2              Create a work package                        Keeps product, installation, preparation and areas together
+
+ 3              Enter quantities                             Calculates labour, material usage, waste, packs and supplier fees
+
+ 4              Assign areas beneath that product            Builds a product-specific scope sentence
+
+ 5              Review cost and margin                       Uses highest eligible installer rate until one is selected
+
+ 6              Select/assign installer                      Recalculates actual planned margin using that installer's rates
+
+ 7              Generate quote                               Creates editable line items and scope wording without losing cost links
+
+
+Recommended screen layout
+ - Top: AI-assisted search bar with a manual group filter and recent/favourite items.
+
+ - Left/upper panel: alphabetically ordered trade groups. Items inside a group use admin-defined manual order, not alphabetical order.
+
+ - Centre: work-package cards containing product, areas, measurements, labour and preparation.
+
+ - Right/lower sticky summary: customer subtotal, materials, supplier fees, protected labour, gross profit, gross margin and warnings.
+
+ - Actions: duplicate package, reorder, split, archive, save draft, preview quote and generate quote.
+
+Quick-entry behaviour
+ - Each item has a quantity box beside it. Example: Carpet install - 34 LM; Weld - 18 LM; Internal corner - 7 each.
+
+ - The unit is displayed beside the quantity and comes from the price-book item. Admin can override the unit only on a custom line.
+
+ - Keyboard-first entry on desktop; large tap targets, numeric keyboard and minimal modal windows on mobile/tablet.
+
+ - Autosave each edit. Show Saved, Saving and Offline/Pending states clearly.
+
+ - Allow optional notes, measurement source, area and attachment against every estimate line.
+
+AI-assisted search
+ - Understands terms such as 'R12 vinyl', 'commercial safety vinyl', 'skim', 'smoothing compound', 'cove' and supplier/product aliases.
+
+ - Example query: '2 mm R12 Armstrong' filters by thickness, slip rating, brand and product category.
+
+ - Results display product, supplier, SKU, category, rating, dimensions/pack size, current cost and last-updated date.
+
+ - If nothing matches, say 'No matching item in the price book'. Never manufacture a result.
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                              Page 12
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+10.5 Price-book structure
+The price book is editable configuration, not hardcoded data. It needs bulk import/export, active/inactive status, effective dates and
+an audit trail.
+
+ Entity                                     Required fields / behaviour
+
+ price_book_groups                          name, description, groupSortOrder, active. Groups display alphabetically; sort order is retained for explicit
+                                            future override.
+
+ price_book_items                           groupId, name, aliases, SKU, unitType, itemType, suggestedSellRate, defaultBudgetCost, taxable,
+                                            quoteTemplate, manualSortOrder, active
+
+ price_book_versions                        version, effectiveAt, createdBy, reason. A job stores the version current at job creation.
+
+ installer_item_rates                       installerId, priceBookItemId, rate, effectiveFrom, effectiveTo, active. Never exposed to another installer.
+
+ suppliers                                  name, account reference, standard dispatch rule, contact details, active
+
+ products                                   supplierId, brand, productName, SKU, category, attributes JSON, purchaseUnit, packSize, coverage, cost,
+                                            lastUpdatedAt, active
+
+ job_work_packages                          jobId, name, productId, workType, sortOrder, notes. Parent container that prevents cross-product area errors.
+
+ job_estimate_lines                         packageId, item/product reference, description, quantity, unit, sell-rate snapshot, cost snapshots, override
+                                            flags and totals
+
+ job_package_areas                          packageId, areaType, label, count, notes. Areas belong to exactly one work package unless deliberately
+                                            copied.
+
+ supplier_fee_rules                         supplierId, rule type, threshold, fee, priority, effective dates and tax treatment
+
+ margin_approvals                           jobId, triggeredByLine, marginBefore, marginAfter, approvedBy, approvedAt, mandatory reason
+
+
+Units and item types
+ - Supported units: m2, LM, each, hour, day, bag, roll, length, pack, box, litre and custom.
+
+ - Item types: customer service, installer labour, material/product, supplier fee, allowance and custom.
+
+ - All monetary costs are stored consistently ex-GST for margin calculation; the quote renderer applies the configured customer GST
+   display.
+
+ - A price may be left blank and completed on the job. Blank is not treated as zero.
+
+Master versus job behaviour
+ - Editing a suggested price on a job changes only that job.
+
+ - Editing the master suggested price changes new jobs created from that point onward.
+
+ - Accepted quotes and dispatched task pay are immutable except through a named variation or audited admin adjustment.
+
+ - Deleting an item with history means archiving it, never removing the historical record.
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                                                   Page 13
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+10.6 Installer rates, eligibility & margin protection
+Installer pricing is not a duplicate customer price list. It is a private cost schedule connected to the installer's skills and the price-book
+items they are permitted to perform.
+
+Skills and visible rate groups
+ - An installer has skill toggles such as Carpet, Sheet Vinyl, Vinyl Plank, Hard Floor, Timber, Preparation, Stairs and Commercial
+   Coving.
+
+ - Only applicable rate groups and items appear when editing that installer. Admin can add or remove individual item eligibility.
+
+ - Preparation can be linked as a companion group for carpet, vinyl and hard-floor installers, while still allowing individual prep skills to
+   be disabled.
+
+ - Task eligibility continues to use installer_skills and canLead. Rate visibility does not grant a skill.
+
+Quote-time protected labour
+
+     Owner decision - highest eligible rate
+     Before an installer is selected, the estimate uses the highest active rate among installers eligible for each labour
+     line. This protects the quote from being profitable only when the cheapest installer is available. If no eligible
+     installer has a rate, use the item's default budget cost and show a blocking 'No eligible installer rate' warning
+     before the quote is sent.
+
+
+Selecting an installer
+ - The admin may view eligible installers with availability, skill match, rating tier, distance/travel estimate, relevant rate and forecast job
+   margin.
+
+ - The system may suggest alternatives, but must not recommend an installer solely because they are cheapest.
+
+ - After selection, actual planned labour cost uses that installer's snapshotted rates and the margin recalculates instantly.
+
+ - A later change to the installer's master rates does not alter already accepted/dispatched task pay.
+
+Low-margin approval
+
+     Owner decision - warn and approve
+     If the selected installer or any estimate edit drops the job below the configured minimum gross margin, show a
+     persistent red warning. The job may proceed only after an admin approves it and enters a reason. Do not
+     automatically change the customer's price and do not block the installer from assignment.
+
+
+Installer view
+
+     Owner decision - own line items and total pay
+     The installer sees their own pay line items, quantities, units, rates and calculated total for the assigned task, plus
+     any approved pay variation. They never receive customer prices, profit/margin data, supplier costs or other
+     installers' rates.
+
+
+Margin calculation
+ - Gross profit = customer revenue ex-GST minus material costs, supplier fees, installer/subcontract labour and other direct job costs.
+
+ - Gross margin % = gross profit divided by customer revenue ex-GST.
+
+ - Show both protected margin (highest eligible installer) and selected-installer margin when an installer has been chosen.
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                                Page 14
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+10.7 Product catalogue & supplier rules
+The material selector and AI bar search one structured product catalogue. Product records can carry different attributes by category
+without forcing every product into flooring-specific fields.
+
+ Product field                              Examples / rule
+
+ Identity                                   Supplier, brand, product name, supplier SKU, Terra alias
+
+ Classification                             Carpet, carpet tile, sheet vinyl, safety vinyl, LVT, timber, adhesive, leveller, trim, moisture barrier
+
+ Technical attributes                       Thickness, width, roll length, slip rating, colour, coverage, density, pack quantity, stock length
+
+ Purchase data                              Cost, purchase unit, minimum order, pack/box multiple, waste factor, last verified date
+
+ Quote data                                 Suggested sell price, sell unit, customer-facing name and description template
+
+
+Supplier fee engine
+ - Combine all selected products from the same supplier before evaluating order thresholds.
+
+ - Apply a dispatch fee once per supplier order/job, not once per product line.
+
+ - Show the fee separately in cost calculations. Whether it appears separately or is absorbed into selling prices is configurable.
+
+ - Rules are effective-dated and may be flat, threshold-based, percentage, zone/postcode-based or manual.
+
+     Armstrong seed rule supplied by owner
+     If the Armstrong product subtotal is $1,000 or less, apply a $150 dispatch fee. If the subtotal is over $1,000, apply a
+     $100 dispatch fee. The threshold, fee and tax basis remain editable configuration.
+
+
+Material quantity calculations
+ - Coverage products calculate required packs/bags/rolls from measured quantity, depth where relevant, coverage and waste.
+
+ - Round purchases up to the supplier's purchase multiple while retaining the exact measured quantity for installation labour.
+
+ - Show calculated requirement, purchasable quantity, waste/overage, cost and manual override.
+
+ - A manually overridden purchase quantity is visibly flagged and requires a note when it is below the calculated requirement.
+
+
+10.8 Areas belong to each product/work package
+Every selected flooring product creates or joins a work package. The area selector appears directly beneath that product/package,
+never as one global room list for the entire job.
+
+ Standard area                                                   Input behaviour
+
+ Lounge, Dining, Hallway, Passageway, Garage,                    Tick box plus optional label/notes
+ Kitchen, Laundry
+
+ Bedroom, WIR, Cupboard                                          Tick box plus quantity; optionally expand to Bedroom 1, Bedroom 2, etc.
+
+ Stairs                                                          Tick box plus quantity and straight/winder/feature type
+
+ Custom area                                                     Free-text name, quantity and notes
+
+ - Installation and preparation lines attach to the same work package or to explicitly selected areas.
+
+ - Moving an area between products requires confirmation if it already has installation or preparation lines.
+
+ - Copying an area to two products is allowed only as an explicit action, for example floor preparation plus finished flooring.
+
+Quote wording example
+
+     Generated draft
+     Supply and install Armstrong R11 commercial sheet vinyl to the kitchen and hallway, including 100 mm coved
+     skirting, internal/external corners and hot-welded seams.
+
+
+ - A second carpet product with bedrooms selected generates its own separate scope line. Its areas cannot be merged into the vinyl
+   description accidentally.
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                                             Page 15
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+10.9 Trim measurement & cut optimisation
+Trim products store stock length and pack quantity. After selecting a trim type, the admin enters every required door/opening size
+beneath that exact trim product.
+
+ Input                                      Rule
+
+ Trim product                               Exact SKU/profile/colour; only identical stock may share offcuts
+
+ Stock length                               Supplier value, e.g. 3.3 m
+
+ Pack quantity                              Lengths per box; purchasing rounds up to full boxes where required
+
+ Cuts                                       One row per doorway/opening: label, required length and quantity
+
+ Saw kerf                                   Configurable; initial suggested default 3 mm
+
+ Joining                                    Not allowed by default. May be enabled per trim/product if acceptable
+
+ Waste allowance                            Configurable minimum plus actual optimisation waste
+
+
+Calculation output
+ - Use a deterministic one-dimensional cutting-stock calculation to minimise full lengths while accounting for saw kerf.
+
+ - Return full lengths required, boxes required, total purchased length, used length, offcut/waste and total product cost.
+
+ - Produce a cut list per physical length: for example Length 1 - Door A 920 mm, Door B 820 mm, Door C 760 mm.
+
+ - Never combine offcuts across different SKU, profile, colour or job unless an admin deliberately adds known warehouse offcut stock
+   later.
+
+ - Allow the admin to override calculated lengths/boxes, but preserve the original calculation and flag the override.
+
+
+10.10 Quote generation and editing
+ - Generate quote sections in work-package order, with product, areas, installation, preparation, exclusions and optional notes.
+
+ - Customer wording uses quote templates and structured area data. It must not expose supplier cost names or installer pay.
+
+ - The admin can edit text, reorder lines, split/merge customer-facing sections, change quantities and change sell prices.
+
+ - Editing wording alone does not alter calculations. Editing a linked quantity or price recalculates totals and margin.
+
+ - The generated wording is a draft, not a locked template. Preserve the structured estimate behind the final edited text.
+
+ - Quote revisions are versioned. Accepted versions remain reproducible exactly as sent.
+
+
+10.11 Acceptance tests
+ - Changing a master suggested price does not alter an existing job, quote or accepted task.
+
+ - Creating a new job after the change uses the new master price-book version.
+
+ - A job-specific price override never changes the master price book.
+
+ - Two products on one job retain independent area lists and generate correct separate quote descriptions.
+
+ - An R12 search returns only matching stored products and never invents a missing result.
+
+ - Armstrong supplier totals trigger the correct single dispatch fee across multiple Armstrong products.
+
+ - Trim optimisation respects 3.3 m stock lengths, kerf, pack multiples and SKU separation.
+
+ - Highest eligible installer rate is used before assignment; selected rate replaces it for actual planned margin.
+
+ - A below-minimum margin produces a red warning and cannot proceed without an admin approval reason.
+
+ - Installer API responses contain only that installer's own pay line items and total.
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                          Page 16
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+10.12 Initial installer-rate seed data
+The following rows came from the attached owner note. Import them as draft installer-cost items, not customer selling prices.
+Admin must confirm each classification, rate and GST basis before activation. Blank prices remain incomplete and must not calculate
+as zero.
+
+Carpet
+ Carpet item                                                                    Draft rate            Unit
+
+ 3.6 m wide install                                                             $40                   LM
+
+ 4 m wide install                                                               $45                   LM
+
+ 3.6 m extra heavy                                                              $45                   LM
+
+ 4 m extra heavy                                                                $50                   LM
+
+ Glue gripper                                                                   $4                    LM
+
+ Ramp MDF                                                                       $15                   LM
+
+ Capping                                                                        $8                    LM
+
+ Multi pinned/unpinned                                                          $8                    LM
+
+ Stairs - straight waterfall                                                    $13                   each
+
+ Stairs - winder waterfall                                                      $18                   each
+
+ Stairs - straight bullnose                                                     $20                   each
+
+ Stairs - winder bullnose                                                       $27                   each
+
+ Feature step                                                                   $50                   each
+
+ Double-sided feature                                                           $100                  each
+
+ Carpet tile install                                                            $10                   m2
+
+ Carpet tile straight step incl. nosing, drill/plug/glue, max 1.2 m             $60                   each
+
+ Carpet tile winder step incl. nosing, drill/plug/glue, max 1.2 m               $90                   each
+
+
+
+Vinyl
+ Vinyl item                                                                     Draft rate            Unit
+
+ Vinyl plank install                                                            $25                   m2
+
+ Sheet vinyl install                                                            $28                   m2
+
+ Cove - 100 mm                                                                  $13                   LM
+
+ Cove - 150 mm                                                                  $18                   LM
+
+ Cove - custom height                                                           Blank                 LM
+
+ Internal/external corner                                                       $15                   each
+
+ Weld                                                                           $8                    LM
+
+ Straight stair with box-out                                                    $50                   each
+
+ Winder stair with box-out                                                      $90                   each
+
+ Square single bullnose with box-out                                            $250                  each
+
+ Square double bullnose with box-out                                            $400                  each
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                   Page 17
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+10.12 Initial installer-rate seed data - continued
+Hard floor
+ Hard-floor item                                          Draft rate   Unit
+
+ Hybrid/laminate install                                  $28          m2
+
+ Engineered timber click install                          $28          m2
+
+ Engineered T&G; floating with wood glue                  $35          m2
+
+ Engineered timber including glue                         $60          m2
+
+ Straight stair                                           $50          each
+
+ Winder stair                                             $100         each
+
+ Square single bullnose with box-out                      $250         each
+
+ Square double bullnose with box-out                      $400         each
+
+ Herringbone                                              $100         m2 - confirm
+
+ Chevron                                                  $100         m2 - confirm
+
+ Scotia install                                           $6           LM
+
+ Install new skirting                                     $11          LM
+
+ Remove skirting                                          $4           LM
+
+ Remove, de-nail and clean skirting                       $6           LM
+
+ Refit existing skirting                                  $6           LM
+
+ Install trims                                            $6           LM
+
+ Other                                                    Blank        Custom
+
+
+
+Preparation
+ Preparation item                                         Draft rate   Unit
+
+ Single skim                                              $10          m2
+
+ Double skim                                              $18          m2
+
+ Self-levelling at 4 mm, supply leveller                  $27          m2
+
+ Self-levelling, no leveller supplied                     $18          m2
+
+ Each additional mm                                       $3           m2/mm
+
+ Light grind                                              $5           m2
+
+ Medium grind                                             $10          m2
+
+ Heavy grind                                              $15          m2
+
+ Apply moisture barrier by trowel, product not supplied   $7           m2
+
+ Ramp floor                                               Blank        each
+
+ Remove tiles, no disposal                                $30          m2 - confirm
+
+
+
+
+Terra Flooring | Full Build Specification                                             Page 18
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+10.13 Initial material-cost seed data
+These are draft supplier/product cost records from the owner note. Empty prices require completion before use. Product names
+should be verified against current supplier invoices rather than silently corrected by AI.
+
+ Supplier                       Product                                                       Draft cost   Purchase unit / status
+
+ Intafloors                     Mapei Adesilex G19                                            $70.30       Confirm unit and GST basis
+
+ Intafloors                     RLA Tuff Top                                                  $38.00       each; confirm pack size
+
+ Bayset                         Uzin 182                                                      Blank        Incomplete
+
+ Sika                           Sika Level Top                                                $19.50       Confirm bag size
+
+ Sika                           Sikafloor-01 Primer (AU)                                      $67.62       Confirm container size
+
+ Sika                           SikaLevel SkimCoat C5001 / 4 x 4.5 kg                         $82.61       pack
+
+ Sika                           Sikafloor-14 Prep N Prime 10 L                                $140.24      10 L
+
+
+
+     Outstanding owner input
+     Provide the complete customer selling-price list, installer items/rates, product catalogue, pack sizes/coverage,
+     supplier fee rules, quote description templates, minimum margin setting and confirmation of whether each stored
+     rate is ex-GST or inc-GST. The importer must preserve blanks and flag uncertain units for review.
+
+
+10.14 Build sequence
+ Stage             Deliverable
+
+ 1                 Price-book groups/items, versions, units, import/export and audit trail
+
+ 2                 Installer item rates, skill eligibility and server-side visibility tests
+
+ 3                 Job work packages, quantities, per-product areas and snapshot logic
+
+ 4                 Product catalogue, supplier rules, material quantities and dispatch fees
+
+ 5                 Trim measurement, cut optimisation, pack rounding and cut-list output
+
+ 6                 Margin engine, highest-eligible-rate costing, red warning and approval audit
+
+ 7                 Quote description generation, full editing, versioning and branded PDF output
+
+ 8                 AI-assisted search over the completed structured catalogue
+
+Do not build the AI search first. It depends on clean product and price-book data. Build and test deterministic pricing, snapshotting
+and permissions before adding natural-language retrieval.
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                               Page 19
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+11. Product surfaces: one database, three
+experiences
+Terra Ops must present three deliberately different clients over the same API and database. This is not three separate systems. Each
+surface exposes only the work appropriate to its user and device. The permission boundary is enforced by the API, not by hiding
+buttons.
+
+     Locked product rule
+     Mobile is for doing and responding. Desktop is for configuring, analysing and building. Terra Crew is for
+     completing assigned work. A new feature is not automatically added to all three surfaces.
+
+
+11.1 Navigation
+ Surface                                    Primary navigation                                                 Design goal
+
+ Terra Ops Desktop/Web                      Dashboard, CRM, Jobs, Schedule, Inbox, Quotes, Marketing,          Complete owner and office control
+                                            Materials, Reports, Settings
+
+ Terra Ops Admin Mobile                     Home, Jobs, Schedule, Inbox, More, plus global search/action       Fast field quoting, communication and
+                                                                                                               approvals
+
+ Terra Crew                                 Today, Coming Up, Offers, Me                                       Simple installer workflow with minimal
+                                                                                                               decisions
+
+
+11.2 Mobile vs desktop feature matrix
+ Capability                           Desktop/Web                                 Admin Mobile                               Terra Crew
+
+ Needs Attention                      Full queue, filters, rule settings and      Own/assigned alerts, quick actions and     Own task blockers only
+                                      bulk actions                                approvals
+
+ CRM and timeline                     Full contact/company/job history and        Search, view, call, message and add        Assigned-task contacts and
+                                      merge tools                                 notes                                      notes only
+
+ Leads and jobs                       Create, edit, bulk manage and report        Create/search jobs, capture visits and     No lead management
+                                                                                  update status
+
+ Schedule and dispatch                Full board, capacity, travel and            Today/week view, assign, offer and         Own accepted work and
+                                      broadcast controls                          contact                                    offers
+
+ Estimating and quotes                Full build, review, templates, revisions    Measure, estimate, edit, approve and       No customer quote access
+                                      and reporting                               send on site
+
+ Job execution                        Review/configure forms, files,              Capture, review and approve from the       Start, photos, forms,
+                                      variations and completion                   field                                      variation and complete
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                                               Page 20
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+11.2 Mobile vs desktop feature matrix - continued
+ Capability                           Desktop/Web                                Admin Mobile                             Terra Crew
+
+ Inbox/email/calls/SMS                Full team inbox, routing, templates and    Compose, reply, search, link and         Contact office; permitted job
+                                      rules                                      create follow-up                         communication only
+
+ Marketing                            Segments, campaigns, sequences,            Summary/urgent approval only; no         None
+                                      consent and reports                        campaign builder
+
+ Price book/products                  Configure, version, import/export and      Search and use job snapshots; job-only   Permitted material
+                                      supplier rules                             overrides                                scan/account price only
+
+ Installers and pay                   Profiles, skills, rates, eligibility and   Assign and approve within permission     Own pay lines and own total
+                                      reporting                                  profile                                  only
+
+ Payments/accounting                  Invoices, reconciliation, Xero/Stripe      Job payment state and authorised field   Own material account only
+                                      controls                                   actions
+
+ Reports/settings/audit               Full configuration, audit, exports and     Critical alerts and named approvals      None
+                                      recovery                                   only
+
+ AI search/action                     Search allowed business data and draft     Fast field search and safe actions       Own assigned work only
+                                      actions
+
+
+11.3 Surface acceptance rules
+ - Every API procedure authorises the user, role, admin permission profile and record scope before returning data.
+
+ - Terra Ops Admin Mobile is a responsive admin experience; it is not the desktop sidebar compressed onto a phone.
+
+ - Marketing builders, bulk imports, master price configuration, integrations, permissions, detailed reporting and global audit remain
+   desktop-only.
+
+ - Admin Mobile may show a critical summary and a 'Review on desktop' action when the full workflow is unsuitable for a phone.
+
+ - Terra Crew language uses one clear action per screen, large tap targets, plain instructions and no office jargon.
+
+ - Any future feature ticket must name its required surfaces. If unspecified, it goes to Desktop/Web only until product review.
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                                           Page 21
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+12. Job lifecycle and Needs Attention engine
+A job keeps its normal lifecycle stage while a separate rules engine calculates operational flags. A flag does not overwrite the job
+status. This prevents the schedule and reports being corrupted just to show that somebody needs to act.
+
+
+12.1 Flag behaviour
+ - Red means overdue, blocked or likely to cost money. Amber means due soon. Blue/grey means legitimately waiting and has a next
+   review date.
+
+ - Every flag has a rule, severity, owner, due time, reason, clear next action and link to the exact record.
+
+ - The system removes a flag automatically when its condition is resolved. Manual completion remains audited.
+
+ - Snooze requires a reason and a new date. Indefinite snooze is not allowed.
+
+ - Timers use configured Terra Flooring business hours and public holidays, not raw elapsed hours.
+
+ Trigger                                            Amber                                Red / required action
+
+ New enquiry not contacted                          After 2 working hours                End of business day - contact or record outcome
+
+ Job has no booking or next action                  After 4 working hours                After 1 business day - book or set named next action
+
+ Site visit finished, no quote                      Later that business day              Next business day - create/send quote or record
+                                                                                         pending reason
+
+ Quote drafted, not sent                            Same-day reminder                    After 1 business day - send, cancel or document
+                                                                                         blocker
+
+ Quote sent, no follow-up                           Day 3                                Day 7 - contact or set pending/lost outcome
+
+ Accepted quote/work order, no booking              Immediate                            Immediate - remains red until booked
+
+ Upcoming work not ready                            Configurable lead time               Deposit/materials/installer missing by cutoff
+
+ Work complete, evidence missing                    At attempted completion              Block completion until required files/forms exist
+
+ Completed, invoice not sent                        Same business day                    Next business day - send or record accounts hold
+
+
+12.2 Site visits and pending quotes
+ - Admin Mobile provides Start Site Visit and Finish Site Visit. Finishing the visit starts the quote timer.
+
+ - A pending quote requires: reason, who Terra is waiting on, assigned staff member, next follow-up date and notes.
+
+ - Standard pending reasons: customer deciding; insurance; builder/strata; product choice; revised scope; plans/measurements;
+   finance; tender; customer requested later date; no response.
+
+ - Other red rules include overdue deposit, material not ordered, no installer near start date, expired/unaccepted offer, unpriced
+   variation, unresolved defect and failed integration delivery.
+
+
+12.3 Queue views
+ - Desktop Home shows My Attention, Team Attention and Unassigned, sortable by urgency, value, age, stage and owner.
+
+ - Admin Mobile Home shows the user's red items first, then today's visits/jobs and amber items.
+
+ - A daily summary may be sent, but critical red events also create an immediate in-app alert.
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                                    Page 22
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+13. CRM, email and marketing automation
+Contacts, conversations and jobs are separate records. Every email belongs to a mailbox and conversation; it may link to a contact; it
+may link to a job. A job link is never compulsory.
+
+
+13.1 Unified customer timeline
+ - The contact timeline combines permitted calls, SMS, emails, website enquiries, site visits, quotes, jobs, payments/invoices,
+   complaints, defects, marketing events and internal notes.
+
+ - Conversation categories: General enquiry, New work/quote request, Existing job, Accounts/payment, Complaint/defect, Supplier,
+   Installer, Spam and Unclassified.
+
+ - Conversation statuses: Unassigned, Assigned, Waiting on us, Waiting on customer, Resolved and Archived.
+
+ - A recognised customer's unrelated question becomes a General enquiry on the contact timeline and in the team Inbox. It does not
+   create or attach to a job.
+
+ - General enquiries waiting on Terra turn amber after 2 working hours and red at end of day. A one-click action can later create a
+   lead/job from the conversation.
+
+
+13.2 Zoho Mail two-way sync
+ Event                                      Required Terra Ops behaviour
+
+ Sent from Terra Ops                        Send through the connected Zoho mailbox, appear in Zoho Sent, and log immediately to the conversation
+
+ Sent directly from Zoho                    Sync the Sent folder, de-duplicate by external message ID, then attach to the correct conversation
+
+ Incoming email                             Receive near real time by webhook/sync, store thread metadata and place in the team Inbox
+
+ Existing linked thread                     Keep the established contact/job links unless an authorised admin changes them
+
+ One open job                               Suggest the job; show the link clearly and allow correction
+
+ Several possible jobs                      Require admin selection; do not guess
+
+ Known contact, no job                      Attach to contact conversation only
+
+ Unknown sender                             Place in Unmatched Emails; suggest match/new lead but do not silently create records
+
+ - Use provider message IDs and reply/thread headers for de-duplication and threading. A Terra job reference is an additional
+   deterministic match, not the only method.
+
+ - Attachments remain on the conversation until an admin files them into a relevant job-file bucket.
+
+ - Mailbox permissions are separate: general customer mail may be shared, billing is owner/accounts, and Damien's private mail is not
+   exposed to every admin.
+
+
+13.3 Marketing automation
+ - Segment by client type, product interest, location, source, quote/job history, recency and other consented fields.
+
+ - Initial automations: lead confirmation, visit reminder, quote follow-up, deposit reminder, pre-install instructions, product-specific
+   aftercare, review request, annual follow-up and lost-lead reactivation.
+
+ - Transactional messages and marketing messages are separate. Unsubscribe suppresses marketing without blocking essential job
+   communication where lawful.
+
+ - Pause marketing during an unresolved complaint, open defect, payment dispute or no-contact request.
+
+ - Enforce consent source, suppression reason, frequency limits, test sends, approval state and full send audit.
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                                        Page 23
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+14. Voice agent rules and security
+The voice agent is built after jobs, CRM, permissions and audit are reliable. Caller ID is a matching hint, not proof of identity.
+
+
+14.1 Call matching
+ - Normalise the caller number, find the contact, then show/open recent and active jobs.
+
+ - If multiple jobs are possible, ask which address or job the caller means. Append to the existing job only when confirmed.
+
+ - If the customer asks a general question, create or continue a contact conversation without creating a job.
+
+ - Unknown callers provide name, phone, email, address and reason. Run duplicate checks before creating a draft lead.
+
+ - Store recording where permitted, transcript, summary, outcome, linked contact/job/conversation and action items.
+
+
+14.2 Allowed and prohibited actions
+ Agent may                                                                   Agent must not do without authorised human action
+
+ Find a contact/job; create a draft lead; add a note; log complaint/defect   Invent or approve a customer price, discount or variation
+
+ Provide a confirmed appointment; offer allowed slots; send confirmation     Promise an installation date outside scheduling rules
+
+ Collect details; answer approved FAQs; transfer or request callback         Cancel jobs, issue refunds, change payments or expose sensitive finance
+                                                                             data
+
+ - For sensitive information, verify an additional fact such as postcode or send a one-time SMS link.
+
+ - Low confidence, angry callers, safety issues, legal threats, payment disputes and urgent damage escalate to a human.
+
+ - Every agent action records tool input, result, confidence, rule applied and whether a human approved it.
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                                        Page 24
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+15. Admin permission profiles
+Keep the fixed top-level admin and installer roles, but add permission profiles inside admin. Profiles are editable sets of
+server-enforced capabilities.
+
+ Profile                           Default access
+
+ Owner                             Full system; master pricing/rates; margin; low-margin approvals; integrations; audit; exports
+
+ Office                            Contacts, jobs, schedule, dispatch and shared communications; no private rates unless granted
+
+ Estimator                         Visits, measures and job quotes; no master-rate edits; no low-margin approval by default
+
+ Marketing                         Segments, templates, campaigns and reports; no supplier costs, installer rates or job margin
+
+ Accounts                          Invoices, payments, supplier/accounting records and approved financial reports
+
+ Installer                         Own offers, assigned tasks, permitted contacts/files and own pay only
+
+
+Granular permissions
+ - Separate permissions include: view margin, view supplier cost, view/edit installer rates, change master price, override a job price,
+   approve low margin, send quotes, send campaigns, issue/refund payments, export data, manage users, manage integrations and
+   view global audit.
+
+ - Permission changes require owner-level authority, take effect immediately, revoke active sessions where appropriate and create
+   immutable audit events.
+
+ - Approval permissions must name the approver; a user cannot approve their own restricted change unless their profile explicitly allows
+   self-approval.
+
+
+15.1 Data export and deletion
+ - Bulk export, contact deletion/anonymisation and retention controls are permissioned separately from ordinary viewing.
+
+ - Historical job, quote, payment and safety evidence is archived according to retention policy rather than silently hard-deleted.
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                            Page 25
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+16. Integration failure and audit system
+Every external action is treated as a tracked delivery, not assumed successful. A failed email, SMS, payment, accounting push, file
+upload or webhook must be visible and recoverable.
+
+
+16.1 Integration event model
+ Field                                      Required behaviour
+
+ Provider and operation                     Zoho send/sync, SMS, voice, Stripe, Xero, storage, website webhook or other named action
+
+ Internal/external IDs                      Link the Terra record and provider request/message/payment ID for de-duplication
+
+ State                                      Queued, processing, succeeded, retrying, failed, cancelled or needs human action
+
+ Attempts                                   Attempt count, last attempt, next retry, safe error summary and technical detail
+
+ Ownership                                  Assigned staff member, severity, due time and linked Needs Attention flag
+
+ Recovery                                   Idempotent retry where safe; manual resolve/relink/cancel with required reason
+
+ - Automatic retry uses capped backoff and never creates duplicate emails, payments, invoices, leads or files.
+
+ - After retry limits, create a red Needs Attention item. Do not leave failures buried in logs.
+
+ - Do not show provider secrets or sensitive payloads in the UI, notifications or ordinary logs.
+
+
+16.2 Immutable audit
+ - Audit actor, time, action, entity, record ID, previous value, new value, reason, source surface and request/correlation ID.
+
+ - High-risk events include login/security changes, permissions, prices/rates, margin approvals, quote/invoice changes, refunds, exports,
+   deletions, integration configuration and AI/voice actions.
+
+ - Job activity remains a readable operational timeline; the global audit view is the immutable security and change record.
+
+ - Owners can filter/export audit data, but ordinary users cannot edit or delete it.
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                              Page 26
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+17. Training, migration and controlled go-live
+17.1 In-product training
+ - Training Mode uses clearly marked fake customers, jobs, prices and communications; it cannot send real messages, charge cards or
+   sync accounting.
+
+ - Role-based walkthroughs include a 'What do I do next?' action, searchable help, tooltips and 30-60 second embedded videos.
+
+ - Preview and confirmation are mandatory for bulk sends, price changes, imports, refunds and other high-impact actions. Provide undo
+   or version restore where safe.
+
+ - Installer onboarding should take about 10-15 minutes: sign in, accept, view, start, photos, variation, complete and check own pay.
+
+ - If a normal installer workflow needs lengthy training, simplify the product rather than producing a longer manual.
+
+
+17.2 Guided setup
+ - Configure staff/installers and permissions, skills/rates, price book, products/suppliers, templates/terms, lifecycle stages/timers,
+   integrations, data import and one complete test job.
+
+ - Do not allow live quoting until minimum margin, GST basis, active prices, installer fallback costs and quote terms are confirmed.
+
+
+17.3 Migration
+ - Import contacts/companies, de-duplicate identities, preserve marketing consent/suppression, bring over open jobs and required
+   notes/photos/documents, then select the useful completed history.
+
+ - Record source IDs and migration batch so every imported record can be traced and a batch can be safely reviewed.
+
+ - Decide which legacy information stays read-only rather than trying to recreate every historical workflow.
+
+
+17.4 Rollout
+ Gate           Scope                                                     Exit condition
+
+ 1              10 historical jobs in Training Mode                       Workflows and totals reproduce expected outcomes
+
+ 2              5 low-risk live jobs run by Damien                        No critical data, permission or integration defects
+
+ 3              One reliable installer                                    Crew workflow succeeds with poor signal and minimal help
+
+ 4              All installers and office users                           Support issues stable; alerts and ownership working
+
+ 5              All new enquiries and live integrations                   30 stable days before retiring the replaced system
+
+ - Avoid long-term dual entry. During transition, declare which system is authoritative for each record type.
+
+ - Test backup restore, session/device revocation, offline sync conflicts, duplicate messages, failed payments, duplicate contacts and AI
+   mistakes before broad rollout.
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                                Page 27
+TERRA OPS - FULL BUILD SPEC & RUNABLE HANDOFF
+
+
+
+
+18. Runable delivery plan and owner input gates
+     Start Runable now - do not wait for every price
+     Runable can build the platform foundations, lifecycle engine, permissions, audit, CRM/email structure and editable
+     price-book importer now. Prices and products must remain configuration data. The complete lists are required
+     before the estimating and quoting module is accepted for live use, not before development begins.
+
+
+18.1 Delivery order
+ Phase                      Build now                                                           Owner input needed before acceptance
+
+ 1. Foundations             Three surfaces, route permissions, audit events, integration        Admin profile assignments and final mobile colour
+                            event queue                                                         decision
+
+ 2. Operations              Job lifecycle, Needs Attention, site-visit timer, pending reasons   Business hours, alert owners and timer adjustments
+
+ 3. CRM/email               Conversations, Inbox, contact timeline, Zoho sync and matching      Mailboxes, visibility, signatures, categories and
+                                                                                                templates
+
+ 4. Pricing data            Price-book versions, product/supplier catalogue, bulk importer      Full sell prices, installer rates, products, pack sizes,
+                            and draft validation                                                fees and GST basis
+
+ 5. Estimating              Work packages, areas, calculations, trim optimiser and margin       Minimum margin, waste/kerf rules and quote wording
+                            approvals
+
+ 6. Documents/market        Quote documents, campaigns, automations, consent and                Brand samples, terms, campaign copy and approval
+ ing                        reporting                                                           rules
+
+ 7. Voice/integrations      Voice agent, Stripe/Xero and recovery workflows                     Phone strategy, verified FAQs, financial rules and
+                                                                                                credentials
+
+ 8. Go-live                 Training Mode, migration tooling, guided setup and rollout          Test users, legacy exports and sign-off results
+                            controls
+
+
+18.2 Price-list handoff
+ - Damien may provide the lists in this chat in batches. Convert each batch into structured rows with category, item, aliases, unit, sell
+   price, installer cost/rates, supplier cost, GST basis, effective date and notes.
+
+ - Products additionally need supplier, brand, SKU, category, technical attributes, purchase unit, pack/box size, coverage, waste factor,
+   current cost and fee rule.
+
+ - Import all new rows as Draft. Show validation errors and blanks. Damien reviews and activates them; the AI must not silently repair
+   uncertain product names, units or prices.
+
+ - Use the draft seed data in Section 10 for development and test fixtures only. It is not approval to activate live customer or installer
+   pricing.
+
+
+18.3 Definition of done
+ - A phase is not complete merely because screens exist. It needs server-side permission tests, calculation tests, failure/retry tests,
+   responsive checks, audit evidence and owner acceptance on realistic jobs.
+
+ - Runable ships each phase behind a feature flag or controlled rollout, with lint/build/tests passing and a rollback or disable path.
+
+ - Any proposed change that conflicts with locked decisions in Sections 1-4 or the security rules in Section 10 must stop for owner
+   approval.
+
+
+
+
+Terra Flooring | Full Build Specification                                                                                                                  Page 28
+
