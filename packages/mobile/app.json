@@ -7,7 +7,6 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1C1B1A"
       },
-      "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_MEDIA_IMAGES",
@@ -37,18 +36,12 @@
         "NSLocationWhenInUseUsageDescription": "Terra shares your location with the office only while you have a job running, so they can see the crew on the map. It stops when you mark the job complete."
       }
     },
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "cover",
-      "backgroundColor": "#1C1B1A"
-    },
     "name": "Terra",
     "slug": "terra",
     "version": "1.0.0",
     "scheme": "runable-terraop-l8jfdfu",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "web": {
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
@@ -79,7 +72,14 @@
           "defaultChannel": "default"
         }
       ],
-      "expo-splash-screen",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-logo.png",
+          "backgroundColor": "#1C1B1A",
+          "imageWidth": 200
+        }
+      ],
       "expo-updates"
     ],
     "owner": "terra-flooring",

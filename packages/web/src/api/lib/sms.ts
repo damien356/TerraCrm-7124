@@ -10,7 +10,7 @@
 const BASE = "https://rest.clicksend.com/v3";
 
 const auth = () =>
-  "Basic " + Buffer.from(`${process.env.CLICKSEND_USERNAME}:${process.env.CLICKSEND_API_KEY}`).toString("base64");
+  "Basic " + btoa(`${process.env.CLICKSEND_USERNAME}:${process.env.CLICKSEND_API_KEY}`);
 
 export const smsConfigured = () => Boolean(process.env.CLICKSEND_USERNAME && process.env.CLICKSEND_API_KEY);
 

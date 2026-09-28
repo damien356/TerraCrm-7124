@@ -129,7 +129,15 @@ export const products = {
           includeInactive: z.boolean().default(false),
           limit: z.number().int().min(1).max(2000).default(500),
         })
-        .default({}),
+        .default({
+          supplierId: null,
+          category: "",
+          range: "",
+          search: "",
+          onSpecialOnly: false,
+          includeInactive: false,
+          limit: 500,
+        }),
     )
     .handler(async ({ input }) => {
       const today = todayISO();
@@ -168,7 +176,7 @@ export const products = {
    * ProBac), so a range carries a price RANGE, not a price.
    */
   ranges: adminOnly
-    .input(z.object({ supplierId: z.number().nullable().default(null) }).default({}))
+    .input(z.object({ supplierId: z.number().nullable().default(null) }).default({ supplierId: null }))
     .handler(async ({ input }) => {
       const today = todayISO();
       const rows = await db
@@ -336,7 +344,11 @@ export const products = {
    * Drives the specials screen and the dashboard warning.
    */
   specialsBoard: adminOnly
-    .input(z.object({ endingWithinDays: z.number().int().min(1).max(120).default(ENDING_SOON_DAYS) }).default({}))
+    .input(
+      z
+        .object({ endingWithinDays: z.number().int().min(1).max(120).default(ENDING_SOON_DAYS) })
+        .default({ endingWithinDays: ENDING_SOON_DAYS }),
+    )
     .handler(async ({ input }) => {
       const today = todayISO();
       const rows = await db
