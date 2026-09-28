@@ -4,7 +4,7 @@
     "android": {
       "package": "au.com.terraflooring.terra",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon.png",
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1C1B1A"
       },
       "edgeToEdgeEnabled": true,
@@ -74,7 +74,7 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/icon.png",
+          "icon": "./assets/adaptive-icon.png",
           "color": "#1C1B1A",
           "defaultChannel": "default"
         }
