@@ -10,7 +10,7 @@ const extra = (Constants.expoConfig?.extra ?? {}) as {
 };
 
 export const authClient = createAuthClient({
-  baseURL: extra.apiUrl ?? process.env.EXPO_PUBLIC_API_URL,
+  baseURL: process.env.EXPO_PUBLIC_API_URL ?? extra.apiUrl,
   basePath: "/api/auth",
   plugins: [
     managedAuthExpoClient({

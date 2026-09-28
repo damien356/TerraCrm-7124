@@ -5,7 +5,9 @@ import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import type { AppRouterClient } from "@template/web";
 import { authClient } from "./auth";
 
-const baseUrl = Constants.expoConfig?.extra?.apiUrl ?? process.env.EXPO_PUBLIC_API_URL;
+// Store builds pin the live domain through EXPO_PUBLIC_API_URL (set in eas.json).
+// Dev and preview builds fall back to the platform-managed apiUrl.
+const baseUrl = process.env.EXPO_PUBLIC_API_URL ?? Constants.expoConfig?.extra?.apiUrl;
 
 const link = new RPCLink({
   url: `${baseUrl}/api/rpc`,

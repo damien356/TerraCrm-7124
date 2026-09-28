@@ -1,9 +1,16 @@
 {
-  "cli": {
-    "version": ">= 24.0.0",
-    "appVersionSource": "remote"
-  },
   "build": {
+    "production": {
+      "distribution": "store",
+      "channel": "production",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://ops.terraflooring.com.au"
+      },
+      "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle"
+      }
+    },
     "development": {
       "developmentClient": true,
       "distribution": "internal",
@@ -19,17 +26,17 @@
       "android": {
         "buildType": "apk"
       }
-    },
-    "production": {
-      "distribution": "store",
-      "channel": "production",
-      "autoIncrement": true,
-      "android": {
-        "buildType": "app-bundle"
-      }
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "ascApiKeyPath": "./keys/AuthKey.p8"
+      }
+    }
+  },
+  "cli": {
+    "version": ">= 24.0.0",
+    "appVersionSource": "remote"
   }
 }
