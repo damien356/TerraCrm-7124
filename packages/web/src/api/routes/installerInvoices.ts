@@ -11,7 +11,7 @@ import { sendEmail } from "../lib/email";
 
 /**
  * The installer's own invoice to Terra for a completed task. Installers can
- * never edit their own agreed rates or add arbitrary line items — the only
+ * never edit their own agreed rates or add arbitrary line items. The only
  * numbers that make it onto an invoice are the task's frozen pay breakdown
  * (`job_tasks.labour_breakdown`) plus any variation the OFFICE has already
  * approved. Once submitted, the row is locked to the installer.
@@ -126,7 +126,7 @@ export const installerInvoices = {
   /**
    * SUBMIT INVOICE. Confirms, generates the PDF, saves it, emails a copy to
    * accounts and the installer, and locks the invoice. Idempotent per
-   * (taskId, installerId) thanks to the unique index — a repeat call returns
+   * (taskId, installerId) thanks to the unique index, so a repeat call returns
    * the invoice that already exists rather than creating a second one.
    */
   submit: installerOnly.input(z.object({ taskId: z.number() })).handler(async ({ input, context }) => {
@@ -236,7 +236,7 @@ export const installerInvoices = {
     }
 
     const attachments = [{ filename: `invoice-${invoiceNumber}.pdf`, content: pdfBuffer.toString("base64") }];
-    const subject = `Invoice #${invoiceNumber} from ${installer.tradingName || installer.name} — Job #${job.number}`;
+    const subject = `Invoice #${invoiceNumber} from ${installer.tradingName || installer.name}, Job #${job.number}`;
     const bodyHtml = `<p>Invoice #${invoiceNumber} for job #${job.number}, task "${task.title}".</p><p>Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.</p>`;
     const bodyText = `Invoice #${invoiceNumber} for job #${job.number}, task "${task.title}". Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.`;
 
@@ -267,7 +267,7 @@ export const installerInvoices = {
     return { url: await signGet(row.pdfKey) };
   }),
 
-  /** REQUEST VARIATION / EXTRA — goes to Terra for approval, never self-approved. */
+  /** REQUEST VARIATION / EXTRA. Goes to Terra for approval, never self-approved. */
   requestVariation: installerOnly
     .input(z.object({ taskId: z.number(), description: z.string().min(1), amount: z.number().positive() }))
     .handler(async ({ input, context }) => {

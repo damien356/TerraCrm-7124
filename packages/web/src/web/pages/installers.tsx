@@ -14,6 +14,7 @@ import {
   useInstallers,
   useSetInstallerSkill,
   useUpdateInstaller,
+  uploadInstallerLogo,
 } from "../queries/installers";
 import { useBootstrap } from "../queries/settings";
 import {
@@ -213,7 +214,7 @@ function prettyRange(from: string | null, to: string | null) {
 
 /**
  * Blackout dates. He types it how he'd say it and we parse it into real blocked
- * dates — the booking check is server-side, not a warning on the screen.
+ * dates. The booking check is server-side, not a warning on the screen.
  */
 function BlackoutCard({ installerId }: { installerId: number }) {
   const rows = useUnavailability(installerId);
@@ -262,7 +263,7 @@ function BlackoutCard({ installerId }: { installerId: number }) {
       {rows.isLoading ? (
         <Loading />
       ) : (rows.data ?? []).length === 0 ? (
-        <p className="px-4 pb-4 text-sm text-muted-foreground">Nothing blocked — available any working day.</p>
+        <p className="px-4 pb-4 text-sm text-muted-foreground">Nothing blocked, available any working day.</p>
       ) : (
         <ul className="border-t border-border">
           {(rows.data ?? []).map((r) => {
@@ -307,8 +308,230 @@ function BlackoutCard({ installerId }: { installerId: number }) {
   );
 }
 
+/**
+ * The contractor's own invoicing profile. Whatever is typed here is what gets
+ * printed on the invoice he raises from Terra Crew, in his business name and
+ * billed to Arclan Pty Ltd t/a Terra Flooring.
+ *
+ * Two things here gate him entirely. He cannot raise an invoice until the
+ * office has given him a starting invoice number, because the numbering is his
+ * sequence not Terra's, and he cannot raise one without bank details because
+ * accounts would have nowhere to pay it. The readiness strip below says so
+ * plainly rather than letting him find out on the job.
+ */
+function InstallerInvoicingTab({ id }: { id: number }) {
+  const detail = useInstaller(id);
+  const update = useUpdateInstaller();
+  const [error, setError] = React.useState<string | null>(null);
+  const [saved, setSaved] = React.useState(false);
+  const [uploading, setUploading] = React.useState(false);
+  const [form, setForm] = React.useState<{
+    tradingName: string;
+    gstRegistered: boolean;
+    abn: string;
+    businessAddress: string;
+    invoiceEmail: string;
+    bankAccountName: string;
+    bankBsb: string;
+    bankAccountNumber: string;
+    nextInvoiceNumber: string;
+    logoUrl: string | null;
+  } | null>(null);
+
+  const installer = detail.data?.installer;
+  const invoicing = detail.data?.invoicing;
+
+  React.useEffect(() => {
+    if (!installer) return;
+    setForm({
+      tradingName: installer.tradingName ?? "",
+      gstRegistered: installer.gstRegistered,
+      abn: installer.abn ?? "",
+      businessAddress: installer.businessAddress ?? "",
+      invoiceEmail: installer.invoiceEmail ?? installer.email ?? "",
+      bankAccountName: installer.bankAccountName ?? "",
+      bankBsb: installer.bankBsb ?? "",
+      bankAccountNumber: installer.bankAccountNumber ?? "",
+      nextInvoiceNumber: installer.nextInvoiceNumber == null ? "" : String(installer.nextInvoiceNumber),
+      logoUrl: installer.logoUrl ?? null,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- hydrate once per installer
+  }, [installer?.id]);
+
+  function set<K extends keyof NonNullable<typeof form>>(key: K, value: NonNullable<typeof form>[K]) {
+    setSaved(false);
+    setForm((f) => (f ? { ...f, [key]: value } : f));
+  }
+
+  async function pickLogo(file: File | undefined) {
+    if (!file) return;
+    setError(null);
+    setUploading(true);
+    try {
+      const key = await uploadInstallerLogo(file, id);
+      set("logoUrl", key);
+      await update.mutateAsync({ id, logoUrl: key });
+      setSaved(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function save() {
+    if (!form) return;
+    setError(null);
+    const numbered = form.nextInvoiceNumber.trim();
+    if (numbered && !/^\d+$/.test(numbered)) {
+      setError("The starting invoice number has to be a whole number.");
+      return;
+    }
+    try {
+      await update.mutateAsync({
+        id,
+        tradingName: form.tradingName.trim() || null,
+        gstRegistered: form.gstRegistered,
+        abn: form.abn.trim() || null,
+        businessAddress: form.businessAddress.trim() || null,
+        invoiceEmail: form.invoiceEmail.trim() || null,
+        bankAccountName: form.bankAccountName.trim() || null,
+        bankBsb: form.bankBsb.trim() || null,
+        bankAccountNumber: form.bankAccountNumber.trim() || null,
+        // Once he has raised one, the number is locked and we never send it.
+        ...(invoicing && invoicing.raised > 0 ? {} : { nextInvoiceNumber: numbered ? Number(numbered) : null }),
+      });
+      setSaved(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  if (detail.isLoading || !form || !invoicing) return <Loading />;
+
+  const locked = invoicing.raised > 0;
+  const blockers: string[] = [];
+  if (installer?.nextInvoiceNumber == null) blockers.push("no starting invoice number");
+  if (form.gstRegistered && !form.abn.trim()) blockers.push("GST registered with no ABN");
+  if (!form.bankAccountName.trim() || !form.bankBsb.trim() || !form.bankAccountNumber.trim())
+    blockers.push("bank details incomplete");
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div
+        className={
+          blockers.length
+            ? "rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+            : "rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900"
+        }
+      >
+        {blockers.length ? (
+          <>
+            <span className="font-medium">He can't raise an invoice yet.</span> Outstanding: {blockers.join(", ")}.
+          </>
+        ) : (
+          <>
+            <Check className="mr-1 inline size-4" />
+            Set up. He can invoice a completed job from his phone.
+          </>
+        )}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Trading / business name" hint="Printed at the top of his invoice. Falls back to his own name.">
+          <Input
+            value={form.tradingName}
+            placeholder={installer?.name ?? ""}
+            onChange={(e) => set("tradingName", e.target.value)}
+          />
+        </Field>
+        <Field label="ABN">
+          <Input value={form.abn} onChange={(e) => set("abn", e.target.value)} />
+        </Field>
+        <Field label="Business / home address" className="sm:col-span-2">
+          <Textarea rows={2} value={form.businessAddress} onChange={(e) => set("businessAddress", e.target.value)} />
+        </Field>
+        <Field label="Invoice email" hint="His copy of every submitted invoice lands here.">
+          <Input value={form.invoiceEmail} onChange={(e) => set("invoiceEmail", e.target.value)} />
+        </Field>
+        <Field label="GST" hint="GST is only ever added if he's registered for it.">
+          <label className="flex h-9 items-center gap-2 text-sm">
+            <Checkbox checked={form.gstRegistered} onChange={(e) => set("gstRegistered", e.target.checked)} />
+            Registered for GST
+          </label>
+        </Field>
+      </div>
+
+      <div className="rounded-lg border border-border p-3">
+        <p className="label-xs mb-2">Bank details</p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="Account name" className="sm:col-span-3">
+            <Input value={form.bankAccountName} onChange={(e) => set("bankAccountName", e.target.value)} />
+          </Field>
+          <Field label="BSB">
+            <Input value={form.bankBsb} placeholder="000-000" onChange={(e) => set("bankBsb", e.target.value)} />
+          </Field>
+          <Field label="Account number" className="sm:col-span-2">
+            <Input value={form.bankAccountNumber} onChange={(e) => set("bankAccountNumber", e.target.value)} />
+          </Field>
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field
+          label="Starting invoice number"
+          hint={
+            locked
+              ? `Locked. He's raised ${invoicing.raised}, last one was #${invoicing.lastNumber}. Next will be #${installer?.nextInvoiceNumber}.`
+              : "His sequence, not Terra's. Set it to whatever his next invoice number is, then it locks."
+          }
+        >
+          <Input
+            inputMode="numeric"
+            disabled={locked}
+            value={form.nextInvoiceNumber}
+            placeholder="e.g. 1042"
+            onChange={(e) => set("nextInvoiceNumber", e.target.value)}
+          />
+        </Field>
+        <Field label="Business logo" hint="Optional. Sits on his invoice instead of the Terra mark.">
+          <div className="flex items-center gap-3">
+            {invoicing.logoViewUrl ? (
+              <img
+                src={invoicing.logoViewUrl}
+                alt="Logo"
+                className="h-9 w-16 rounded border border-border bg-card object-contain"
+              />
+            ) : null}
+            <label className="cursor-pointer rounded-md border border-border px-3 py-1.5 text-sm hover:bg-secondary">
+              {uploading ? "Uploading..." : invoicing.logoViewUrl ? "Replace" : "Upload"}
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                disabled={uploading}
+                onChange={(e) => pickLogo(e.target.files?.[0])}
+              />
+            </label>
+          </div>
+        </Field>
+      </div>
+
+      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+
+      <div className="flex items-center gap-3">
+        <Button onClick={save} disabled={update.isPending}>
+          {update.isPending ? <Spinner className="border-white/40 border-t-white" /> : null}
+          Save invoicing
+        </Button>
+        {saved && !update.isPending ? <span className="text-sm text-muted-foreground">Saved.</span> : null}
+      </div>
+    </div>
+  );
+}
+
 function InstallerPanel({ id, onClose }: { id: number; onClose: () => void }) {
-  const [panel, setPanel] = React.useState<"card" | "rates">("card");
+  const [panel, setPanel] = React.useState<"card" | "rates" | "invoicing">("card");
   const detail = useInstaller(id);
   const bootstrap = useBootstrap();
   const update = useUpdateInstaller();
@@ -414,6 +637,7 @@ function InstallerPanel({ id, onClose }: { id: number; onClose: () => void }) {
         {([
           { id: "card", label: "His card" },
           { id: "rates", label: "Rates" },
+          { id: "invoicing", label: "Invoicing" },
         ] as const).map((t) => (
           <button
             key={t.id}
@@ -431,6 +655,7 @@ function InstallerPanel({ id, onClose }: { id: number; onClose: () => void }) {
       </div>
 
       {panel === "rates" ? <InstallerRatesTab installerId={id} /> : null}
+      {panel === "invoicing" ? <InstallerInvoicingTab id={id} /> : null}
 
       {panel === "card" && (detail.isLoading || !form) ? <Loading /> : null}
       {panel === "card" && !(detail.isLoading || !form) ? (
@@ -668,7 +893,7 @@ export default function InstallersPage() {
                   {i.skills.length === 0 ? (
                     <span className="inline-flex items-center gap-1 text-xs text-destructive">
                       <AlertTriangle className="size-3.5" />
-                      No skills ticked — can't be dispatched
+                      No skills ticked, can't be dispatched
                     </span>
                   ) : (
                     i.skills.slice(0, 6).map((s) => (
@@ -702,7 +927,7 @@ export default function InstallersPage() {
       {rows.length > 0 ? (
         <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
           <HardHat className="size-3.5" />
-          Installers never see customer pricing, quotes, invoices or each other's tasks — that's enforced on the
+          Installers never see customer pricing, quotes, invoices or each other's tasks, that's enforced on the
           server, not just hidden in the app.
         </p>
       ) : null}

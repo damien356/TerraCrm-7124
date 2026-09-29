@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { orpc } from "../lib/api";
+import { client, orpc } from "../lib/api";
 
 export function useInstallers(includeInactive = false) {
   return useQuery(orpc.installers.list.queryOptions({ input: { includeInactive }, staleTime: 30_000 }));
@@ -52,4 +52,23 @@ export function useUpdateInstaller() {
 /** Tick/untick a skill on the installer card, with their own rate for it. */
 export function useSetInstallerSkill() {
   return useMutation(useInstallerMutation("setSkill"));
+}
+
+/**
+ * The installer's business logo, uploaded by the office on their behalf.
+ * Straight to storage from the browser, the API server never holds the file.
+ */
+export async function uploadInstallerLogo(file: File, installerId: number) {
+  const { url, key } = await client.installers.presignLogo({
+    installerId,
+    filename: file.name,
+    contentType: file.type || "image/png",
+  });
+  const res = await fetch(url, {
+    method: "PUT",
+    body: file,
+    headers: { "Content-Type": file.type || "image/png" },
+  });
+  if (!res.ok) throw new Error("That logo didn't upload. Try again.");
+  return key;
 }

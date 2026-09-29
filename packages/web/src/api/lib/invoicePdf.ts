@@ -3,7 +3,7 @@ import { Document, Page, Text, View, Image, StyleSheet, renderToBuffer } from "@
 
 /**
  * The installer's own invoice to Terra, rendered in their business name.
- * Built with React.createElement, not JSX — this file lives under the API
+ * Built with React.createElement, not JSX, because this file lives under the API
  * project's tsconfig, which has no "jsx" compiler option, and adding one
  * would open JSX up across every server file rather than just this one.
  */

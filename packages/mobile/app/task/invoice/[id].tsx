@@ -210,13 +210,13 @@ export default function InvoiceScreen() {
               </View>
             </View>
             <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: c.mutedForeground, marginTop: 10 }}>
-              This invoice is locked. Terra pays it through their own process — you'll see the status update here as it
+              This invoice is locked. Terra pays it through their own process, you'll see the status update here as it
               moves along.
             </Text>
           </Card>
         ) : null}
 
-        {/* Read-only work summary — always visible. */}
+        {/* Read-only work summary, always visible. */}
         <Card>
           <Text style={{ fontFamily: Fonts.medium, fontSize: 10.5, letterSpacing: 1, color: c.mutedForeground }}>
             WORK COMPLETED
@@ -270,7 +270,7 @@ export default function InvoiceScreen() {
             </Pressable>
             {pendingVariations.length > 0 ? (
               <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: c.mutedForeground, marginTop: 8 }}>
-                {pendingVariations.length} waiting on the office — they'll show up here once approved.
+                {pendingVariations.length} waiting on the office, they'll show up here once approved.
               </Text>
             ) : null}
           </>
@@ -282,15 +282,15 @@ export default function InvoiceScreen() {
               YOUR DETAILS ON THIS INVOICE
             </Text>
             <Row label="Trading as" value={p.profile.tradingName || p.profile.installerName} />
-            <Row label="ABN" value={p.profile.abn ?? "—"} />
+            <Row label="ABN" value={p.profile.abn ?? "-"} />
             <Row label="GST registered" value={p.profile.gstRegistered ? "Yes" : "No"} />
-            <Row label="Address" value={p.profile.businessAddress ?? "—"} />
-            <Row label="Email" value={p.profile.invoiceEmail ?? "—"} />
-            <Row label="Invoice number" value={p.profile.nextInvoiceNumber != null ? String(p.profile.nextInvoiceNumber) : "—"} />
+            <Row label="Address" value={p.profile.businessAddress ?? "-"} />
+            <Row label="Email" value={p.profile.invoiceEmail ?? "-"} />
+            <Row label="Invoice number" value={p.profile.nextInvoiceNumber != null ? String(p.profile.nextInvoiceNumber) : "-"} />
             <View style={{ height: 1, backgroundColor: c.border, marginVertical: 10 }} />
-            <Row label="Bank account" value={p.profile.bankAccountName ?? "—"} />
-            <Row label="BSB" value={p.profile.bankBsb ?? "—"} />
-            <Row label="Account no." value={p.profile.bankAccountNumber ?? "—"} />
+            <Row label="Bank account" value={p.profile.bankAccountName ?? "-"} />
+            <Row label="BSB" value={p.profile.bankBsb ?? "-"} />
+            <Row label="Account no." value={p.profile.bankAccountNumber ?? "-"} />
             <View style={{ height: 1, backgroundColor: c.border, marginVertical: 10 }} />
             <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: c.mutedForeground }}>Billed to</Text>
             <Text style={{ fontFamily: Fonts.medium, fontSize: 13.5, color: c.foreground, marginTop: 2 }}>

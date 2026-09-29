@@ -5,6 +5,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
 import { blockedInstallerIds } from "../lib/availability";
+import { installerLogoKey, signGet, signPut } from "../lib/s3";
 
 /**
  * Skills are TICKS on the installer card (`installer_skills`) with a per-skill
@@ -66,7 +67,7 @@ export const installers = {
     const [installer] = await db.select().from(schema.installers).where(eq(schema.installers.id, input.id));
     if (!installer) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
 
-    const [skillRows, recent, stats] = await Promise.all([
+    const [skillRows, recent, stats, invoiceStats] = await Promise.all([
       db
         .select({ link: schema.installerSkills, skill: schema.skills })
         .from(schema.installerSkills)
@@ -88,10 +89,28 @@ export const installers = {
         })
         .from(schema.jobTasks)
         .where(eq(schema.jobTasks.assignedInstallerId, input.id)),
+      /*
+       * Invoice numbering belongs to the contractor, so the office sets the
+       * starting number once. After he has raised one, the number is his own
+       * running sequence and we only report it, never reset it.
+       */
+      db
+        .select({
+          count: sql<number>`count(*)`,
+          lastNumber: sql<number>`max(${schema.installerInvoices.invoiceNumber})`,
+        })
+        .from(schema.installerInvoices)
+        .where(eq(schema.installerInvoices.installerId, input.id)),
     ]);
 
     return {
       installer: { ...installer, unavailableDays: safeDays(installer.unavailableDays) },
+      invoicing: {
+        raised: Number(invoiceStats[0]?.count ?? 0),
+        lastNumber: invoiceStats[0]?.lastNumber ?? null,
+        /* Short-lived read link so the office can eyeball the logo it uploaded. */
+        logoViewUrl: installer.logoUrl ? await signGet(installer.logoUrl) : null,
+      },
       skills: skillRows.map((s) => ({
         id: s.link.id,
         skillId: s.link.skillId,
@@ -174,6 +193,25 @@ export const installers = {
       return row;
     }),
 
+  /**
+   * A presigned slot for an installer's business logo, uploaded by the office.
+   * Most of these blokes will never upload their own, so the office does it
+   * off whatever they emailed through. Same storage key the app would use.
+   */
+  presignLogo: adminOnly
+    .input(
+      z.object({
+        installerId: z.number(),
+        filename: z.string().min(1),
+        contentType: z.string().min(1),
+      }),
+    )
+    .handler(async ({ input }) => {
+      const key = installerLogoKey(input.installerId, input.filename);
+      const url = await signPut(key, input.contentType);
+      return { url, key };
+    }),
+
   /** Tick or untick a skill, and set the rate for it. */
   setSkill: adminOnly
     .input(
@@ -220,7 +258,7 @@ export const installers = {
       return { ok: true, enabled: true };
     }),
 
-  /** Who can legitimately be offered this skill — used by the dispatch pickers. */
+  /** Who can legitimately be offered this skill, used by the dispatch pickers. */
   eligible: adminOnly
     .input(z.object({ skillId: z.number(), date: z.string().optional(), crewSize: z.number().default(1) }))
     .handler(async ({ input }) => {
@@ -266,7 +304,7 @@ export const installers = {
       });
     }),
 
-  /** Compliance watchlist — insurance/licence expiring inside 60 days. */
+  /** Compliance watchlist: insurance or licence expiring inside 60 days. */
   expiring: adminOnly.handler(async () => {
     const soon = new Date();
     soon.setDate(soon.getDate() + 60);
@@ -277,7 +315,7 @@ export const installers = {
     return rows.map((r) => ({ id: r.id, name: r.name, insuranceExpiry: r.insuranceExpiry }));
   }),
 
-  /** Availability heat for the week — how many tasks each installer holds per day. */
+  /** Availability heat for the week: how many tasks each installer holds per day. */
   load: adminOnly
     .input(z.object({ from: z.string(), to: z.string() }))
     .handler(async ({ input }) => {

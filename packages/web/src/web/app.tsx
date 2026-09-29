@@ -27,6 +27,7 @@ import SupervisorDetailPage from "./pages/supervisor-detail";
 import CashflowPage from "./pages/finance-cashflow";
 import ForecastingPage from "./pages/finance-forecasting";
 import InvoicesPage from "./pages/finance-invoices";
+import SubcontractorInvoicesPage from "./pages/subcontractor-invoices";
 import ExpensesPage from "./pages/finance-expenses";
 import ProfitabilityPage from "./pages/finance-profitability";
 import TemplatesPage from "./pages/templates";
@@ -67,6 +68,7 @@ function App() {
           <Route path="/finance/cashflow" component={CashflowPage} />
           <Route path="/finance/forecasting" component={ForecastingPage} />
           <Route path="/finance/invoices" component={InvoicesPage} />
+          <Route path="/finance/subcontractor-invoices" component={SubcontractorInvoicesPage} />
           <Route path="/finance/expenses" component={ExpensesPage} />
           <Route path="/finance/profitability" component={ProfitabilityPage} />
           <Route path="/marketing/templates" component={TemplatesPage} />

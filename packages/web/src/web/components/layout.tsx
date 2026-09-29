@@ -70,6 +70,7 @@ const NAV: { label?: string; items: { to: string; label: string; icon: typeof Us
       { to: "/finance/cashflow", label: "Cashflow", icon: Wallet },
       { to: "/finance/forecasting", label: "Forecasting", icon: TrendingUp },
       { to: "/finance/invoices", label: "Invoices", icon: Receipt },
+      { to: "/finance/subcontractor-invoices", label: "Installer invoices", icon: HardHat },
       { to: "/finance/expenses", label: "Expenses", icon: BanknoteArrowDown },
       { to: "/suppliers", label: "Suppliers", icon: Truck },
       { to: "/finance/profitability", label: "Profitability", icon: PieChart },
