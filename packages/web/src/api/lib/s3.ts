@@ -47,8 +47,32 @@ export function invoicePdfKey(installerId: number, taskId: number) {
   return `installers/${installerId}/invoices/task-${taskId}-${Date.now()}.pdf`;
 }
 
-/** Server writes a file straight to storage (used for generated PDFs, not client uploads). */
-export async function putObject(key: string, body: Buffer, contentType: string) {
-  await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: body, ContentType: contentType }));
+/** Read a stored file back into memory, to re-attach a generated PDF to an email. */
+export async function getObject(key: string) {
+  const res = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+  if (!res.Body) throw new Error(`Nothing stored at ${key}`);
+  return Buffer.from(await res.Body.transformToByteArray());
+}
+
+/**
+ * Server writes a file straight to storage (used for generated PDFs, not client uploads).
+ *
+ * `downloadAs` is the filename a browser should SAVE the object under, and it
+ * has to be set here, on the write. Tigris serves the disposition stored with
+ * the object and ignores the `response-content-disposition` override on a
+ * presigned link, so a PDF written without this opens inline in a tab named
+ * after its storage key, which is what a phone shows instead of downloading it.
+ */
+export async function putObject(key: string, body: Buffer, contentType: string, downloadAs?: string) {
+  const safeName = downloadAs?.replace(/["\\\r\n]/g, "");
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: BUCKET,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+      ...(safeName ? { ContentDisposition: `attachment; filename="${safeName}"` } : {}),
+    }),
+  );
   return key;
 }

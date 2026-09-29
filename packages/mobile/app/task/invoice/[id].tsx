@@ -21,6 +21,7 @@ import {
   useInvoicePreview,
   useMyVariations,
   useRequestVariation,
+  useResendInvoice,
   useSubmitInvoice,
 } from "@/queries/invoices";
 
@@ -76,6 +77,7 @@ export default function InvoiceScreen() {
   const requestVariation = useRequestVariation();
   const submit = useSubmitInvoice();
   const downloadUrl = useInvoiceDownloadUrl();
+  const resend = useResendInvoice();
 
   const [stage, setStage] = useState<"summary" | "confirm">("summary");
   const [error, setError] = useState<string | null>(null);
@@ -132,6 +134,17 @@ export default function InvoiceScreen() {
       setError(e instanceof Error ? e.message : "Couldn't open that PDF. Try again.");
     } finally {
       setDownloading(false);
+    }
+  }
+
+  async function onResend() {
+    const invoiceId = p?.existingInvoiceId;
+    if (!invoiceId) return;
+    setError(null);
+    try {
+      await resend.mutateAsync({ invoiceId });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Still couldn't send it. Ring the office.");
     }
   }
 
@@ -213,6 +226,55 @@ export default function InvoiceScreen() {
               This invoice is locked. Terra pays it through their own process, you'll see the status update here as it
               moves along.
             </Text>
+
+            {/* Submitted and received are different facts. Say which one this is. */}
+            <View style={{ height: 1, backgroundColor: c.border, marginVertical: 12 }} />
+            {p.emailedToTerra ? (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
+                <Ionicons name="checkmark-circle" size={16} color={c.success} />
+                <Text style={{ fontFamily: Fonts.medium, fontSize: 13, color: c.foreground }}>
+                  Emailed to Terra accounts
+                </Text>
+              </View>
+            ) : (
+              <>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
+                  <Ionicons name="alert-circle" size={16} color={c.destructive} />
+                  <Text style={{ fontFamily: Fonts.medium, fontSize: 13, color: c.destructive }}>
+                    Not emailed to Terra yet
+                  </Text>
+                </View>
+                <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: c.mutedForeground, marginTop: 4 }}>
+                  Your invoice is saved and locked, but the email to accounts didn't go through
+                  {p.emailError ? ` (${p.emailError})` : ""}. Send it again, the numbers can't change.
+                </Text>
+                <Pressable
+                  disabled={resend.isPending}
+                  onPress={() => void onResend()}
+                  style={({ pressed }) => ({
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 8,
+                    marginTop: 10,
+                    borderWidth: 1,
+                    borderColor: c.border,
+                    borderRadius: 12,
+                    paddingVertical: 12,
+                    opacity: pressed || resend.isPending ? 0.7 : 1,
+                  })}
+                >
+                  {resend.isPending ? (
+                    <ActivityIndicator size="small" color={c.foreground} />
+                  ) : (
+                    <Ionicons name="mail-outline" size={17} color={c.foreground} />
+                  )}
+                  <Text style={{ fontFamily: Fonts.medium, fontSize: 14, color: c.foreground }}>
+                    {resend.isPending ? "Sending" : "Send to Terra again"}
+                  </Text>
+                </Pressable>
+              </>
+            )}
           </Card>
         ) : null}
 

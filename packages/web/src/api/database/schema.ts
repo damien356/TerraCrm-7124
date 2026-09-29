@@ -2131,6 +2131,16 @@ export const installerInvoices = sqliteTable(
     total: real("total").notNull().default(0),
     /** Storage key for the generated PDF. */
     pdfKey: text("pdf_key"),
+    /**
+     * Did the invoice actually REACH Terra. Submitting writes the row and the
+     * PDF, emailing it is a separate thing that can fail on its own, and an
+     * invoice nobody received is not a submitted invoice. Null means the email
+     * never went, so the app can say so and offer to send it again.
+     */
+    emailedToTerraAt: integer("emailed_to_terra_at", { mode: "timestamp" }),
+    emailedToInstallerAt: integer("emailed_to_installer_at", { mode: "timestamp" }),
+    /** Why the last send failed, in the provider's own words. */
+    emailError: text("email_error"),
     confirmedAt: integer("confirmed_at", { mode: "timestamp" }),
     submittedAt: integer("submitted_at", { mode: "timestamp" }),
     approvedAt: integer("approved_at", { mode: "timestamp" }),

@@ -42,3 +42,9 @@ export function useSubmitInvoice() {
 export function useInvoiceDownloadUrl() {
   return useMutation(orpc.installerInvoices.downloadUrl.mutationOptions());
 }
+
+/** Send an already-submitted invoice to Terra again, when the first send failed. */
+export function useResendInvoice() {
+  const invalidate = useInvalidateInvoices();
+  return useMutation(orpc.installerInvoices.resendToTerra.mutationOptions({ onSuccess: invalidate }));
+}

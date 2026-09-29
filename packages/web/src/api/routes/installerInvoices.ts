@@ -5,7 +5,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, installerOnly } from "../middleware/auth";
 import { ownTaskOrThrow } from "./field";
-import { invoicePdfKey, putObject, signGet } from "../lib/s3";
+import { getObject, invoicePdfKey, putObject, signGet } from "../lib/s3";
 import { renderInvoicePdf, type InvoiceLineItem } from "../lib/invoicePdf";
 import { sendEmail } from "../lib/email";
 
@@ -91,6 +91,9 @@ export const installerInvoices = {
       alreadySubmitted: !!existing,
       existingStatus: existing?.status ?? null,
       existingInvoiceId: existing?.id ?? null,
+      /** Submitted is not the same as received. The screen says which of the two. */
+      emailedToTerra: existing ? !!existing.emailedToTerraAt : false,
+      emailError: existing?.emailError ?? null,
       canSubmit: !existing && installer.nextInvoiceNumber != null && (!installer.gstRegistered || !!installer.abn),
       blockedReason: existing
         ? null
@@ -189,7 +192,9 @@ export const installerInvoices = {
     });
 
     const pdfKey = invoicePdfKey(context.installerId, input.taskId);
-    await putObject(pdfKey, pdfBuffer, "application/pdf");
+    // Written as an attachment with a real filename so the Download PDF button
+    // saves "invoice-1001.pdf" instead of opening the storage key in a tab.
+    await putObject(pdfKey, pdfBuffer, "application/pdf", `invoice-${invoiceNumber}.pdf`);
 
     const [row] = await db
       .insert(schema.installerInvoices)
@@ -240,12 +245,29 @@ export const installerInvoices = {
     const bodyHtml = `<p>Invoice #${invoiceNumber} for job #${job.number}, task "${task.title}".</p><p>Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.</p>`;
     const bodyText = `Invoice #${invoiceNumber} for job #${job.number}, task "${task.title}". Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.`;
 
-    await sendEmail({ to: BILLING_EMAIL, subject, html: bodyHtml, text: bodyText, attachments });
-    if (installer.invoiceEmail) {
-      await sendEmail({ to: installer.invoiceEmail, subject, html: bodyHtml, text: bodyText, attachments });
-    }
+    /*
+     * Submitting and DELIVERING are two different things. The row and the PDF
+     * are saved above, so a failed send must never throw away a submitted
+     * invoice. It must not be reported as sent either: record what actually
+     * left the building so the app can say so and offer to send it again.
+     */
+    const toTerra = await sendEmail({ to: BILLING_EMAIL, subject, html: bodyHtml, text: bodyText, attachments });
+    const toInstaller = installer.invoiceEmail
+      ? await sendEmail({ to: installer.invoiceEmail, subject, html: bodyHtml, text: bodyText, attachments })
+      : null;
 
-    return row;
+    const delivery = {
+      emailedToTerraAt: toTerra.ok ? now : null,
+      emailedToInstallerAt: toInstaller?.ok ? now : null,
+      emailError: toTerra.ok ? null : toTerra.reason,
+    };
+    const [saved] = await db
+      .update(schema.installerInvoices)
+      .set(delivery)
+      .where(eq(schema.installerInvoices.id, row!.id))
+      .returning();
+
+    return saved ?? { ...row!, ...delivery };
   }),
 
   /** My past invoices and where each one sits in the payment lifecycle. */
@@ -265,6 +287,41 @@ export const installerInvoices = {
       .where(and(eq(schema.installerInvoices.id, input.invoiceId), eq(schema.installerInvoices.installerId, context.installerId)));
     if (!row || !row.pdfKey) throw new ORPCError("NOT_FOUND", { message: "Invoice not found" });
     return { url: await signGet(row.pdfKey) };
+  }),
+
+  /**
+   * Send a submitted invoice to Terra again. The invoice already exists and is
+   * locked, so this only re-attaches the stored PDF: nothing is recalculated
+   * and no numbers can change. It exists because a send can fail on its own
+   * after a successful submit, and the installer needs a way out of that
+   * without re-doing the job card.
+   */
+  resendToTerra: installerOnly.input(z.object({ invoiceId: z.number() })).handler(async ({ input, context }) => {
+    const [row] = await db
+      .select()
+      .from(schema.installerInvoices)
+      .where(and(eq(schema.installerInvoices.id, input.invoiceId), eq(schema.installerInvoices.installerId, context.installerId)));
+    if (!row || !row.pdfKey) throw new ORPCError("NOT_FOUND", { message: "Invoice not found" });
+
+    const pdfBuffer = await getObject(row.pdfKey);
+    const attachments = [{ filename: `invoice-${row.invoiceNumber}.pdf`, content: pdfBuffer.toString("base64") }];
+    const subject = `Invoice #${row.invoiceNumber} from ${row.tradingName || row.installerName}, Job #${row.jobNumber}`;
+    const bodyHtml = `<p>Invoice #${row.invoiceNumber} for job #${row.jobNumber}, task "${row.taskTitle}".</p><p>Total: ${row.total.toFixed(2)}${row.gstRegistered ? " inc GST" : ""}.</p>`;
+    const bodyText = `Invoice #${row.invoiceNumber} for job #${row.jobNumber}, task "${row.taskTitle}". Total: ${row.total.toFixed(2)}${row.gstRegistered ? " inc GST" : ""}.`;
+
+    const now = new Date();
+    const toTerra = await sendEmail({ to: BILLING_EMAIL, subject, html: bodyHtml, text: bodyText, attachments });
+    const [saved] = await db
+      .update(schema.installerInvoices)
+      .set({
+        emailedToTerraAt: toTerra.ok ? now : row.emailedToTerraAt,
+        emailError: toTerra.ok ? null : toTerra.reason,
+        updatedAt: now,
+      })
+      .where(eq(schema.installerInvoices.id, row.id))
+      .returning();
+    if (!toTerra.ok) throw new ORPCError("BAD_GATEWAY", { message: toTerra.reason });
+    return saved;
   }),
 
   /** REQUEST VARIATION / EXTRA. Goes to Terra for approval, never self-approved. */
