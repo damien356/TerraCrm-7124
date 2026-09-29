@@ -4,7 +4,7 @@ import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import type { AppRouterClient } from "@template/web";
-import { authClient } from "./auth";
+import { authClient, getWebSessionToken } from "./auth";
 
 // Store builds pin the live domain through EXPO_PUBLIC_API_URL (set in eas.json).
 // Dev and preview builds fall back to the platform-managed apiUrl.
@@ -23,9 +23,14 @@ const link = new RPCLink({
     // one this login actually has.
     const token = authClient.managedAuth.getToken();
     if (token) return { Authorization: `Bearer ${token}` };
-    // Cookie is a forbidden header in a browser, where the cookie is the
-    // browser's job anyway. Only a phone has to set it itself.
-    if (Platform.OS === "web") return {};
+    // A browser drops a cross-origin session cookie regardless of what we set
+    // by hand, so the web preview keeps its token in storage instead and
+    // replays it as a bearer header (see lib/auth.ts). A phone keeps the
+    // cookie itself and puts it on the request the same way.
+    if (Platform.OS === "web") {
+      const webToken = getWebSessionToken();
+      return webToken ? { Authorization: `Bearer ${webToken}` } : {};
+    }
     const cookie = authClient.getCookie?.();
     return cookie ? { Cookie: cookie } : {};
   },
