@@ -455,8 +455,12 @@ function InstallerInvoicingTab({ id }: { id: number }) {
           <Input value={form.invoiceEmail} onChange={(e) => set("invoiceEmail", e.target.value)} />
         </Field>
         <Field label="GST" hint="GST is only ever added if he's registered for it.">
-          <label className="flex h-9 items-center gap-2 text-sm">
-            <Checkbox checked={form.gstRegistered} onChange={(e) => set("gstRegistered", e.target.checked)} />
+          <label htmlFor="installer-gst-registered" className="flex h-9 items-center gap-2 text-sm">
+            <Checkbox
+              id="installer-gst-registered"
+              checked={form.gstRegistered}
+              onChange={(e) => set("gstRegistered", e.target.checked)}
+            />
             Registered for GST
           </label>
         </Field>
@@ -508,6 +512,7 @@ function InstallerInvoicingTab({ id }: { id: number }) {
               <input
                 type="file"
                 accept="image/*"
+                aria-label="Upload invoice logo"
                 className="hidden"
                 disabled={uploading}
                 onChange={(e) => pickLogo(e.target.files?.[0])}

@@ -50,11 +50,13 @@ export default function TodayScreen() {
   }, [rangeTasks]);
 
   const isToday = selectedDate === todayISO();
-  const selectedDayTasks: FieldTask[] = isToday
-    ? today.data ?? []
-    : (rangeTasks ?? []).filter((t) => t.scheduledDate === selectedDate);
+  /* The list is always one day's work: today's own feed on the day view, and
+   * the selected day's slice of the range on the week and month views. */
+  const tasks = useMemo<FieldTask[]>(() => {
+    if (viewMode === "day" || isToday) return today.data ?? [];
+    return (rangeTasks ?? []).filter((t) => t.scheduledDate === selectedDate);
+  }, [viewMode, isToday, today.data, rangeTasks, selectedDate]);
 
-  const tasks = viewMode === "day" ? today.data ?? [] : selectedDayTasks;
   const dayPay = useMemo(
     () => tasks.reduce((sum, t) => sum + (t.payType === "per_job" ? (t.payAmount ?? 0) : 0), 0),
     [tasks],

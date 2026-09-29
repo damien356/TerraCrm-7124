@@ -46,6 +46,7 @@ export default function CashflowPage() {
           <label className="flex cursor-pointer items-center gap-2 rounded-md border border-border px-3 py-2 text-[13px]">
             <input
               type="checkbox"
+              aria-label="Include pipeline"
               checked={includePipeline}
               onChange={(e) => setIncludePipeline(e.target.checked)}
               className="size-3.5 accent-[var(--gold)]"

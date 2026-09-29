@@ -100,6 +100,7 @@ export function Combobox({
         <input
           ref={inputRef}
           disabled={disabled}
+          aria-label={selected ? selected.label : placeholder}
           className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground/70"
           placeholder={selected ? selected.label : placeholder}
           value={open ? query : ""}

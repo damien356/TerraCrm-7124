@@ -267,6 +267,7 @@ export default function InboxPage() {
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <input
+                aria-label="Search conversations"
                 className="h-11 w-full rounded-xl border border-border bg-card pl-9 pr-10 text-sm outline-none placeholder:text-muted-foreground focus:border-primary/50"
                 placeholder="Search job, address, name, message, file…"
                 value={search}

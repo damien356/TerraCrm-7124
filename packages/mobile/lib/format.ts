@@ -18,7 +18,7 @@ export function fmtHours(h?: number | null) {
 
 export function fmtMoney(n?: number | null) {
   if (n == null) return "—";
-  return `${n.toLocaleString("en-AU", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  return `$${n.toLocaleString("en-AU", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 }
 
 /** Same as fmtMoney but keeps the cents, for line item pay breakdowns. */

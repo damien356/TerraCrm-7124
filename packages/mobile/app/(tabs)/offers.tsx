@@ -33,6 +33,37 @@ function windowDays(from?: string | null, to?: string | null): string[] {
   return out;
 }
 
+/** Suburb and state, and never a bare "QLD" when the suburb is missing. */
+function suburbLine(suburb?: string | null, state?: string | null) {
+  const s = (suburb ?? "").trim();
+  if (!s) return "Suburb on acceptance";
+  return state ? `${s} ${state}` : s;
+}
+
+/** "Residential" / "Commercial", enough to picture the site and nothing more. */
+function propertyLabel(type?: string | null) {
+  if (!type) return "";
+  return type.charAt(0).toUpperCase() + type.slice(1).replace(/_/g, " ");
+}
+
+/**
+ * The offer pay is always the total for the task, even when the office worked
+ * it out off an hourly or per m² rate. This says which, so the number is never
+ * misread as the rate itself.
+ */
+function payBasis(payType?: string | null, hours?: number | null) {
+  switch (payType) {
+    case "hourly":
+      return hours ? `total, your hourly rate over ${fmtHours(hours)}` : "total, off your hourly rate";
+    case "per_m2":
+      return "total, off your m² rate";
+    case "day_rate":
+      return "total, off your day rate";
+    default:
+      return "fixed for the task";
+  }
+}
+
 function holdClock(until?: Date | string | null) {
   if (!until) return "shortly";
   const d = typeof until === "string" ? new Date(until) : until;
@@ -172,9 +203,15 @@ export default function OffersScreen() {
                   <Text style={{ fontFamily: Fonts.bold, fontSize: 18, color: c.foreground, lineHeight: 23 }}>
                     {offer.title}
                   </Text>
-                  <Text style={{ fontFamily: Fonts.sans, fontSize: 13.5, color: c.mutedForeground, marginTop: 3 }}>
-                    {[offer.siteAddress, offer.siteSuburb].filter(Boolean).join(", ") || "Address on acceptance"}
-                  </Text>
+                  {/* Suburb only while it's still an offer. Street address and the
+                      site contact land on the task card once it's theirs. */}
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginTop: 4 }}>
+                    <Ionicons name="location-outline" size={14} color={c.mutedForeground} />
+                    <Text style={{ fontFamily: Fonts.medium, fontSize: 13.5, color: c.mutedForeground }}>
+                      {suburbLine(offer.siteSuburb, offer.siteState)}
+                      {offer.propertyType ? ` · ${propertyLabel(offer.propertyType)}` : ""}
+                    </Text>
+                  </View>
 
                   <View
                     style={{
@@ -195,6 +232,9 @@ export default function OffersScreen() {
                       </Text>
                       <Text style={{ fontFamily: Fonts.bold, fontSize: 21, color: c.foreground, marginTop: 2 }}>
                         {fmtMoney(offer.payAmount)}
+                      </Text>
+                      <Text style={{ fontFamily: Fonts.sans, fontSize: 11.5, color: c.mutedForeground, marginTop: 1 }}>
+                        {payBasis(offer.payType, offer.durationHours)}
                       </Text>
                     </View>
                     <View style={{ width: 1, alignSelf: "stretch", backgroundColor: c.border }} />
@@ -225,7 +265,8 @@ export default function OffersScreen() {
                     ) : null}
                     {offer.crewSize > 1 ? (
                       <Text style={{ fontFamily: Fonts.medium, fontSize: 12.5, color: c.mutedForeground }}>
-                        {offer.areaM2 ? " · " : ""}2 on site
+                        {offer.areaM2 ? " · " : ""}
+                        {offer.crewSize} on site
                       </Text>
                     ) : null}
                     {offer.furnitureOnSite ? (
@@ -252,6 +293,17 @@ export default function OffersScreen() {
                     >
                       {offer.description}
                     </Text>
+                  ) : null}
+
+                  {!holding ? (
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 11 }}>
+                      <Ionicons name="lock-closed-outline" size={13} color={c.mutedForeground} />
+                      <Text
+                        style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground, flex: 1, lineHeight: 17 }}
+                      >
+                        Street address and the site contact come through the moment the job is yours.
+                      </Text>
+                    </View>
                   ) : null}
 
                   {days.length > 1 && !holding ? (

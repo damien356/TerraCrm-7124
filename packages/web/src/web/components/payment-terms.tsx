@@ -422,8 +422,12 @@ function TermsModal({
           label="End of month"
           hint="30 days EOM is not 30 days. An invoice on 2 Oct is not due until 30 Nov, and that drift is what catches people out."
         >
-          <label className="flex h-9 items-center gap-2 text-sm">
-            <Checkbox checked={form.endOfMonth} onChange={(e) => set("endOfMonth", e.target.checked)} />
+          <label htmlFor="terms-end-of-month" className="flex h-9 items-center gap-2 text-sm">
+            <Checkbox
+              id="terms-end-of-month"
+              checked={form.endOfMonth}
+              onChange={(e) => set("endOfMonth", e.target.checked)}
+            />
             Count to the end of the month first
           </label>
         </Field>

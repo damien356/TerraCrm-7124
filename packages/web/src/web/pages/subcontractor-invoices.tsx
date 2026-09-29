@@ -189,10 +189,15 @@ function InvoiceRow({
     <>
       <tr className="border-b border-border hover:bg-secondary/50">
         <td className="px-4 py-2.5">
-          <button type="button" onClick={() => setOpen((v) => !v)} className="text-left">
-            <span className="font-medium">#{row.invoiceNumber}</span>
-            <p className="text-xs text-muted-foreground">{row.tradingName || row.installerName}</p>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="text-left font-medium"
+            aria-expanded={open}
+          >
+            #{row.invoiceNumber}
           </button>
+          <p className="text-xs text-muted-foreground">{row.tradingName || row.installerName}</p>
         </td>
         <td className="px-4 py-2.5 text-[13px]">{installerName(row.installerId)}</td>
         <td className="px-4 py-2.5 text-xs text-muted-foreground">
@@ -228,7 +233,7 @@ function InvoiceRow({
       </tr>
       {open ? (
         <tr className="border-b border-border bg-secondary/30">
-          <td colSpan={9} className="px-4 py-3">
+          <td colSpan={9} className="px-4 py-3" aria-label={`Invoice ${row.invoiceNumber} detail`}>
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <p className="label-xs">What they billed</p>

@@ -340,7 +340,14 @@ export const field = {
 
   /* ----------------------------- offers ----------------------------- */
 
-  /** Offers waiting on me, with the pay shown up front. */
+  /**
+   * Offers waiting on me, with the pay shown up front.
+   *
+   * An offer goes out to several installers at once, so it is deliberately
+   * anonymous: everything needed to price the work, nothing that identifies
+   * the customer. Suburb only, never the street address, and no contact names
+   * or numbers. Both unlock on the task card the moment the job is theirs.
+   */
   offers: installerOnly.handler(async ({ context }) => {
     await expireStale();
     const rows = await db
@@ -363,12 +370,16 @@ export const field = {
         startTime: schema.jobTasks.startTime,
         durationHours: schema.jobTasks.durationHours,
         crewSize: schema.jobTasks.crewSize,
+        payType: schema.jobTasks.payType,
         skillName: schema.skills.name,
         skillGroup: schema.skills.groupName,
         jobNumber: schema.jobs.number,
         furnitureOnSite: schema.jobs.furnitureOnSite,
+        // Suburb and property type only. The street address stays out of the
+        // payload, not just out of the UI.
         siteSuburb: schema.sites.suburb,
-        siteAddress: schema.sites.address,
+        siteState: schema.sites.state,
+        propertyType: schema.sites.propertyType,
       })
       .from(schema.taskOffers)
       .innerJoin(schema.jobTasks, eq(schema.jobTasks.id, schema.taskOffers.taskId))

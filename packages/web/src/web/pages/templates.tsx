@@ -392,8 +392,9 @@ function Editor({ id, onClose }: { id?: number; onClose: () => void }) {
               </div>
             </div>
 
-            <label className="flex items-start gap-2 text-sm">
+            <label htmlFor="template-use-wrapper" className="flex items-start gap-2 text-sm">
               <Checkbox
+                id="template-use-wrapper"
                 checked={draft.useWrapper}
                 onChange={(e) => setDraft((d) => ({ ...d, useWrapper: e.target.checked }))}
               />
@@ -405,8 +406,9 @@ function Editor({ id, onClose }: { id?: number; onClose: () => void }) {
               </span>
             </label>
 
-            <label className="flex items-center gap-2 text-sm">
+            <label htmlFor="template-active" className="flex items-center gap-2 text-sm">
               <Checkbox
+                id="template-active"
                 checked={draft.active}
                 onChange={(e) => setDraft((d) => ({ ...d, active: e.target.checked }))}
               />

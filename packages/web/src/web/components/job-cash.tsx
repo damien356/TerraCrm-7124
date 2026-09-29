@@ -227,7 +227,7 @@ export function JobCashCard({ jobId }: { jobId: number }) {
                       <th className="th px-2">State</th>
                       <th className="th px-2">Leaves the account</th>
                       <th className="th px-2 text-right">Amount</th>
-                      <th className="th px-2" />
+                      <th aria-hidden="true" className="th px-2" />
                     </tr>
                   </thead>
                   <tbody>
@@ -284,9 +284,9 @@ export function JobCashCard({ jobId }: { jobId: number }) {
                       <td className="px-2 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                         Total cost
                       </td>
-                      <td colSpan={2} />
+                      <td aria-hidden="true" colSpan={2} />
                       <td className="tabular px-2 py-2.5 text-right font-semibold">{moneyExact(s.totalCost)}</td>
-                      <td />
+                      <td aria-hidden="true" />
                     </tr>
                   </tfoot>
                 </table>

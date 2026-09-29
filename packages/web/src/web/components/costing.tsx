@@ -214,7 +214,7 @@ export function MeasureUpModal({
                     <th className="pb-2 pr-3 label-xs font-normal">Qty</th>
                     <th className="pb-2 pr-3 label-xs font-normal">Rate</th>
                     <th className="pb-2 pr-3 label-xs font-normal text-right">Total</th>
-                    <th className="pb-2" />
+                    <th aria-hidden="true" className="pb-2" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -266,7 +266,7 @@ export function MeasureUpModal({
                       {d.other > 0 ? ` · surcharges and allowances ${dollars(d.other)}` : ""}
                     </td>
                     <td className="tabular pt-2 text-right text-base font-semibold">{dollars(d.total)}</td>
-                    <td />
+                    <td aria-hidden="true" />
                   </tr>
                 </tfoot>
               </table>

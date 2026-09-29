@@ -1,6 +1,7 @@
 import type { RouterClient } from "@orpc/server";
 import { createApp } from "./__core/app";
 import { auth } from "./auth";
+import { bootJourneyEngine } from "./lib/journey-boot";
 import { ping, diag, diagThrow, diagActor } from "./routes/ping";
 import { settings } from "./routes/settings";
 import { contacts } from "./routes/contacts";
@@ -120,5 +121,8 @@ const app = createApp(router);
 
 // Better Auth (email/password + Runable managed Google) — Hono v4 single wildcard.
 app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
+
+// Marketing journeys tick here. Gated to the published server only — see lib/journey-boot.
+bootJourneyEngine();
 
 export default app;

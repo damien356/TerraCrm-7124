@@ -558,8 +558,9 @@ function Editor({
               </p>
             </div>
 
-            <label className="flex items-start gap-2 text-sm">
+            <label htmlFor="segment-require-email" className="flex items-start gap-2 text-sm">
               <Checkbox
+                id="segment-require-email"
                 checked={draft.rules.requireEmail}
                 onChange={(e) => setRules({ requireEmail: e.target.checked })}
               />
