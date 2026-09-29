@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   ListChecks,
   LogOut,
+  Mail,
   MapPinned,
   PieChart,
   Receipt,
@@ -73,6 +74,10 @@ const NAV: { label?: string; items: { to: string; label: string; icon: typeof Us
       { to: "/suppliers", label: "Suppliers", icon: Truck },
       { to: "/finance/profitability", label: "Profitability", icon: PieChart },
     ],
+  },
+  {
+    label: "Marketing",
+    items: [{ to: "/marketing/templates", label: "Email templates", icon: Mail }],
   },
   {
     label: "Admin",
