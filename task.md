@@ -4,7 +4,10 @@ Decided 29 Sep 2026. Damien's call: engine first, canvas builder later.
 
 ## Order
 
-- [ ] 1. Templates. Route plus page. Merge fields, preview, test send to self.
+- [x] 1. Templates. DONE. Route, page, editor with live preview rendered by
+      the same code that sends. Verified in a real browser: page renders, zero
+      console errors, preview iframe shows real merged HTML. Review request
+      template saved (id 1). Test-send button built but not fired yet.
 - [ ] 2. Segments. Route plus page. Live matching count.
 - [x] 3. Engine. DONE. Ticks every 5 min from `__server.ts` only, never from
       Vite dev, so the sandbox can never send to a real customer. Kill switch
