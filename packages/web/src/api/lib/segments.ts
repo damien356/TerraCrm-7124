@@ -2,6 +2,7 @@ import { and, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { treatAsHomeownerSql, treatAsTradeSql } from "./trade";
 
 /* ---------------------------------------------------------------------------
  * Segments — who a message is allowed to go to.
@@ -136,20 +137,13 @@ export function describeRules(rules: SegmentRules, audience: Audience): string {
  * Matching
  * ------------------------------------------------------------------------- */
 
-/**
- * Contacts carry no company_id, so "is this a builder" is answered through
- * their jobs: any job attached to a company makes them trade, and a journey
- * must never touch them.
- */
-const tradesAsCompany = sql`exists (
-  select 1 from ${schema.jobs} j
-  where j.contact_id = ${schema.contacts.id} and j.company_id is not null
-)`;
-
 function ruleConditions(rules: SegmentRules, audience: Audience): SQL[] {
   const where: SQL[] = [sql`${schema.contacts.active} = 1`];
 
-  where.push(audience === "builder" ? tradesAsCompany : sql`not ${tradesAsCompany}`);
+  /* Homeowner vs trade comes from lib/trade.ts, not from jobs.company_id. The
+   * company link is empty for all but two contacts, so trusting it put real
+   * estate agents and a shopfitter in the homeowner pool. See that file. */
+  where.push(audience === "builder" ? treatAsTradeSql : treatAsHomeownerSql);
 
   if (rules.requireEmail !== false) {
     where.push(sql`trim(coalesce(${schema.contacts.email}, '')) != ''`);

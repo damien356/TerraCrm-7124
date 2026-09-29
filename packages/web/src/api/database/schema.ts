@@ -108,6 +108,17 @@ export const contacts = sqliteTable(
     doNotMarketReason: text("do_not_market_reason"),
     /** Last completed job, the clock recency cutoffs are measured against. */
     lastCompletedAt: integer("last_completed_at", { mode: "timestamp" }),
+    /**
+     * homeowner · trade · unknown. A human's ruling on whether this contact is
+     * a private customer or a business, which beats the heuristic in lib/trade.ts.
+     *
+     * It exists because ServiceM8 filed builder work against the company with
+     * contact_id NULL, so the company link cannot answer the question: only two
+     * of 1,653 contacts look like trade through their jobs, while real estate
+     * agents, shopfitters and a body corporate manager sit in the homeowner
+     * pool. Unknown plus a trade signal means held back, not mailed.
+     */
+    audienceKind: text("audience_kind").notNull().default("unknown"),
     /** True while a migrated record still needs a human decision. */
     needsReview: integer("needs_review", { mode: "boolean" }).notNull().default(false),
     /** The ServiceM8 client name this came in as, for tracing and re-imports. */

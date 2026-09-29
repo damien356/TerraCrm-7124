@@ -2,6 +2,7 @@ import { and, asc, eq, gte, inArray, isNotNull, isNull, lt, lte, sql } from "dri
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { checkConsent, sendMarketing } from "./marketing";
+import { isHomeowner } from "./trade";
 
 /* ---------------------------------------------------------------------------
  * The journey engine.
@@ -83,14 +84,16 @@ export async function enrol(
     .where(eq(schema.contacts.id, contactId));
   if (!contact) return { ok: false, reason: "contact not found" };
 
-  /* Is this contact a builder? Contacts carry no company_id, so the test is
-   * whether any of their jobs belong to a company. */
-  const [builderJob] = await db
-    .select({ id: schema.jobs.id })
-    .from(schema.jobs)
-    .where(and(eq(schema.jobs.contactId, contactId), isNotNull(schema.jobs.companyId)))
-    .limit(1);
-  if (builderJob) return { ok: false, reason: "contact trades as a company, journeys are homeowner-only" };
+  /* Is this contact trade? Not answered by jobs.company_id: ServiceM8 filed
+   * builder work against the company with contact_id NULL, so that test found
+   * two contacts out of 1,653 and waved through a Coronis agent, a shopfitter
+   * and a body corporate manager. lib/trade.ts answers it on signals, and
+   * holds back anyone business-looking that nobody has ruled on yet. */
+  const who = await isHomeowner(contactId);
+  if (!who.homeowner) {
+    const why = who.decided ? "marked as trade" : `looks like trade: ${who.reasons.join("; ")}`;
+    return { ok: false, reason: `journeys are homeowner-only — ${why}` };
+  }
 
   const consent = await checkConsent(contact, "email");
   if (!consent.allowed) return { ok: false, reason: consent.reason };
