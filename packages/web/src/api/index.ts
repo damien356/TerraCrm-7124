@@ -30,6 +30,7 @@ import { finance } from "./routes/finance";
 import { intel } from "./routes/intel";
 import { devices } from "./routes/devices";
 import { templates } from "./routes/templates";
+import { segments } from "./routes/segments";
 
 // Terra Ops — Terra Flooring only. Admin procedures are built on `adminOnly`,
 // the installer app talks exclusively to `field` (installerOnly, scoped to the
@@ -98,6 +99,12 @@ export const router = {
    * the only send here is a test to the signed-in staff member.
    */
   templates,
+  /**
+   * Who a message may go to. Every count comes back as a pair — matching and
+   * reachable — because one number hides a consent problem. Builder segments
+   * are forced non-journey-eligible on write.
+   */
+  segments,
   /** Phase 0 — Damien can pull all his data out himself, any time. */
   backups,
 };
