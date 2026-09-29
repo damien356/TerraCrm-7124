@@ -30,6 +30,7 @@ import InvoicesPage from "./pages/finance-invoices";
 import ExpensesPage from "./pages/finance-expenses";
 import ProfitabilityPage from "./pages/finance-profitability";
 import TemplatesPage from "./pages/templates";
+import SegmentsPage from "./pages/segments";
 
 // Finish a returning managed sign-in before anything renders. This top-level
 // await resolves before __main.tsx mounts React (app.tsx is its dependency).
@@ -69,6 +70,7 @@ function App() {
           <Route path="/finance/expenses" component={ExpensesPage} />
           <Route path="/finance/profitability" component={ProfitabilityPage} />
           <Route path="/marketing/templates" component={TemplatesPage} />
+          <Route path="/marketing/segments" component={SegmentsPage} />
           <Route path="/review" component={ReviewPage} />
           <Route path="/installers" component={InstallersPage} />
           <Route path="/team" component={TeamPage} />

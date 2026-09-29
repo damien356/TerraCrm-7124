@@ -8,13 +8,44 @@ Decided 29 Sep 2026. Damien's call: engine first, canvas builder later.
       the same code that sends. Verified in a real browser: page renders, zero
       console errors, preview iframe shows real merged HTML. Review request
       template saved (id 1). Test-send button built but not fired yet.
-- [ ] 2. Segments. Matcher lib DONE (`api/lib/segments.ts`): every segment
-      reports two counts, matching and reachable, plus a blocked breakdown.
-      Never collapsed into one number. Product matching is keyword families,
-      not exact category, because ten years of ServiceM8 free text spells
-      carpet six ways. All 7 sample rule sets under 300ms against prod.
-      `reachableIds` cross-checked against `checkConsent` on 60 real
-      contacts, 0 mismatches. STILL TO DO: oRPC route, page, rule editor.
+- [x] 2. Segments. DONE, end to end. Matcher lib (`api/lib/segments.ts`):
+      every segment reports two counts, matching and reachable, plus a
+      blocked breakdown. Never collapsed into one number. Product matching
+      is keyword families, not exact category, because ten years of
+      ServiceM8 free text spells carpet six ways. All 7 sample rule sets
+      under 300ms against prod. `reachableIds` cross-checked against
+      `checkConsent` on 60 real contacts, 0 mismatches.
+      Route (`api/routes/segments.ts`): list, get, preview, options,
+      create, update, remove, plus an `audienceReview` group (queue,
+      setAudience, signals). `journeyEligibleFor(audience)` is recomputed
+      server-side on every write and never trusted from input, so a segment
+      flipped to builder loses journey eligibility in the same statement.
+      Page (`web/pages/segments.tsx`) + hooks (`web/queries/segments.ts`):
+      list, rule editor, audience-review modal, three starter segments,
+      debounced live preview.
+  - [x] 2b. Schema discovery: `journeys` has NO `segment_id` column.
+        Journeys enrol off their own trigger, not off a segment. So "is
+        this segment in use" is `sends.segment_id`, not a journey link.
+        `get` returns sendCount/lastSentAt; `remove` refuses once anything
+        has been sent to the segment and tells the user to rename instead.
+  - [x] 2c. Browser-verified against prod, signed in as a throwaway admin
+        (created, used, then user/account/session/profile rows deleted; the
+        one segment the test saved was deleted too, and `audience_kind` is
+        still `unknown` for all 1653, so the run wrote no human decisions).
+        Confirmed: nav link resolves; trade banner reads "85 contacts look
+        like trade, not homeowners"; review modal lists all 85 with a
+        Homeowner and a Trade button each and plain-English reasons; editor
+        shows both counts side by side (26 can be emailed / 27 match the
+        rules for "Carpet, last 2 years") with the blocked breakdown;
+        narrowing the window 730 to 60 days recomputed 26 to 6 live;
+        switching audience to Builders raised the warning "A builder
+        segment can't be attached to a journey" and the saved card carries
+        a "builder · no journeys" badge. Zero page errors, zero failed API
+        calls. (The one console 401 is `settings/bootstrap` on the login
+        page before sign-in, pre-existing and unrelated.)
+        Earlier "That page doesn't exist" was the test harness loading the
+        public domain with injected cookies, not a routing bug — driving
+        localhost:4200 through the real login form renders correctly.
   - [x] 2a. Homeowner vs trade, fixed. The old test (contact's own jobs
         carry a company_id) classified 2 of 1653 contacts as trade, because
         1351 jobs carry a company_id with contact_id NULL. It was letting

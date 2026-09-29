@@ -77,7 +77,10 @@ const NAV: { label?: string; items: { to: string; label: string; icon: typeof Us
   },
   {
     label: "Marketing",
-    items: [{ to: "/marketing/templates", label: "Email templates", icon: Mail }],
+    items: [
+      { to: "/marketing/templates", label: "Email templates", icon: Mail },
+      { to: "/marketing/segments", label: "Segments", icon: Users },
+    ],
   },
   {
     label: "Admin",
