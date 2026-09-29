@@ -7,6 +7,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
+import { Combobox } from "../components/ui/combobox";
 import { useContact, useLinkCompany, useUnlinkCompany, useUpdateContact } from "../queries/contacts";
 import { useCompanies } from "../queries/companies";
 import { useClient } from "../queries/intel";
@@ -336,17 +337,16 @@ export default function ContactDetailPage() {
       >
         <div className="grid gap-3">
           <Field label="Company">
-            <Select
+            <Combobox
               value={linkForm.companyId}
-              onChange={(e) => setLinkForm((f) => ({ ...f, companyId: e.target.value }))}
-            >
-              <option value="">Pick a company</option>
-              {(companies.data ?? []).map((co) => (
-                <option key={co.id} value={co.id}>
-                  {co.name}
-                </option>
-              ))}
-            </Select>
+              onChange={(v) => setLinkForm((f) => ({ ...f, companyId: v }))}
+              placeholder="Search companies…"
+              emptyLabel="Pick a company"
+              options={(companies.data ?? []).map((co) => ({
+                value: String(co.id),
+                label: co.name,
+              }))}
+            />
           </Field>
           <Field label="Role there">
             <Select value={linkForm.role} onChange={(e) => setLinkForm((f) => ({ ...f, role: e.target.value }))}>

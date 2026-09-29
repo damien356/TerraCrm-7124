@@ -7,6 +7,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
+import { Combobox } from "../components/ui/combobox";
 import { useCreateJob, useJobs } from "../queries/jobs";
 import { useBootstrap } from "../queries/settings";
 import { useContacts } from "../queries/contacts";
@@ -93,24 +94,28 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
           />
         </Field>
         <Field label="Contact (the person)">
-          <Select value={form.contactId} onChange={(e) => set("contactId", e.target.value)}>
-            <option value="">None</option>
-            {(contacts.data ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.firstName} {c.lastName}
-              </option>
-            ))}
-          </Select>
+          <Combobox
+            value={form.contactId}
+            onChange={(v) => set("contactId", v)}
+            placeholder="Search contacts…"
+            emptyLabel="None"
+            options={(contacts.data ?? []).map((c) => ({
+              value: String(c.id),
+              label: `${c.firstName} ${c.lastName}`,
+            }))}
+          />
         </Field>
         <Field label="Company (optional)">
-          <Select value={form.companyId} onChange={(e) => set("companyId", e.target.value)}>
-            <option value="">None — private customer</option>
-            {(companies.data ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </Select>
+          <Combobox
+            value={form.companyId}
+            onChange={(v) => set("companyId", v)}
+            placeholder="Search companies…"
+            emptyLabel="None — private customer"
+            options={(companies.data ?? []).map((c) => ({
+              value: String(c.id),
+              label: c.name,
+            }))}
+          />
         </Field>
         <Field label="Site">
           <Select value={form.siteId} onChange={(e) => set("siteId", e.target.value)}>

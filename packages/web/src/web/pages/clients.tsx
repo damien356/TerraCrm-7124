@@ -12,6 +12,7 @@ import {
   Textarea,
 } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
+import { Combobox } from "../components/ui/combobox";
 import { useCreateContact } from "../queries/contacts";
 import { useCompanies } from "../queries/companies";
 import { useClientIntel, type ListSort } from "../queries/intel";
@@ -149,17 +150,16 @@ export function NewContactModal({
           />
         </Field>
         <Field label="Company (optional)">
-          <Select
+          <Combobox
             value={form.companyId}
-            onChange={(e) => set("companyId", e.target.value)}
-          >
-            <option value="">None — private customer</option>
-            {(companies.data ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </Select>
+            onChange={(v) => set("companyId", v)}
+            placeholder="Search companies…"
+            emptyLabel="None — private customer"
+            options={(companies.data ?? []).map((c) => ({
+              value: String(c.id),
+              label: c.name,
+            }))}
+          />
         </Field>
         <Field label="Their role there">
           <Select

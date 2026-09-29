@@ -7,6 +7,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
+import { Combobox } from "../components/ui/combobox";
 import { useCreateQuote, useQuoteStats, useQuotes } from "../queries/quotes";
 import { useContacts } from "../queries/contacts";
 import { useCompanies, useSites } from "../queries/companies";
@@ -91,25 +92,29 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
     >
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Customer" className="sm:col-span-2">
-          <Select value={form.contactId} onChange={(e) => set("contactId", e.target.value)}>
-            <option value="">Select a person…</option>
-            {(contacts.data ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.firstName} {c.lastName}
-                {c.suburb ? ` — ${c.suburb}` : ""}
-              </option>
-            ))}
-          </Select>
+          <Combobox
+            value={form.contactId}
+            onChange={(v) => set("contactId", v)}
+            placeholder="Search people…"
+            emptyLabel="Select a person…"
+            options={(contacts.data ?? []).map((c) => ({
+              value: String(c.id),
+              label: `${c.firstName} ${c.lastName}`,
+              sublabel: c.suburb ?? undefined,
+            }))}
+          />
         </Field>
         <Field label="Bill the company?" hint="Leave as none for a private customer">
-          <Select value={form.companyId} onChange={(e) => set("companyId", e.target.value)}>
-            <option value="">None — bills the person</option>
-            {(companies.data ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </Select>
+          <Combobox
+            value={form.companyId}
+            onChange={(v) => set("companyId", v)}
+            placeholder="Search companies…"
+            emptyLabel="None — bills the person"
+            options={(companies.data ?? []).map((c) => ({
+              value: String(c.id),
+              label: c.name,
+            }))}
+          />
         </Field>
         <Field label="Site">
           <Select value={form.siteId} onChange={(e) => set("siteId", e.target.value)}>
