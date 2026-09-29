@@ -306,15 +306,7 @@ export default function InvoiceScreen() {
         {locked ? (
           <Pressable
             disabled={downloading}
-            onPress={async () => {
-              setError(null);
-              setDownloading(true);
-              try {
-                const list = await downloadUrl.mutateAsync({ invoiceId: -1 }).catch(() => null);
-              } finally {
-                setDownloading(false);
-              }
-            }}
+            onPress={() => void onDownload()}
             style={({ pressed }) => ({
               flexDirection: "row",
               alignItems: "center",
