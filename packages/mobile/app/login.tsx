@@ -21,12 +21,15 @@ export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState<null | "email" | "google">(null);
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function signInWithEmail() {
     setError(null);
     setBusy("email");
-    const res = await authClient.signIn.email({ email: email.trim(), password });
+    // Pasting from a text message or an autofill tends to bring a space along
+    // with it, and nobody's password here ends in one.
+    const res = await authClient.signIn.email({ email: email.trim(), password: password.trim() });
     setBusy(null);
     if (res.error) setError(res.error.message ?? "Couldn't sign you in.");
   }
@@ -82,7 +85,11 @@ export default function LoginScreen() {
             value={email}
             onChangeText={setEmail}
             autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
             keyboardType="email-address"
+            textContentType="emailAddress"
+            autoComplete="email"
             placeholder="you@terraflooring.com.au"
             placeholderTextColor="rgba(255,255,255,0.3)"
             style={{
@@ -111,24 +118,50 @@ export default function LoginScreen() {
           >
             Password
           </Text>
-          <TextInput
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            placeholder="••••••••"
-            placeholderTextColor="rgba(255,255,255,0.3)"
-            style={{
-              height: 50,
-              borderRadius: 10,
-              backgroundColor: "rgba(255,255,255,0.07)",
-              borderWidth: 1,
-              borderColor: "rgba(255,255,255,0.12)",
-              paddingHorizontal: 14,
-              color: "#FFFFFF",
-              fontFamily: Fonts.sans,
-              fontSize: 15,
-            }}
-          />
+          {/* A phone keyboard will happily capitalise or autocorrect the first
+              thing typed into a password box, and the crew can't see what went
+              in to spot it. Both off, and an eye to check the typing. */}
+          <View style={{ position: "relative", justifyContent: "center" }}>
+            <TextInput
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry={!showPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
+              textContentType="password"
+              autoComplete="current-password"
+              onSubmitEditing={() => {
+                if (email && password && busy === null) void signInWithEmail();
+              }}
+              returnKeyType="go"
+              placeholder="••••••••"
+              placeholderTextColor="rgba(255,255,255,0.3)"
+              style={{
+                height: 50,
+                borderRadius: 10,
+                backgroundColor: "rgba(255,255,255,0.07)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.12)",
+                paddingLeft: 14,
+                paddingRight: 48,
+                color: "#FFFFFF",
+                fontFamily: Fonts.sans,
+                fontSize: 15,
+              }}
+            />
+            <Pressable
+              onPress={() => setShowPassword((v) => !v)}
+              hitSlop={10}
+              style={{ position: "absolute", right: 12, padding: 4 }}
+            >
+              <Ionicons
+                name={showPassword ? "eye-off-outline" : "eye-outline"}
+                size={20}
+                color="rgba(255,255,255,0.45)"
+              />
+            </Pressable>
+          </View>
 
           {error ? (
             <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: "#F0A39A", marginTop: 14 }}>{error}</Text>

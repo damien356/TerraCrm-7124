@@ -502,9 +502,9 @@ export default function TaskScreen() {
           </Section>
         ) : null}
 
-        <Section title="JOB FILE">
-          <JobFileSection taskId={t.id} jobId={t.jobId} />
-        </Section>
+        {/* JobFileSection carries its own heading and top margin, so it is not
+            wrapped in a Section. Wrapping it printed JOB FILE twice. */}
+        <JobFileSection taskId={t.id} jobId={t.jobId} />
 
         <Section title="YOUR PAY">
           <Card>
