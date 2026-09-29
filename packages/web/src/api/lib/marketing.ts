@@ -1,4 +1,4 @@
-import { and, eq, gte, isNull, or, sql } from "drizzle-orm";
+import { and, eq, gte, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import {
@@ -221,18 +221,26 @@ export async function recentlyMessaged(contactId: number): Promise<boolean> {
 
 export interface MergeContext {
   contact: ContactRow;
-  jobNumber?: string | null;
+  /** `jobs.number` is an integer column, so a number is the common case. */
+  jobNumber?: string | number | null;
   product?: string | null;
 }
 
+/**
+ * Every value is coerced rather than assumed to be a string. `jobs.number` is
+ * an integer in the schema, and a caller passing it straight through used to
+ * throw at send time — the worst possible place to find out.
+ */
+const str = (v: string | number | null | undefined) => (v == null ? "" : String(v).trim());
+
 export function mergeFieldsFor({ contact, jobNumber, product }: MergeContext) {
   return {
-    first_name: (contact.firstName ?? "").trim(),
-    last_name: (contact.lastName ?? "").trim(),
-    full_name: `${contact.firstName ?? ""} ${contact.lastName ?? ""}`.trim(),
-    suburb: (contact.suburb ?? "").trim(),
-    job_number: (jobNumber ?? "").trim(),
-    product: (product ?? "").trim(),
+    first_name: str(contact.firstName),
+    last_name: str(contact.lastName),
+    full_name: `${str(contact.firstName)} ${str(contact.lastName)}`.trim(),
+    suburb: str(contact.suburb),
+    job_number: str(jobNumber),
+    product: str(product),
   } satisfies Record<string, string>;
 }
 
@@ -245,6 +253,26 @@ export const MERGE_FIELDS = [
   { key: "job_number", label: "Job number", sample: "1042" },
   { key: "product", label: "Product", sample: "Terramater Oak" },
 ] as const;
+
+/**
+ * Body text to the exact HTML that goes on the wire.
+ *
+ * Shared by the real send and the office preview on purpose. If these two ever
+ * drift, the office approves one email and the homeowner receives a different
+ * one, which is the whole reason a preview exists.
+ */
+export function renderMarketingEmail(
+  bodyText: string,
+  unsubUrl: string,
+  useWrapper = true,
+) {
+  const paragraphs = bodyText
+    .split(/\n{2,}/)
+    .map((p) => `<p style="margin:0 0 16px;">${p.replace(/\n/g, "<br>")}</p>`)
+    .join("");
+
+  return useWrapper === false ? paragraphs : wrapEmail(paragraphs, unsubUrl);
+}
 
 /* ---------------------------------------------------------------------------
  * The gated send
@@ -351,13 +379,7 @@ export async function sendMarketing(args: MarketingSendArgs): Promise<MarketingR
 
   /* ---- 7. On the wire ---- */
   if (channel === "email") {
-    const paragraphs = bodyText
-      .split(/\n{2,}/)
-      .map((p) => `<p style="margin:0 0 16px;">${p.replace(/\n/g, "<br>")}</p>`)
-      .join("");
-
-    const html =
-      args.useWrapper === false ? paragraphs : wrapEmail(paragraphs, unsubUrl);
+    const html = renderMarketingEmail(bodyText, unsubUrl, args.useWrapper !== false);
     const text = bodyText + footerText(unsubUrl);
 
     const out = await sendEmail({ to: toAddress, subject, html, text, unsubscribeUrl: unsubUrl });

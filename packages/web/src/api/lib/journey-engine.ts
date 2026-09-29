@@ -1,7 +1,7 @@
-import { and, asc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { checkConsent, sendMarketing, withinSendingHours } from "./marketing";
+import { checkConsent, sendMarketing } from "./marketing";
 
 /* ---------------------------------------------------------------------------
  * The journey engine.

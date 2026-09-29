@@ -6,7 +6,10 @@ Decided 29 Sep 2026. Damien's call: engine first, canvas builder later.
 
 - [ ] 1. Templates. Route plus page. Merge fields, preview, test send to self.
 - [ ] 2. Segments. Route plus page. Live matching count.
-- [ ] 3. Engine. Worker, every 5 min. Consent, rails, step runner.
+- [x] 3. Engine. DONE. Ticks every 5 min from `__server.ts` only, never from
+      Vite dev, so the sandbox can never send to a real customer. Kill switch
+      `MARKETING_ENGINE=off`. Verified with a real tick against prod: 378ms,
+      zero sends, because no journey exists yet.
 - [ ] 4. Review request journey, live. 3 days after job complete.
 - [ ] 5. Quote follow-up journey, draft only. 3 days then 10 then stop.
 - [ ] 6. Unsubscribe, opens, clicks.

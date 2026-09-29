@@ -414,7 +414,7 @@ async function main() {
   const plywood = await db.select().from(s.products).where(eq(s.products.supplierId, supplier.id));
   const existing = new Set(plywood.filter((p) => p.category === "sheet_goods").map((p) => p.variantKey));
   for (const i of items) {
-    if (existing.has(i.variantKey)) throw new Error(`${i.variantKey} collides with a plywood row`);
+    if (i.variantKey && existing.has(i.variantKey)) throw new Error(`${i.variantKey} collides with a plywood row`);
   }
 
   /* Every seeded cost must be a rate Hurford's actually print. If the $80 ever

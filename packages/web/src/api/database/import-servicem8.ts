@@ -18,7 +18,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db } from "./__client";
 import * as schema from "./schema";
 

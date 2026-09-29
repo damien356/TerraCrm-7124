@@ -297,10 +297,10 @@ async function main() {
     // MJS print dollars, never a percentage.
     if (i.cutUpliftPct !== null) throw new Error(`MJS publish a dollar cut rate, not an uplift — ${i.range} ${i.colour}`);
     // Note 3: an identical rate is not a break, in either direction.
-    if (i.cutCostPrice !== null && i.cutCostPrice <= i.costPrice) {
+    if (i.cutCostPrice != null && i.cutCostPrice <= i.costPrice) {
       throw new Error(`cut rate is not dearer than the roll rate on ${i.range} ${i.colour}`);
     }
-    if (i.volumeCostPrice !== null && i.volumeCostPrice >= i.costPrice) {
+    if (i.volumeCostPrice != null && i.volumeCostPrice >= i.costPrice) {
       throw new Error(`volume rate is not cheaper than the roll rate on ${i.range} ${i.colour}`);
     }
     // The volume pair has to be all-or-nothing, or the resolver gets a rate

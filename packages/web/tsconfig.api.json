@@ -1,0 +1,39 @@
+{
+	/*
+	 * The server. This project exists because nothing else was checking it.
+	 *
+	 * The root tsconfig.json is `"files": []` plus project references, and
+	 * `tsc --noEmit` does not build referenced projects — so `bun run typecheck`
+	 * was silently passing on everything under src/api without reading a line of
+	 * it. A deliberate `const x: string = 42` in a route came back clean.
+	 *
+	 * Kept separate from tsconfig.node.json, and NOT added to the root
+	 * references, because `tsc --build` over the whole workspace exhausts memory
+	 * in a 4GB sandbox. Run it on its own: `bun run typecheck:api`.
+	 */
+	"compilerOptions": {
+		"target": "ES2022",
+		"lib": [
+			"ES2023"
+		],
+		"module": "ESNext",
+		"skipLibCheck": true,
+		"moduleResolution": "bundler",
+		"allowImportingTsExtensions": true,
+		"types": [
+			"bun"
+		],
+		"isolatedModules": true,
+		"moduleDetection": "force",
+		"noEmit": true,
+		"strict": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"noFallthroughCasesInSwitch": true,
+		"noUncheckedSideEffectImports": true
+	},
+	"include": [
+		"src/api",
+		"src/__server.ts"
+	]
+}

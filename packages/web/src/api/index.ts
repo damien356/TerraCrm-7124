@@ -29,6 +29,7 @@ import { conversations } from "./routes/conversations";
 import { finance } from "./routes/finance";
 import { intel } from "./routes/intel";
 import { devices } from "./routes/devices";
+import { templates } from "./routes/templates";
 
 // Terra Ops — Terra Flooring only. Admin procedures are built on `adminOnly`,
 // the installer app talks exclusively to `field` (installerOnly, scoped to the
@@ -91,6 +92,12 @@ export const router = {
    * underlying numbers shown instead of a made-up score.
    */
   intel,
+  /**
+   * Marketing email bodies. Plain text with merge fields, because that is what
+   * lands in an inbox instead of the promotions tab. Cannot send to a customer:
+   * the only send here is a test to the signed-in staff member.
+   */
+  templates,
   /** Phase 0 — Damien can pull all his data out himself, any time. */
   backups,
 };

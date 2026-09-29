@@ -269,7 +269,8 @@ async function main() {
   }
   /* Only the scotia may claim a floor range — the rest name a substrate. */
   const claiming = accessories.filter((a) => a.fitsRange);
-  if (claiming.length !== 1 || !claiming[0].range.startsWith("Scotia")) {
+  const onlyClaim = claiming[0];
+  if (claiming.length !== 1 || !onlyClaim?.range?.startsWith("Scotia")) {
     throw new Error(`expected only the scotia to name a range, got: ${claiming.map((a) => a.range).join(", ")}`);
   }
 
