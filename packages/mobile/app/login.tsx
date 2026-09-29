@@ -27,20 +27,33 @@ export default function LoginScreen() {
   async function signInWithEmail() {
     setError(null);
     setBusy("email");
-    // Pasting from a text message or an autofill tends to bring a space along
-    // with it, and nobody's password here ends in one.
-    const res = await authClient.signIn.email({ email: email.trim(), password: password.trim() });
-    setBusy(null);
-    if (res.error) setError(res.error.message ?? "Couldn't sign you in.");
+    try {
+      // Pasting from a text message or an autofill tends to bring a space along
+      // with it, and nobody's password here ends in one.
+      const res = await authClient.signIn.email({ email: email.trim(), password: password.trim() });
+      if (res.error) setError(res.error.message ?? "Couldn't sign you in.");
+    } catch {
+      // A dropped connection or a CORS block throws instead of resolving with
+      // res.error. Without this catch, busy is never cleared and the button
+      // spins forever with no explanation.
+      setError("Couldn't reach the server. Check your connection and try again.");
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function signInWithGoogle() {
     setError(null);
     setBusy("google");
-    const res = await authClient.managedAuth.signIn({ provider: "google" });
-    setBusy(null);
-    if (res.error && res.error.code !== "AUTH_SESSION_DISMISSED") {
-      setError(res.error.message ?? "Couldn't sign you in.");
+    try {
+      const res = await authClient.managedAuth.signIn({ provider: "google" });
+      if (res.error && res.error.code !== "AUTH_SESSION_DISMISSED") {
+        setError(res.error.message ?? "Couldn't sign you in.");
+      }
+    } catch {
+      setError("Couldn't reach the server. Check your connection and try again.");
+    } finally {
+      setBusy(null);
     }
   }
 
