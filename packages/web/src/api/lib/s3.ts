@@ -35,3 +35,20 @@ export function mediaKey(jobId: number, bucket: string, filename: string) {
   const safe = filename.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-60);
   return `jobs/${jobId}/${bucket}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`;
 }
+
+/** An installer's own logo, not tied to any job. */
+export function installerLogoKey(installerId: number, filename: string) {
+  const safe = filename.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-60);
+  return `installers/${installerId}/logo/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`;
+}
+
+/** Where a submitted subcontractor invoice PDF is stored. */
+export function invoicePdfKey(installerId: number, taskId: number) {
+  return `installers/${installerId}/invoices/task-${taskId}-${Date.now()}.pdf`;
+}
+
+/** Server writes a file straight to storage (used for generated PDFs, not client uploads). */
+export async function putObject(key: string, body: Buffer, contentType: string) {
+  await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: body, ContentType: contentType }));
+  return key;
+}

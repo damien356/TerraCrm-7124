@@ -2,7 +2,7 @@ import { Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { Colors, Fonts, tintFor } from "@/constants/theme";
-import { fmtHours, fmtMoney, fmtTime, statusLabel } from "@/lib/format";
+import { fmtHours, fmtMoney, fmtMoney2, fmtTime, statusLabel, unitLabel } from "@/lib/format";
 import type { useToday } from "@/queries/field";
 
 const c = Colors.light;
@@ -124,9 +124,6 @@ export function TaskCard({
           {showPay ? (
             <View
               style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
                 borderTopWidth: 1,
                 borderTopColor: c.border,
                 marginTop: 12,
@@ -143,14 +140,57 @@ export function TaskCard({
               >
                 YOUR PAY
               </Text>
-              <Text style={{ fontFamily: Fonts.bold, fontSize: 16, color: c.foreground }}>
-                {fmtMoney(task.payAmount)}
-                {task.payType === "hourly" ? (
-                  <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground }}> /hr</Text>
-                ) : task.payType === "per_m2" ? (
-                  <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground }}> /m²</Text>
-                ) : null}
-              </Text>
+
+              {task.payBreakdown && task.payBreakdown.length > 0 ? (
+                <View style={{ marginTop: 6 }}>
+                  {task.payBreakdown.map((line, idx) => (
+                    <View
+                      key={idx}
+                      style={{ flexDirection: "row", justifyContent: "space-between", paddingVertical: 3 }}
+                    >
+                      <Text
+                        style={{ fontFamily: Fonts.sans, fontSize: 13, color: c.mutedForeground, flex: 1, paddingRight: 8 }}
+                      >
+                        {line.name}
+                        <Text style={{ color: c.mutedForeground }}>
+                          {" "}
+                          · {line.qty} {unitLabel(line.unit)}
+                        </Text>
+                      </Text>
+                      <Text style={{ fontFamily: Fonts.medium, fontSize: 13, color: c.foreground }}>
+                        {line.total != null ? fmtMoney2(line.total) : "—"}
+                      </Text>
+                    </View>
+                  ))}
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      justifyContent: "space-between",
+                      borderTopWidth: 1,
+                      borderTopColor: c.border,
+                      marginTop: 6,
+                      paddingTop: 6,
+                    }}
+                  >
+                    <Text style={{ fontFamily: Fonts.bold, fontSize: 14, color: c.foreground }}>Total</Text>
+                    <Text style={{ fontFamily: Fonts.bold, fontSize: 16, color: c.foreground }}>
+                      {fmtMoney(task.payAmount)}
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <View />
+                  <Text style={{ fontFamily: Fonts.bold, fontSize: 16, color: c.foreground }}>
+                    {fmtMoney(task.payAmount)}
+                    {task.payType === "hourly" ? (
+                      <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground }}> /hr</Text>
+                    ) : task.payType === "per_m2" ? (
+                      <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground }}> /m²</Text>
+                    ) : null}
+                  </Text>
+                </View>
+              )}
             </View>
           ) : null}
         </View>

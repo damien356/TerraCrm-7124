@@ -12,6 +12,7 @@ import { tasks } from "./routes/tasks";
 import { offers } from "./routes/offers";
 import { quotes } from "./routes/quotes";
 import { field } from "./routes/field";
+import { installerInvoices } from "./routes/installerInvoices";
 import { upload } from "./routes/upload";
 import { areas } from "./routes/areas";
 import { media } from "./routes/media";
@@ -53,6 +54,8 @@ export const router = {
   offers,
   quotes,
   field,
+  /** The installer's own invoice to Terra for a completed task. */
+  installerInvoices,
   /** Presigned direct-to-storage uploads for photos, video and plans. */
   upload,
   /** Rooms and zones the work covers — photos hang off these. */

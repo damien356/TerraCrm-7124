@@ -15,7 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Colors, Fonts, tintFor } from "@/constants/theme";
-import { fmtDayLabel, fmtHours, fmtMoney, fmtTime, statusLabel } from "@/lib/format";
+import { fmtDayLabel, fmtHours, fmtMoney, fmtMoney2, fmtTime, statusLabel, unitLabel } from "@/lib/format";
 import {
   useAddFieldNote,
   useCompleteTask,
@@ -508,15 +508,62 @@ export default function TaskScreen() {
 
         <Section title="YOUR PAY">
           <Card>
-            <View style={{ flexDirection: "row", alignItems: "center" }}>
-              <Text style={{ fontFamily: Fonts.bold, fontSize: 24, color: c.foreground, flex: 1 }}>
-                {fmtMoney(t.payAmount)}
-                <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: c.mutedForeground }}>
-                  {t.payType === "hourly" ? " /hr" : t.payType === "per_m2" ? " /m²" : " for the job"}
+            {t.payBreakdown && t.payBreakdown.length > 0 ? (
+              <View>
+                {t.payBreakdown.map((line, idx) => (
+                  <View
+                    key={idx}
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "flex-start",
+                      justifyContent: "space-between",
+                      paddingVertical: 8,
+                      borderTopWidth: idx === 0 ? 0 : 1,
+                      borderTopColor: c.border,
+                    }}
+                  >
+                    <View style={{ flex: 1, paddingRight: 10 }}>
+                      <Text style={{ fontFamily: Fonts.medium, fontSize: 14, color: c.foreground }}>{line.name}</Text>
+                      <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground, marginTop: 2 }}>
+                        {line.qty} {unitLabel(line.unit)}
+                        {line.rate != null ? ` @ ${fmtMoney2(line.rate)}/${unitLabel(line.unit)}` : ""}
+                        {" +GST"}
+                      </Text>
+                    </View>
+                    <Text style={{ fontFamily: Fonts.bold, fontSize: 14, color: c.foreground }}>
+                      {line.total != null ? fmtMoney2(line.total) : "—"}
+                    </Text>
+                  </View>
+                ))}
+
+                <View style={{ borderTopWidth: 1, borderTopColor: c.border, marginTop: 4, paddingTop: 10, gap: 4 }}>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                    <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: c.mutedForeground }}>
+                      Total ex GST
+                    </Text>
+                    <Text style={{ fontFamily: Fonts.medium, fontSize: 15, color: c.foreground }}>
+                      {fmtMoney2(t.payTotalExGst)}
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                    <Text style={{ fontFamily: Fonts.bold, fontSize: 16, color: c.foreground }}>Total inc GST</Text>
+                    <Text style={{ fontFamily: Fonts.bold, fontSize: 18, color: c.primary }}>
+                      {fmtMoney2(t.payTotalExGst != null ? t.payTotalExGst * 1.1 : null)}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            ) : (
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <Text style={{ fontFamily: Fonts.bold, fontSize: 24, color: c.foreground, flex: 1 }}>
+                  {fmtMoney(t.payAmount)}
+                  <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: c.mutedForeground }}>
+                    {t.payType === "hourly" ? " /hr" : t.payType === "per_m2" ? " /m²" : " for the job"}
+                  </Text>
                 </Text>
-              </Text>
-              <Ionicons name="wallet-outline" size={22} color={c.mutedForeground} />
-            </View>
+                <Ionicons name="wallet-outline" size={22} color={c.mutedForeground} />
+              </View>
+            )}
           </Card>
         </Section>
 
@@ -604,7 +651,38 @@ export default function TaskScreen() {
             )}
           </Pressable>
         </View>
-      ) : null}
+      ) : (
+        <View
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            padding: 16,
+            paddingBottom: 26,
+            backgroundColor: c.card,
+            borderTopWidth: 1,
+            borderTopColor: c.border,
+          }}
+        >
+          <Pressable
+            onPress={() => router.push(`/task/invoice/${t.id}`)}
+            style={({ pressed }) => ({
+              backgroundColor: c.primary,
+              borderRadius: 14,
+              paddingVertical: 17,
+              alignItems: "center",
+              flexDirection: "row",
+              justifyContent: "center",
+              gap: 8,
+              opacity: pressed ? 0.8 : 1,
+            })}
+          >
+            <Ionicons name="document-text-outline" size={18} color="#FFFFFF" />
+            <Text style={{ fontFamily: Fonts.bold, fontSize: 16.5, color: "#FFFFFF" }}>Invoice this job</Text>
+          </Pressable>
+        </View>
+      )}
 
       <Modal visible={sheet !== null} transparent animationType="slide" onRequestClose={() => setSheet(null)}>
         <KeyboardAvoidingView

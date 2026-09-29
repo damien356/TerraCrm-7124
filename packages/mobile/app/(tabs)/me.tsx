@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { Colors, Fonts, tintFor } from "@/constants/theme";
 import { authClient } from "@/lib/auth";
 import { crewLabel, daysUntil, fmtDateTime, fmtDayLabel, fmtMoney } from "@/lib/format";
@@ -75,6 +76,7 @@ function ExpiryRow({ label, value }: { label: string; value: Date | string | nul
 }
 
 export default function MeScreen() {
+  const router = useRouter();
   const [skillsOpen, setSkillsOpen] = useState(false);
   const me = useMe();
   const history = useHistory();
@@ -290,6 +292,28 @@ export default function MeScreen() {
                 );
               })
             )}
+
+            <Pressable
+              onPress={() => router.push("/rate-card")}
+              style={({ pressed }) => ({
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 10,
+                backgroundColor: c.card,
+                borderWidth: 1,
+                borderColor: c.border,
+                borderRadius: 14,
+                padding: 14,
+                marginTop: 20,
+                opacity: pressed ? 0.7 : 1,
+              })}
+            >
+              <Ionicons name="pricetags-outline" size={20} color={c.primary} />
+              <Text style={{ fontFamily: Fonts.medium, fontSize: 15, color: c.foreground, flex: 1 }}>
+                Your rate card
+              </Text>
+              <Ionicons name="chevron-forward" size={18} color={c.mutedForeground} />
+            </Pressable>
 
             <Text
               style={{

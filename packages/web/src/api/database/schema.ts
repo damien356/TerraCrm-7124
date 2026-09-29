@@ -228,6 +228,26 @@ export const installers = sqliteTable("installers", {
    * Null = never consented, so nothing is ever recorded.
    */
   locationConsentAt: integer("location_consent_at", { mode: "timestamp" }),
+  /*
+   * Contractor invoicing profile. What goes on the PDF this installer sends
+   * Terra for their own pay. Kept separate from Terra's customer-facing
+   * business details entirely.
+   */
+  tradingName: text("trading_name"),
+  gstRegistered: integer("gst_registered", { mode: "boolean" }).notNull().default(false),
+  businessAddress: text("business_address"),
+  invoiceEmail: text("invoice_email"),
+  logoUrl: text("logo_url"),
+  bankAccountName: text("bank_account_name"),
+  bankBsb: text("bank_bsb"),
+  bankAccountNumber: text("bank_account_number"),
+  /**
+   * The next invoice number this installer will be given, in their own
+   * sequence. Office-set only. An installer never picks their own number.
+   * Null means the office hasn't started this installer's book yet, so they
+   * can't submit an invoice.
+   */
+  nextInvoiceNumber: integer("next_invoice_number"),
   ...timestamps,
 });
 
@@ -2023,5 +2043,107 @@ export const deviceTokens = sqliteTable(
   (t) => [
     unique("device_token_unique").on(t.token),
     index("device_tokens_user_idx").on(t.userId),
+  ],
+);
+
+/* ---------------------------------------------------------------------------
+ * Subcontractor invoicing
+ * The installer's own outgoing invoice to Terra for their pay on a finished
+ * task, not Terra's customer-facing invoice. Extras never appear here unless
+ * the office already approved them as a variation.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * An installer asking to be paid for something outside the task's frozen
+ * labour lines. Sits pending until the office approves it. Only once approved
+ * does it attach to an invoice; nothing here is ever invoiceable on its own.
+ */
+export const installerVariationRequests = sqliteTable(
+  "installer_variation_requests",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    taskId: integer("task_id")
+      .notNull()
+      .references(() => jobTasks.id, { onDelete: "cascade" }),
+    installerId: integer("installer_id")
+      .notNull()
+      .references(() => installers.id, { onDelete: "cascade" }),
+    description: text("description").notNull().default(""),
+    amount: real("amount").notNull().default(0),
+    /** pending · approved · rejected */
+    status: text("status").notNull().default("pending"),
+    requestedAt: integer("requested_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+    decidedAt: integer("decided_at", { mode: "timestamp" }),
+    decidedByName: text("decided_by_name"),
+    adminNotes: text("admin_notes"),
+    /** Set once an approved amount has been pulled onto an invoice, so it can't be used twice. */
+    invoiceId: integer("invoice_id"),
+    ...timestamps,
+  },
+  (t) => [
+    index("installer_var_task_idx").on(t.taskId),
+    index("installer_var_installer_idx").on(t.installerId, t.status),
+  ],
+);
+
+/**
+ * The installer's own invoice for a completed task, in their business name,
+ * billed to Arclan Pty Ltd t/a Terra Flooring. Every business detail is
+ * snapshotted at submission so a later profile edit never rewrites a locked
+ * invoice. Immutable to the installer the moment status leaves "submitted".
+ */
+export const installerInvoices = sqliteTable(
+  "installer_invoices",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    taskId: integer("task_id")
+      .notNull()
+      .references(() => jobTasks.id, { onDelete: "cascade" }),
+    jobId: integer("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    installerId: integer("installer_id")
+      .notNull()
+      .references(() => installers.id, { onDelete: "cascade" }),
+    invoiceNumber: integer("invoice_number").notNull(),
+    /** submitted · approved · scheduled_for_payment · paid */
+    status: text("status").notNull().default("submitted"),
+    /* Snapshot of the installer's contractor profile at submission time. */
+    tradingName: text("trading_name").notNull().default(""),
+    installerName: text("installer_name").notNull().default(""),
+    abn: text("abn"),
+    gstRegistered: integer("gst_registered", { mode: "boolean" }).notNull().default(false),
+    businessAddress: text("business_address"),
+    invoiceEmail: text("invoice_email"),
+    mobile: text("mobile"),
+    logoUrl: text("logo_url"),
+    bankAccountName: text("bank_account_name"),
+    bankBsb: text("bank_bsb"),
+    bankAccountNumber: text("bank_account_number"),
+    /* Snapshot of the job the invoice is for, so it reads without a join. */
+    jobNumber: integer("job_number").notNull().default(0),
+    siteAddress: text("site_address"),
+    taskTitle: text("task_title").notNull().default(""),
+    /** JSON array of { description, unit, qty, rate, total }, work lines plus approved extras. */
+    lineItems: text("line_items").notNull().default("[]"),
+    subtotal: real("subtotal").notNull().default(0),
+    gstAmount: real("gst_amount").notNull().default(0),
+    total: real("total").notNull().default(0),
+    /** Storage key for the generated PDF. */
+    pdfKey: text("pdf_key"),
+    confirmedAt: integer("confirmed_at", { mode: "timestamp" }),
+    submittedAt: integer("submitted_at", { mode: "timestamp" }),
+    approvedAt: integer("approved_at", { mode: "timestamp" }),
+    scheduledAt: integer("scheduled_at", { mode: "timestamp" }),
+    paidAt: integer("paid_at", { mode: "timestamp" }),
+    adminNotes: text("admin_notes"),
+    ...timestamps,
+  },
+  (t) => [
+    unique("installer_invoice_task_unique").on(t.taskId, t.installerId),
+    unique("installer_invoice_number_unique").on(t.installerId, t.invoiceNumber),
+    index("installer_invoices_installer_idx").on(t.installerId, t.status),
+    index("installer_invoices_job_idx").on(t.jobId),
+    index("installer_invoices_status_idx").on(t.status),
   ],
 );

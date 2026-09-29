@@ -148,6 +148,15 @@ export const installers = {
         active: z.boolean().optional(),
         starRating: z.number().int().min(1).max(5).optional(),
         creditLimit: z.number().min(0).optional(),
+        tradingName: z.string().nullable().optional(),
+        gstRegistered: z.boolean().optional(),
+        businessAddress: z.string().nullable().optional(),
+        invoiceEmail: z.string().nullable().optional(),
+        logoUrl: z.string().nullable().optional(),
+        bankAccountName: z.string().nullable().optional(),
+        bankBsb: z.string().nullable().optional(),
+        bankAccountNumber: z.string().nullable().optional(),
+        nextInvoiceNumber: z.number().int().min(1).nullable().optional(),
       }),
     )
     .handler(async ({ input }) => {

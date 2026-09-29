@@ -48,6 +48,7 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
       sitePostcode: schema.sites.postcode,
       siteAccessNotes: schema.sites.accessNotes,
       propertyType: schema.sites.propertyType,
+      labourBreakdown: schema.jobTasks.labourBreakdown,
     })
     .from(schema.jobTasks)
     .leftJoin(schema.skills, eq(schema.skills.id, schema.jobTasks.skillId))
@@ -73,22 +74,42 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
     .innerJoin(schema.contacts, eq(schema.contacts.id, schema.jobContacts.contactId))
     .where(inArray(schema.jobContacts.jobId, jobIds));
 
-  return rows.map((r) => ({
-    ...r,
-    isSecond: Number(r.isSecond) === 1,
-    contacts: people
-      .filter((p) => p.jobId === r.jobId && (p.onSite || p.role === "job_contact" || p.role === "property_manager"))
-      .map((p) => ({
-        name: `${p.firstName} ${p.lastName}`.trim(),
-        mobile: p.mobile,
-        role: p.role,
-        onSite: p.onSite,
-      })),
-  }));
+  return rows.map((r) => {
+    let payBreakdown: Array<{ name: string; unit: string; qty: number; rate: number | null; total: number | null }> | null =
+      null;
+    if (r.labourBreakdown) {
+      try {
+        const parsed = JSON.parse(r.labourBreakdown) as Array<{
+          name: string;
+          unit: string;
+          qty: number;
+          rate: number | null;
+          total: number | null;
+        }>;
+        payBreakdown = parsed.map((l) => ({ name: l.name, unit: l.unit, qty: l.qty, rate: l.rate, total: l.total }));
+      } catch {
+        payBreakdown = null;
+      }
+    }
+    const { labourBreakdown: _labourBreakdown, ...rest } = r;
+    return {
+      ...rest,
+      isSecond: Number(r.isSecond) === 1,
+      payBreakdown,
+      contacts: people
+        .filter((p) => p.jobId === r.jobId && (p.onSite || p.role === "job_contact" || p.role === "property_manager"))
+        .map((p) => ({
+          name: `${p.firstName} ${p.lastName}`.trim(),
+          mobile: p.mobile,
+          role: p.role,
+          onSite: p.onSite,
+        })),
+    };
+  });
 }
 
 /** Guarantees the task belongs to this installer before any write. */
-async function ownTaskOrThrow(taskId: number, installerId: number) {
+export async function ownTaskOrThrow(taskId: number, installerId: number) {
   const [task] = await db
     .select()
     .from(schema.jobTasks)
@@ -215,6 +236,7 @@ export const field = {
         payAmount: schema.jobTasks.payAmount,
         jobNumber: schema.jobs.number,
         siteSuburb: schema.sites.suburb,
+        labourBreakdown: schema.jobTasks.labourBreakdown,
       })
       .from(schema.jobTasks)
       .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
@@ -224,7 +246,26 @@ export const field = {
       )
       .orderBy(desc(schema.jobTasks.completedAt))
       .limit(50);
-    return rows;
+    return rows.map((r) => {
+      let payBreakdown: Array<{ name: string; unit: string; qty: number; rate: number | null; total: number | null }> | null =
+        null;
+      if (r.labourBreakdown) {
+        try {
+          const parsed = JSON.parse(r.labourBreakdown) as Array<{
+            name: string;
+            unit: string;
+            qty: number;
+            rate: number | null;
+            total: number | null;
+          }>;
+          payBreakdown = parsed.map((l) => ({ name: l.name, unit: l.unit, qty: l.qty, rate: l.rate, total: l.total }));
+        } catch {
+          payBreakdown = null;
+        }
+      }
+      const { labourBreakdown: _labourBreakdown, ...rest } = r;
+      return { ...rest, payBreakdown };
+    });
   }),
 
   /** One task card, with checklist, materials and photos. */
@@ -262,7 +303,39 @@ export const field = {
         .where(eq(schema.jobTasks.id, input.id)),
     ]);
 
-    return { ...card, checklist, materials, photos, crewMate: mate[0] ?? null };
+    // My own pay breakdown, frozen at assignment. Never anyone else's rate,
+    // never a sell price or margin, just what this task's lines pay me.
+    const [taskRow] = await db
+      .select({ labourCost: schema.jobTasks.labourCost, labourBreakdown: schema.jobTasks.labourBreakdown })
+      .from(schema.jobTasks)
+      .where(eq(schema.jobTasks.id, input.id));
+
+    let payBreakdown: Array<{ name: string; unit: string; qty: number; rate: number | null; total: number | null }> | null =
+      null;
+    if (taskRow?.labourBreakdown) {
+      try {
+        const parsed = JSON.parse(taskRow.labourBreakdown) as Array<{
+          name: string;
+          unit: string;
+          qty: number;
+          rate: number | null;
+          total: number | null;
+        }>;
+        payBreakdown = parsed.map((l) => ({ name: l.name, unit: l.unit, qty: l.qty, rate: l.rate, total: l.total }));
+      } catch {
+        payBreakdown = null;
+      }
+    }
+
+    return {
+      ...card,
+      checklist,
+      materials,
+      photos,
+      crewMate: mate[0] ?? null,
+      payBreakdown,
+      payTotalExGst: taskRow?.labourCost ?? null,
+    };
   }),
 
   /* ----------------------------- offers ----------------------------- */

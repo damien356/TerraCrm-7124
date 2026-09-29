@@ -102,6 +102,8 @@ interface SendArgs {
    */
   inReplyTo?: string;
   references?: string;
+  /** Transactional attachments, e.g. a generated invoice PDF. Base64 content. */
+  attachments?: Array<{ filename: string; content: string }>;
 }
 
 /**
@@ -119,6 +121,7 @@ export async function sendEmail({
   unsubscribeUrl,
   inReplyTo,
   references,
+  attachments,
 }: SendArgs): Promise<SendOutcome> {
   if (!emailConfigured()) return { ok: false, deferred: true, reason: "RESEND_API_KEY not set" };
 
@@ -141,6 +144,7 @@ export async function sendEmail({
     text,
     replyTo: replyTo ?? MARKETING_REPLY_TO,
     headers: Object.keys(headers).length ? headers : undefined,
+    attachments,
   });
 
   if (error) {

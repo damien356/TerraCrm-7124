@@ -18,7 +18,39 @@ export function fmtHours(h?: number | null) {
 
 export function fmtMoney(n?: number | null) {
   if (n == null) return "—";
-  return `$${n.toLocaleString("en-AU", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  return `${n.toLocaleString("en-AU", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+}
+
+/** Same as fmtMoney but keeps the cents, for line item pay breakdowns. */
+export function fmtMoney2(n?: number | null) {
+  if (n == null) return "—";
+  return `${n.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** Short label for a rate book unit, as used on an installer's pay breakdown. */
+export function unitLabel(unit?: string | null) {
+  switch (unit) {
+    case "m2":
+      return "m²";
+    case "lm":
+      return "lin";
+    case "each":
+      return "each";
+    case "step":
+      return "step";
+    case "hour":
+      return "hr";
+    case "day":
+      return "day";
+    case "job":
+      return "job";
+    case "percent":
+      return "%";
+    case "km":
+      return "km";
+    default:
+      return unit ?? "";
+  }
 }
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -32,6 +64,63 @@ function parseISODate(iso: string) {
 export function todayISO() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+function toISO(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** iso plus n days, n can be negative. */
+export function addDaysISO(iso: string, n: number) {
+  const d = parseISODate(iso);
+  d.setDate(d.getDate() + n);
+  return toISO(d);
+}
+
+/** Monday of the week that iso falls in. */
+export function startOfWeekISO(iso: string) {
+  const d = parseISODate(iso);
+  const dow = d.getDay(); // 0 = Sunday
+  const back = dow === 0 ? 6 : dow - 1;
+  d.setDate(d.getDate() - back);
+  return toISO(d);
+}
+
+/** The 1st of iso's month. */
+export function startOfMonthISO(iso: string) {
+  const d = parseISODate(iso);
+  return toISO(new Date(d.getFullYear(), d.getMonth(), 1));
+}
+
+/** "September 2026" for a month grid header. */
+export function monthLabel(iso: string) {
+  const d = parseISODate(iso);
+  return `${["January","February","March","April","May","June","July","August","September","October","November","December"][d.getMonth()]} ${d.getFullYear()}`;
+}
+
+/** "Mon 29" for a week strip day. */
+export function dayOfMonth(iso: string) {
+  return parseISODate(iso).getDate();
+}
+
+export const WEEKDAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/**
+ * Full calendar grid for the month iso falls in, in whole weeks, Monday first.
+ * Each cell knows whether it belongs to iso's own month, for dimming the
+ * leading/trailing days that spill from the months either side.
+ */
+export function monthGrid(iso: string): { date: string; inMonth: boolean }[] {
+  const monthStart = startOfMonthISO(iso);
+  const month = parseISODate(iso).getMonth();
+  const gridStart = startOfWeekISO(monthStart);
+  const cells: { date: string; inMonth: boolean }[] = [];
+  let cursor = gridStart;
+  for (let i = 0; i < 42; i++) {
+    cells.push({ date: cursor, inMonth: parseISODate(cursor).getMonth() === month });
+    cursor = addDaysISO(cursor, 1);
+  }
+  return cells;
 }
 
 /** "Today", "Tomorrow", else "Wednesday 2 Sep". */

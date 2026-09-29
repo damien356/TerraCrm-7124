@@ -20,6 +20,11 @@ export function useUpcoming() {
   return useQuery(orpc.field.upcoming.queryOptions({ input: {}, refetchInterval: 120_000 }));
 }
 
+/** Same feed, a custom window — what the calendar's week and month views page through. */
+export function useScheduleRange(from: string, to: string) {
+  return useQuery(orpc.field.upcoming.queryOptions({ input: { from, to } }));
+}
+
 export function useHistory() {
   return useQuery(orpc.field.history.queryOptions());
 }
