@@ -23,11 +23,14 @@ export const crew = {
     .handler(async ({ input }) => {
       const cutoff = new Date(Date.now() - input.staleMinutes * 60_000);
 
-      // Latest ping per installer inside the window.
+      // Latest ping per installer inside the window. The alias must not be
+      // "captured_at": drizzle references it unqualified in the join, and that
+      // name also exists on installer_locations, so SQLite refused the query
+      // as ambiguous and the crew map and the phone's "On site now" 500'd.
       const latest = db
         .select({
           installerId: schema.installerLocations.installerId,
-          capturedAt: sql<number>`max(${schema.installerLocations.capturedAt})`.as("captured_at"),
+          capturedAt: sql<number>`max(${schema.installerLocations.capturedAt})`.as("latest_captured_at"),
         })
         .from(schema.installerLocations)
         .where(gte(schema.installerLocations.capturedAt, cutoff))
