@@ -190,6 +190,7 @@ export const voiceQuotes = {
               sortOrder: i,
               flagged: l.flagged,
               flagReason: l.flagReason,
+              voicePhrase: l.voicePhrase,
             })),
           );
         }

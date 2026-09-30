@@ -395,6 +395,7 @@ export const quotes = {
         sortOrder: z.number().int().optional(),
         flagged: z.boolean().optional(),
         flagReason: z.string().nullable().optional(),
+        productId: z.number().nullable().optional(),
       }),
     )
     .handler(async ({ input }) => {
@@ -410,6 +411,24 @@ export const quotes = {
         .set({ ...rest, total: round2(qty * unitPrice), updatedAt: new Date() })
         .where(eq(schema.quoteItems.id, id))
         .returning();
+
+      // A human picking (or confirming) the right product for a line that
+      // carries a spoken phrase is exactly the signal worth learning from —
+      // next time that phrase comes up, price.ts matches it outright.
+      if (rest.productId != null && before.voicePhrase) {
+        await db
+          .insert(schema.voicePhraseProductMatches)
+          .values({
+            phrase: before.voicePhrase,
+            productId: rest.productId,
+            confirmCount: 1,
+            lastConfirmedAt: new Date(),
+          })
+          .onConflictDoUpdate({
+            target: [schema.voicePhraseProductMatches.phrase, schema.voicePhraseProductMatches.productId],
+            set: { confirmCount: sql`${schema.voicePhraseProductMatches.confirmCount} + 1`, lastConfirmedAt: new Date(), updatedAt: new Date() },
+          });
+      }
 
       const totals = await recalc(before.quoteId);
       return { item: row, totals };

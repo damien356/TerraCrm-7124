@@ -48,11 +48,14 @@ type Item = {
   total: number;
   flagged?: boolean;
   flagReason?: string | null;
+  voicePhrase?: string | null;
 };
 
 function LineRow({ item, locked }: { item: Item; locked: boolean }) {
   const update = useUpdateQuoteItem();
   const remove = useRemoveQuoteItem();
+  const products = useProducts();
+  const [fixProductId, setFixProductId] = React.useState("");
   const [draft, setDraft] = React.useState({
     description: item.description,
     qty: String(item.qty),
@@ -90,6 +93,46 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
           <span className="mb-1 flex items-center gap-1 text-xs text-[#D08A1E]" title={item.flagReason ?? "Needs review"}>
             <AlertTriangle className="size-3.5" /> {item.flagReason ?? "Needs review"}
           </span>
+        ) : null}
+        {item.flagged && item.voicePhrase ? (
+          <div className="mb-1 flex items-center gap-1.5">
+            <Select
+              className="h-7 min-w-[220px] flex-1 text-xs"
+              value={fixProductId}
+              disabled={locked}
+              onChange={(e) => setFixProductId(e.target.value)}
+            >
+              <option value="">Pick the right product…</option>
+              {(products.data ?? []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {[p.brand, p.range, p.colour].filter(Boolean).join(" — ")}
+                  {p.sellPrice ? ` · ${money(p.sellPrice)}/${p.unit}` : ""}
+                </option>
+              ))}
+            </Select>
+            <Button
+              variant="outline"
+              className="h-7 px-2 text-xs"
+              disabled={!fixProductId || update.isPending}
+              onClick={() => {
+                const chosen = (products.data ?? []).find((p) => String(p.id) === fixProductId);
+                if (!chosen) return;
+                update.mutate({
+                  id: item.id,
+                  productId: chosen.id,
+                  description: [chosen.brand, chosen.range, chosen.colour].filter(Boolean).join(", ") || item.description,
+                  unit: chosen.unit || item.unit,
+                  unitPrice: chosen.sellPrice ?? item.unitPrice,
+                  unitCost: chosen.costPrice ?? item.unitCost,
+                  flagged: false,
+                  flagReason: null,
+                });
+                setFixProductId("");
+              }}
+            >
+              <Check className="size-3.5" /> Confirm
+            </Button>
+          </div>
         ) : null}
         <Input
           className="h-8"

@@ -1184,6 +1184,12 @@ export const quoteItems = sqliteTable(
      */
     flagged: integer("flagged", { mode: "boolean" }).notNull().default(false),
     flagReason: text("flag_reason"),
+    /**
+     * The raw, normalised phrase Damien spoke for this line, when it came
+     * from a voice capture. Kept so a human's correction (picking the right
+     * product) can be learned against the exact words that produced it.
+     */
+    voicePhrase: text("voice_phrase"),
     ...timestamps,
   },
   (t) => [index("quote_items_quote_idx").on(t.quoteId)],

@@ -1,4 +1,4 @@
-import { eq, or, like } from "drizzle-orm";
+import { eq, or, like, desc } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { sellExGst } from "../lib/pricing";
@@ -23,6 +23,8 @@ export type PricedLine = {
   unitCost: number | null;
   flagged: boolean;
   flagReason: string | null;
+  /** The normalised spoken phrase this line came from, kept for learning. */
+  voicePhrase: string | null;
 };
 
 function normalise(s: string | null | undefined): string {
@@ -132,6 +134,23 @@ async function findBestProduct(hints: {
   return best;
 }
 
+/**
+ * A phrase Damien has already corrected before, once, wins outright over
+ * the token-score guess. Picks whichever product has been confirmed against
+ * this exact phrase the most times.
+ */
+async function findLearnedProduct(phraseKey: string): Promise<ProductRow | null> {
+  if (!phraseKey) return null;
+  const rows = await db
+    .select({ product: schema.products })
+    .from(schema.voicePhraseProductMatches)
+    .innerJoin(schema.products, eq(schema.products.id, schema.voicePhraseProductMatches.productId))
+    .where(eq(schema.voicePhraseProductMatches.phrase, phraseKey))
+    .orderBy(desc(schema.voicePhraseProductMatches.confirmCount))
+    .limit(1);
+  return rows[0]?.product ?? null;
+}
+
 async function priceMaterialLine(line: Extraction["lines"][number]): Promise<PricedLine> {
   const hints = {
     supplierHint: line.supplierHint,
@@ -141,10 +160,29 @@ async function priceMaterialLine(line: Extraction["lines"][number]): Promise<Pri
     category: line.category,
     spokenDescription: line.spokenDescription,
   };
-  const match = await findBestProduct(hints);
   const qty = line.qty;
   const unit = line.unit ?? "m2";
   const spoken = line.spokenDescription ?? "Material (unspecified)";
+  const phraseKey = normalise(spoken);
+
+  const learned = phraseKey ? await findLearnedProduct(phraseKey) : null;
+  if (learned) {
+    const description = [learned.brand, learned.range, learned.colour].filter(Boolean).join(", ") || spoken;
+    return {
+      productId: learned.id,
+      kind: learned.category === "labour" ? "labour" : "supply",
+      description,
+      qty,
+      unit: learned.unit || unit,
+      unitPrice: learned.sellPrice ?? 0,
+      unitCost: learned.costPrice ?? null,
+      flagged: false,
+      flagReason: null,
+      voicePhrase: phraseKey,
+    };
+  }
+
+  const match = await findBestProduct(hints);
 
   if (!match) {
     return {
@@ -157,6 +195,7 @@ async function priceMaterialLine(line: Extraction["lines"][number]): Promise<Pri
       unitCost: null,
       flagged: true,
       flagReason: "No matching product found in the price book. Priced at $0 — pick the right product and reprice before sending.",
+      voicePhrase: phraseKey || null,
     };
   }
 
@@ -176,6 +215,7 @@ async function priceMaterialLine(line: Extraction["lines"][number]): Promise<Pri
     flagReason: confident
       ? null
       : `Damien said "${spoken}". Closest match in the price book is "${description}", but it is not a strong match. Check the product before sending.`,
+    voicePhrase: confident ? null : phraseKey || null,
   };
 }
 
@@ -192,6 +232,7 @@ async function priceLabourLine(line: Extraction["lines"][number]): Promise<Price
       unitCost: null,
       flagged: true,
       flagReason: "No labour rate book item was matched. Priced at $0 — pick the right item and reprice before sending.",
+      voicePhrase: null,
     };
   }
 
@@ -214,6 +255,7 @@ async function priceLabourLine(line: Extraction["lines"][number]): Promise<Price
     unitCost: cost,
     flagged: cost === null,
     flagReason: cost === null ? `No current rate on file for "${description}". Priced at $0 — set a rate and reprice before sending.` : null,
+    voicePhrase: null,
   };
 }
 
@@ -233,6 +275,7 @@ function priceOtherLine(line: Extraction["lines"][number]): PricedLine {
       unitCost: null,
       flagged: true,
       flagReason: "Damien did not give a dollar figure for this line. Priced at $0 — fill it in before sending.",
+      voicePhrase: null,
     };
   }
 
@@ -246,6 +289,7 @@ function priceOtherLine(line: Extraction["lines"][number]): PricedLine {
     unitCost: cost,
     flagged: false,
     flagReason: null,
+    voicePhrase: null,
   };
 }
 
