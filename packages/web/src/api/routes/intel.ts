@@ -611,24 +611,73 @@ export const intel = {
     .input(
       z
         .object({
-          scope: z.enum(["companies", "clients"]).default("companies"),
+          scope: z.enum(["companies", "clients", "supervisors"]).default("companies"),
           limit: z.number().int().min(10).max(500).default(100),
         })
         .default({ scope: "companies", limit: 100 }),
     )
     .handler(async ({ input }) => {
-      const isCompany = input.scope === "companies";
+      /*
+       * The supervisor scope counts only jobs with a real `job_contacts` row at
+       * role 'supervisor'. It deliberately does NOT use the softer sender
+       * fallback chain above, because a guess dressed up as a name is worse
+       * than an honest gap. Jobs with nobody recorded fall out of the list and
+       * are counted by `supervisorAttribution` instead.
+       *
+       * Unlike the company and client scopes this one keeps people whose work
+       * has not been delivered yet. Attribution starts from nothing, so the
+       * first jobs to carry a supervisor will all be live, and a tab that hid
+       * them until they were finished would read as broken rather than empty.
+       * Revenue is still delivered work only, so a new supervisor shows jobs
+       * against their name and no revenue until those jobs land.
+       */
+      const supervisorsQuery = sql`
+        select c.id, c.first_name || ' ' || c.last_name as name,
+          coalesce(
+            (select co.name from company_contacts cc
+               join companies co on co.id = cc.company_id
+               where cc.contact_id = c.id
+               order by cc.is_primary desc limit 1),
+            (select co2.name from job_contacts jc2
+               join jobs j2 on j2.id = jc2.job_id
+               join companies co2 on co2.id = j2.company_id
+               where jc2.contact_id = c.id and jc2.role = 'supervisor'
+               order by j2.number desc limit 1)
+          ) as company_name,
+          (select coalesce(sum(i.total - i.amount_paid), 0) from invoices i
+             where i.status not in ('paid','void')
+               and i.job_id in (select jc3.job_id from job_contacts jc3
+                                  where jc3.contact_id = c.id and jc3.role = 'supervisor')) as outstanding,
+          (select avg(julianday(i.paid_at, 'unixepoch') - julianday(i.created_at, 'unixepoch'))
+             from invoices i
+             where i.paid_at is not null
+               and i.job_id in (select jc4.job_id from job_contacts jc4
+                                  where jc4.contact_id = c.id and jc4.role = 'supervisor')) as avg_days_to_pay,
+          (select count(*) from quotes q where q.contact_id = c.id) as quotes_total,
+          (select count(*) from quotes q where q.contact_id = c.id and q.status = 'accepted') as quotes_won,
+          ${AGG}
+        from contacts c
+        join job_contacts jcs on jcs.contact_id = c.id and jcs.role = 'supervisor'
+        join jobs j on j.id = jcs.job_id
+        left join job_statuses s on s.id = j.status_id
+        group by c.id having total_jobs > 0
+        order by revenue desc limit ${input.limit}
+      `;
+
       const rows = await db.all<
         AggRow & {
           id: number;
           name: string;
+          company_name?: string | null;
           outstanding: number;
           avg_days_to_pay: number | null;
           quotes_total: number;
           quotes_won: number;
         }
       >(
-        isCompany
+        input.scope === "supervisors"
+          ? supervisorsQuery
+          : input.scope === "companies"
           ? sql`
             select co.id, co.name,
               (select coalesce(sum(i.total - i.amount_paid), 0) from invoices i
@@ -668,6 +717,8 @@ export const intel = {
         return {
           id: r.id,
           name: r.name,
+          /** Only filled on the supervisor scope: who they work for. */
+          company: r.company_name ?? null,
           ...shaped,
           outstanding: Math.round((r.outstanding ?? 0) * 100) / 100,
           avgDaysToPay: r.avg_days_to_pay == null ? null : Math.round(r.avg_days_to_pay),
@@ -685,4 +736,37 @@ export const intel = {
         };
       });
     }),
+
+  /**
+   * How much of the work has a supervisor recorded against it. Sits above the
+   * supervisor list so the gap is stated rather than implied by a short table.
+   * Cancelled jobs are left out, nobody needs chasing about those.
+   */
+  supervisorAttribution: adminOnly.handler(async () => {
+    const [row] = await db.all<{
+      total_jobs: number;
+      with_supervisor: number;
+      without_value: number;
+    }>(sql`
+      select count(*) as total_jobs,
+        coalesce(sum(case when exists (
+          select 1 from job_contacts jc where jc.job_id = j.id and jc.role = 'supervisor'
+        ) then 1 end), 0) as with_supervisor,
+        coalesce(sum(case when not exists (
+          select 1 from job_contacts jc where jc.job_id = j.id and jc.role = 'supervisor'
+        ) then j.value end), 0) as without_value
+      from jobs j
+      left join job_statuses s on s.id = j.status_id
+      where not ${CANCELLED}
+    `);
+
+    const total = Number(row?.total_jobs ?? 0);
+    const withSupervisor = Number(row?.with_supervisor ?? 0);
+    return {
+      totalJobs: total,
+      withSupervisor,
+      withoutSupervisor: total - withSupervisor,
+      valueWithoutSupervisor: Math.round((row?.without_value ?? 0) * 100) / 100,
+    };
+  }),
 };

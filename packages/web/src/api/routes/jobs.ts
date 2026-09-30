@@ -169,14 +169,21 @@ export const jobs = {
         accessNotes: z.string().nullable().optional(),
         source: z.string().default("other"),
         value: z.number().default(0),
+        /**
+         * The person at the builder who sent the work. Stored as a normal
+         * `job_contacts` row at role 'supervisor', not a column on the job, so
+         * it reads back through the same link every other person on the job uses.
+         */
+        supervisorContactId: z.number().nullable().optional(),
       }),
     )
     .handler(async ({ input, context }) => {
+      const { supervisorContactId, ...jobInput } = input;
       const [maxRow] = await db.select({ max: sql<number>`coalesce(max(${schema.jobs.number}), 200)` }).from(schema.jobs);
       const number = Number(maxRow?.max ?? 200) + 1;
 
-      const [status] = input.statusId
-        ? [{ id: input.statusId }]
+      const [status] = jobInput.statusId
+        ? [{ id: jobInput.statusId }]
         : await db
             .select({ id: schema.jobStatuses.id })
             .from(schema.jobStatuses)
@@ -187,24 +194,40 @@ export const jobs = {
       const [row] = await db
         .insert(schema.jobs)
         .values({
-          ...input,
+          ...jobInput,
           number,
           statusId: status?.id ?? null,
-          billToContactId: input.billToType === "contact" ? (input.billToContactId ?? input.contactId ?? null) : null,
-          billToCompanyId: input.billToType === "company" ? (input.billToCompanyId ?? input.companyId ?? null) : null,
+          billToContactId:
+            jobInput.billToType === "contact" ? (jobInput.billToContactId ?? jobInput.contactId ?? null) : null,
+          billToCompanyId:
+            jobInput.billToType === "company" ? (jobInput.billToCompanyId ?? jobInput.companyId ?? null) : null,
         })
         .returning();
 
-      if (row && input.contactId) {
+      if (row && jobInput.contactId) {
         await db
           .insert(schema.jobContacts)
           .values({
             jobId: row.id,
-            contactId: input.contactId,
+            contactId: jobInput.contactId,
             role: "job_contact",
             isPrimary: true,
             onSiteContact: true,
             receivesSms: true,
+            receivesEmail: true,
+            canApproveQuote: true,
+          })
+          .onConflictDoNothing();
+      }
+
+      if (row && supervisorContactId) {
+        await db
+          .insert(schema.jobContacts)
+          .values({
+            jobId: row.id,
+            contactId: supervisorContactId,
+            role: "supervisor",
+            isPrimary: true,
             receivesEmail: true,
             canApproveQuote: true,
           })
@@ -340,6 +363,35 @@ export const jobs = {
     await db.delete(schema.jobContacts).where(eq(schema.jobContacts.id, input.id));
     return { ok: true };
   }),
+
+  /**
+   * Sets, changes or clears the supervisor on a job. One job has one
+   * supervisor, so this swaps the existing 'supervisor' link rather than
+   * stacking another one on top. Pass a null contact to clear it.
+   */
+  setSupervisor: adminOnly
+    .input(z.object({ jobId: z.number(), contactId: z.number().nullable() }))
+    .handler(async ({ input }) => {
+      await db
+        .delete(schema.jobContacts)
+        .where(and(eq(schema.jobContacts.jobId, input.jobId), eq(schema.jobContacts.role, "supervisor")));
+
+      if (!input.contactId) return { ok: true, contactId: null };
+
+      await db
+        .insert(schema.jobContacts)
+        .values({
+          jobId: input.jobId,
+          contactId: input.contactId,
+          role: "supervisor",
+          isPrimary: true,
+          receivesEmail: true,
+          canApproveQuote: true,
+        })
+        .onConflictDoNothing();
+
+      return { ok: true, contactId: input.contactId };
+    }),
 
   /* --------------------------- materials -------------------------- */
   addMaterial: adminOnly

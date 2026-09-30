@@ -5,7 +5,7 @@ import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { money, pct, histDate } from "../lib/money";
-import { useProfitability } from "../queries/intel";
+import { useProfitability, useSupervisorAttribution, type ProfitabilityScope } from "../queries/intel";
 
 /**
  * PROFITABILITY.
@@ -43,9 +43,10 @@ const COLUMNS: { key: SortKey; label: string; hint: string }[] = [
 ];
 
 export default function ProfitabilityPage() {
-  const [scope, setScope] = React.useState<"companies" | "clients">("companies");
+  const [scope, setScope] = React.useState<ProfitabilityScope>("companies");
   const [sort, setSort] = React.useState<SortKey>("revenue");
   const q = useProfitability({ scope });
+  const attribution = useSupervisorAttribution(scope === "supervisors");
 
   const rows = React.useMemo(() => {
     const data = [...(q.data ?? [])];
@@ -70,7 +71,7 @@ export default function ProfitabilityPage() {
       subtitle="The numbers behind who is actually worth having. No single score, on purpose."
       actions={
         <div className="flex flex-wrap gap-1.5">
-          {(["companies", "clients"] as const).map((s) => (
+          {(["companies", "clients", "supervisors"] as const).map((s) => (
             <button
               key={s}
               type="button"
@@ -103,9 +104,30 @@ export default function ProfitabilityPage() {
             </Card>
           ) : null}
 
+          {scope === "supervisors" && attribution.data && attribution.data.withoutSupervisor > 0 ? (
+            <Card className="flex items-start gap-3 px-4 py-3.5">
+              <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+              <p className="text-[13px] text-muted-foreground">
+                <span className="font-semibold text-foreground">
+                  {attribution.data.withoutSupervisor.toLocaleString()} of{" "}
+                  {attribution.data.totalJobs.toLocaleString()} jobs have no supervisor recorded.
+                </span>{" "}
+                Those jobs are left out of the table below, so this is only the work where someone is named.
+                Nothing that came across from ServiceM8 carries a supervisor, so this fills in as supervisors
+                get put on jobs from here on.
+              </p>
+            </Card>
+          ) : null}
+
           <Card>
             <CardHeader
-              title={scope === "companies" ? "Companies" : "Individual clients"}
+              title={
+                scope === "companies"
+                  ? "Companies"
+                  : scope === "clients"
+                    ? "Individual clients"
+                    : "Supervisors"
+              }
               subtitle="Click a column to sort by it. Days to pay sorts fastest first, everything else biggest first."
               action={<Badge>{rows.length}</Badge>}
             />
@@ -113,10 +135,23 @@ export default function ProfitabilityPage() {
               <Empty>No delivered work to measure yet.</Empty>
             ) : (
               <div className="board-scroll overflow-x-auto">
-                <table className="w-full min-w-[1080px] text-sm">
+                <table
+                  className={
+                    scope === "supervisors"
+                      ? "w-full min-w-[1240px] text-sm"
+                      : "w-full min-w-[1080px] text-sm"
+                  }
+                >
                   <thead>
                     <tr className="border-b border-border">
-                      <th className="th px-4">{scope === "companies" ? "Company" : "Client"}</th>
+                      <th className="th px-4">
+                        {scope === "companies" ? "Company" : scope === "clients" ? "Client" : "Supervisor"}
+                      </th>
+                      {scope === "supervisors" ? (
+                        <th className="th px-3" title="The company this person works for">
+                          Company
+                        </th>
+                      ) : null}
                       {COLUMNS.map((c) => (
                         <th key={c.key} className="th px-3 text-right" title={c.hint}>
                           <button
@@ -141,12 +176,23 @@ export default function ProfitabilityPage() {
                       <tr key={r.id} className="border-b border-border last:border-0 hover:bg-secondary/50">
                         <td className="px-4 py-2.5">
                           <Link
-                            to={scope === "companies" ? `/companies/${r.id}` : `/clients/${r.id}`}
+                            to={
+                              scope === "companies"
+                                ? `/companies/${r.id}`
+                                : scope === "clients"
+                                  ? `/clients/${r.id}`
+                                  : `/supervisors/${r.id}`
+                            }
                             className="font-medium text-primary hover:underline"
                           >
                             {r.name}
                           </Link>
                         </td>
+                        {scope === "supervisors" ? (
+                          <td className="px-3 py-2.5 text-[13px] text-muted-foreground">
+                            {r.company ?? "Not recorded"}
+                          </td>
+                        ) : null}
                         <td className="tabular px-3 py-2.5 text-right font-semibold">{money(r.revenue)}</td>
                         <td className="tabular px-3 py-2.5 text-right">
                           {r.grossProfit === null ? (
@@ -163,7 +209,13 @@ export default function ProfitabilityPage() {
                           )}
                         </td>
                         <td className="tabular px-3 py-2.5 text-right">{money(r.avgJobValue)}</td>
-                        <td className="tabular px-3 py-2.5 text-right">{r.deliveredJobs}</td>
+                        <td className="tabular px-3 py-2.5 text-right">
+                          {r.deliveredJobs}
+                          {/* Supervisors can be brand new, so say what is still open. */}
+                          {scope === "supervisors" && r.liveJobs > 0 ? (
+                            <span className="ml-1 text-xs text-muted-foreground">+{r.liveJobs} live</span>
+                          ) : null}
+                        </td>
                         <td className="tabular px-3 py-2.5 text-right">
                           {r.outstanding > 0 ? (
                             <span className="font-medium text-[var(--warning)]">{money(r.outstanding)}</span>

@@ -24,6 +24,7 @@ function useJobMutation(
     | "addContact"
     | "updateContact"
     | "removeContact"
+    | "setSupervisor"
     | "addMaterial"
     | "updateMaterial"
     | "removeMaterial"
@@ -53,6 +54,10 @@ export function useUpdateJobContact() {
 }
 export function useRemoveJobContact() {
   return useMutation(useJobMutation("removeContact"));
+}
+/** Sets, changes or clears the supervisor who sent the job. */
+export function useSetJobSupervisor() {
+  return useMutation(useJobMutation("setSupervisor"));
 }
 export function useAddMaterial() {
   return useMutation(useJobMutation("addMaterial"));

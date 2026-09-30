@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, asc, desc, eq, like, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, like, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -78,6 +78,35 @@ export const companies = {
 
     return { company, people, sites, jobs: jobRows };
   }),
+
+  /**
+   * The people filed under one company, optionally narrowed to certain roles.
+   * Used by the supervisor picker on a job, which only wants the people who
+   * could plausibly have sent the work.
+   */
+  people: adminOnly
+    .input(z.object({ companyId: z.number(), roles: z.array(z.string()).optional() }))
+    .handler(async ({ input }) => {
+      const where = [eq(schema.companyContacts.companyId, input.companyId)];
+      if (input.roles?.length) where.push(inArray(schema.companyContacts.role, input.roles));
+
+      const rows = await db
+        .select({ link: schema.companyContacts, contact: schema.contacts })
+        .from(schema.companyContacts)
+        .innerJoin(schema.contacts, eq(schema.contacts.id, schema.companyContacts.contactId))
+        .where(and(...where))
+        .orderBy(desc(schema.companyContacts.isPrimary), asc(schema.contacts.firstName));
+
+      return rows.map((r) => ({
+        contactId: r.contact.id,
+        name: `${r.contact.firstName} ${r.contact.lastName}`.trim(),
+        mobile: r.contact.mobile,
+        email: r.contact.email,
+        role: r.link.role,
+        jobTitle: r.link.jobTitle,
+        isPrimary: r.link.isPrimary,
+      }));
+    }),
 
   create: adminOnly
     .input(

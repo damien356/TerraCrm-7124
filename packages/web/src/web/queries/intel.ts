@@ -57,11 +57,18 @@ export function useSupervisor(id: number | null) {
   );
 }
 
-export function useProfitability(input: { scope: "companies" | "clients"; limit?: number }) {
+export type ProfitabilityScope = "companies" | "clients" | "supervisors";
+
+export function useProfitability(input: { scope: ProfitabilityScope; limit?: number }) {
   return useQuery(
     orpc.intel.profitability.queryOptions({
       input: { scope: input.scope, limit: input.limit ?? 50 },
       staleTime: 60_000,
     }),
   );
+}
+
+/** How many jobs still have nobody recorded as the supervisor. */
+export function useSupervisorAttribution(enabled = true) {
+  return useQuery(orpc.intel.supervisorAttribution.queryOptions({ enabled, staleTime: 60_000 }));
 }

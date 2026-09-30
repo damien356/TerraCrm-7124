@@ -11,6 +11,20 @@ export function useCompany(id: number | null) {
   );
 }
 
+/**
+ * The people filed under one company, narrowed to roles. Used by the
+ * supervisor picker on a job, which only wants people who could have sent it.
+ */
+export function useCompanyPeople(companyId: number | null, roles?: string[]) {
+  return useQuery(
+    orpc.companies.people.queryOptions({
+      input: { companyId: companyId ?? 0, roles },
+      enabled: companyId !== null,
+      staleTime: 15_000,
+    }),
+  );
+}
+
 function useCompanyMutation(name: "create" | "update") {
   const queryClient = useQueryClient();
   return orpc.companies[name].mutationOptions({

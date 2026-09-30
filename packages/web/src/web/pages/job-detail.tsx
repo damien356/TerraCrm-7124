@@ -20,10 +20,12 @@ import {
   useJob,
   useRemoveJobContact,
   useRemoveMaterial,
+  useSetJobSupervisor,
   useUpdateJob,
   useUpdateJobContact,
   useUpdateMaterial,
 } from "../queries/jobs";
+import { SupervisorPicker } from "../components/supervisor-picker";
 import { useCreateTask, useRemoveTask } from "../queries/tasks";
 import { useBootstrap } from "../queries/settings";
 import { useContacts } from "../queries/contacts";
@@ -278,6 +280,97 @@ function AddContactModal({ jobId, open, onClose }: { jobId: number; open: boolea
 
 /* -------------------------------- the page ------------------------------- */
 
+/**
+ * The supervisor who sent the job. Reads and writes the same `job_contacts`
+ * link as everyone else on the job, at role 'supervisor', so it also shows up
+ * in the people list below with its comms flags.
+ */
+function SupervisorCard({
+  jobId,
+  companyId,
+  current,
+}: {
+  jobId: number;
+  companyId: number | null;
+  current: { contactId: number; name: string } | null;
+}) {
+  const setSupervisor = useSetJobSupervisor();
+  const currentId = current?.contactId ?? null;
+  const [editing, setEditing] = React.useState(false);
+  const [picked, setPicked] = React.useState(currentId ? String(currentId) : "");
+
+  // Keep the picker in step when the job reloads with a different supervisor.
+  React.useEffect(() => {
+    setPicked(currentId ? String(currentId) : "");
+  }, [currentId]);
+
+  async function save(contactId: number | null) {
+    await setSupervisor.mutateAsync({ jobId, contactId });
+    setEditing(false);
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="Supervisor"
+        subtitle="Who sent this work. Drives the supervisor numbers on Profitability."
+        action={
+          companyId && !editing ? (
+            <Button variant="secondary" onClick={() => setEditing(true)}>
+              {current ? "Change" : "Add"}
+            </Button>
+          ) : null
+        }
+      />
+      <div className="px-4 py-3.5">
+        {editing ? (
+          <div className="space-y-3">
+            <SupervisorPicker
+              companyId={companyId}
+              value={picked}
+              onChange={(v) => setPicked(v)}
+            />
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                onClick={() => save(picked ? Number(picked) : null)}
+                disabled={setSupervisor.isPending}
+              >
+                {setSupervisor.isPending ? <Spinner className="border-white/40 border-t-white" /> : null}
+                Save
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+                Cancel
+              </Button>
+              {current ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-destructive"
+                  onClick={() => save(null)}
+                  disabled={setSupervisor.isPending}
+                >
+                  Clear
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ) : current ? (
+          <Link to={`/supervisors/${current.contactId}`} className="text-sm font-medium text-primary hover:underline">
+            {current.name}
+          </Link>
+        ) : (
+          <p className="text-[13px] text-muted-foreground">
+            {companyId
+              ? "Nobody recorded yet. This job will not show up under any supervisor until one is added."
+              : "Private customer, so there is no builder supervisor to record."}
+          </p>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 export default function JobDetailPage() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
@@ -487,6 +580,21 @@ export default function JobDetailPage() {
               </ul>
             )}
           </Card>
+
+          {/* who sent the work */}
+          <SupervisorCard
+            jobId={j.id}
+            companyId={j.companyId ?? null}
+            current={(() => {
+              const row = j.contacts.find((p) => p.link.role === "supervisor");
+              return row
+                ? {
+                    contactId: row.contact.id,
+                    name: `${row.contact.firstName} ${row.contact.lastName}`.trim(),
+                  }
+                : null;
+            })()}
+          />
 
           {/* people on the job */}
           <Card>

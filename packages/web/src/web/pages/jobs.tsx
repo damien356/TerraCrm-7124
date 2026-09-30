@@ -8,6 +8,7 @@ import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { Combobox } from "../components/ui/combobox";
+import { SupervisorPicker } from "../components/supervisor-picker";
 import { useCreateJob, useJobs } from "../queries/jobs";
 import { useBootstrap } from "../queries/settings";
 import { useContacts } from "../queries/contacts";
@@ -27,6 +28,7 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
     title: "",
     contactId: "",
     companyId: "",
+    supervisorContactId: "",
     siteId: "",
     statusId: "",
     billToType: "contact" as "contact" | "company",
@@ -59,6 +61,8 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
         description: form.description || null,
         accessNotes: form.accessNotes || null,
         source: form.source,
+        supervisorContactId:
+          form.companyId && form.supervisorContactId ? Number(form.supervisorContactId) : null,
       });
       onClose();
     } catch (e) {
@@ -108,15 +112,23 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
         <Field label="Company (optional)">
           <Combobox
             value={form.companyId}
-            onChange={(v) => set("companyId", v)}
+            onChange={(v) => {
+              // A different builder means a different set of supervisors.
+              setForm((f) => ({ ...f, companyId: v, supervisorContactId: "" }));
+            }}
             placeholder="Search companies…"
-            emptyLabel="None — private customer"
+            emptyLabel="None, private customer"
             options={(companies.data ?? []).map((c) => ({
               value: String(c.id),
               label: c.name,
             }))}
           />
         </Field>
+        <SupervisorPicker
+          companyId={form.companyId ? Number(form.companyId) : null}
+          value={form.supervisorContactId}
+          onChange={(v) => set("supervisorContactId", v)}
+        />
         <Field label="Site">
           <Select value={form.siteId} onChange={(e) => set("siteId", e.target.value)}>
             <option value="">None</option>
