@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { Colors, Fonts } from "@/constants/theme";
 import { fmtLongDate, fmtMoney, fmtTime, statusLabel, todayISO } from "@/lib/format";
 import { useLiveCrew, useOfficeSummary } from "@/queries/office";
@@ -156,7 +157,49 @@ function Empty({ text }: { text: string }) {
   );
 }
 
+/** The one thing the office does from a site visit: talk, and get a priced draft. */
+function VoiceQuoteButton({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityLabel="Record a voice quote"
+      style={({ pressed }) => ({
+        marginTop: 16,
+        backgroundColor: c.primary,
+        borderRadius: 18,
+        paddingVertical: 18,
+        paddingHorizontal: 18,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 14,
+        opacity: pressed ? 0.88 : 1,
+      })}
+    >
+      <View
+        style={{
+          width: 52,
+          height: 52,
+          borderRadius: 26,
+          backgroundColor: "rgba(255,255,255,0.18)",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Ionicons name="mic" size={27} color="#FFFFFF" />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={{ fontFamily: Fonts.bold, fontSize: 18, color: "#FFFFFF" }}>Voice quote</Text>
+        <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: "rgba(255,255,255,0.8)", marginTop: 1 }}>
+          Talk through the job, get a priced draft
+        </Text>
+      </View>
+      <Ionicons name="chevron-forward" size={22} color="rgba(255,255,255,0.85)" />
+    </Pressable>
+  );
+}
+
 export default function OfficeScreen() {
+  const router = useRouter();
   const who = useWhoami();
   const isAdmin = who.data?.canSeeOffice === true;
   const summary = useOfficeSummary(isAdmin);
@@ -223,6 +266,8 @@ export default function OfficeScreen() {
         <Text style={{ fontFamily: Fonts.sans, fontSize: 13.5, color: c.mutedForeground, marginTop: 2 }}>
           {who.data?.name ? `${who.data.name}, ` : ""}admin access
         </Text>
+
+        <VoiceQuoteButton onPress={() => router.push("/voice-quote")} />
 
         {summary.isLoading ? (
           <View style={{ paddingVertical: 40, alignItems: "center" }}>

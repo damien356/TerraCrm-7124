@@ -14,6 +14,9 @@ import { authClient, getWebSessionToken } from "./auth";
 const rawBaseUrl = process.env.EXPO_PUBLIC_API_URL ?? Constants.expoConfig?.extra?.apiUrl;
 const baseUrl = String(rawBaseUrl ?? "").replace(/\/+$/, "");
 
+/** The Terra Ops site this build talks to, for links that open the full web app. */
+export const siteUrl = baseUrl;
+
 const link = new RPCLink({
   url: `${baseUrl}/api/rpc`,
   headers: () => {
