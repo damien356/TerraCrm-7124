@@ -125,6 +125,7 @@ type SkillRow = {
   recommendedCrew: number;
   productionRate: number | null;
   productionUnit: string;
+  extraCrewUpliftPct: number;
   sortOrder: number;
   active: boolean;
 };
@@ -263,7 +264,26 @@ function SkillLine({ skill }: { skill: SkillRow }) {
               </option>
             ))}
           </Select>
-          <span className="text-xs text-muted-foreground">per person, per day</span>
+          <span className="text-xs text-muted-foreground">for one person, per day</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Label className="mb-0">Second person adds</Label>
+          <Select
+            value={String(skill.extraCrewUpliftPct ?? 35)}
+            onChange={(e) => update.mutate({ id: skill.id, extraCrewUpliftPct: Number(e.target.value) })}
+            className="h-8 w-20"
+          >
+            {[0, 10, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100].map((n) => (
+              <option key={n} value={n}>
+                {n}%
+              </option>
+            ))}
+          </Select>
+          <span className="text-xs text-muted-foreground">
+            {skill.productionRate
+              ? `so two get through about ${Math.round(skill.productionRate * (1 + (skill.extraCrewUpliftPct ?? 35) / 100) * 10) / 10} ${UNIT_LABEL[skill.productionUnit as keyof typeof UNIT_LABEL] ?? skill.productionUnit} a day, not double`
+              : "two people are never twice as fast, they share the room"}
+          </span>
         </div>
       </div>
     </div>

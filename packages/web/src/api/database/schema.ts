@@ -190,6 +190,13 @@ export const skills = sqliteTable("skills", {
   productionRate: real("production_rate"),
   /** m2 · lm · each · step · hour */
   productionUnit: text("production_unit").notNull().default("m2"),
+  /**
+   * What each body after the first adds to the day's output, as a percentage.
+   * Not 100: two people share a cut station, a room and a doorway, so they run
+   * 30 to 40 per cent faster on resilient rather than twice as fast. Carpet
+   * scales better, about 80 per cent, since 25lm a day becomes 45lm with two.
+   */
+  extraCrewUpliftPct: integer("extra_crew_uplift_pct").notNull().default(35),
   /** How many completion photos the crew must add before they can mark it done. */
   minCompletionPhotos: integer("min_completion_photos").notNull().default(4),
   sortOrder: integer("sort_order").notNull().default(0),
@@ -567,6 +574,12 @@ export const jobTasks = sqliteTable(
     planMime: text("plan_mime"),
     startTime: text("start_time"),
     durationHours: real("duration_hours").notNull().default(4),
+    /**
+     * Days on site, put in by hand. Set this and it wins over the rate-based
+     * recommendation for good, because the office knows about the furniture,
+     * the stairs and the parking and the rates do not.
+     */
+    manualDays: integer("manual_days"),
     /** 1 or 2. Forced to 2 when the job has furniture on site. */
     crewSize: integer("crew_size").notNull().default(1),
     /** unassigned · offered · assigned · in_progress · complete · cancelled */

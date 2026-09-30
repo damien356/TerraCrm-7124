@@ -81,6 +81,10 @@ export function BookInstallerPanel({
 
   const eligible = useEligible(t?.skillId ?? null, startDate, t?.crewSize ?? 1);
   const book = useBookTask();
+  // True once the office has put the day count in themselves. That number then
+  // sticks on the job and beats the rate-based recommendation next time, since
+  // they are the ones who know about the furniture and the stairs.
+  const [daysByHand, setDaysByHand] = React.useState(false);
 
   // Prefill from whatever the job already knows: the day it was pencilled in
   // for, and the day count the measure implies. Both stay editable.
@@ -143,6 +147,7 @@ export function BookInstallerPanel({
         durationHours,
         payAmount: payOverride ? Number(payOverride) : null,
         overrideNote: loud && overrideNote ? overrideNote : null,
+        manualDays: daysByHand ? dates.length : null,
       })
       .then(() => {
         onBooked?.();
@@ -243,25 +248,47 @@ export function BookInstallerPanel({
                 variant="outline"
                 size="icon-sm"
                 disabled={dayCount <= 1}
-                onClick={() => setDayCount((n) => Math.max(1, n - 1))}
+                onClick={() => {
+                  setDaysByHand(true);
+                  setDayCount((n) => Math.max(1, n - 1));
+                }}
               >
                 <Minus className="size-4" />
               </Button>
               <span className="tabular w-10 text-center text-lg font-semibold">{dayCount}</span>
-              <Button variant="outline" size="icon-sm" disabled={dayCount >= 30} onClick={() => setDayCount((n) => n + 1)}>
+              <Button
+                variant="outline"
+                size="icon-sm"
+                disabled={dayCount >= 30}
+                onClick={() => {
+                  setDaysByHand(true);
+                  setDayCount((n) => n + 1);
+                }}
+              >
                 <Plus className="size-4" />
               </Button>
               {t.suggested ? (
                 <button
                   type="button"
-                  onClick={() => setDayCount(t.suggested!.days)}
+                  onClick={() => {
+                    setDaysByHand(false);
+                    setDayCount(t.suggested!.days);
+                  }}
                   className="ml-1 text-left text-xs text-primary hover:underline"
                 >
-                  Terra reckons {t.suggested.days} {t.suggested.days === 1 ? "day" : "days"}
+                  {t.suggested.basis === "manual"
+                    ? `Set by hand at ${t.suggested.days} ${t.suggested.days === 1 ? "day" : "days"}`
+                    : `Terra reckons ${t.suggested.days} ${t.suggested.days === 1 ? "day" : "days"}`}
                   <span className="block text-[11px] text-muted-foreground">
-                    {t.suggested.qty}
-                    {t.suggested.unit === "m2" ? "m²" : ` ${t.suggested.unit}`} at {t.suggested.perDay}/day
-                    {t.suggested.basis === "area" ? ", off the area" : ", off the measure"}
+                    {t.suggested.basis === "manual" ? (
+                      "Someone put this in themselves, not off the rates"
+                    ) : (
+                      <>
+                        {t.suggested.qty}
+                        {t.suggested.unit === "m2" ? "m²" : ` ${t.suggested.unit}`} at {t.suggested.perDay}/day
+                        {t.suggested.basis === "area" ? ", off the area" : ", off the measure"}
+                      </>
+                    )}
                   </span>
                 </button>
               ) : null}

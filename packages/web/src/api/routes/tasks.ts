@@ -5,6 +5,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
 import { checkDays, nonWorkingWeekdays } from "../lib/availability";
+import { daysFromQty } from "../lib/day-estimate";
 import { lockTaskLabour } from "./costing";
 
 /**
@@ -98,10 +99,24 @@ async function suggestDays(taskId: number) {
     .where(eq(schema.jobTasks.id, taskId));
   if (!row) return null;
 
+  // A hand-entered day count is the answer, full stop. The office set it
+  // because they know something the rates do not.
+  if (row.task.manualDays && row.task.manualDays > 0) {
+    return {
+      days: row.task.manualDays,
+      exact: row.task.manualDays,
+      basis: "manual" as const,
+      qty: 0,
+      unit: row.skill?.productionUnit ?? "m2",
+      perDay: 0,
+    };
+  }
+
   const rate = row.skill?.productionRate ?? null;
   if (!rate || rate <= 0) return null;
   const unit = row.skill?.productionUnit ?? "m2";
   const crew = Math.max(1, row.task.crewSize);
+  const uplift = row.skill?.extraCrewUpliftPct ?? 35;
 
   const measured = await db
     .select({ qty: schema.taskLabourLines.qty, unit: schema.labourRateItems.unit, kind: schema.labourRateItems.kind })
@@ -115,14 +130,15 @@ async function suggestDays(taskId: number) {
   const qty = measuredQty > 0 ? measuredQty : unit === "m2" ? (row.task.areaM2 ?? 0) : 0;
   if (qty <= 0) return null;
 
-  const exact = qty / (rate * crew);
+  const est = daysFromQty({ qty, rate, crew, extraCrewUpliftPct: uplift });
+  if (!est) return null;
   return {
-    days: Math.max(1, Math.ceil(exact - 0.15)),
-    exact: Math.round(exact * 10) / 10,
+    days: est.days,
+    exact: est.exact,
     basis: measuredQty > 0 ? ("measured" as const) : ("area" as const),
     qty: Math.round(qty * 10) / 10,
     unit,
-    perDay: rate * crew,
+    perDay: est.perDay,
   };
 }
 
@@ -683,6 +699,12 @@ export const tasks = {
         payAmount: z.number().nullable().optional(),
         /** Why the office booked over a clash. Stored on the affected days. */
         overrideNote: z.string().nullable().optional(),
+        /**
+         * Day count the office put in themselves. Stored on the task so it
+         * beats the rate-based recommendation from here on, including on a
+         * later drag. Null leaves the recommendation in charge.
+         */
+        manualDays: z.number().int().min(1).max(30).nullable().optional(),
       }),
     )
     .handler(async ({ input, context }) => {
@@ -737,6 +759,7 @@ export const tasks = {
           startTime: input.arrivalStart ?? task.startTime,
           ...(input.durationHours != null ? { durationHours: input.durationHours } : {}),
           ...(input.payAmount != null ? { payAmount: input.payAmount } : {}),
+          ...(input.manualDays !== undefined ? { manualDays: input.manualDays } : {}),
           updatedAt: new Date(),
         })
         .where(eq(schema.jobTasks.id, input.taskId))

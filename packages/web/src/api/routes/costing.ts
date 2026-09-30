@@ -4,6 +4,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
 import { rateBook } from "./labour";
+import { crewOutputPerDay } from "../lib/day-estimate";
 
 /**
  * JOB COSTING.
@@ -133,14 +134,18 @@ function priceLines(args: {
 }
 
 /**
- * How long the work takes: quantity ÷ (what one man gets through in a day ×
- * how many men). Null when the skill has no production rate set, because a
- * made up duration is what puts a crew on a job that was never going to finish.
+ * How long the work takes: quantity ÷ what the crew gets through in a day.
+ *
+ * A second body is not worth a second full day of output, so the crew uplift
+ * is applied rather than multiplying the rate by head count. Null when the
+ * skill has no production rate set, because a made up duration is what puts a
+ * crew on a job that was never going to finish.
  */
 function estimateDays(args: {
   lines: PricedLine[];
   productionRate: number | null;
   productionUnit: string | null;
+  extraCrewUpliftPct?: number | null;
   crew: number;
 }) {
   const { lines, productionRate, productionUnit, crew } = args;
@@ -149,7 +154,9 @@ function estimateDays(args: {
     .filter((l) => l.kind === "work" && l.unit === (productionUnit ?? "m2"))
     .reduce((sum, l) => sum + l.qty, 0);
   if (qty <= 0) return null;
-  return Math.round((qty / (productionRate * Math.max(1, crew))) * 10) / 10;
+  const perDay = crewOutputPerDay(productionRate, crew, args.extraCrewUpliftPct ?? 35);
+  if (perDay <= 0) return null;
+  return Math.round((qty / perDay) * 10) / 10;
 }
 
 /**
@@ -251,6 +258,7 @@ export const costing = {
           lines: result.lines,
           productionRate: task.skill?.productionRate ?? null,
           productionUnit: task.skill?.productionUnit ?? null,
+          extraCrewUpliftPct: task.skill?.extraCrewUpliftPct ?? null,
           crew: task.task.crewSize,
         }),
         frozen: task.task.labourCost == null
@@ -411,6 +419,7 @@ export const costing = {
             lines: live.lines,
             productionRate: t.skill?.productionRate ?? null,
             productionUnit: t.skill?.productionUnit ?? null,
+            extraCrewUpliftPct: t.skill?.extraCrewUpliftPct ?? null,
             crew: t.task.crewSize,
           }),
         };
