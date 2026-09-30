@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Link } from "wouter";
 import {
+  AlertTriangle,
   Calendar,
   Check,
   ChevronLeft,
@@ -168,12 +169,26 @@ type Run = {
   totalDays: number;
   window: string | null;
   lane: number;
+  /** Days in this stretch this installer is also on another job for. */
+  clashDates: string[];
 };
 
 function runsFor(tasks: any[], installerId: number, dates: string[]): Run[] {
   const from = dates[0]!;
   const to = dates[dates.length - 1]!;
   const found: Omit<Run, "lane">[] = [];
+
+  /** Which days this installer is on more than one live job for. */
+  const onPerDay = new Map<string, number>();
+  for (const task of tasks) {
+    if (task.status === "complete" || task.status === "cancelled") continue;
+    for (const date of (task.dates ?? []) as string[]) {
+      const day = (task.days ?? []).find((d: any) => d.date === date);
+      const lead = day?.installerId ?? task.assignedInstallerId;
+      if (lead !== installerId && task.secondInstallerId !== installerId) continue;
+      onPerDay.set(date, (onPerDay.get(date) ?? 0) + 1);
+    }
+  }
 
   for (const task of tasks) {
     const all: string[] = [...((task.dates ?? []) as string[])].sort();
@@ -191,10 +206,12 @@ function runsFor(tasks: any[], installerId: number, dates: string[]): Run[] {
       .sort((a, b) => a - b);
     if (visible.length === 0) continue;
 
+    const live = task.status !== "complete" && task.status !== "cancelled";
     const push = (startIdx: number, endIdx: number) => {
       const firstDate = dates[startIdx]!;
       const day = (task.days ?? []).find((d: any) => d.date === firstDate);
       const start = sayTime(day?.arrivalStart ?? task.startTime);
+      const stretch = dates.slice(startIdx, endIdx + 1);
       found.push({
         task,
         startIdx,
@@ -204,6 +221,7 @@ function runsFor(tasks: any[], installerId: number, dates: string[]): Run[] {
         firstSeq: all.indexOf(firstDate) + 1,
         totalDays: all.length,
         window: day?.coordinate ? "rings the site" : start,
+        clashDates: live ? stretch.filter((d) => (onPerDay.get(d) ?? 0) > 1) : [],
       });
     };
 
@@ -248,6 +266,7 @@ function RunBar({
 }) {
   const t = run.task;
   const tint = tintFor(t.skill?.groupName);
+  const clash = run.clashDates.length > 0;
   const partial = run.span < run.totalDays;
   const dayLabel =
     run.totalDays === 1
@@ -265,7 +284,11 @@ function RunBar({
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onClick={onOpen}
-      title={`${t.title} · #${t.jobNumber} ${t.jobTitle ?? ""}`}
+      title={
+        clash
+          ? `Double booked ${run.clashDates.length === 1 ? sayDate(run.clashDates[0]!) : `on ${run.clashDates.length} days`}. ${t.title} · #${t.jobNumber} ${t.jobTitle ?? ""}`
+          : `${t.title} · #${t.jobNumber} ${t.jobTitle ?? ""}`
+      }
       style={{
         position: "absolute",
         left: `calc(${(run.startIdx / cols) * 100}% + 3px)`,
@@ -273,8 +296,11 @@ function RunBar({
         top: run.lane * (LANE_H + LANE_GAP) + LANE_GAP,
         height: LANE_H,
         backgroundColor: tint.fill,
-        borderLeftColor: tint.edge,
-        borderLeftWidth: run.openLeft ? 0 : 3,
+        // A double booking reads as a problem at a glance, before anyone clicks
+        // it: red edge, red outline, warning triangle.
+        borderLeftColor: clash ? "#C0362C" : tint.edge,
+        borderLeftWidth: run.openLeft && !clash ? 0 : 3,
+        ...(clash ? { outline: "1.5px solid #C0362C", outlineOffset: "-1.5px" } : {}),
         opacity: t.status === "complete" ? 0.7 : 1,
         // While another bar is being dragged this one steps out of the way, so a
         // day that already has a booking on it still takes the drop. The bar
@@ -286,7 +312,8 @@ function RunBar({
       } ${run.openRight ? "rounded-r-none" : "rounded-r-md"}`}
     >
       <div className="flex items-center gap-1">
-        {run.openLeft ? <ChevronsLeft className="size-3 shrink-0 text-[#1C1B1A]/45" /> : null}
+        {run.openLeft && !clash ? <ChevronsLeft className="size-3 shrink-0 text-[#1C1B1A]/45" /> : null}
+        {clash ? <AlertTriangle className="size-3.5 shrink-0 text-[#C0362C]" /> : null}
         <p className="truncate text-[12px] font-semibold leading-tight text-[#1C1B1A]">{t.title}</p>
         {t.crewSize > 1 ? <Users2 className="size-3 shrink-0 text-[#1C1B1A]/55" /> : null}
         {t.furnitureOnSite ? <Sofa className="size-3 shrink-0 text-[#1C1B1A]/45" /> : null}
@@ -718,6 +745,7 @@ export default function SchedulePage() {
                 const runs = runsFor(tasks, inst.id, dates);
                 const lanes = Math.max(1, ...runs.map((r) => r.lane + 1));
                 const height = lanes * (LANE_H + LANE_GAP) + LANE_GAP;
+                const clashDays = [...new Set(runs.flatMap((r) => r.clashDates))].sort();
                 return (
                   <div key={inst.id} className="flex border-b border-border">
                     <div className="sticky left-0 z-20 w-40 shrink-0 border-r border-border bg-card px-3 py-2">
@@ -732,6 +760,14 @@ export default function SchedulePage() {
                                 ? "needs a partner"
                                 : "solo"}
                           </span>
+                          {clashDays.length ? (
+                            <span className="mt-0.5 flex items-center gap-1 text-[11px] font-semibold text-[#C0362C]">
+                              <AlertTriangle className="size-3 shrink-0" />
+                              {clashDays.length === 1
+                                ? `Double booked ${sayDate(clashDays[0]!).replace(/ \w+$/, "")}`
+                                : `Double booked, ${clashDays.length} days`}
+                            </span>
+                          ) : null}
                         </span>
                       </Link>
                     </div>
