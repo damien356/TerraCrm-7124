@@ -197,6 +197,14 @@ export const skills = sqliteTable("skills", {
    * scales better, about 80 per cent, since 25lm a day becomes 45lm with two.
    */
   extraCrewUpliftPct: integer("extra_crew_uplift_pct").notNull().default(35),
+  /**
+   * Days the job sits there that have nothing to do with how big it is.
+   * Sanding is the reason this exists: the coats have to dry, so a 50m2 floor
+   * and a 120m2 floor both wear the same waiting. Area sets the sanding time,
+   * this sets the drying time, and putting a second man on does not dry paint
+   * any faster so the crew uplift never touches it.
+   */
+  fixedDays: real("fixed_days").notNull().default(0),
   /** How many completion photos the crew must add before they can mark it done. */
   minCompletionPhotos: integer("min_completion_photos").notNull().default(4),
   sortOrder: integer("sort_order").notNull().default(0),

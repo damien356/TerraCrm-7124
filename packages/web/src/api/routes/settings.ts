@@ -39,6 +39,7 @@ export const settings = {
         productionRate: z.number().min(0).nullable().default(null),
         productionUnit: z.string().default("m2"),
         extraCrewUpliftPct: z.number().int().min(0).max(200).default(35),
+        fixedDays: z.number().min(0).max(30).default(0),
         sortOrder: z.number().int().default(0),
       }),
     )
@@ -59,6 +60,7 @@ export const settings = {
         productionRate: z.number().min(0).nullable().optional(),
         productionUnit: z.string().optional(),
         extraCrewUpliftPct: z.number().int().min(0).max(200).optional(),
+        fixedDays: z.number().min(0).max(30).optional(),
         sortOrder: z.number().int().optional(),
         active: z.boolean().optional(),
       }),

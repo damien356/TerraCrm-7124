@@ -34,6 +34,16 @@ export function crewOutputPerDay(rate: number, crew: number, extraCrewUpliftPct:
 /**
  * Turn a quantity into days on site.
  *
+ * Two parts, added together, because they behave completely differently:
+ *
+ *   working days = quantity ÷ what the crew gets through in a day
+ *   fixed days   = the waiting the job does regardless of its size
+ *
+ * Sanding is why the second part exists. Coats have to dry, and drying does
+ * not care whether the floor is 50m2 or 120m2, so that time is flat. It also
+ * means a second body cannot shorten it: paint dries at its own pace. Hence
+ * the uplift is applied to the working part only and never to the fixed part.
+ *
  * The 0.15 shaved off before rounding up is there so a job that lands a
  * whisker over a clean day does not book an extra one. 41m2 of hybrid at
  * 40m2 a day is a big day, not two days. 52m2 is two.
@@ -43,13 +53,19 @@ export function daysFromQty(args: {
   rate: number;
   crew: number;
   extraCrewUpliftPct: number;
+  /** Drying, curing, waiting. Not shortened by extra bodies. */
+  fixedDays?: number;
 }) {
   const perDay = crewOutputPerDay(args.rate, args.crew, args.extraCrewUpliftPct);
   if (perDay <= 0 || args.qty <= 0) return null;
-  const exact = args.qty / perDay;
+  const working = args.qty / perDay;
+  const fixed = Math.max(0, args.fixedDays ?? 0);
+  const exact = working + fixed;
   return {
     days: Math.max(1, Math.ceil(exact - 0.15)),
     exact: Math.round(exact * 10) / 10,
     perDay: Math.round(perDay * 10) / 10,
+    workingDays: Math.round(working * 10) / 10,
+    fixedDays: fixed,
   };
 }

@@ -146,6 +146,7 @@ function estimateDays(args: {
   productionRate: number | null;
   productionUnit: string | null;
   extraCrewUpliftPct?: number | null;
+  fixedDays?: number | null;
   crew: number;
 }) {
   const { lines, productionRate, productionUnit, crew } = args;
@@ -156,7 +157,8 @@ function estimateDays(args: {
   if (qty <= 0) return null;
   const perDay = crewOutputPerDay(productionRate, crew, args.extraCrewUpliftPct ?? 35);
   if (perDay <= 0) return null;
-  return Math.round((qty / perDay) * 10) / 10;
+  // Drying and curing time is flat, so it is added after the rate, not through it.
+  return Math.round((qty / perDay + Math.max(0, args.fixedDays ?? 0)) * 10) / 10;
 }
 
 /**
@@ -259,6 +261,7 @@ export const costing = {
           productionRate: task.skill?.productionRate ?? null,
           productionUnit: task.skill?.productionUnit ?? null,
           extraCrewUpliftPct: task.skill?.extraCrewUpliftPct ?? null,
+          fixedDays: task.skill?.fixedDays ?? null,
           crew: task.task.crewSize,
         }),
         frozen: task.task.labourCost == null
@@ -420,6 +423,7 @@ export const costing = {
             productionRate: t.skill?.productionRate ?? null,
             productionUnit: t.skill?.productionUnit ?? null,
             extraCrewUpliftPct: t.skill?.extraCrewUpliftPct ?? null,
+            fixedDays: t.skill?.fixedDays ?? null,
             crew: t.task.crewSize,
           }),
         };

@@ -109,6 +109,7 @@ async function suggestDays(taskId: number) {
       qty: 0,
       unit: row.skill?.productionUnit ?? "m2",
       perDay: 0,
+      fixedDays: 0,
     };
   }
 
@@ -117,6 +118,7 @@ async function suggestDays(taskId: number) {
   const unit = row.skill?.productionUnit ?? "m2";
   const crew = Math.max(1, row.task.crewSize);
   const uplift = row.skill?.extraCrewUpliftPct ?? 35;
+  const fixedDays = row.skill?.fixedDays ?? 0;
 
   const measured = await db
     .select({ qty: schema.taskLabourLines.qty, unit: schema.labourRateItems.unit, kind: schema.labourRateItems.kind })
@@ -130,7 +132,7 @@ async function suggestDays(taskId: number) {
   const qty = measuredQty > 0 ? measuredQty : unit === "m2" ? (row.task.areaM2 ?? 0) : 0;
   if (qty <= 0) return null;
 
-  const est = daysFromQty({ qty, rate, crew, extraCrewUpliftPct: uplift });
+  const est = daysFromQty({ qty, rate, crew, extraCrewUpliftPct: uplift, fixedDays });
   if (!est) return null;
   return {
     days: est.days,
@@ -139,6 +141,7 @@ async function suggestDays(taskId: number) {
     qty: Math.round(qty * 10) / 10,
     unit,
     perDay: est.perDay,
+    fixedDays: est.fixedDays,
   };
 }
 

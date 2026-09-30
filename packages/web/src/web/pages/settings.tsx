@@ -126,6 +126,7 @@ type SkillRow = {
   productionRate: number | null;
   productionUnit: string;
   extraCrewUpliftPct: number;
+  fixedDays: number;
   sortOrder: number;
   active: boolean;
 };
@@ -283,6 +284,25 @@ function SkillLine({ skill }: { skill: SkillRow }) {
             {skill.productionRate
               ? `so two get through about ${Math.round(skill.productionRate * (1 + (skill.extraCrewUpliftPct ?? 35) / 100) * 10) / 10} ${UNIT_LABEL[skill.productionUnit as keyof typeof UNIT_LABEL] ?? skill.productionUnit} a day, not double`
               : "two people are never twice as fast, they share the room"}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Label className="mb-0">Waiting on top</Label>
+          <Select
+            value={String(skill.fixedDays ?? 0)}
+            onChange={(e) => update.mutate({ id: skill.id, fixedDays: Number(e.target.value) })}
+            className="h-8 w-24"
+          >
+            {[0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5].map((n) => (
+              <option key={n} value={n}>
+                {n === 0 ? "none" : `${n} ${n === 1 ? "day" : "days"}`}
+              </option>
+            ))}
+          </Select>
+          <span className="text-xs text-muted-foreground">
+            {skill.fixedDays
+              ? "drying or curing, same whatever the size, and a second person can't speed it up"
+              : "for drying or curing time that doesn't depend on the size"}
           </span>
         </div>
       </div>
