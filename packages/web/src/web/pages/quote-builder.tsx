@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useLocation, useParams } from "wouter";
-import { ArrowLeft, ArrowRight, Check, Plus, Send, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, Check, Plus, Send, Trash2, X } from "lucide-react";
 import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -45,11 +45,16 @@ type Item = {
   unitPrice: number;
   unitCost: number | null;
   total: number;
+  flagged?: boolean;
+  flagReason?: string | null;
+  voicePhrase?: string | null;
 };
 
 function LineRow({ item, locked }: { item: Item; locked: boolean }) {
   const update = useUpdateQuoteItem();
   const remove = useRemoveQuoteItem();
+  const products = useProducts();
+  const [fixProductId, setFixProductId] = React.useState("");
   const [draft, setDraft] = React.useState({
     description: item.description,
     qty: String(item.qty),
@@ -67,7 +72,7 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
   }, [item.id, item.description, item.qty, item.unitPrice, item.unitCost]);
 
   return (
-    <tr className="border-b border-border last:border-0">
+    <tr className={item.flagged ? "border-b border-border bg-[#D08A1E]/10 last:border-0" : "border-b border-border last:border-0"}>
       <td className="px-2 py-1.5">
         <Select
           className="h-8 w-[104px]"
@@ -83,6 +88,51 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
         </Select>
       </td>
       <td className="px-2 py-1.5">
+        {item.flagged ? (
+          <span className="mb-1 flex items-center gap-1 text-xs text-[#D08A1E]" title={item.flagReason ?? "Needs review"}>
+            <AlertTriangle className="size-3.5" /> {item.flagReason ?? "Needs review"}
+          </span>
+        ) : null}
+        {item.flagged && item.voicePhrase ? (
+          <div className="mb-1 flex items-center gap-1.5">
+            <Select
+              className="h-7 min-w-[220px] flex-1 text-xs"
+              value={fixProductId}
+              disabled={locked}
+              onChange={(e) => setFixProductId(e.target.value)}
+            >
+              <option value="">Pick the right product…</option>
+              {(products.data ?? []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {[p.brand, p.range, p.colour].filter(Boolean).join(" — ")}
+                  {p.sellPrice ? ` · ${money(p.sellPrice)}/${p.unit}` : ""}
+                </option>
+              ))}
+            </Select>
+            <Button
+              variant="outline"
+              className="h-7 px-2 text-xs"
+              disabled={!fixProductId || update.isPending}
+              onClick={() => {
+                const chosen = (products.data ?? []).find((p) => String(p.id) === fixProductId);
+                if (!chosen) return;
+                update.mutate({
+                  id: item.id,
+                  productId: chosen.id,
+                  description: [chosen.brand, chosen.range, chosen.colour].filter(Boolean).join(", ") || item.description,
+                  unit: chosen.unit || item.unit,
+                  unitPrice: chosen.sellPrice ?? item.unitPrice,
+                  unitCost: chosen.costPrice ?? item.unitCost,
+                  flagged: false,
+                  flagReason: null,
+                });
+                setFixProductId("");
+              }}
+            >
+              <Check className="size-3.5" /> Confirm
+            </Button>
+          </div>
+        ) : null}
         <Input
           className="h-8"
           value={draft.description}
@@ -317,6 +367,17 @@ export default function QuoteBuilderPage() {
             <Link to={`/jobs/${q.job.id}`}>
               <Button variant="outline">Job #{q.job.number}</Button>
             </Link>
+          ) : null}
+          {q.status === "needs_review" ? (
+            <Button
+              variant="outline"
+              disabled={q.items.some((i: Item) => i.flagged) || update.isPending}
+              title={q.items.some((i: Item) => i.flagged) ? "Fix every flagged line first" : undefined}
+              onClick={() => run(() => update.mutateAsync({ id: q.id, status: "draft" }))}
+            >
+              <Check className="size-4" />
+              Mark as reviewed
+            </Button>
           ) : null}
           {q.status === "draft" ? (
             <Button variant="outline" onClick={() => run(() => send.mutateAsync({ id: q.id }))} disabled={send.isPending}>

@@ -17,13 +17,14 @@ const money = (n: number) =>
 
 export const QUOTE_STATUS_COLOUR: Record<string, string> = {
   draft: "#7A736D",
+  needs_review: "#D08A1E",
   sent: "#D08A1E",
   accepted: "#3F7D3A",
   declined: "#B4342A",
   expired: "#7A736D",
 };
 
-const STATUSES = ["draft", "sent", "accepted", "declined", "expired"];
+const STATUSES = ["draft", "needs_review", "sent", "accepted", "declined", "expired"];
 
 function fmtDate(value: Date | string | null) {
   if (!value) return "—";

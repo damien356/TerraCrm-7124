@@ -17,6 +17,7 @@ import {
   Mail,
   MapPinned,
   Menu,
+  Mic,
   PieChart,
   Receipt,
   Settings as SettingsIcon,
@@ -65,7 +66,10 @@ const NAV: NavEntry[] = [
   {
     label: "Pipeline",
     icon: Workflow,
-    children: [{ to: "/quotes", label: "Quotes", icon: FileText }],
+    children: [
+      { to: "/quotes", label: "Quotes", icon: FileText },
+      { to: "/voice-quotes", label: "Voice quotes", icon: Mic },
+    ],
   },
   { to: "/jobs", label: "Jobs", icon: ClipboardList },
   {

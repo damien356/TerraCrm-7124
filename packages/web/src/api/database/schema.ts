@@ -1215,7 +1215,7 @@ export const quotes = sqliteTable(
     contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
     companyId: integer("company_id").references(() => companies.id, { onDelete: "set null" }),
     siteId: integer("site_id").references(() => sites.id, { onDelete: "set null" }),
-    /** draft · sent · accepted · declined · expired */
+    /** draft · needs_review · sent · accepted · declined · expired */
     status: text("status").notNull().default("draft"),
     subtotal: real("subtotal").notNull().default(0),
     gst: real("gst").notNull().default(0),
@@ -1246,9 +1246,75 @@ export const quoteItems = sqliteTable(
     unitCost: real("unit_cost"),
     total: real("total").notNull().default(0),
     sortOrder: integer("sort_order").notNull().default(0),
+    /**
+     * True when this line was created without a confident match (voice
+     * capture or any other source) and needs a human's eyes before the quote
+     * can go out. `flagReason` is a short plain English note of why.
+     */
+    flagged: integer("flagged", { mode: "boolean" }).notNull().default(false),
+    flagReason: text("flag_reason"),
+    /**
+     * The raw, normalised phrase Damien spoke for this line, when it came
+     * from a voice capture. Kept so a human's correction (picking the right
+     * product) can be learned against the exact words that produced it.
+     */
+    voicePhrase: text("voice_phrase"),
     ...timestamps,
   },
   (t) => [index("quote_items_quote_idx").on(t.quoteId)],
+);
+
+/* ---------------------------------------------------------------------------
+ * Voice quote capture
+ * Damien talks on site, the recording and its transcript are kept against the
+ * quote it produced, and every draft it makes goes through the SAME quotes /
+ * quoteItems tables above, never a shadow copy.
+ * ------------------------------------------------------------------------- */
+
+export const voiceQuoteCaptures = sqliteTable(
+  "voice_quote_captures",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    quoteId: integer("quote_id").references(() => quotes.id, { onDelete: "set null" }),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    /** Tigris storage key for the original recording. Never deleted. */
+    audioKey: text("audio_key").notNull(),
+    audioUrl: text("audio_url"),
+    durationSeconds: real("duration_seconds"),
+    /** Raw Whisper transcript, unedited, kept for playback-and-check. */
+    transcript: text("transcript").notNull().default(""),
+    /** The structured fields the LLM extracted from the transcript, as JSON. */
+    extractedJson: text("extracted_json"),
+    /** captured · transcribing · extracting · priced · failed */
+    status: text("status").notNull().default("captured"),
+    errorMessage: text("error_message"),
+    capturedByProfileId: integer("captured_by_profile_id").references(() => profiles.id, { onDelete: "set null" }),
+    capturedByName: text("captured_by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [index("voice_captures_quote_idx").on(t.quoteId)],
+);
+
+/**
+ * A simple spoken-phrase to product mapping, learned from Damien's own
+ * corrections. "Gold foam" said three times and picked to the same underlay
+ * product means the fourth time it auto-matches. One flat table, no per
+ * business scoping beyond what already exists (Terra only runs the one book).
+ */
+export const voicePhraseProductMatches = sqliteTable(
+  "voice_phrase_product_matches",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** Lowercased, trimmed, exactly as heard. Matching is deliberately dumb. */
+    phrase: text("phrase").notNull(),
+    productId: integer("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+    /** How many times Damien has confirmed this exact pairing. */
+    confirmCount: integer("confirm_count").notNull().default(1),
+    lastConfirmedAt: integer("last_confirmed_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+    ...timestamps,
+  },
+  (t) => [unique("voice_phrase_product_unique").on(t.phrase, t.productId), index("voice_phrase_idx").on(t.phrase)],
 );
 
 export const invoices = sqliteTable(
