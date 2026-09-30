@@ -77,6 +77,17 @@ function useRecorder() {
 
 function Recorder({ onProcessed }: { onProcessed: (result: unknown) => void }) {
   const rec = useRecorder();
+
+  // One object URL per recording, freed when the recording changes or the card
+  // unmounts. Creating it inline in render made a fresh URL on every re-render
+  // and never released any of them.
+  const playbackUrl = React.useMemo(() => (rec.blob ? URL.createObjectURL(rec.blob) : null), [rec.blob]);
+  React.useEffect(
+    () => () => {
+      if (playbackUrl) URL.revokeObjectURL(playbackUrl);
+    },
+    [playbackUrl],
+  );
   const process = useProcessVoiceQuote();
 
   const submit = async () => {
@@ -136,7 +147,10 @@ function Recorder({ onProcessed }: { onProcessed: (result: unknown) => void }) {
 
         {rec.stage === "recorded" ? (
           <>
-            <audio controls src={URL.createObjectURL(rec.blob!)} className="w-full max-w-sm" />
+            {/* The user's own just-recorded note, so there are no captions to offer. */}
+            <audio controls src={playbackUrl ?? undefined} aria-label="Play back your recording" className="w-full max-w-sm">
+              <track kind="captions" />
+            </audio>
             <div className="flex gap-2">
               <Button variant="outline" onClick={rec.reset}>
                 Record again

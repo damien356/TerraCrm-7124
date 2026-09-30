@@ -194,7 +194,7 @@ async function priceMaterialLine(line: Extraction["lines"][number]): Promise<Pri
       unitPrice: 0,
       unitCost: null,
       flagged: true,
-      flagReason: "No matching product found in the price book. Priced at $0 — pick the right product and reprice before sending.",
+      flagReason: "No matching product found in the price book. Priced at $0. Pick the right product and reprice before sending.",
       voicePhrase: phraseKey || null,
     };
   }
@@ -231,7 +231,7 @@ async function priceLabourLine(line: Extraction["lines"][number]): Promise<Price
       unitPrice: 0,
       unitCost: null,
       flagged: true,
-      flagReason: "No labour rate book item was matched. Priced at $0 — pick the right item and reprice before sending.",
+      flagReason: "No labour rate book item was matched. Priced at $0. Pick the right item and reprice before sending.",
       voicePhrase: null,
     };
   }
@@ -254,7 +254,7 @@ async function priceLabourLine(line: Extraction["lines"][number]): Promise<Price
     unitPrice,
     unitCost: cost,
     flagged: cost === null,
-    flagReason: cost === null ? `No current rate on file for "${description}". Priced at $0 — set a rate and reprice before sending.` : null,
+    flagReason: cost === null ? `No current rate on file for "${description}". Priced at $0. Set a rate and reprice before sending.` : null,
     voicePhrase: null,
   };
 }
@@ -274,7 +274,7 @@ function priceOtherLine(line: Extraction["lines"][number]): PricedLine {
       unitPrice: 0,
       unitCost: null,
       flagged: true,
-      flagReason: "Damien did not give a dollar figure for this line. Priced at $0 — fill it in before sending.",
+      flagReason: "Damien did not give a dollar figure for this line. Priced at $0. Fill it in before sending.",
       voicePhrase: null,
     };
   }
