@@ -32,42 +32,53 @@ type Row = {
 const SKILLS: Row[] = [
   // carpet
   { id: 1, name: "Broadloom carpet 3.6 wide", groupName: "carpet", defaultCrewSize: 1, productionUnit: "lm", productionRate: 25, extraCrewUpliftPct: 80 },
-  { id: 2, name: "Carpet tiles", groupName: "carpet", defaultCrewSize: 1, productionUnit: "m2" },
-  { id: 3, name: "Carpet stairs", groupName: "carpet", defaultCrewSize: 1, productionUnit: "each" },
-  { id: 4, name: "Direct stick carpet", groupName: "carpet", defaultCrewSize: 1, productionUnit: "m2" },
-  { id: 31, name: "Carpet repairs", groupName: "carpet", defaultCrewSize: 1, productionUnit: "job" },
+  { id: 2, name: "Carpet tiles", groupName: "carpet", defaultCrewSize: 1, productionUnit: "m2", productionRate: 60, extraCrewUpliftPct: 60 },
+  { id: 3, name: "Carpet stairs", groupName: "carpet", defaultCrewSize: 1, productionUnit: "step", productionRate: 14, extraCrewUpliftPct: 50 },
+  { id: 4, name: "Direct stick carpet", groupName: "carpet", defaultCrewSize: 1, productionUnit: "m2", productionRate: 50, extraCrewUpliftPct: 60 },
+  // Two hours a repair once the drive is counted, so four in a day. A single
+  // repair still books a day, because nobody sends a man out for a quarter of one.
+  { id: 31, name: "Carpet repairs", groupName: "carpet", defaultCrewSize: 1, productionUnit: "each", productionRate: 4, extraCrewUpliftPct: 0 },
   // resilient
   { id: 5, name: "Vinyl sheet", groupName: "resilient", defaultCrewSize: 1, productionUnit: "m2", productionRate: 40, extraCrewUpliftPct: 35 },
   { id: 6, name: "Vinyl plank / LVT", groupName: "resilient", defaultCrewSize: 1, productionUnit: "m2", productionRate: 40, extraCrewUpliftPct: 35 },
   { id: 7, name: "Hybrid", groupName: "resilient", defaultCrewSize: 1, productionUnit: "m2", productionRate: 40, extraCrewUpliftPct: 35 },
   { id: 8, name: "Laminate", groupName: "resilient", defaultCrewSize: 1, productionUnit: "m2", productionRate: 40, extraCrewUpliftPct: 35 },
-  { id: 9, name: "Safety vinyl / welding", groupName: "resilient", defaultCrewSize: 1, productionUnit: "m2" },
-  { id: 10, name: "100mm Coving", groupName: "resilient", defaultCrewSize: 1, productionUnit: "lm" },
-  { id: 32, name: "150mm Coving", groupName: "resilient", defaultCrewSize: 1, productionUnit: "lm" },
+  // Welding is the slow part, not the laying, hence a third of plain sheet.
+  { id: 9, name: "Safety vinyl / welding", groupName: "resilient", defaultCrewSize: 1, productionUnit: "m2", productionRate: 25, extraCrewUpliftPct: 35 },
+  { id: 10, name: "100mm Coving", groupName: "resilient", defaultCrewSize: 1, productionUnit: "lm", productionRate: 35, extraCrewUpliftPct: 35 },
+  { id: 32, name: "150mm Coving", groupName: "resilient", defaultCrewSize: 1, productionUnit: "lm", productionRate: 30, extraCrewUpliftPct: 35 },
   // timber
   { id: 11, name: "Timber install", groupName: "timber", defaultCrewSize: 2, productionUnit: "m2", productionRate: 40, extraCrewUpliftPct: 35 },
   { id: 12, name: "Floor sanding + Coating Poly + 2 pac", groupName: "timber", defaultCrewSize: 1, productionUnit: "m2", productionRate: 30, extraCrewUpliftPct: 20, fixedDays: 1 },
   { id: 13, name: "Floor sanding + Poly coating", groupName: "timber", defaultCrewSize: 1, productionUnit: "m2", productionRate: 30, extraCrewUpliftPct: 20, fixedDays: 1 },
-  { id: 33, name: "Floor Sanding + Staining + coating", groupName: "timber", defaultCrewSize: 1, productionUnit: "m2", productionRate: 30, extraCrewUpliftPct: 20, fixedDays: 1 },
+  // Stain is a coat of its own and it has to be dry before anything goes over
+  // it, so this one waits two days where a straight poly job waits one.
+  { id: 33, name: "Floor Sanding + Staining + coating", groupName: "timber", defaultCrewSize: 1, productionUnit: "m2", productionRate: 30, extraCrewUpliftPct: 20, fixedDays: 2 },
   // prep
-  { id: 14, name: "Light prep", groupName: "prep", defaultCrewSize: 1, productionUnit: "m2" },
-  { id: 15, name: "Full prep / levelling", groupName: "prep", defaultCrewSize: 1, productionUnit: "m2" },
-  { id: 16, name: "Screeding", groupName: "prep", defaultCrewSize: 1, productionUnit: "m2" },
-  { id: 17, name: "Moisture barrier", groupName: "prep", defaultCrewSize: 1, productionUnit: "m2" },
-  { id: 18, name: "Grinding", groupName: "prep", defaultCrewSize: 1, productionUnit: "m2" },
+  { id: 14, name: "Light prep", groupName: "prep", defaultCrewSize: 1, productionUnit: "m2", productionRate: 150, extraCrewUpliftPct: 50 },
+  // Levelling, screeding, barriers and bedding all go off wet and have to be
+  // walked on the next day, so they carry a drying day the same way sanding does.
+  { id: 15, name: "Full prep / levelling", groupName: "prep", defaultCrewSize: 1, productionUnit: "m2", productionRate: 70, extraCrewUpliftPct: 50, fixedDays: 1 },
+  { id: 16, name: "Screeding", groupName: "prep", defaultCrewSize: 1, productionUnit: "m2", productionRate: 50, extraCrewUpliftPct: 50, fixedDays: 1 },
+  { id: 17, name: "Moisture barrier", groupName: "prep", defaultCrewSize: 1, productionUnit: "m2", productionRate: 100, extraCrewUpliftPct: 40, fixedDays: 1 },
+  { id: 18, name: "Grinding", groupName: "prep", defaultCrewSize: 1, productionUnit: "m2", productionRate: 60, extraCrewUpliftPct: 50 },
   // demolition
-  { id: 19, name: "Carpet removal", groupName: "demolition", defaultCrewSize: 1, productionUnit: "m2" },
+  // Pulling up is grunt work in a room with nothing else happening in it, so a
+  // second body is worth close to a whole one here, unlike laying.
+  { id: 19, name: "Carpet removal", groupName: "demolition", defaultCrewSize: 1, productionUnit: "m2", productionRate: 120, extraCrewUpliftPct: 80 },
   { id: 20, name: "Tile removal", groupName: "demolition", defaultCrewSize: 1, productionUnit: "m2", productionRate: 40, extraCrewUpliftPct: 50 },
-  { id: 21, name: "Vinyl removal", groupName: "demolition", defaultCrewSize: 1, productionUnit: "m2" },
-  { id: 22, name: "Glue removal", groupName: "demolition", defaultCrewSize: 1, productionUnit: "m2" },
+  { id: 21, name: "Vinyl removal", groupName: "demolition", defaultCrewSize: 1, productionUnit: "m2", productionRate: 60, extraCrewUpliftPct: 80 },
+  { id: 22, name: "Glue removal", groupName: "demolition", defaultCrewSize: 1, productionUnit: "m2", productionRate: 40, extraCrewUpliftPct: 80 },
   // trades
-  { id: 23, name: "Silicone perimeter", groupName: "trades", defaultCrewSize: 1, productionUnit: "m2" },
-  { id: 24, name: "Skirting / carpenter", groupName: "trades", defaultCrewSize: 1, productionUnit: "m2" },
-  { id: 25, name: "Door trimming", groupName: "trades", defaultCrewSize: 1, productionUnit: "m2" },
-  { id: 26, name: "Nosings", groupName: "trades", defaultCrewSize: 1, productionUnit: "m2" },
-  { id: 29, name: "Waterproofing", groupName: "trades", defaultCrewSize: 1, productionUnit: "m2" },
-  { id: 30, name: "Bedding", groupName: "trades", defaultCrewSize: 2, productionUnit: "m2" },
+  { id: 23, name: "Silicone perimeter", groupName: "trades", defaultCrewSize: 1, productionUnit: "lm", productionRate: 120, extraCrewUpliftPct: 30 },
+  { id: 24, name: "Skirting / carpenter", groupName: "trades", defaultCrewSize: 1, productionUnit: "lm", productionRate: 70, extraCrewUpliftPct: 50 },
+  { id: 25, name: "Door trimming", groupName: "trades", defaultCrewSize: 1, productionUnit: "each", productionRate: 20, extraCrewUpliftPct: 50 },
+  { id: 26, name: "Nosings", groupName: "trades", defaultCrewSize: 1, productionUnit: "each", productionRate: 20, extraCrewUpliftPct: 50 },
+  { id: 29, name: "Waterproofing", groupName: "trades", defaultCrewSize: 1, productionUnit: "m2", productionRate: 40, extraCrewUpliftPct: 30, fixedDays: 1 },
+  { id: 30, name: "Bedding", groupName: "trades", defaultCrewSize: 2, productionUnit: "m2", productionRate: 30, extraCrewUpliftPct: 50, fixedDays: 1 },
   // other
+  // No rate on purpose. A furniture shift depends on what is in the house and
+  // a measure depends on the drive, so the office puts the day in by hand.
   { id: 27, name: "Furniture shift", groupName: "other", defaultCrewSize: 2, productionUnit: "m2" },
   { id: 28, name: "Measure & quote", groupName: "other", defaultCrewSize: 1, productionUnit: "m2" },
 ];
