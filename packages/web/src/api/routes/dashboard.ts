@@ -117,12 +117,23 @@ export const dashboard = {
         .from(sql`${schema.jobs} j`)
         .leftJoin(sql`${schema.jobStatuses} s`, sql`s.id = j.status_id`),
 
+      // Value of work that came in over the last 30 days. created_at cannot
+      // be trusted on its own: the ServiceM8 import stamped all 4,219 history
+      // jobs with the day it ran, which counted ten years of work as last
+      // month's and showed about $26M. An imported job has no real "came in"
+      // date, so it goes by its own scheduled or completed day instead. A job
+      // made in Terra Ops goes by created_at as normal. Capped at now so a
+      // booking in the future is not counted as work already in.
       db
         .select({
           weekValue: sql<number>`coalesce(sum(${schema.jobs.value}), 0)`,
         })
         .from(schema.jobs)
-        .where(gte(schema.jobs.createdAt, new Date(Date.now() - 30 * 86400_000))),
+        .where(
+          sql`(case when ${schema.jobs.externalRef} is null then ${schema.jobs.createdAt}
+                else coalesce(${schema.jobs.scheduledStart}, ${schema.jobs.completedAt}, ${schema.jobs.createdAt}) end)
+              between ${Math.floor((Date.now() - 30 * 86400_000) / 1000)} and ${Math.floor(Date.now() / 1000)}`,
+        ),
 
       db
         .select()
