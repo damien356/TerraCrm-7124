@@ -6,6 +6,7 @@ import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
 import { checkDays, nonWorkingWeekdays } from "../lib/availability";
 import { daysFromQty } from "../lib/day-estimate";
+import { matchInstaller, parseBookingLine } from "../lib/booking-command";
 import { lockTaskLabour } from "./costing";
 
 /**
@@ -50,6 +51,12 @@ async function assertAssignable(taskId: number, installerId: number, _crewSize: 
 }
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+/** A date as YYYY-MM-DD in local time, not UTC, so "today" is today here. */
+function iso(d: Date) {
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 10);
+}
 
 /** "Thu 1 Oct", the way the office says a date out loud. */
 function sayDate(date: string) {
@@ -614,6 +621,157 @@ export const tasks = {
     }),
 
   /* --------------------------- booking a run --------------------------- */
+
+  /**
+   * Read a typed booking line and say what it would do, without doing it.
+   *
+   * "Pedro 4446 thu 3 days 7-11" is faster to say than to click, so the board
+   * takes the whole booking as one line. This resolves the words into a real
+   * installer, a real task and real dates, then hands back exactly what the
+   * panel would have shown: the days, their availability, and any clash.
+   *
+   * It resolves rather than assumes. Anything it could not place comes back as
+   * a question, because a booking that lands on the wrong week is worse than
+   * one that took an extra five seconds to confirm.
+   */
+  parseCommand: adminOnly
+    .input(
+      z.object({
+        text: z.string(),
+        /** The task already on screen, used when the line names no job. */
+        contextTaskId: z.number().nullable().default(null),
+      }),
+    )
+    .handler(async ({ input }) => {
+      /** Genuinely in the way: without these there is nothing to book. */
+      const problems: string[] = [];
+      /**
+       * Filled in for them rather than asked about. These never hold the
+       * booking up, the same way a clash never does: they are said out loud on
+       * the preview and the office books straight over them if they are right.
+       */
+      const notes: string[] = [];
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const parsed = parseBookingLine(input.text, today);
+
+      /* ---------------------------- the task ---------------------------- */
+      let taskRow: { task: typeof schema.jobTasks.$inferSelect; job: typeof schema.jobs.$inferSelect } | null = null;
+      let jobChoices: Array<{ taskId: number; label: string }> = [];
+
+      if (parsed.taskId) {
+        const [found] = await db
+          .select({ task: schema.jobTasks, job: schema.jobs })
+          .from(schema.jobTasks)
+          .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
+          .where(eq(schema.jobTasks.id, parsed.taskId));
+        if (found) taskRow = found;
+        else problems.push(`There is no dispatch ${parsed.taskId}.`);
+      } else if (parsed.jobNumber) {
+        const rows = await db
+          .select({ task: schema.jobTasks, job: schema.jobs })
+          .from(schema.jobTasks)
+          .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
+          .where(and(eq(schema.jobs.number, Number(parsed.jobNumber)), inArray(schema.jobTasks.status, ["unassigned", "offered", "assigned"])))
+          .orderBy(asc(schema.jobTasks.seq));
+        if (rows.length === 1) taskRow = rows[0]!;
+        else if (rows.length > 1) {
+          // Several dispatches on the one job is normal: tile removal, then
+          // prep, then the lay. The line cannot tell them apart, so ask.
+          taskRow = null;
+          jobChoices = rows.map((r) => ({ taskId: r.task.id, label: r.task.title }));
+          problems.push(`Job ${parsed.jobNumber} has ${rows.length} dispatches on it. Which one?`);
+        } else problems.push(`No open dispatch on job ${parsed.jobNumber}.`);
+      } else if (input.contextTaskId) {
+        const [found] = await db
+          .select({ task: schema.jobTasks, job: schema.jobs })
+          .from(schema.jobTasks)
+          .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
+          .where(eq(schema.jobTasks.id, input.contextTaskId));
+        if (found) taskRow = found;
+      } else problems.push("No job number in that.");
+
+      /* -------------------------- the installer -------------------------- */
+      // Matched against who is ticked for this skill when the task is known,
+      // so a name only has to be unique among the people who could do it.
+      const pool = taskRow?.task.skillId
+        ? await db
+            .select({ id: schema.installers.id, name: schema.installers.name })
+            .from(schema.installerSkills)
+            .innerJoin(schema.installers, eq(schema.installers.id, schema.installerSkills.installerId))
+            .where(and(eq(schema.installerSkills.skillId, taskRow.task.skillId), eq(schema.installers.active, true)))
+        : await db
+            .select({ id: schema.installers.id, name: schema.installers.name })
+            .from(schema.installers)
+            .where(eq(schema.installers.active, true));
+
+      const { installer, ambiguous } = matchInstaller(parsed.nameWords, pool);
+      if (!installer) {
+        if (ambiguous.length > 1) problems.push(`Which one: ${ambiguous.map((a) => a.name).join(" or ")}?`);
+        else if (parsed.nameWords.length) problems.push(`No installer matching "${parsed.nameWords.join(" ")}" is ticked for this work.`);
+        else problems.push("No installer name in that.");
+      }
+
+      /* ---------------------------- the dates ---------------------------- */
+      const startDate = parsed.startDate ?? iso(today);
+      if (!parsed.dateGiven) notes.push("No day said, so today it is.");
+
+      const suggested = taskRow ? await suggestDays(taskRow.task.id) : null;
+      const days = parsed.days ?? suggested?.days ?? 1;
+      if (parsed.days == null && days > 1) {
+        notes.push(`No day count said, so Terra reckons ${days} days.`);
+      }
+      const off = installer ? await nonWorkingWeekdays(installer.id) : [];
+      const dates = runDates(startDate, days, off);
+
+      const checks =
+        installer && taskRow
+          ? await checkDays({ installerId: installer.id, dates, exceptTaskId: taskRow.task.id })
+          : dates.map((date) => ({ date, status: "available" as const, reason: null, clashes: [] }));
+
+      // Words that went nowhere are usually a mangled time. Loud, but not a
+      // blocker: the preview shows the window it did read, so the office can
+      // see for themselves whether the leftovers mattered.
+      if (parsed.unread.length) {
+        notes.push(`Could not place "${parsed.unread.join(" ")}", so it was left out.`);
+      }
+
+      return {
+        /**
+         * Enough resolved to book. Notes and clashes deliberately do not count:
+         * the office overrides those on purpose, the same as on the panel.
+         */
+        ready: problems.length === 0 && !!installer && !!taskRow,
+        problems,
+        notes,
+        unread: parsed.unread,
+        jobChoices,
+        task: taskRow
+          ? {
+              id: taskRow.task.id,
+              title: taskRow.task.title,
+              jobNumber: taskRow.job.number,
+              areaM2: taskRow.task.areaM2,
+              crewSize: taskRow.task.crewSize,
+            }
+          : null,
+        installer: installer ?? null,
+        startDate,
+        dateGiven: parsed.dateGiven,
+        days,
+        /** True when the day count came off the rates, not off the line. */
+        daysFromRates: parsed.days == null && suggested != null,
+        daysByHand: parsed.days != null,
+        suggested,
+        arrivalStart: parsed.arrivalStart,
+        arrivalEnd: parsed.arrivalEnd,
+        coordinateAfterFirst: parsed.coordinateAfterFirst,
+        dates,
+        dayChecks: checks.map((c) => ({ ...c, label: sayDate(c.date) })),
+        clashCount: checks.reduce((n, c) => n + c.clashes.length, 0),
+        unavailableCount: checks.filter((c) => c.status !== "available").length,
+      };
+    }),
 
   /**
    * What a booking would land on, before anything is written: the dates, each
