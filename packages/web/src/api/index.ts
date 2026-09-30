@@ -33,6 +33,7 @@ import { intel } from "./routes/intel";
 import { devices } from "./routes/devices";
 import { templates } from "./routes/templates";
 import { segments } from "./routes/segments";
+import { voiceQuotes } from "./routes/voiceQuotes";
 
 // Terra Ops — Terra Flooring only. Admin procedures are built on `adminOnly`,
 // the installer app talks exclusively to `field` (installerOnly, scoped to the
@@ -54,6 +55,8 @@ export const router = {
   tasks,
   offers,
   quotes,
+  /** Damien dictates a job note on site, this turns the recording into a draft quote. */
+  voiceQuotes,
   field,
   /** The installer's own invoice to Terra for a completed task. */
   installerInvoices,

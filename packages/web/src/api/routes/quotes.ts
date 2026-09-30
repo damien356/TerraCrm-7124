@@ -16,8 +16,10 @@ import { adminOnly } from "../middleware/auth";
 
 const GST_RATE = 0.1;
 
-/** Recalculate a quote header from its own line items. Returns the new totals. */
-async function recalc(quoteId: number) {
+/** Recalculate a quote header from its own line items. Returns the new totals.
+ *  Exported for the voice quote pipeline, which inserts lines directly and
+ *  then needs the same header maths this file already does. */
+export async function recalc(quoteId: number) {
   const items = await db
     .select({ total: schema.quoteItems.total })
     .from(schema.quoteItems)
@@ -188,6 +190,8 @@ export const quotes = {
               unit: z.string().default("m2"),
               unitPrice: z.number().default(0),
               unitCost: z.number().nullable().optional(),
+              flagged: z.boolean().default(false),
+              flagReason: z.string().nullable().optional(),
             }),
           )
           .default([]),
@@ -239,6 +243,8 @@ export const quotes = {
             unitCost: item.unitCost ?? null,
             total: round2(item.qty * item.unitPrice),
             sortOrder: i,
+            flagged: item.flagged,
+            flagReason: item.flagReason ?? null,
           })),
         );
       }
@@ -267,7 +273,7 @@ export const quotes = {
         contactId: z.number().nullable().optional(),
         companyId: z.number().nullable().optional(),
         siteId: z.number().nullable().optional(),
-        status: z.enum(["draft", "sent", "accepted", "declined", "expired"]).optional(),
+        status: z.enum(["draft", "needs_review", "sent", "accepted", "declined", "expired"]).optional(),
         depositPercent: z.number().min(0).max(100).optional(),
         validUntil: z.date().nullable().optional(),
         notes: z.string().nullable().optional(),
@@ -307,6 +313,8 @@ export const quotes = {
         unit: z.string().default("m2"),
         unitPrice: z.number().default(0),
         unitCost: z.number().nullable().optional(),
+        flagged: z.boolean().default(false),
+        flagReason: z.string().nullable().optional(),
       }),
     )
     .handler(async ({ input }) => {
@@ -329,6 +337,8 @@ export const quotes = {
           unitCost: input.unitCost ?? null,
           total: round2(input.qty * input.unitPrice),
           sortOrder: Number(maxRow?.max ?? -1) + 1,
+          flagged: input.flagged,
+          flagReason: input.flagReason ?? null,
         })
         .returning();
 
@@ -383,6 +393,8 @@ export const quotes = {
         unitPrice: z.number().optional(),
         unitCost: z.number().nullable().optional(),
         sortOrder: z.number().int().optional(),
+        flagged: z.boolean().optional(),
+        flagReason: z.string().nullable().optional(),
       }),
     )
     .handler(async ({ input }) => {

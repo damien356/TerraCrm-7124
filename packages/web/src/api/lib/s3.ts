@@ -36,6 +36,12 @@ export function mediaKey(jobId: number, bucket: string, filename: string) {
   return `jobs/${jobId}/${bucket}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`;
 }
 
+/** A voice quote capture's own audio recording, not tied to any job yet. */
+export function voiceAudioKey(filename: string) {
+  const safe = filename.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-60);
+  return `voice-quotes/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`;
+}
+
 /** An installer's own logo, not tied to any job. */
 export function installerLogoKey(installerId: number, filename: string) {
   const safe = filename.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-60);

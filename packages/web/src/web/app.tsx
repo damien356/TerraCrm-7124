@@ -11,6 +11,7 @@ import JobDetailPage from "./pages/job-detail";
 import CrewPage from "./pages/crew";
 import QuotesPage from "./pages/quotes";
 import QuoteBuilderPage from "./pages/quote-builder";
+import VoiceQuotesPage from "./pages/voice-quotes";
 import ClientsPage from "./pages/clients";
 import ContactDetailPage from "./pages/contact-detail";
 import CompaniesPage from "./pages/companies";
@@ -59,6 +60,7 @@ function App() {
           <Route path="/crew" component={CrewPage} />
           <Route path="/quotes" component={QuotesPage} />
           <Route path="/quotes/:id" component={QuoteBuilderPage} />
+          <Route path="/voice-quotes" component={VoiceQuotesPage} />
           <Route path="/clients" component={ClientsPage} />
           <Route path="/clients/:id" component={ContactDetailPage} />
           <Route path="/companies" component={CompaniesPage} />

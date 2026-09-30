@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useLocation, useParams } from "wouter";
-import { ArrowLeft, ArrowRight, Check, Plus, Send, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, Check, Plus, Send, Trash2, X } from "lucide-react";
 import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -46,6 +46,8 @@ type Item = {
   unitPrice: number;
   unitCost: number | null;
   total: number;
+  flagged?: boolean;
+  flagReason?: string | null;
 };
 
 function LineRow({ item, locked }: { item: Item; locked: boolean }) {
@@ -68,7 +70,7 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
   }, [item.id, item.description, item.qty, item.unitPrice, item.unitCost]);
 
   return (
-    <tr className="border-b border-border last:border-0">
+    <tr className={item.flagged ? "border-b border-border bg-[#D08A1E]/10 last:border-0" : "border-b border-border last:border-0"}>
       <td className="px-2 py-1.5">
         <Select
           className="h-8 w-[104px]"
@@ -84,6 +86,11 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
         </Select>
       </td>
       <td className="px-2 py-1.5">
+        {item.flagged ? (
+          <span className="mb-1 flex items-center gap-1 text-xs text-[#D08A1E]" title={item.flagReason ?? "Needs review"}>
+            <AlertTriangle className="size-3.5" /> {item.flagReason ?? "Needs review"}
+          </span>
+        ) : null}
         <Input
           className="h-8"
           value={draft.description}
@@ -345,6 +352,17 @@ export default function QuoteBuilderPage() {
             <Link to={`/jobs/${q.job.id}`}>
               <Button variant="outline">Job #{q.job.number}</Button>
             </Link>
+          ) : null}
+          {q.status === "needs_review" ? (
+            <Button
+              variant="outline"
+              disabled={q.items.some((i: Item) => i.flagged) || update.isPending}
+              title={q.items.some((i: Item) => i.flagged) ? "Fix every flagged line first" : undefined}
+              onClick={() => run(() => update.mutateAsync({ id: q.id, status: "draft" }))}
+            >
+              <Check className="size-4" />
+              Mark as reviewed
+            </Button>
           ) : null}
           {q.status === "draft" ? (
             <Button variant="outline" onClick={() => run(() => send.mutateAsync({ id: q.id }))} disabled={send.isPending}>
