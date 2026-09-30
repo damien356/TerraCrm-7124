@@ -3,7 +3,7 @@ import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, authed, installerOnly } from "../middleware/auth";
-import { sellExGst } from "../lib/pricing";
+import { sellExGstWithMarkup } from "../lib/pricing";
 
 /**
  * THE LABOUR RATE BOOK.
@@ -230,6 +230,12 @@ export const labour = {
         groupName: z.enum(GROUPS).default("other"),
         kind: z.enum(KINDS).default("work"),
         unit: z.enum(UNITS).default("m2"),
+        /**
+         * Null (the normal case) = the standard markup chain, 91.1%. Set it
+         * only on an item that genuinely prices differently, which today means
+         * disposal and tip runs going out at cost plus 15%.
+         */
+        markupPercent: z.number().min(0).nullable().default(null),
         notes: z.string().nullable().default(null),
       }),
     )
@@ -253,6 +259,8 @@ export const labour = {
         groupName: z.enum(GROUPS).optional(),
         kind: z.enum(KINDS).optional(),
         unit: z.enum(UNITS).optional(),
+        /** Pass null to put the item back on the standard chain. */
+        markupPercent: z.number().min(0).nullable().optional(),
         notes: z.string().nullable().optional(),
         sortOrder: z.number().optional(),
         active: z.boolean().optional(),
@@ -560,8 +568,12 @@ export const labour = {
             /** What Terra pays. Never shown to an installer or a customer. */
             rate: std.amount,
             minimumCharge: std.minimumCharge,
-            /** What it quotes at: the same markup chain the materials use. */
-            sell: std.amount == null ? null : sellExGst(std.amount),
+            /**
+             * What it quotes at. The standard chain, unless the item carries
+             * its own markup, which is how a tip run goes out at cost plus 15%.
+             */
+            sell: std.amount == null ? null : sellExGstWithMarkup(std.amount, i.markupPercent),
+            markupPercent: i.markupPercent,
             layers,
             dearer,
           };

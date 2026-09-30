@@ -20,8 +20,27 @@ type Item = {
   group: "carpet" | "resilient" | "timber" | "prep" | "demolition" | "trades" | "surcharge" | "other";
   unit: "m2" | "lm" | "each" | "step" | "hour" | "day" | "job" | "percent" | "km";
   kind?: "work" | "surcharge" | "allowance";
+  /**
+   * Percent added to Terra's cost on THIS item instead of the standard markup
+   * chain. Leave it off and the item takes the chain, 91.1%, like everything
+   * else. Only the disposal lines set it: getting rid of the old floor is money
+   * passed through, not work Terra profits on.
+   */
+  markupPercent?: number;
   notes?: string;
 };
+
+/**
+ * Old item name -> new item name, applied before anything else.
+ *
+ * The row is RENAMED rather than replaced, because the rates hanging off it are
+ * the history of what Terra has paid and a new row would start that history
+ * again from nothing. "Carpet uplift and disposal" was one item priced per
+ * lineal metre, and its $10 was always the uplift. The disposal was never
+ * costed, which is what this split fixes. Quotes already sent are unaffected:
+ * quote_items keep their own description and unit price at the time.
+ */
+const RENAMES: Array<[from: string, to: string]> = [["Carpet uplift and disposal", "Carpet uplift"]];
 
 /** Stairs, the five items every hard floor gets. Carpet gets its own longer list. */
 const hardFloorStairs = (prefix: string, skill: string, group: Item["group"]): Item[] => [
@@ -34,13 +53,25 @@ const hardFloorStairs = (prefix: string, skill: string, group: Item["group"]): I
 
 const ITEMS: Item[] = [
   /* ----------------------------- carpet ----------------------------- */
-  { name: "Broadloom carpet 3.66m", skill: "Broadloom carpet", group: "carpet", unit: "lm" },
-  { name: "Broadloom carpet 4.0m", skill: "Broadloom carpet", group: "carpet", unit: "lm" },
-  { name: "Broadloom carpet, by the metre", skill: "Broadloom carpet", group: "carpet", unit: "m2", notes: "For jobs priced on area rather than roll length." },
+  /* All three point at the ONE broadloom skill Terra tick installers for. It
+   * reads "3.6 wide" because that is what Damien renamed it to in Settings, and
+   * it still covers the 4.0m work: the skill is who is allowed to lay broadloom,
+   * not which roll width is on the van. */
+  { name: "Broadloom carpet 3.66m", skill: "Broadloom carpet 3.6 wide", group: "carpet", unit: "lm" },
+  { name: "Broadloom carpet 4.0m", skill: "Broadloom carpet 3.6 wide", group: "carpet", unit: "lm" },
+  { name: "Broadloom carpet, by the metre", skill: "Broadloom carpet 3.6 wide", group: "carpet", unit: "m2", notes: "For jobs priced on area rather than roll length." },
   { name: "Carpet tile install", skill: "Carpet tiles", group: "carpet", unit: "m2" },
   { name: "Direct stick carpet", skill: "Direct stick carpet", group: "carpet", unit: "m2" },
   { name: "Carpet repair", skill: "Carpet repairs", group: "carpet", unit: "hour" },
-  { name: "Carpet uplift and disposal", skill: "Carpet removal", group: "carpet", unit: "m2" },
+  /* Uplift, disposal and hard-floor-over-carpet removal are three different
+   * jobs and were one line. Uplift is labour on the full markup chain. Disposal
+   * is a tip fee passed through at cost plus 15%. The third is what a hard
+   * floor going over carpet needs, gripper and underlay out as well, which
+   * carpet-to-carpet never touches. They also measure differently: uplift is
+   * priced by the lineal metre of carpet coming up, the other two by area. */
+  { name: "Carpet uplift", skill: "Carpet removal", group: "carpet", unit: "lm", notes: "Pulling the old carpet up only. Getting rid of it is charged separately." },
+  { name: "Carpet disposal and tip run", skill: "Carpet removal", group: "carpet", unit: "m2", markupPercent: 15, notes: "Tip fees and the run out there. Passed through at cost plus 15%, not on the standard markup, because it is not work Terra profits on." },
+  { name: "Carpet, underlay and gripper removal", skill: "Carpet removal", group: "carpet", unit: "m2", markupPercent: 10, notes: "For a hard floor going over existing carpet: carpet, underlay and gripper all come out and the slab has to be left clean. Not the same job as carpet onto carpet." },
 
   /* carpet stairs, itemised — this is where the money hides */
   { name: "Carpet stairs, standard straight step", skill: "Carpet stairs", group: "carpet", unit: "step" },
@@ -58,7 +89,7 @@ const ITEMS: Item[] = [
   { name: "Vinyl plank / LVT, herringbone", skill: "Vinyl plank / LVT", group: "resilient", unit: "m2" },
   { name: "Sheet vinyl installation", skill: "Vinyl sheet", group: "resilient", unit: "m2" },
   { name: "Hot welding", skill: "Safety vinyl / welding", group: "resilient", unit: "lm" },
-  { name: "Coving", skill: "Coving", group: "resilient", unit: "lm" },
+  { name: "Coving", skill: "100mm Coving", group: "resilient", unit: "lm" },
   ...hardFloorStairs("Hybrid stairs,", "Hybrid", "resilient"),
   ...hardFloorStairs("Laminate stairs,", "Laminate", "resilient"),
   ...hardFloorStairs("LVT stairs,", "Vinyl plank / LVT", "resilient"),
@@ -68,8 +99,8 @@ const ITEMS: Item[] = [
   { name: "Engineered timber, direct stick", skill: "Timber install", group: "timber", unit: "m2" },
   { name: "Solid timber, secret nail", skill: "Timber install", group: "timber", unit: "m2" },
   { name: "Solid timber, direct stick", skill: "Timber install", group: "timber", unit: "m2" },
-  { name: "Floor sanding", skill: "Floor sanding", group: "timber", unit: "m2" },
-  { name: "Coating, per coat", skill: "Polishing / coating", group: "timber", unit: "m2" },
+  { name: "Floor sanding", skill: "Floor sanding + Coating Poly + 2 pac", group: "timber", unit: "m2" },
+  { name: "Coating, per coat", skill: "Floor sanding + Poly coating", group: "timber", unit: "m2" },
   ...hardFloorStairs("Engineered timber stairs,", "Timber install", "timber"),
   ...hardFloorStairs("Solid timber stairs,", "Timber install", "timber"),
 
@@ -137,6 +168,24 @@ async function run() {
     console.log(`+ skill ${extra.name}`);
   }
 
+  /* Renames first, so the loop below finds the row under its new name and
+   * updates it instead of inserting a duplicate beside it. Skipped when the new
+   * name is already taken, which is what a second run looks like. */
+  for (const [from, to] of RENAMES) {
+    const old = await db.select().from(s.labourRateItems).where(eq(s.labourRateItems.name, from));
+    if (old.length === 0) continue;
+    const taken = await db.select().from(s.labourRateItems).where(eq(s.labourRateItems.name, to));
+    if (taken.length > 0) {
+      console.warn(`! "${from}" and "${to}" both exist, leaving both alone, sort it out by hand`);
+      continue;
+    }
+    await db
+      .update(s.labourRateItems)
+      .set({ name: to, updatedAt: new Date() })
+      .where(eq(s.labourRateItems.id, old[0]!.id));
+    console.log(`~ renamed "${from}" -> "${to}" (id ${old[0]!.id}, rate history kept)`);
+  }
+
   const existingItems = await db.select().from(s.labourRateItems);
   const itemByName = new Map(existingItems.map((i) => [i.name.toLowerCase(), i]));
 
@@ -144,8 +193,22 @@ async function run() {
   let updated = 0;
 
   for (const [i, item] of ITEMS.entries()) {
-    const skillId = item.skill ? (byName.get(item.skill.toLowerCase())?.id ?? null) : null;
-    if (item.skill && !skillId) console.warn(`! no skill named "${item.skill}" for ${item.name}`);
+    const found = itemByName.get(item.name.toLowerCase());
+    const matched = item.skill ? (byName.get(item.skill.toLowerCase())?.id ?? null) : null;
+    /**
+     * A skill named here that no longer exists must NOT clear the link the item
+     * already has. Skills are renamed in Settings. "Broadloom carpet" is now
+     * "Broadloom carpet 3.6 wide" and "Coving" split into 100mm and 150mm, and a
+     * rename used to make this seed quietly null out every item pointing at it,
+     * which un-prices those items for every installer. Keep what is there and
+     * say so instead.
+     */
+    const skillId = item.skill && !matched ? (found?.skillId ?? null) : matched;
+    if (item.skill && !matched) {
+      console.warn(
+        `! no skill named "${item.skill}" for ${item.name}, keeping its current skill (${found?.skillId ?? "none"}). Rename it in this file or in Settings.`,
+      );
+    }
 
     const values = {
       skillId,
@@ -153,11 +216,11 @@ async function run() {
       groupName: item.group,
       kind: item.kind ?? "work",
       unit: item.unit,
+      markupPercent: item.markupPercent ?? null,
       notes: item.notes ?? null,
       sortOrder: i,
     };
 
-    const found = itemByName.get(item.name.toLowerCase());
     if (found) {
       await db
         .update(s.labourRateItems)

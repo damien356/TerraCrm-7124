@@ -14,6 +14,7 @@ import {
   useSetRate,
   useUpdateRateItem,
 } from "../queries/labour";
+import { STANDARD_MARKUP_PCT, markupPctUsed, sellExGstWithMarkup } from "../../api/lib/pricing";
 
 export const RATE_UNITS = ["m2", "lm", "each", "step", "hour", "day", "job", "percent", "km"] as const;
 export const RATE_GROUPS = [
@@ -49,7 +50,7 @@ function isPercent(unit: string) {
 }
 
 export function money(amount: number | null | undefined, unit: string) {
-  if (amount == null) return "—";
+  if (amount == null) return "not set";
   return isPercent(unit) ? `${amount}%` : `$${amount.toFixed(2)}`;
 }
 
@@ -116,6 +117,88 @@ function RateInput({
 }
 
 /* ------------------------------------------------------------------ *
+ * Markup, per rate item.
+ *
+ * Blank is the normal answer and means the standard chain, 91.1%. A number
+ * here overrides it, which today exists for one reason: getting rid of the
+ * old floor is money passed through, not work Terra profits on, so a tip run
+ * goes out at cost plus 15%. Clearing the box puts the item back on standard.
+ * ------------------------------------------------------------------ */
+
+function MarkupInput({
+  value,
+  onSave,
+  pending,
+}: {
+  value: number | null;
+  onSave: (markupPercent: number | null) => void;
+  pending?: boolean;
+}) {
+  const [text, setText] = React.useState(value == null ? "" : String(value));
+  React.useEffect(() => setText(value == null ? "" : String(value)), [value]);
+
+  function commit() {
+    const trimmed = text.trim();
+    if (trimmed === "") {
+      // Empty box = back on the standard chain. Only a change if it was set.
+      if (value != null) onSave(null);
+      return;
+    }
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n < 0 || n === value) {
+      setText(value == null ? "" : String(value));
+      return;
+    }
+    onSave(Number(n.toFixed(2)));
+  }
+
+  return (
+    <div className="relative w-24">
+      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+        %
+      </span>
+      <Input
+        value={text}
+        inputMode="decimal"
+        placeholder={`${STANDARD_MARKUP_PCT} std`}
+        title="Markup on top of cost. Leave blank for Terra's standard 91.1%."
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        }}
+        className={`h-8 pl-2 pr-5 text-right ${value == null ? "" : "font-medium text-foreground"}`}
+      />
+      {pending ? (
+        <span className="absolute -right-5 top-1/2 -translate-y-1/2">
+          <Spinner />
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/** What the customer pays for one unit of this item, at whatever markup it carries. */
+function SellCell({ rate, unit, markupPercent }: { rate: number | null; unit: string; markupPercent: number | null }) {
+  if (isPercent(unit)) return <div className="w-28" />;
+  if (rate == null) {
+    return <div className="w-28 text-right text-xs text-muted-foreground">no cost yet</div>;
+  }
+  const sell = sellExGstWithMarkup(rate, markupPercent);
+  return (
+    <div className="w-28 text-right text-xs leading-tight">
+      <div className="text-foreground">
+        ${sell.toFixed(2)}
+        <span className="text-muted-foreground">/{UNIT_LABEL[unit] ?? unit}</span>
+      </div>
+      <div className="text-muted-foreground">
+        sells ex GST, +{markupPctUsed(markupPercent)}%
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
  * Settings -> Labour rates. Terra's own numbers.
  * ------------------------------------------------------------------ */
 
@@ -172,8 +255,10 @@ export function LabourRatesTab() {
       </div>
 
       <p className="mb-4 text-xs text-muted-foreground">
-        These are Terra's rates. Every installer follows them unless he has his own number on his card. A new rate
-        starts from the date you set it, it never rewrites a job that was already priced.
+        These are Terra's rates, what the work COSTS. Every installer follows them unless he has his own number on his
+        card. A new rate starts from the date you set it, it never rewrites a job that was already priced. The markup
+        box is normally blank, meaning the standard {STANDARD_MARKUP_PCT}%. Put a number in it only where the line is
+        money passed through rather than work Terra profits on, like a tip run.
         {book.data ? (
           <span className="ml-1 text-foreground">
             {book.data.priced} of {rows.length} priced.
@@ -239,6 +324,18 @@ export function LabourRatesTab() {
                         })
                       }
                     />
+
+                    {isPercent(row.unit) ? (
+                      <div className="w-24" />
+                    ) : (
+                      <MarkupInput
+                        value={row.markupPercent ?? null}
+                        pending={update.isPending && update.variables?.id === row.id}
+                        onSave={(markupPercent) => update.mutate({ id: row.id, markupPercent })}
+                      />
+                    )}
+
+                    <SellCell rate={row.rate} unit={row.unit} markupPercent={row.markupPercent ?? null} />
 
                     <div className="w-32 text-right text-xs text-muted-foreground">
                       {row.overrides > 0 ? (

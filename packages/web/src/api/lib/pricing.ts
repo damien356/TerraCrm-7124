@@ -31,6 +31,33 @@ export function sellExGst(costExGst: number) {
   return round2(costExGst * MARKUP.overhead * MARKUP.inefficiency * MARKUP.profit);
 }
 
+/** The standard chain as one percentage, for showing the working: 91.1%. */
+export const STANDARD_MARKUP_PCT = round2(
+  (MARKUP.overhead * MARKUP.inefficiency * MARKUP.profit - 1) * 100,
+);
+
+/**
+ * Cost -> sell where the ITEM is allowed its own markup.
+ *
+ * Almost everything passes null and gets the standard chain. A rate book item
+ * with `markupPercent` set overrides it, which exists for one reason: getting
+ * rid of the old floor is money passed through, not work Terra profits on, so
+ * a disposal and tip run goes out at cost plus 15% rather than plus 91.1%.
+ *
+ * Deliberately NOT a general per-product margin. Materials are still marked up
+ * off the standard cost by `priceProduct`, and labour still defaults to the
+ * chain. This is the exception, and it has to be set on purpose.
+ */
+export function sellExGstWithMarkup(costExGst: number, markupPercent: number | null | undefined) {
+  if (markupPercent === null || markupPercent === undefined) return sellExGst(costExGst);
+  return round2(costExGst * (1 + markupPercent / 100));
+}
+
+/** What markup a line actually carried, as a percent. For the working shown. */
+export function markupPctUsed(markupPercent: number | null | undefined) {
+  return markupPercent === null || markupPercent === undefined ? STANDARD_MARKUP_PCT : round2(markupPercent);
+}
+
 /** Today in Brisbane as YYYY-MM-DD, so a window that ends today is still live. */
 export function todayISO(now: Date = new Date()) {
   return new Intl.DateTimeFormat("en-CA", {

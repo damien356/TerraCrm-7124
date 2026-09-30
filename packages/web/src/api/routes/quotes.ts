@@ -4,7 +4,7 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
-import { sellExGst } from "../lib/pricing";
+import { sellExGstWithMarkup } from "../lib/pricing";
 
 /**
  * Quotes are admin-only, end to end. Installers must never reach any procedure
@@ -438,11 +438,23 @@ export const quotes = {
       }
 
       const cost = live.amount;
-      const sell = sellExGst(cost);
+      /**
+       * The item's own markup if it has one, the standard chain if it does not.
+       * Almost every item is on the chain. Disposal and a tip run are not:
+       * getting rid of the old floor is money passed through, so Damien's rule
+       * is cost plus 15% there and the full chain everywhere else.
+       */
+      const sell = sellExGstWithMarkup(cost, item.markupPercent);
       // A minimum charge is a floor on the LINE, not on the rate: two stairs
       // still pays a call out, so the line cannot come in under it.
       const lineCost = Math.max(round2(input.qty * cost), live.minimumCharge ?? 0);
-      const lineSell = Math.max(round2(input.qty * sell), live.minimumCharge ? sellExGst(live.minimumCharge) : 0);
+      const lineSell = Math.max(
+        round2(input.qty * sell),
+        // The floor is marked up the SAME way as the rate above it. Marking a
+        // minimum on the standard chain while the rate ran at 15% would put the
+        // line above its own arithmetic.
+        live.minimumCharge ? sellExGstWithMarkup(live.minimumCharge, item.markupPercent) : 0,
+      );
       const minApplied = live.minimumCharge != null && round2(input.qty * cost) < live.minimumCharge;
 
       let installerName: string | null = null;

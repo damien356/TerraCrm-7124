@@ -346,6 +346,20 @@ export const labourRateItems = sqliteTable(
     kind: text("kind").notNull().default("work"),
     /** m2 · lm · each · step · hour · day · job · percent · km. Never hardcoded. */
     unit: text("unit").notNull().default("m2"),
+    /**
+     * Percent added to Terra's cost to get the customer price ON THIS ITEM ONLY.
+     *
+     * Null is the normal case and means "use the standard markup chain" in
+     * api/lib/pricing.ts, which comes out at 91.1%. This column exists because
+     * a handful of items must NOT carry that: getting rid of the old floor is a
+     * pass-through, not work Terra profits on, so Damien's rule is disposal and
+     * tip runs go out at cost plus 15% and nothing more. Uplift, the labour of
+     * pulling the carpet up, is real work and stays on the full chain.
+     *
+     * Set it only where the item genuinely prices differently. Every item left
+     * null keeps behaving exactly as it did before this column existed.
+     */
+    markupPercent: real("markup_percent"),
     notes: text("notes"),
     sortOrder: integer("sort_order").notNull().default(0),
     active: integer("active", { mode: "boolean" }).notNull().default(true),
@@ -1113,6 +1127,17 @@ export const products = sqliteTable(
     fitsRange: text("fits_range").notNull().default(""),
     /** Not stocked — the supplier makes it on order. Changes the promise to the customer. */
     madeToOrder: integer("made_to_order", { mode: "boolean" }).notNull().default(false),
+    /**
+     * Terra buys this one ahead and keeps it at the warehouse, so a job that
+     * uses it must NOT put it on a supplier order. Dunlop Gold foam is the case:
+     * it is bought in bulk and pulled off the rack, while the Green foam is
+     * ordered per job.
+     *
+     * This is a flag, not stock control. It says "do not order this, we have
+     * it", nothing about how much is left. Counting what is on the rack is a
+     * separate job and is not built.
+     */
+    heldInWarehouse: integer("held_in_warehouse", { mode: "boolean" }).notNull().default(false),
     /** Working days to get it, where the supplier states one (Sunstar custom nosing: 10). */
     leadTimeDays: integer("lead_time_days"),
     /**
