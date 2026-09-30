@@ -56,6 +56,19 @@ function sayDate(date: string) {
   return `${DAY_NAMES[d.getDay()]} ${d.getDate()} ${d.toLocaleDateString("en-AU", { month: "short" })}`;
 }
 
+/** Same date, n days on. Plain calendar days, no weekend logic. */
+function addDays(date: string, n: number) {
+  const d = new Date(`${date}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Calendar days from a to b, so a run keeps its shape when it moves. */
+function daysBetween(a: string, b: string) {
+  const ms = new Date(`${b}T00:00:00`).getTime() - new Date(`${a}T00:00:00`).getTime();
+  return Math.round(ms / 86_400_000);
+}
+
 /**
  * How many days on site the work looks like, from what has already been
  * measured, or failing that the area on the dispatch. It is a starting number
@@ -373,7 +386,11 @@ export const tasks = {
       return row;
     }),
 
-  /** Drag-and-drop on the board: move a task to a day, optionally onto an installer. */
+  /**
+   * Drag-and-drop on the board: move a task to a day, optionally onto an
+   * installer. A booked run moves as a whole. Drag the bar to Wednesday and
+   * all four days shift with it, gaps and per-day windows intact.
+   */
   reschedule: adminOnly
     .input(
       z.object({
@@ -398,10 +415,48 @@ export const tasks = {
         }
       }
 
+      // Move the booked days with the bar the office just dragged.
+      const existingDays = await db
+        .select()
+        .from(schema.taskDays)
+        .where(and(eq(schema.taskDays.taskId, input.id), sql`${schema.taskDays.status} != 'cancelled'`))
+        .orderBy(asc(schema.taskDays.date));
+
+      let moved: string[] = [];
+      if (existingDays.length && input.scheduledDate) {
+        const offsets = existingDays.map((d) => daysBetween(existingDays[0]!.date, d.date));
+        moved = offsets.map((o) => addDays(input.scheduledDate!, o));
+        // Rewrite the run rather than nudge each row, so the one-day-per-task
+        // unique index can't trip over a date the run already holds.
+        await db.delete(schema.taskDays).where(eq(schema.taskDays.taskId, input.id));
+        await db.insert(schema.taskDays).values(
+          existingDays.map((d, i) => ({
+            taskId: input.id,
+            date: moved[i]!,
+            seq: i + 1,
+            arrivalStart: i === 0 && input.startTime !== undefined ? input.startTime : d.arrivalStart,
+            arrivalEnd: d.arrivalEnd,
+            coordinate: d.coordinate,
+            // A day handed to someone else stays theirs. Only dropping the run
+            // on a different installer pulls those hand-offs back.
+            installerId:
+              input.installerId && input.installerId !== existing.assignedInstallerId ? null : d.installerId,
+            status: d.status,
+            overrideNote: d.overrideNote,
+          })),
+        );
+      } else if (existingDays.length && !input.scheduledDate) {
+        // Dragged off the board: the run is gone, not silently left behind.
+        await db.delete(schema.taskDays).where(eq(schema.taskDays.taskId, input.id));
+      }
+
       const [row] = await db
         .update(schema.jobTasks)
         .set({
           scheduledDate: input.scheduledDate,
+          ...(existingDays.length
+            ? { scheduledFrom: moved[0] ?? null, scheduledTo: moved[moved.length - 1] ?? null }
+            : {}),
           ...(input.startTime !== undefined ? { startTime: input.startTime } : {}),
           ...(input.installerId !== undefined
             ? {
@@ -418,18 +473,22 @@ export const tasks = {
       // Someone is on it now, so the labour stops moving with the rate book.
       if (input.installerId) await lockTaskLabour({ taskId: input.id, installerId: input.installerId });
 
+      const span =
+        moved.length > 1
+          ? `${sayDate(moved[0]!)} → ${sayDate(moved[moved.length - 1]!)} (${moved.length} days)`
+          : (input.scheduledDate ?? "unscheduled");
       await db.insert(schema.activityLog).values({
         jobId: existing.jobId,
         taskId: input.id,
         entityType: "task",
         entityId: input.id,
         action: "rescheduled",
-        detail: `${existing.title} → ${input.scheduledDate ?? "unscheduled"}`,
+        detail: `${existing.title} → ${span}`,
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
 
-      return row;
+      return { ...row, dates: moved };
     }),
 
   /** Assign directly, no offer — the installer is simply told. */

@@ -1,6 +1,19 @@
 import * as React from "react";
 import { Link } from "wouter";
-import { Calendar, ChevronLeft, ChevronRight, Radio, Send, Sofa, UserMinus, Users2, X } from "lucide-react";
+import {
+  Calendar,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Radio,
+  Send,
+  Sofa,
+  UserMinus,
+  Users2,
+  X,
+} from "lucide-react";
 import { Page } from "../components/layout";
 import { BookInstallerPanel } from "../components/book-installer";
 import { Loading, Spinner } from "../components/ui/card";
@@ -59,17 +72,18 @@ function useWeek() {
 
 function TaskBlock({
   task,
+  dragging,
   onOpen,
   onDragStart,
+  onDragEnd,
   compact,
-  note,
 }: {
   task: any;
+  dragging?: boolean;
   onOpen: () => void;
   onDragStart: (e: React.DragEvent) => void;
+  onDragEnd?: () => void;
   compact?: boolean;
-  /** "Day 2 of 4" on a run that spans more than one day. */
-  note?: string;
 }) {
   const tint = tintFor(task.skill?.groupName);
   return (
@@ -77,9 +91,11 @@ function TaskBlock({
       type="button"
       draggable
       onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
       onClick={onOpen}
       className="w-full cursor-grab rounded-md border-l-[3px] px-2 py-1.5 text-left transition-shadow hover:shadow-sm active:cursor-grabbing"
-      style={{ backgroundColor: tint.fill, borderLeftColor: tint.edge }}
+      // Out of the way mid-drag, so the row behind it takes the drop.
+      style={{ backgroundColor: tint.fill, borderLeftColor: tint.edge, pointerEvents: dragging ? "none" : undefined }}
     >
       <div className="flex items-start justify-between gap-1">
         <p className="truncate text-[12px] font-semibold leading-tight text-[#1C1B1A]">{task.title}</p>
@@ -88,9 +104,6 @@ function TaskBlock({
       <p className="mt-0.5 truncate text-[11px] leading-tight text-[#1C1B1A]/65">
         #{task.jobNumber} · {task.siteSuburb || task.siteAddress || "no site"}
       </p>
-      {note ? (
-        <p className="mt-0.5 truncate text-[10px] font-semibold uppercase leading-tight text-[#1C1B1A]/55">{note}</p>
-      ) : null}
       {!compact ? (
         <div className="mt-1 flex flex-wrap items-center gap-1">
           {task.startTime ? (
@@ -112,6 +125,188 @@ function TaskBlock({
           ) : null}
         </div>
       ) : null}
+    </button>
+  );
+}
+
+/* -------------------------------- run bars -------------------------------- */
+
+/** One booked day in the lane: 46px of bar, 4px of air under it. */
+const LANE_H = 46;
+const LANE_GAP = 4;
+
+/** "07:00" the way the office says it: 7am, 12:30pm. */
+function sayTime(hhmm?: string | null) {
+  if (!hhmm) return null;
+  const [rawH, rawM] = hhmm.split(":");
+  const h = Number(rawH);
+  const m = Number(rawM ?? 0);
+  if (Number.isNaN(h)) return hhmm;
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  return `${hour}${m ? `:${String(m).padStart(2, "0")}` : ""}${h < 12 ? "am" : "pm"}`;
+}
+
+/**
+ * A stretch of consecutive booked days on one installer's row, drawn as a
+ * single bar. A four day run is one bar, not four blocks. A run that carries
+ * on past Saturday runs off the edge instead of vanishing.
+ */
+type Run = {
+  task: any;
+  startIdx: number;
+  span: number;
+  openLeft: boolean;
+  openRight: boolean;
+  /** Where this stretch sits in the whole run, for "Day 3 to 5 of 6". */
+  firstSeq: number;
+  totalDays: number;
+  window: string | null;
+  lane: number;
+};
+
+function runsFor(tasks: any[], installerId: number, dates: string[]): Run[] {
+  const from = dates[0]!;
+  const to = dates[dates.length - 1]!;
+  const found: Omit<Run, "lane">[] = [];
+
+  for (const task of tasks) {
+    const all: string[] = [...((task.dates ?? []) as string[])].sort();
+    // A day handed to someone else belongs on their row, not the lead's.
+    const mine = all.filter((date) => {
+      const day = (task.days ?? []).find((d: any) => d.date === date);
+      const lead = day?.installerId ?? task.assignedInstallerId;
+      return lead === installerId || task.secondInstallerId === installerId;
+    });
+    if (mine.length === 0) continue;
+
+    const visible = mine
+      .map((d) => dates.indexOf(d))
+      .filter((i) => i >= 0)
+      .sort((a, b) => a - b);
+    if (visible.length === 0) continue;
+
+    const push = (startIdx: number, endIdx: number) => {
+      const firstDate = dates[startIdx]!;
+      const day = (task.days ?? []).find((d: any) => d.date === firstDate);
+      const start = sayTime(day?.arrivalStart ?? task.startTime);
+      found.push({
+        task,
+        startIdx,
+        span: endIdx - startIdx + 1,
+        openLeft: startIdx === 0 && mine.some((d) => d < from),
+        openRight: endIdx === dates.length - 1 && mine.some((d) => d > to),
+        firstSeq: all.indexOf(firstDate) + 1,
+        totalDays: all.length,
+        window: day?.coordinate ? "rings the site" : start,
+      });
+    };
+
+    let start = visible[0]!;
+    let prev = start;
+    for (const i of visible.slice(1)) {
+      if (i !== prev + 1) {
+        push(start, prev);
+        start = i;
+      }
+      prev = i;
+    }
+    push(start, prev);
+  }
+
+  // Two jobs on the same day stack instead of sitting on top of each other.
+  const nextFree: number[] = [];
+  return found
+    .sort((a, b) => a.startIdx - b.startIdx || b.span - a.span)
+    .map((run) => {
+      let lane = nextFree.findIndex((free) => free <= run.startIdx);
+      if (lane < 0) lane = nextFree.length;
+      nextFree[lane] = run.startIdx + run.span;
+      return { ...run, lane };
+    });
+}
+
+function RunBar({
+  run,
+  cols,
+  dragging,
+  onOpen,
+  onDragStart,
+  onDragEnd,
+}: {
+  run: Run;
+  cols: number;
+  dragging: boolean;
+  onOpen: () => void;
+  onDragStart: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
+}) {
+  const t = run.task;
+  const tint = tintFor(t.skill?.groupName);
+  const partial = run.span < run.totalDays;
+  const dayLabel =
+    run.totalDays === 1
+      ? null
+      : partial
+        ? run.span === 1
+          ? `Day ${run.firstSeq} of ${run.totalDays}`
+          : `Day ${run.firstSeq} to ${run.firstSeq + run.span - 1} of ${run.totalDays}`
+        : `${run.totalDays} days`;
+
+  return (
+    <button
+      type="button"
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onClick={onOpen}
+      title={`${t.title} · #${t.jobNumber} ${t.jobTitle ?? ""}`}
+      style={{
+        position: "absolute",
+        left: `calc(${(run.startIdx / cols) * 100}% + 3px)`,
+        width: `calc(${(run.span / cols) * 100}% - 6px)`,
+        top: run.lane * (LANE_H + LANE_GAP) + LANE_GAP,
+        height: LANE_H,
+        backgroundColor: tint.fill,
+        borderLeftColor: tint.edge,
+        borderLeftWidth: run.openLeft ? 0 : 3,
+        opacity: t.status === "complete" ? 0.7 : 1,
+        // While another bar is being dragged this one steps out of the way, so a
+        // day that already has a booking on it still takes the drop. The bar
+        // being dragged keeps its pointer events or Chrome drops the gesture.
+        pointerEvents: dragging ? "none" : undefined,
+      }}
+      className={`group flex cursor-grab flex-col justify-center overflow-hidden px-2 text-left transition-shadow hover:z-10 hover:shadow-md active:cursor-grabbing ${
+        run.openLeft ? "rounded-l-none" : "rounded-l-md"
+      } ${run.openRight ? "rounded-r-none" : "rounded-r-md"}`}
+    >
+      <div className="flex items-center gap-1">
+        {run.openLeft ? <ChevronsLeft className="size-3 shrink-0 text-[#1C1B1A]/45" /> : null}
+        <p className="truncate text-[12px] font-semibold leading-tight text-[#1C1B1A]">{t.title}</p>
+        {t.crewSize > 1 ? <Users2 className="size-3 shrink-0 text-[#1C1B1A]/55" /> : null}
+        {t.furnitureOnSite ? <Sofa className="size-3 shrink-0 text-[#1C1B1A]/45" /> : null}
+        {t.status === "in_progress" ? (
+          <span className="ml-auto shrink-0 rounded-full bg-[#D08A1E]/25 px-1.5 text-[10px] font-semibold text-[#8A5A0B]">
+            on site
+          </span>
+        ) : null}
+        {t.status === "complete" ? <Check className="ml-auto size-3 shrink-0 text-[#2C5A28]" /> : null}
+        {run.openRight ? <ChevronsRight className="ml-auto size-3 shrink-0 text-[#1C1B1A]/45" /> : null}
+      </div>
+      <div className="flex items-center gap-1.5 text-[11px] leading-tight text-[#1C1B1A]/65">
+        <span className="truncate">
+          #{t.jobNumber} · {t.siteSuburb || t.siteAddress || "no site"}
+        </span>
+        {/* One column of bar is too narrow for both, and which day it is beats
+            the arrival time when the run is only part visible. */}
+        {run.window && !(dayLabel && run.span === 1) ? (
+          <span className="tabular shrink-0 text-[#1C1B1A]/55">{run.window}</span>
+        ) : null}
+        {dayLabel ? (
+          <span className="ml-auto shrink-0 rounded-sm bg-[#1C1B1A]/8 px-1 text-[10px] font-semibold uppercase tracking-wide text-[#1C1B1A]/55">
+            {dayLabel}
+          </span>
+        ) : null}
+      </div>
     </button>
   );
 }
@@ -387,16 +582,35 @@ export default function SchedulePage() {
   const [panel, setPanel] = React.useState<"book" | "offers">("book");
   const [dragId, setDragId] = React.useState<number | null>(null);
   const [dropError, setDropError] = React.useState<string | null>(null);
+  /** The cell under the cursor mid-drag, so the office can see where it lands. */
+  const [hover, setHover] = React.useState<{ installerId: number; idx: number } | null>(null);
 
   const tasks = board.data?.tasks ?? [];
   const unassigned = board.data?.unassigned ?? [];
+  const dates = React.useMemo(() => week.days.map(iso), [week.days]);
+  const cols = dates.length;
+  const today = iso(new Date());
 
   function open(id: number) {
     setSelected(id);
     setPanel("book");
   }
 
+  /** Which day the cursor is over, from where it is across the lane. */
+  function idxFromEvent(e: React.DragEvent) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const i = Math.floor(((e.clientX - rect.left) / rect.width) * cols);
+    return Math.min(cols - 1, Math.max(0, i));
+  }
+
+  /** Let go anywhere, even off the board, and the bars come back to life. */
+  function endDrag() {
+    setDragId(null);
+    setHover(null);
+  }
+
   function drop(installerId: number | null, date: string | null) {
+    setHover(null);
     if (dragId == null) return;
     setDropError(null);
     reschedule
@@ -413,7 +627,7 @@ export default function SchedulePage() {
         <Page
           wide
           title="Schedule"
-          subtitle="Drag a dispatch onto an installer's day. Skill ticks and the 2-man rule are enforced on drop."
+          subtitle="One row per installer, one bar per booking. Click a bar to change the booking, drag it to move it."
           actions={
             <div className="flex items-center gap-1">
               <Button variant="outline" size="icon-sm" onClick={() => week.shift(-1)}>
@@ -438,40 +652,36 @@ export default function SchedulePage() {
           ) : null}
 
           <div className="card-surface board-scroll overflow-x-auto">
-            <table className="w-full min-w-[900px] border-collapse">
-              <thead>
-                <tr>
-                  <th className="sticky left-0 z-10 w-40 border-b border-r border-border bg-card px-3 py-2 text-left">
-                    <span className="label-xs">Installer</span>
-                  </th>
+            <div className="min-w-[900px]">
+              {/* Day headings, lined up with the lanes underneath. */}
+              <div className="flex border-b border-border">
+                <div className="sticky left-0 z-20 w-40 shrink-0 border-r border-border bg-card px-3 py-2">
+                  <span className="label-xs">Installer</span>
+                </div>
+                <div className="grid flex-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
                   {week.days.map((d) => {
-                    const isToday = iso(d) === iso(new Date());
+                    const isToday = iso(d) === today;
                     return (
-                      <th
-                        key={iso(d)}
-                        className={`border-b border-border px-2 py-2 text-left ${isToday ? "bg-primary/5" : ""}`}
-                      >
+                      <div key={iso(d)} className={`px-2 py-2 ${isToday ? "bg-primary/5" : ""}`}>
                         <p className="label-xs">{d.toLocaleDateString("en-AU", { weekday: "short" })}</p>
                         <p className={`tabular text-sm font-semibold ${isToday ? "text-primary" : ""}`}>
                           {d.getDate()}/{d.getMonth() + 1}
                         </p>
-                      </th>
+                      </div>
                     );
                   })}
-                </tr>
-              </thead>
-              <tbody>
-                {(installers.data ?? []).map((inst) => (
-                  <tr key={inst.id}>
-                    <th
-                      aria-label={inst.name}
-                      className="sticky left-0 z-10 border-b border-r border-border bg-card px-3 py-2 text-left align-top"
-                    >
+                </div>
+              </div>
+
+              {(installers.data ?? []).map((inst) => {
+                const runs = runsFor(tasks, inst.id, dates);
+                const lanes = Math.max(1, ...runs.map((r) => r.lane + 1));
+                const height = lanes * (LANE_H + LANE_GAP) + LANE_GAP;
+                return (
+                  <div key={inst.id} className="flex border-b border-border">
+                    <div className="sticky left-0 z-20 w-40 shrink-0 border-r border-border bg-card px-3 py-2">
                       <Link to={`/installers?open=${inst.id}`} className="flex items-start gap-2">
-                        <span
-                          className="mt-1 size-2.5 shrink-0 rounded-full"
-                          style={{ backgroundColor: inst.colour }}
-                        />
+                        <span className="mt-1 size-2.5 shrink-0 rounded-full" style={{ backgroundColor: inst.colour }} />
                         <span className="min-w-0">
                           <span className="block truncate text-[13px] font-semibold">{inst.name}</span>
                           <span className="block truncate text-[11px] font-normal text-muted-foreground">
@@ -483,84 +693,95 @@ export default function SchedulePage() {
                           </span>
                         </span>
                       </Link>
-                    </th>
-                    {week.days.map((d) => {
-                      const date = iso(d);
-                      // A booking can run over several days, so the task shows on
-                      // every day it holds, and a day handed to someone else
-                      // shows on that person's row instead.
-                      const cell = tasks.filter((t) => {
-                        const day = t.days.find((d) => d.date === date);
-                        if (!day && !t.dates.includes(date)) return false;
-                        const lead = day?.installerId ?? t.assignedInstallerId;
-                        return lead === inst.id || t.secondInstallerId === inst.id;
-                      });
-                      return (
-                        <td
-                          key={date}
-                          onDragOver={(e) => e.preventDefault()}
-                          onDrop={() => drop(inst.id, date)}
-                          className="h-20 border-b border-border px-1.5 py-1.5 align-top transition-colors hover:bg-secondary/50"
-                        >
-                          <div className="space-y-1">
-                            {cell.map((t) => {
-                              const seq = t.dates.indexOf(date) + 1;
-                              return (
-                                <TaskBlock
-                                  key={t.id}
-                                  task={t}
-                                  note={t.dates.length > 1 && seq > 0 ? `Day ${seq} of ${t.dates.length}` : undefined}
-                                  onOpen={() => open(t.id)}
-                                  onDragStart={() => setDragId(t.id)}
-                                />
-                              );
-                            })}
-                          </div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                    </div>
 
-                {/* Unassigned queue lives at the bottom, exactly like the mockup. */}
-                <tr>
-                  <th className="sticky left-0 z-10 border-r border-border bg-[#F3EFEA] px-3 py-2 text-left align-top">
-                    <span className="block text-[13px] font-semibold text-[#C0603F]">Unassigned</span>
-                    <span className="block text-[11px] font-normal text-muted-foreground">
-                      {unassigned.length} waiting
-                    </span>
-                  </th>
-                  <td colSpan={week.days.length} className="bg-[#F3EFEA]/60 px-2 py-2 align-top">
-                    {unassigned.length === 0 ? (
-                      <p className="px-1 py-2 text-xs text-muted-foreground">
-                        Nothing waiting — every dispatch has someone on it.
-                      </p>
-                    ) : (
-                      <div className="flex flex-wrap gap-2">
-                        {unassigned.map((t) => (
-                          <div key={t.id} className="w-[190px]">
-                            <TaskBlock task={t} onOpen={() => open(t.id)} onDragStart={() => setDragId(t.id)} />
-                          </div>
+                    {/* One lane per installer. Bars float over the day grid, so a
+                        run of days is a single bar instead of a block per cell. */}
+                    <div
+                      className="relative flex-1"
+                      style={{ height }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setHover({ installerId: inst.id, idx: idxFromEvent(e) });
+                      }}
+                      onDragLeave={() => setHover(null)}
+                      onDrop={(e) => drop(inst.id, dates[idxFromEvent(e)] ?? null)}
+                    >
+                      <div
+                        className="absolute inset-0 grid"
+                        style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+                      >
+                        {dates.map((date, i) => (
+                          <div
+                            key={date}
+                            className={`border-r border-border/50 last:border-r-0 ${
+                              hover?.installerId === inst.id && hover.idx === i
+                                ? "bg-primary/10"
+                                : date === today
+                                  ? "bg-primary/5"
+                                  : ""
+                            }`}
+                          />
                         ))}
                       </div>
-                    )}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+
+                      {runs.map((r) => (
+                        <RunBar
+                          key={`${r.task.id}-${r.startIdx}`}
+                          run={r}
+                          cols={cols}
+                          dragging={dragId != null && dragId !== r.task.id}
+                          onOpen={() => open(r.task.id)}
+                          onDragStart={() => setDragId(r.task.id)}
+                          onDragEnd={endDrag}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Unassigned queue at the bottom, and the place to drop someone off a job. */}
+              <div
+                className="flex bg-[#F3EFEA]/60"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => drop(null, null)}
+              >
+                <div className="sticky left-0 z-20 w-40 shrink-0 border-r border-border bg-[#F3EFEA] px-3 py-2">
+                  <span className="block text-[13px] font-semibold text-[#C0603F]">Unassigned</span>
+                  <span className="block text-[11px] font-normal text-muted-foreground">
+                    {unassigned.length} waiting
+                  </span>
+                </div>
+                <div className="min-w-0 flex-1 px-2 py-2">
+                  {unassigned.length === 0 ? (
+                    <p className="px-1 py-2 text-xs text-muted-foreground">
+                      Nothing waiting, every dispatch has someone on it. Drop a bar here to take them off one.
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {unassigned.map((t) => (
+                        <div key={t.id} className="w-[190px]">
+                          <TaskBlock
+                            task={t}
+                            dragging={dragId != null && dragId !== t.id}
+                            onOpen={() => open(t.id)}
+                            onDragStart={() => setDragId(t.id)}
+                            onDragEnd={endDrag}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
 
           <p className="mt-3 text-xs text-muted-foreground">
-            Drop a dispatch on a cell to schedule and assign it in one move. Drop it back on the unassigned row to
-            pull someone off.
+            Drop a dispatch on a day to schedule and assign it in one move. A booked run moves as a whole, so dragging
+            a 4 day bar to Wednesday shifts all four days. Drop it on the unassigned row to pull someone off.
           </p>
-          <div
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={() => drop(null, null)}
-            className="mt-2 rounded-md border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground"
-          >
-            Drag here to unschedule and free the installer
-          </div>
         </Page>
       </div>
 
