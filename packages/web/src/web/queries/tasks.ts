@@ -43,6 +43,24 @@ export function usePlanBooking(input: {
   );
 }
 
+/**
+ * What a typed booking line would do. Runs on every keystroke the caller lets
+ * through, so the preview under the box keeps up with the typing, and stays
+ * quiet until there is something worth reading apart.
+ */
+export function useParseCommand(text: string, contextTaskId: number | null) {
+  return useQuery(
+    orpc.tasks.parseCommand.queryOptions({
+      input: { text, contextTaskId },
+      enabled: text.trim().length > 1,
+      staleTime: 5_000,
+      // The last good preview stays on screen while the next one lands, so the
+      // panel does not flicker empty between keystrokes.
+      placeholderData: (prev) => prev,
+    }),
+  );
+}
+
 /** Anything that moves a task invalidates the board, the job and the offer lists. */
 function useTaskMutation(
   name:

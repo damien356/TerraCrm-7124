@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { Page } from "../components/layout";
 import { BookInstallerPanel } from "../components/book-installer";
+import { CommandBox } from "../components/command-box";
 import { Loading, Spinner } from "../components/ui/card";
 import { Badge, TASK_STATUS_COLOUR, TASK_STATUS_LABEL, tintFor } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -619,6 +620,14 @@ export default function SchedulePage() {
   const [dropNote, setDropNote] = React.useState<{ id: number; days: number; from: string; to: string } | null>(null);
   /** The cell under the cursor mid-drag, so the office can see where it lands. */
   const [hover, setHover] = React.useState<{ installerId: number; idx: number } | null>(null);
+  /** What the typed line just booked, so it is confirmed rather than assumed. */
+  const [cmdNote, setCmdNote] = React.useState<{
+    taskId: number;
+    days: number;
+    from: string;
+    to: string;
+    installer: string;
+  } | null>(null);
 
   const tasks = board.data?.tasks ?? [];
   const unassigned = board.data?.unassigned ?? [];
@@ -686,6 +695,40 @@ export default function SchedulePage() {
             </div>
           }
         >
+          <CommandBox
+            onBooked={(s) => {
+              setCmdNote(s);
+              setDropNote(null);
+              setDropError(null);
+            }}
+            onOpenTask={open}
+          />
+
+          {cmdNote ? (
+            <div className="mb-3 flex items-start justify-between gap-3 rounded-md bg-[var(--success)]/10 px-3 py-2 text-sm">
+              <span className="flex items-center gap-1.5">
+                <Check className="size-4 shrink-0 text-[var(--success)]" />
+                Booked {cmdNote.installer} for {cmdNote.days} {cmdNote.days === 1 ? "day" : "days"},{" "}
+                {cmdNote.days === 1 ? sayDate(cmdNote.from) : `${sayDate(cmdNote.from)} to ${sayDate(cmdNote.to)}`}.
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  className="font-medium text-primary hover:underline"
+                  onClick={() => {
+                    open(cmdNote.taskId);
+                    setCmdNote(null);
+                  }}
+                >
+                  Change it
+                </button>
+                <button type="button" onClick={() => setCmdNote(null)}>
+                  <X className="size-4" />
+                </button>
+              </span>
+            </div>
+          ) : null}
+
           {dropError ? (
             <div className="mb-3 flex items-start justify-between gap-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
               <span>{dropError}</span>
