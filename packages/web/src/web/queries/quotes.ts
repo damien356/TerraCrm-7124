@@ -22,6 +22,7 @@ function useQuoteMutation(
     | "remove"
     | "addItem"
     | "addProduct"
+    | "addLabour"
     | "updateItem"
     | "removeItem"
     | "reorderItems"
@@ -55,6 +56,10 @@ export function useAddQuoteItem() {
 }
 export function useAddQuoteProduct() {
   return useMutation(useQuoteMutation("addProduct"));
+}
+/** A labour line off the rate book. The rate is resolved on the server. */
+export function useAddQuoteLabour() {
+  return useMutation(useQuoteMutation("addLabour"));
 }
 export function useUpdateQuoteItem() {
   return useMutation(useQuoteMutation("updateItem"));

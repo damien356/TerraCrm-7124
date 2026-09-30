@@ -1,9 +1,10 @@
 import { z } from "zod";
-import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
+import { sellExGst } from "../lib/pricing";
 
 /**
  * Quotes are admin-only, end to end. Installers must never reach any procedure
@@ -350,7 +351,14 @@ export const quotes = {
         .where(eq(schema.quoteItems.quoteId, input.quoteId));
 
       const unitPrice = product.sellPrice ?? 0;
-      const description = [product.brand, product.range, product.colour].filter(Boolean).join(" — ");
+      // Reads the way Damien says it out loud: "Andes Peak in Merida", not a
+      // string of dashes. This line goes out on the customer's quote.
+      const named = [product.brand, product.range].filter(Boolean).join(" ");
+      const description = product.colour
+        ? named
+          ? `${named} in ${product.colour}`
+          : product.colour
+        : named;
 
       const [row] = await db
         .insert(schema.quoteItems)
@@ -370,6 +378,106 @@ export const quotes = {
 
       const totals = await recalc(input.quoteId);
       return { item: row, totals };
+    }),
+
+  /**
+   * Add a labour line off the rate book.
+   *
+   * The rate is resolved HERE, not passed in, for two reasons. The sell price
+   * has to come off the one markup chain, and Terra's cost has to be the real
+   * number rather than whatever a form posted. Damien's rule holds: the line
+   * quotes at Terra's STANDARD rate whoever is pencilled against it, so the
+   * margin does not move depending on who the office had in mind.
+   *
+   * `installerId` is a note of intent, nothing more. It does not book him, it
+   * does not offer him the work, and it does not reprice the line.
+   */
+  addLabour: adminOnly
+    .input(
+      z.object({
+        quoteId: z.number(),
+        itemId: z.number(),
+        qty: z.number().default(1),
+        installerId: z.number().nullable().default(null),
+        /** Overrides the item's own name on the customer-facing line. */
+        description: z.string().optional(),
+      }),
+    )
+    .handler(async ({ input }) => {
+      await quoteOrThrow(input.quoteId);
+
+      const [item] = await db
+        .select()
+        .from(schema.labourRateItems)
+        .where(eq(schema.labourRateItems.id, input.itemId));
+      if (!item) throw new ORPCError("NOT_FOUND", { message: "That work item is not in the rate book" });
+
+      const on = new Date().toISOString().slice(0, 10);
+      const rates = await db
+        .select()
+        .from(schema.labourRates)
+        .where(and(eq(schema.labourRates.itemId, input.itemId), isNull(schema.labourRates.installerId)));
+      const live = rates
+        .filter((r) => r.effectiveFrom <= on && (!r.effectiveTo || r.effectiveTo >= on))
+        .sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom))[0];
+
+      if (!live) {
+        throw new ORPCError("BAD_REQUEST", {
+          message: `${item.name} has no standard rate yet. Price it in the rate book first, otherwise it quotes at zero.`,
+        });
+      }
+
+      const cost = live.amount;
+      const sell = sellExGst(cost);
+      // A minimum charge is a floor on the LINE, not on the rate: two stairs
+      // still pays a call out, so the line cannot come in under it.
+      const lineCost = Math.max(round2(input.qty * cost), live.minimumCharge ?? 0);
+      const lineSell = Math.max(round2(input.qty * sell), live.minimumCharge ? sellExGst(live.minimumCharge) : 0);
+      const minApplied = live.minimumCharge != null && round2(input.qty * cost) < live.minimumCharge;
+
+      let installerName: string | null = null;
+      if (input.installerId != null) {
+        const [who] = await db
+          .select({ name: schema.installers.name })
+          .from(schema.installers)
+          .where(eq(schema.installers.id, input.installerId));
+        installerName = who?.name ?? null;
+      }
+
+      const [maxRow] = await db
+        .select({ max: sql<number>`coalesce(max(${schema.quoteItems.sortOrder}), -1)` })
+        .from(schema.quoteItems)
+        .where(eq(schema.quoteItems.quoteId, input.quoteId));
+
+      const [row] = await db
+        .insert(schema.quoteItems)
+        .values({
+          quoteId: input.quoteId,
+          kind: item.kind === "work" ? "labour" : item.kind === "allowance" ? "other" : "labour",
+          description: input.description?.trim() || item.name,
+          qty: input.qty,
+          unit: item.unit,
+          // Unit figures, so editing qty on the row still behaves. The minimum
+          // charge is folded into the stored total instead.
+          unitPrice: sell,
+          unitCost: cost,
+          total: lineSell,
+          sortOrder: Number(maxRow?.max ?? -1) + 1,
+        })
+        .returning();
+
+      const totals = await recalc(input.quoteId);
+      return {
+        item: row,
+        totals,
+        rateItem: { id: item.id, name: item.name, unit: item.unit, groupName: item.groupName },
+        cost,
+        sell,
+        lineCost,
+        minApplied,
+        minimumCharge: live.minimumCharge,
+        installerName,
+      };
     }),
 
   updateItem: adminOnly

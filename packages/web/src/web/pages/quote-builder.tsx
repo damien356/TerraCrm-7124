@@ -7,10 +7,10 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
+import { LabourPicker, ProductPicker } from "../components/quote-pickers";
 import {
   useAcceptQuote,
   useAddQuoteItem,
-  useAddQuoteProduct,
   useConvertQuote,
   useDeclineQuote,
   useQuote,
@@ -20,7 +20,6 @@ import {
   useUpdateQuote,
   useUpdateQuoteItem,
 } from "../queries/quotes";
-import { useProducts } from "../queries/settings";
 import { QUOTE_STATUS_COLOUR } from "./quotes";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
@@ -164,8 +163,6 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
 
 function AddLine({ quoteId }: { quoteId: number }) {
   const add = useAddQuoteItem();
-  const addProduct = useAddQuoteProduct();
-  const products = useProducts();
   const [form, setForm] = React.useState({
     kind: "supply",
     description: "",
@@ -174,8 +171,6 @@ function AddLine({ quoteId }: { quoteId: number }) {
     unitPrice: "",
     unitCost: "",
   });
-  const [productId, setProductId] = React.useState("");
-  const [productQty, setProductQty] = React.useState("1");
 
   async function submit() {
     if (!form.description) return;
@@ -193,6 +188,10 @@ function AddLine({ quoteId }: { quoteId: number }) {
 
   return (
     <div className="flex flex-col gap-2 border-t border-border bg-secondary/40 px-3 py-3">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">By hand</span>
+        <span className="text-xs text-muted-foreground">for anything not on a list</span>
+      </div>
       <div className="flex flex-wrap items-end gap-2">
         <Select className="h-9 w-[110px]" value={form.kind} onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value }))}>
           {KINDS.map((k) => (
@@ -239,33 +238,6 @@ function AddLine({ quoteId }: { quoteId: number }) {
         </Button>
       </div>
 
-      <div className="flex flex-wrap items-end gap-2">
-        <Select className="h-9 min-w-[280px] flex-1" value={productId} onChange={(e) => setProductId(e.target.value)}>
-          <option value="">…or pull a product off the price list</option>
-          {(products.data ?? []).map((p) => (
-            <option key={p.id} value={p.id}>
-              {[p.brand, p.range, p.colour].filter(Boolean).join(" — ")}
-              {p.sellPrice ? ` · ${money(p.sellPrice)}/${p.unit}` : ""}
-            </option>
-          ))}
-        </Select>
-        <Input
-          className="tabular w-[76px] text-right"
-          value={productQty}
-          onChange={(e) => setProductQty(e.target.value)}
-        />
-        <Button
-          variant="outline"
-          disabled={!productId || addProduct.isPending}
-          onClick={async () => {
-            await addProduct.mutateAsync({ quoteId, productId: Number(productId), qty: Number(productQty) || 1 });
-            setProductId("");
-            setProductQty("1");
-          }}
-        >
-          Add product
-        </Button>
-      </div>
     </div>
   );
 }
@@ -425,7 +397,13 @@ export default function QuoteBuilderPage() {
               </table>
             </div>
           )}
-          {locked ? null : <AddLine quoteId={q.id} />}
+          {locked ? null : (
+            <>
+              <ProductPicker quoteId={q.id} />
+              <LabourPicker quoteId={q.id} category={q.job?.category ?? null} />
+              <AddLine quoteId={q.id} />
+            </>
+          )}
         </Card>
 
         <div className="flex flex-col gap-4">

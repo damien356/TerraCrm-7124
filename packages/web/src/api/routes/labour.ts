@@ -3,6 +3,7 @@ import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, authed, installerOnly } from "../middleware/auth";
+import { sellExGst } from "../lib/pricing";
 
 /**
  * THE LABOUR RATE BOOK.
@@ -447,6 +448,133 @@ export const labour = {
         upcoming,
         acknowledged: acks.map((a) => ({ effectiveFrom: a.effectiveFrom, at: a.acknowledgedAt })),
       };
+    }),
+
+  /**
+   * The rate book as a QUOTING list: every work item with Terra's standard
+   * rate, what it sells for, and who can lay it.
+   *
+   * Two ways in, on purpose, because the office thinks both ways:
+   *   `groupName`  the category toggle. Carpet job, carpet rates, no typing.
+   *   `search`     the escape hatch. "furniture" finds Furniture shift in the
+   *                other category without anybody having to know it lives there.
+   * Both together narrow; neither returns the lot.
+   *
+   * WHO IS OFFERED. Damien's rule: quote the standard rate, and an installer
+   * who charges more than standard is not on the list. He is still counted and
+   * named in `dearer` so nobody wonders where he went, but he cannot be picked
+   * by accident. Anyone on Terra's default, or under it, is offered.
+   *
+   * Surcharges and allowances carry no skill, so they are never filtered out
+   * by a category toggle the way trade work is.
+   */
+  picker: adminOnly
+    .input(
+      z
+        .object({
+          groupName: z.string().default(""),
+          search: z.string().default(""),
+          on: z.string().optional(),
+          /** Items nobody has priced are hidden: a blank rate quotes as $0. */
+          includeUnpriced: z.boolean().default(false),
+        })
+        .default({ groupName: "", search: "", includeUnpriced: false }),
+    )
+    .handler(async ({ input }) => {
+      const on = input.on ?? today();
+      const [items, rates, skillRows, installerRows, tickRows] = await Promise.all([
+        db
+          .select()
+          .from(schema.labourRateItems)
+          .where(eq(schema.labourRateItems.active, true))
+          .orderBy(asc(schema.labourRateItems.sortOrder), asc(schema.labourRateItems.name)),
+        loadRates(),
+        db.select({ id: schema.skills.id, name: schema.skills.name }).from(schema.skills),
+        db
+          .select({ id: schema.installers.id, name: schema.installers.name })
+          .from(schema.installers)
+          .where(eq(schema.installers.active, true))
+          .orderBy(asc(schema.installers.name)),
+        db.select().from(schema.installerSkills),
+      ]);
+
+      const skillName = new Map(skillRows.map((s) => [s.id, s.name]));
+      const installerName = new Map(installerRows.map((i) => [i.id, i.name]));
+      /** skillId -> installers ticked for it. The dispatch tick list, reused. */
+      const canDo = new Map<number, number[]>();
+      for (const t of tickRows) {
+        if (!installerName.has(t.installerId)) continue;
+        const list = canDo.get(t.skillId) ?? [];
+        list.push(t.installerId);
+        canDo.set(t.skillId, list);
+      }
+
+      const needle = input.search.trim().toLowerCase();
+      const wanted = input.groupName.trim().toLowerCase();
+
+      const rows = items
+        .filter((i) => {
+          if (!wanted) return true;
+          // A loading or an allowance belongs to every trade, so it always shows.
+          if (i.kind !== "work") return true;
+          return i.groupName.toLowerCase() === wanted;
+        })
+        .filter((i) => {
+          if (!needle) return true;
+          const hay = `${i.name} ${i.groupName} ${i.unit} ${skillName.get(i.skillId ?? -1) ?? ""}`;
+          return hay.toLowerCase().includes(needle);
+        })
+        .map((i) => {
+          const std = pick(rates, i.id, null, on);
+          const ticked = i.skillId ? (canDo.get(i.skillId) ?? []) : [];
+
+          const layers: { installerId: number; name: string; rate: number | null; ownRate: boolean }[] = [];
+          const dearer: { installerId: number; name: string; rate: number }[] = [];
+
+          for (const id of ticked) {
+            const mine = pick(rates, i.id, id, on);
+            const name = installerName.get(id) ?? "";
+            if (mine.amount != null && std.amount != null && mine.amount > std.amount) {
+              dearer.push({ installerId: id, name, rate: mine.amount });
+              continue;
+            }
+            layers.push({
+              installerId: id,
+              name,
+              rate: mine.amount,
+              ownRate: mine.source === "installer",
+            });
+          }
+          layers.sort((a, b) => a.name.localeCompare(b.name));
+          dearer.sort((a, b) => a.rate - b.rate);
+
+          return {
+            itemId: i.id,
+            name: i.name,
+            groupName: i.groupName,
+            kind: i.kind,
+            unit: i.unit,
+            skillId: i.skillId,
+            skillName: i.skillId ? (skillName.get(i.skillId) ?? null) : null,
+            notes: i.notes,
+            /** What Terra pays. Never shown to an installer or a customer. */
+            rate: std.amount,
+            minimumCharge: std.minimumCharge,
+            /** What it quotes at: the same markup chain the materials use. */
+            sell: std.amount == null ? null : sellExGst(std.amount),
+            layers,
+            dearer,
+          };
+        })
+        .filter((r) => (input.includeUnpriced ? true : r.rate != null));
+
+      /** Only categories that actually have work in them, for the toggles. */
+      const groups = GROUPS.map((g) => ({
+        name: g,
+        count: items.filter((i) => i.active && i.kind === "work" && i.groupName === g).length,
+      })).filter((g) => g.count > 0);
+
+      return { on, rows, groups, unpricedHidden: input.includeUnpriced ? 0 : items.length - rows.length };
     }),
 
   /* ------------------------------------------------------------------ *

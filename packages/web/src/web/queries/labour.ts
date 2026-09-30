@@ -21,6 +21,23 @@ export function useRateCard(installerId: number | null, input: { on?: string; al
   );
 }
 
+/**
+ * The rate book as a quoting list: standard rate, sell price, and who lays it.
+ * Category toggle and free text search both narrow the same list.
+ */
+export function useRatePicker(input: { groupName?: string; search?: string; includeUnpriced?: boolean } = {}) {
+  return useQuery(
+    orpc.labour.picker.queryOptions({
+      input: {
+        groupName: input.groupName ?? "",
+        search: input.search ?? "",
+        includeUnpriced: input.includeUnpriced ?? false,
+      },
+      staleTime: 15_000,
+    }),
+  );
+}
+
 /** Every version of one item's rate, so nobody has to trust a single number. */
 export function useRateHistory(itemId: number | null, installerId: number | null = null) {
   return useQuery(
