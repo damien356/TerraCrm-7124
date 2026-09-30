@@ -1387,7 +1387,54 @@ const SUPPLIERS: SupplierSeed[] = [
       },
     ],
   },
-
+  {
+    code: "advantageflooring",
+    name: "Advantage Flooring",
+    deliversDirect: false,
+    freightMethod: "Jocks Carpet Express — roll freight to Terra's Gold Coast warehouse",
+    freightNote:
+      "Advantage Flooring does not deliver itself, so Terra books its own carrier. Jocks Carpet Express's own rate card (2025-03-01) charges $25 + GST per roll of carpet, plus their 25% fuel levy, so $31.25 ex GST per roll ($34.38 inc GST) is the real per-roll freight cost. Auto-applies as a supplier delivery fee on a per-roll basis, not baked into any product rate. Jocks also charge a $30 + GST minimum consignment and a $20 + GST pickup fee (fuel levy on the pickup fee is unconfirmed by the supplier) — both held back as reference-only, since it is not clear from the rate card when either is billed on top of the per-roll rate.",
+    fuelSurchargeActive: false,
+    priceListEffectiveFrom: "2026-05-01",
+    priceListSource: "Advantage Flooring May 2026 price list (ADVANTAGE FLOORING MAY 2026.pdf), owner-supplied workbook",
+    notes:
+      "296 broadloom carpet colours across 39 ranges, per the workbook's own Import Rules sheet scoped to broadloom carpet only — marine carpet, carpet tiles, hybrid, vinyl planks and sheet vinyl are excluded. Prices are per lineal metre ex GST. No product codes are published anywhere in the source, so product identity is a generated composite key. Roll width is not published on any of the 296 rows, so lm cannot be converted to m2 — measure and quote in lm. 102 of 296 rows carry a genuine cut-length premium over the roll rate (differs row by row: $2, $5 or $10/lm), but no lm threshold is published for when the cut rate kicks in, so it is kept as reference only rather than wired into the roll/cut break. One range, Merindah (Opal Ef), has no confirmed colour — the workbook's own note says the colour list was not found on Advantage Flooring's current website, so its one colour line is left blank rather than guessed.",
+    fees: [
+      {
+        name: "Jocks Carpet Express — roll freight",
+        kind: "delivery",
+        basis: "roll",
+        amount: 31.25,
+        amountIncludesGst: false,
+        autoApply: true,
+        condition:
+          "$25 + GST per roll from Jocks Carpet Express's own rate card, plus their 25% fuel levy, so $31.25 ex GST per roll. Advantage Flooring does not deliver, so Terra pays this on every roll of Advantage carpet it books through Jocks.",
+        sortOrder: 10,
+      },
+      {
+        name: "Jocks Carpet Express — minimum consignment (NOT USED, reference only)",
+        kind: "delivery",
+        basis: "order",
+        amount: 30,
+        amountIncludesGst: false,
+        autoApply: false,
+        condition:
+          "$30 + GST minimum consignment charge from Jocks Carpet Express's rate card, plus their 25% fuel levy ($37.50 ex GST). Held back — unclear from the rate card whether this replaces or stacks with the per-roll rate on a small order, so it does not auto-apply until confirmed with Jocks.",
+        sortOrder: 20,
+      },
+      {
+        name: "Jocks Carpet Express — pickup fee (NOT USED, reference only)",
+        kind: "delivery",
+        basis: "order",
+        amount: 20,
+        amountIncludesGst: false,
+        autoApply: false,
+        condition:
+          "$20 + GST pickup fee from Jocks Carpet Express's rate card. Fuel levy application to this specific charge is NOT confirmed by the supplier (their own rate card flags it), so the ex-GST rate is left at the base $20 rather than guessed at $25, and it does not auto-apply.",
+        sortOrder: 30,
+      },
+    ],
+  },
 ];
 
 async function main() {
