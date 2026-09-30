@@ -1361,6 +1361,33 @@ const SUPPLIERS: SupplierSeed[] = [
       },
     ],
   },
+  {
+    code: "dunlop",
+    name: "Dunlop Flooring",
+    deliversDirect: true,
+    freightMethod: "Dunlop delivery to Terra's Gold Coast warehouse",
+    freightNote:
+      "$80 + GST per delivery, confirmed by Damien from the Dunlop hard-flooring boxed-products upload. Auto-applies as a supplier delivery fee and is not baked into any product rate.",
+    fuelSurchargeActive: false,
+    priceListEffectiveFrom: "2026-09-30",
+    priceListSource: "Dunlop Flooring Price List - Hard Flooring 30 Sep 2026, owner-supplied workbook",
+    notes:
+      "137 boxed hard-flooring rows across engineered timber, hybrid, laminate and LVT. Prices are per m2 ex GST. The workbook's Scope & Rules sheet explicitly excludes accessories, stairnose, adhesive, end profiles, scotia and T trims, so this supplier seed carries flooring only. No pallet discount exists in the supplied list, so product rates stay as the single standard m2 cost. Missing specs stay blank deliberately, nothing is guessed.",
+    fees: [
+      {
+        name: "Delivery to Gold Coast warehouse",
+        kind: "delivery",
+        basis: "order",
+        amount: 80,
+        amountIncludesGst: false,
+        autoApply: true,
+        condition:
+          "$80 + GST per delivery, confirmed by Damien. Dunlop deliver to Terra's warehouse, so this is a real supplier delivery fee and auto-applies on Dunlop orders.",
+        sortOrder: 10,
+      },
+    ],
+  },
+
 ];
 
 async function main() {
