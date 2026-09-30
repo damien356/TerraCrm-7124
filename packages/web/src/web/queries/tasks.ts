@@ -69,6 +69,7 @@ function useTaskMutation(
     | "reschedule"
     | "assign"
     | "book"
+    | "extendRun"
     | "unassign"
     | "setStatus"
     | "remove"
@@ -101,6 +102,14 @@ export function useAssignTask() {
 /** One day or a run of days, booked in a single write. */
 export function useBookTask() {
   return useMutation(useTaskMutation("book"));
+}
+/**
+ * A day on or a day off the end of a run, straight off the board. Keeps the
+ * rest of the booking exactly as it is, so nobody re-books a run to add a day
+ * to it.
+ */
+export function useExtendRun() {
+  return useMutation(useTaskMutation("extendRun"));
 }
 export function useUnassignTask() {
   return useMutation(useTaskMutation("unassign"));

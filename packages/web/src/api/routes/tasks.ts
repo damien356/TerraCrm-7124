@@ -950,6 +950,184 @@ export const tasks = {
       return { ...row, dates };
     }),
 
+  /**
+   * "It needs another day." One click, one write, on a run that is already
+   * booked.
+   *
+   * This exists instead of re-booking the whole run because the days already on
+   * the job carry things worth keeping: a window the customer was told, a day
+   * handed to a second installer, a day already marked complete. Rebuilding the
+   * run would wipe all of that to add one day to the end of it.
+   *
+   * Extending walks forward from the last day the same way the panel does,
+   * stepping over the weekdays this installer never works, so an extra day on a
+   * Friday run lands on Monday rather than Saturday. Trimming takes days off
+   * the end and stops at one, since a booking with no days is an unassignment
+   * and that is a different button.
+   *
+   * A clash on the day it adds does not stop it, same rule as everywhere else.
+   * The day goes in, the clash comes back in the response, and the board shows
+   * it in red.
+   */
+  extendRun: adminOnly
+    .input(
+      z.object({
+        taskId: z.number(),
+        /** Days to add, or negative to take days off the end. */
+        by: z.number().int().min(-30).max(30).refine((n) => n !== 0, "Nothing to change"),
+        /** Step over the days this installer never works instead of counting them. */
+        skipNonWorking: z.boolean().default(true),
+        /** Why the office added a day over a clash. Stored on the new days. */
+        overrideNote: z.string().nullable().optional(),
+      }),
+    )
+    .handler(async ({ input, context }) => {
+      const [row] = await db
+        .select({ task: schema.jobTasks, job: schema.jobs })
+        .from(schema.jobTasks)
+        .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
+        .where(eq(schema.jobTasks.id, input.taskId));
+      if (!row) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
+      const { task, job } = row;
+      if (!task.assignedInstallerId) {
+        throw new ORPCError("BAD_REQUEST", { message: "Nothing booked on this one yet, so there is no run to extend." });
+      }
+
+      const existing = await db
+        .select()
+        .from(schema.taskDays)
+        .where(eq(schema.taskDays.taskId, input.taskId))
+        .orderBy(asc(schema.taskDays.date));
+      if (existing.length === 0) {
+        throw new ORPCError("BAD_REQUEST", { message: "No days on this booking yet, so there is no run to extend." });
+      }
+
+      const [installer] = await db
+        .select()
+        .from(schema.installers)
+        .where(eq(schema.installers.id, task.assignedInstallerId));
+
+      const added: string[] = [];
+      const removed: string[] = [];
+
+      if (input.by > 0) {
+        const off = input.skipNonWorking ? await nonWorkingWeekdays(task.assignedInstallerId) : [];
+        const taken = new Set(existing.map((d) => d.date));
+        const last = existing[existing.length - 1]!;
+        // The window the run is already running to. A new day on the end keeps
+        // the same arrival time as the day before it rather than inventing one.
+        const cursor = new Date(`${last.date}T00:00:00`);
+        for (let guard = 0; added.length < input.by && guard < 120; guard++) {
+          cursor.setDate(cursor.getDate() + 1);
+          const date = iso(cursor);
+          if (off.includes(cursor.getDay())) continue;
+          if (taken.has(date)) continue;
+          added.push(date);
+        }
+
+        await db.insert(schema.taskDays).values(
+          added.map((date, i) => ({
+            taskId: input.taskId,
+            date,
+            seq: existing.length + i + 1,
+            arrivalStart: last.coordinate ? null : last.arrivalStart,
+            arrivalEnd: last.coordinate ? null : last.arrivalEnd,
+            coordinate: last.coordinate,
+            // Day-level installer is deliberately not carried over: a day
+            // handed to someone else was a one-off, so the extra day goes back
+            // to whoever the task belongs to.
+            installerId: null,
+            status: "booked" as const,
+            overrideNote: input.overrideNote ?? null,
+          })),
+        );
+      } else {
+        // Never trim the run out of existence, and never trim a day the crew
+        // has already done.
+        const keepAtLeast = Math.max(1, existing.filter((d) => d.status === "complete").length);
+        const canDrop = Math.max(0, existing.length - keepAtLeast);
+        const dropping = existing.slice(existing.length - Math.min(-input.by, canDrop));
+        if (dropping.length === 0) {
+          throw new ORPCError("BAD_REQUEST", {
+            message:
+              existing.length === 1
+                ? "That is the only day on it. Take the installer off instead of trimming it."
+                : "The rest of the run is already done, so there is nothing left to trim.",
+          });
+        }
+        await db.delete(schema.taskDays).where(
+          inArray(
+            schema.taskDays.id,
+            dropping.map((d) => d.id),
+          ),
+        );
+        removed.push(...dropping.map((d) => d.date));
+      }
+
+      const dates = [...new Set([...existing.map((d) => d.date), ...added])]
+        .filter((d) => !removed.includes(d))
+        .sort();
+
+      // Re-number so "day 2 of 4" on the installer's phone stays right.
+      for (const [i, date] of dates.entries()) {
+        await db
+          .update(schema.taskDays)
+          .set({ seq: i + 1, updatedAt: new Date() })
+          .where(and(eq(schema.taskDays.taskId, input.taskId), eq(schema.taskDays.date, date)));
+      }
+
+      const [updated] = await db
+        .update(schema.jobTasks)
+        .set({
+          scheduledDate: dates[0]!,
+          scheduledFrom: dates[0]!,
+          scheduledTo: dates[dates.length - 1]!,
+          /**
+           * Adding a day by hand is the office overruling the rate book, so the
+           * new length sticks. Otherwise a later drag would quietly snap the run
+           * back to the number the rates reckon and undo this.
+           */
+          manualDays: dates.length,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.jobTasks.id, input.taskId))
+        .returning();
+
+      const checks = added.length
+        ? await checkDays({ installerId: task.assignedInstallerId, dates: added, exceptTaskId: input.taskId })
+        : [];
+
+      const label = added.length
+        ? `+${added.length === 1 ? "1 day" : `${added.length} days`}, now ${dates.length} to ${sayDate(dates[dates.length - 1]!)}`
+        : `-${removed.length === 1 ? "1 day" : `${removed.length} days`}, now ${dates.length} to ${sayDate(dates[dates.length - 1]!)}`;
+      await db.insert(schema.activityLog).values({
+        jobId: task.jobId,
+        taskId: input.taskId,
+        entityType: "task",
+        entityId: input.taskId,
+        action: added.length ? "run_extended" : "run_trimmed",
+        detail: `${task.title} → ${installer?.name ?? "installer"}, ${label}${input.overrideNote ? ` (override: ${input.overrideNote})` : ""}`,
+        actorName: context.actor.name,
+        actorRole: context.actor.role,
+      });
+
+      return {
+        ...updated,
+        dates,
+        added: checks.map((c) => ({ ...c, label: sayDate(c.date) })),
+        removed: removed.map((d) => ({ date: d, label: sayDate(d) })),
+        clashCount: checks.reduce((n, c) => n + c.clashes.length, 0),
+        unavailableCount: checks.filter((c) => c.status !== "available").length,
+        /**
+         * A day rate job just got longer, so what Terra pays changed and only a
+         * person can decide by how much. Said, never silently adjusted.
+         */
+        payNeedsLook: task.payType === "day_rate",
+        installerName: installer?.name ?? null,
+        jobNumber: job.number,
+      };
+    }),
+
   unassign: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     const [existing] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, input.id));
     if (!existing) throw new ORPCError("NOT_FOUND", { message: "Task not found" });

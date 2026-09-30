@@ -8,6 +8,8 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  Minus,
+  Plus,
   Radio,
   Send,
   Sofa,
@@ -25,6 +27,7 @@ import { Field, Input, Select } from "../components/ui/field";
 import {
   useAssignTask,
   useBoard,
+  useExtendRun,
   useRescheduleTask,
   useSetTaskStatus,
   useTask,
@@ -254,14 +257,20 @@ function RunBar({
   run,
   cols,
   dragging,
+  busy,
   onOpen,
+  onExtend,
   onDragStart,
   onDragEnd,
 }: {
   run: Run;
   cols: number;
   dragging: boolean;
+  /** This bar has a day going on or off it right now. */
+  busy: boolean;
   onOpen: () => void;
+  /** A day on the end, or a day off it. One click, no dialog. */
+  onExtend: (by: number) => void;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
 }) {
@@ -278,70 +287,129 @@ function RunBar({
           : `Day ${run.firstSeq} to ${run.firstSeq + run.span - 1} of ${run.totalDays}`
         : `${run.totalDays} days`;
 
+  // The handles sit on the end of the run, so they only make sense when the end
+  // of the run is on screen. A finished job does not need another day.
+  const canExtend = !run.openRight && t.status !== "complete";
+
   return (
-    <button
-      type="button"
-      draggable
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
-      onClick={onOpen}
-      title={
-        clash
-          ? `Double booked ${run.clashDates.length === 1 ? sayDate(run.clashDates[0]!) : `on ${run.clashDates.length} days`}. ${t.title} · #${t.jobNumber} ${t.jobTitle ?? ""}`
-          : `${t.title} · #${t.jobNumber} ${t.jobTitle ?? ""}`
-      }
+    <div
+      className="group absolute"
       style={{
-        position: "absolute",
         left: `calc(${(run.startIdx / cols) * 100}% + 3px)`,
         width: `calc(${(run.span / cols) * 100}% - 6px)`,
         top: run.lane * (LANE_H + LANE_GAP) + LANE_GAP,
         height: LANE_H,
-        backgroundColor: tint.fill,
-        // A double booking reads as a problem at a glance, before anyone clicks
-        // it: red edge, red outline, warning triangle.
-        borderLeftColor: clash ? "#C0362C" : tint.edge,
-        borderLeftWidth: run.openLeft && !clash ? 0 : 3,
-        ...(clash ? { outline: "1.5px solid #C0362C", outlineOffset: "-1.5px" } : {}),
-        opacity: t.status === "complete" ? 0.7 : 1,
         // While another bar is being dragged this one steps out of the way, so a
         // day that already has a booking on it still takes the drop. The bar
         // being dragged keeps its pointer events or Chrome drops the gesture.
         pointerEvents: dragging ? "none" : undefined,
       }}
-      className={`group flex cursor-grab flex-col justify-center overflow-hidden px-2 text-left transition-shadow hover:z-10 hover:shadow-md active:cursor-grabbing ${
-        run.openLeft ? "rounded-l-none" : "rounded-l-md"
-      } ${run.openRight ? "rounded-r-none" : "rounded-r-md"}`}
     >
-      <div className="flex items-center gap-1">
-        {run.openLeft && !clash ? <ChevronsLeft className="size-3 shrink-0 text-[#1C1B1A]/45" /> : null}
-        {clash ? <AlertTriangle className="size-3.5 shrink-0 text-[#C0362C]" /> : null}
-        <p className="truncate text-[12px] font-semibold leading-tight text-[#1C1B1A]">{t.title}</p>
-        {t.crewSize > 1 ? <Users2 className="size-3 shrink-0 text-[#1C1B1A]/55" /> : null}
-        {t.furnitureOnSite ? <Sofa className="size-3 shrink-0 text-[#1C1B1A]/45" /> : null}
-        {t.status === "in_progress" ? (
-          <span className="ml-auto shrink-0 rounded-full bg-[#D08A1E]/25 px-1.5 text-[10px] font-semibold text-[#8A5A0B]">
-            on site
+      <button
+        type="button"
+        draggable
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onClick={onOpen}
+        title={
+          clash
+            ? `Double booked ${run.clashDates.length === 1 ? sayDate(run.clashDates[0]!) : `on ${run.clashDates.length} days`}. ${t.title} · #${t.jobNumber} ${t.jobTitle ?? ""}`
+            : `${t.title} · #${t.jobNumber} ${t.jobTitle ?? ""}`
+        }
+        style={{
+          position: "absolute",
+          inset: 0,
+          backgroundColor: tint.fill,
+          // A double booking reads as a problem at a glance, before anyone clicks
+          // it: red edge, red outline, warning triangle.
+          borderLeftColor: clash ? "#C0362C" : tint.edge,
+          borderLeftWidth: run.openLeft && !clash ? 0 : 3,
+          ...(clash ? { outline: "1.5px solid #C0362C", outlineOffset: "-1.5px" } : {}),
+          opacity: t.status === "complete" ? 0.7 : 1,
+        }}
+        className={`flex w-full cursor-grab flex-col justify-center overflow-hidden px-2 text-left transition-shadow group-hover:z-10 group-hover:shadow-md active:cursor-grabbing ${
+          run.openLeft ? "rounded-l-none" : "rounded-l-md"
+        } ${run.openRight ? "rounded-r-none" : "rounded-r-md"}`}
+      >
+        <div className="flex items-center gap-1">
+          {run.openLeft && !clash ? <ChevronsLeft className="size-3 shrink-0 text-[#1C1B1A]/45" /> : null}
+          {clash ? <AlertTriangle className="size-3.5 shrink-0 text-[#C0362C]" /> : null}
+          <p className="truncate text-[12px] font-semibold leading-tight text-[#1C1B1A]">{t.title}</p>
+          {t.crewSize > 1 ? <Users2 className="size-3 shrink-0 text-[#1C1B1A]/55" /> : null}
+          {t.furnitureOnSite ? <Sofa className="size-3 shrink-0 text-[#1C1B1A]/45" /> : null}
+          {t.status === "in_progress" ? (
+            <span className="ml-auto shrink-0 rounded-full bg-[#D08A1E]/25 px-1.5 text-[10px] font-semibold text-[#8A5A0B]">
+              on site
+            </span>
+          ) : null}
+          {t.status === "complete" ? <Check className="ml-auto size-3 shrink-0 text-[#2C5A28]" /> : null}
+          {run.openRight ? <ChevronsRight className="ml-auto size-3 shrink-0 text-[#1C1B1A]/45" /> : null}
+        </div>
+        <div className="flex items-center gap-1.5 text-[11px] leading-tight text-[#1C1B1A]/65">
+          <span className="truncate">
+            #{t.jobNumber} · {t.siteSuburb || t.siteAddress || "no site"}
           </span>
-        ) : null}
-        {t.status === "complete" ? <Check className="ml-auto size-3 shrink-0 text-[#2C5A28]" /> : null}
-        {run.openRight ? <ChevronsRight className="ml-auto size-3 shrink-0 text-[#1C1B1A]/45" /> : null}
-      </div>
-      <div className="flex items-center gap-1.5 text-[11px] leading-tight text-[#1C1B1A]/65">
-        <span className="truncate">
-          #{t.jobNumber} · {t.siteSuburb || t.siteAddress || "no site"}
-        </span>
-        {/* One column of bar is too narrow for both, and which day it is beats
-            the arrival time when the run is only part visible. */}
-        {run.window && !(dayLabel && run.span === 1) ? (
-          <span className="tabular shrink-0 text-[#1C1B1A]/55">{run.window}</span>
-        ) : null}
-        {dayLabel ? (
-          <span className="ml-auto shrink-0 rounded-sm bg-[#1C1B1A]/8 px-1 text-[10px] font-semibold uppercase tracking-wide text-[#1C1B1A]/55">
-            {dayLabel}
-          </span>
-        ) : null}
-      </div>
-    </button>
+          {/* One column of bar is too narrow for both, and which day it is beats
+              the arrival time when the run is only part visible. */}
+          {run.window && !(dayLabel && run.span === 1) ? (
+            <span className="tabular shrink-0 text-[#1C1B1A]/55">{run.window}</span>
+          ) : null}
+          {dayLabel ? (
+            // The day count and the extend handles want the same corner, so the
+            // count steps aside while the cursor is on the bar.
+            <span
+              className={`ml-auto shrink-0 rounded-sm bg-[#1C1B1A]/8 px-1 text-[10px] font-semibold uppercase tracking-wide text-[#1C1B1A]/55 ${
+                canExtend ? `transition-opacity ${busy ? "opacity-0" : "group-hover:opacity-0"}` : ""
+              }`}
+            >
+              {dayLabel}
+            </span>
+          ) : null}
+        </div>
+      </button>
+
+      {/* A day on or off the end of the run, from the board, one click, no
+          dialog. Hidden until the bar is hovered so the board stays quiet, and
+          it sits over the end of the run because that is the day it changes. */}
+      {canExtend ? (
+        <div
+          className={`absolute right-0 top-0 z-20 flex h-full items-center gap-1 rounded-r-md pl-4 pr-1.5 transition-opacity ${
+            busy ? "opacity-100" : "opacity-0 focus-within:opacity-100 group-hover:opacity-100"
+          }`}
+          style={{ background: `linear-gradient(to right, transparent, ${tint.fill} 55%)` }}
+        >
+          {busy ? (
+            <Spinner />
+          ) : (
+            <>
+              <button
+                type="button"
+                title={run.totalDays === 1 ? "Only day on it, take the installer off instead" : "One day off the end"}
+                disabled={run.totalDays === 1}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onExtend(-1);
+                }}
+                className="flex size-6 items-center justify-center rounded-md border border-[#1C1B1A]/20 bg-white text-[#1C1B1A]/70 shadow-sm hover:border-[#1C1B1A]/35 hover:text-[#1C1B1A] disabled:cursor-not-allowed disabled:opacity-35"
+              >
+                <Minus className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                title="One more day on the end"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onExtend(1);
+                }}
+                className="flex size-6 items-center justify-center rounded-md border border-[#1C1B1A]/20 bg-white text-[#1C1B1A]/70 shadow-sm hover:border-[#1C1B1A]/35 hover:text-[#1C1B1A]"
+              >
+                <Plus className="size-3.5" />
+              </button>
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -612,6 +680,7 @@ export default function SchedulePage() {
   const board = useBoard(week.from, week.to);
   const installers = useInstallers();
   const reschedule = useRescheduleTask();
+  const extend = useExtendRun();
   const [selected, setSelected] = React.useState<number | null>(null);
   const [panel, setPanel] = React.useState<"book" | "offers">("book");
   const [dragId, setDragId] = React.useState<number | null>(null);
@@ -627,6 +696,21 @@ export default function SchedulePage() {
     from: string;
     to: string;
     installer: string;
+  } | null>(null);
+  /** Which bar has a day going on or off it, so only that one shows a spinner. */
+  const [extBusyId, setExtBusyId] = React.useState<number | null>(null);
+  const [extError, setExtError] = React.useState<string | null>(null);
+  /** What the last +1 or -1 on the board did, said out loud and never blocking. */
+  const [extNote, setExtNote] = React.useState<{
+    taskId: number;
+    installer: string;
+    added: string[];
+    removed: string[];
+    total: number;
+    clashCount: number;
+    /** New days that are not clear, with the reason they are not. */
+    flags: { label: string; reason: string }[];
+    payNeedsLook: boolean;
   } | null>(null);
 
   const tasks = board.data?.tasks ?? [];
@@ -670,6 +754,41 @@ export default function SchedulePage() {
       })
       .catch((e: unknown) => setDropError(e instanceof Error ? e.message : String(e)));
     setDragId(null);
+  }
+
+  /**
+   * A day on or off the end of a run, straight from the bar. No dialog and no
+   * confirm, because the whole point is that it takes a second. A clash or a
+   * day off shows up in the note underneath afterwards, loud but never in the
+   * way, and the bar itself goes red on the board.
+   */
+  function extendRun(taskId: number, by: number) {
+    setExtError(null);
+    setExtNote(null);
+    setDropNote(null);
+    setCmdNote(null);
+    setExtBusyId(taskId);
+    extend
+      .mutateAsync({ taskId, by, skipNonWorking: true })
+      .then((r: any) => {
+        setExtNote({
+          taskId,
+          installer: r.installerName ?? "the installer",
+          added: (r.added ?? []).map((d: { label: string }) => d.label),
+          removed: (r.removed ?? []).map((d: { label: string }) => d.label),
+          total: r.dates?.length ?? 0,
+          clashCount: r.clashCount ?? 0,
+          flags: (r.added ?? [])
+            .filter((d: { status: string }) => d.status !== "available")
+            .map((d: { label: string; reason: string | null }) => ({
+              label: d.label,
+              reason: d.reason || "Not a day he normally works",
+            })),
+          payNeedsLook: Boolean(r.payNeedsLook),
+        });
+      })
+      .catch((e: unknown) => setExtError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setExtBusyId(null));
   }
 
   if (board.isLoading || installers.isLoading) return <Loading label="Loading the board…" />;
@@ -756,6 +875,75 @@ export default function SchedulePage() {
                   Change it
                 </button>
                 <button type="button" onClick={() => setDropNote(null)}>
+                  <X className="size-4" />
+                </button>
+              </span>
+            </div>
+          ) : null}
+
+          {extError ? (
+            <div className="mb-3 flex items-start justify-between gap-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <span>{extError}</span>
+              <button type="button" onClick={() => setExtError(null)}>
+                <X className="size-4" />
+              </button>
+            </div>
+          ) : null}
+
+          {extNote ? (
+            <div
+              className={`mb-3 flex items-start justify-between gap-3 rounded-md px-3 py-2 text-sm ${
+                extNote.clashCount > 0 ? "bg-destructive/10" : "bg-primary/10"
+              }`}
+            >
+              <span className="min-w-0">
+                <span className="block">
+                  {extNote.added.length > 0
+                    ? `${extNote.installer} has ${
+                        extNote.added.length === 1
+                          ? extNote.added[0]
+                          : `${extNote.added.length} more days, ${extNote.added[0]} to ${extNote.added[extNote.added.length - 1]}`
+                      }${extNote.added.length === 1 ? " too" : ""}.`
+                    : `Took ${
+                        extNote.removed.length === 1
+                          ? extNote.removed[0]
+                          : `${extNote.removed.length} days, ${extNote.removed[0]} to ${extNote.removed[extNote.removed.length - 1]},`
+                      } off ${extNote.installer}.`}{" "}
+                  {extNote.total === 1 ? "1 day on it now." : `${extNote.total} days on it now.`}
+                </span>
+                {extNote.clashCount > 0 ? (
+                  <span className="mt-0.5 flex items-center gap-1.5 font-semibold text-destructive">
+                    <AlertTriangle className="size-3.5 shrink-0" />
+                    {extNote.added.length === 1
+                      ? extNote.clashCount === 1
+                        ? `${extNote.installer} is already on another job that day. It is on the board in red.`
+                        : `${extNote.installer} is already on ${extNote.clashCount} other jobs that day. It is on the board in red.`
+                      : `${extNote.clashCount} double bookings on the new days. They are on the board in red.`}
+                  </span>
+                ) : null}
+                {extNote.flags.map((f) => (
+                  <span key={f.label} className="mt-0.5 block text-[#8A5A0B]">
+                    {f.label}: {f.reason.toLowerCase()}.
+                  </span>
+                ))}
+                {extNote.payNeedsLook ? (
+                  <span className="mt-0.5 block text-[#8A5A0B]">
+                    Day rate job, so the pay needs another look before it goes out.
+                  </span>
+                ) : null}
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  className="font-medium text-primary hover:underline"
+                  onClick={() => {
+                    open(extNote.taskId);
+                    setExtNote(null);
+                  }}
+                >
+                  Open it
+                </button>
+                <button type="button" onClick={() => setExtNote(null)}>
                   <X className="size-4" />
                 </button>
               </span>
@@ -851,6 +1039,8 @@ export default function SchedulePage() {
                           run={r}
                           cols={cols}
                           dragging={dragId != null && dragId !== r.task.id}
+                          busy={extBusyId === r.task.id}
+                          onExtend={(by) => extendRun(r.task.id, by)}
                           onOpen={() => open(r.task.id)}
                           onDragStart={() => setDragId(r.task.id)}
                           onDragEnd={endDrag}
