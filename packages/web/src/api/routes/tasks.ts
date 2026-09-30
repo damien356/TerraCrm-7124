@@ -70,6 +70,21 @@ function daysBetween(a: string, b: string) {
 }
 
 /**
+ * The days a run of `days` starting on `startDate` would land on, stepping over
+ * the weekdays this installer never works. Same walk planBooking does, so a
+ * dragged booking and a panel booking land on the same dates.
+ */
+function runDates(startDate: string, days: number, off: number[]) {
+  const dates: string[] = [];
+  const cursor = new Date(`${startDate}T00:00:00`);
+  for (let guard = 0; dates.length < days && guard < 120; guard++) {
+    if (!off.includes(cursor.getDay())) dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
+}
+
+/**
  * How many days on site the work looks like, from what has already been
  * measured, or failing that the area on the dispatch. It is a starting number
  * for the office to accept or change, never a lock: a 96m2 carpet lay at
@@ -423,6 +438,9 @@ export const tasks = {
         .orderBy(asc(schema.taskDays.date));
 
       let moved: string[] = [];
+      /** How many days the drag booked when it booked more than the one dropped on. */
+      let bookedDays = 0;
+      const runInstaller = input.installerId ?? existing.assignedInstallerId;
       if (existingDays.length && input.scheduledDate) {
         const offsets = existingDays.map((d) => daysBetween(existingDays[0]!.date, d.date));
         moved = offsets.map((o) => addDays(input.scheduledDate!, o));
@@ -448,13 +466,37 @@ export const tasks = {
       } else if (existingDays.length && !input.scheduledDate) {
         // Dragged off the board: the run is gone, not silently left behind.
         await db.delete(schema.taskDays).where(eq(schema.taskDays.taskId, input.id));
+      } else if (input.scheduledDate && runInstaller) {
+        // Dragging an unbooked dispatch onto a day books the whole run Terra
+        // reckons it takes, not just the day under the cursor. A 3 day carpet
+        // lay lands as 3 days in one drag, and the office adjusts it after if
+        // the estimate is wrong.
+        const suggested = await suggestDays(input.id);
+        const off = await nonWorkingWeekdays(runInstaller);
+        moved = runDates(input.scheduledDate, Math.max(1, suggested?.days ?? 1), off);
+        bookedDays = moved.length;
+        // Clears any cancelled day rows left on the task, so the one-day-per-task
+        // index can't trip over a date this run wants.
+        await db.delete(schema.taskDays).where(eq(schema.taskDays.taskId, input.id));
+        await db.insert(schema.taskDays).values(
+          moved.map((date, i) => ({
+            taskId: input.id,
+            date,
+            seq: i + 1,
+            arrivalStart: (input.startTime !== undefined ? input.startTime : existing.startTime) ?? null,
+            arrivalEnd: null,
+            coordinate: false,
+            installerId: null,
+            status: "booked",
+          })),
+        );
       }
 
       const [row] = await db
         .update(schema.jobTasks)
         .set({
           scheduledDate: input.scheduledDate,
-          ...(existingDays.length
+          ...(existingDays.length || moved.length
             ? { scheduledFrom: moved[0] ?? null, scheduledTo: moved[moved.length - 1] ?? null }
             : {}),
           ...(input.startTime !== undefined ? { startTime: input.startTime } : {}),
@@ -476,19 +518,21 @@ export const tasks = {
       const span =
         moved.length > 1
           ? `${sayDate(moved[0]!)} → ${sayDate(moved[moved.length - 1]!)} (${moved.length} days)`
-          : (input.scheduledDate ?? "unscheduled");
+          : input.scheduledDate
+            ? sayDate(input.scheduledDate)
+            : "unscheduled";
       await db.insert(schema.activityLog).values({
         jobId: existing.jobId,
         taskId: input.id,
         entityType: "task",
         entityId: input.id,
-        action: "rescheduled",
-        detail: `${existing.title} → ${span}`,
+        action: bookedDays ? "booked" : "rescheduled",
+        detail: `${existing.title} → ${span}${bookedDays > 1 ? " (Terra's estimate, dragged on)" : ""}`,
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
 
-      return { ...row, dates: moved };
+      return { ...row, dates: moved, bookedDays };
     }),
 
   /** Assign directly, no offer — the installer is simply told. */

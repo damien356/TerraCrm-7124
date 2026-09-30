@@ -135,6 +135,12 @@ function TaskBlock({
 const LANE_H = 46;
 const LANE_GAP = 4;
 
+/** "Thu 1 Oct", the way the office says a date out loud. */
+function sayDate(date: string) {
+  const d = new Date(`${date}T00:00:00`);
+  return d.toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" }).replace(",", "");
+}
+
 /** "07:00" the way the office says it: 7am, 12:30pm. */
 function sayTime(hhmm?: string | null) {
   if (!hhmm) return null;
@@ -582,6 +588,8 @@ export default function SchedulePage() {
   const [panel, setPanel] = React.useState<"book" | "offers">("book");
   const [dragId, setDragId] = React.useState<number | null>(null);
   const [dropError, setDropError] = React.useState<string | null>(null);
+  /** What a drag just booked, when it booked more than the day it landed on. */
+  const [dropNote, setDropNote] = React.useState<{ id: number; days: number; from: string; to: string } | null>(null);
   /** The cell under the cursor mid-drag, so the office can see where it lands. */
   const [hover, setHover] = React.useState<{ installerId: number; idx: number } | null>(null);
 
@@ -612,9 +620,18 @@ export default function SchedulePage() {
   function drop(installerId: number | null, date: string | null) {
     setHover(null);
     if (dragId == null) return;
+    const id = dragId;
     setDropError(null);
+    setDropNote(null);
     reschedule
-      .mutateAsync({ id: dragId, scheduledDate: date, installerId })
+      .mutateAsync({ id, scheduledDate: date, installerId })
+      .then((r: any) => {
+        // A one-day drag that booked a whole run says so, rather than the
+        // office finding three days on the board they didn't ask for.
+        if (r?.bookedDays > 1 && r.dates?.length) {
+          setDropNote({ id, days: r.bookedDays, from: r.dates[0], to: r.dates[r.dates.length - 1] });
+        }
+      })
       .catch((e: unknown) => setDropError(e instanceof Error ? e.message : String(e)));
     setDragId(null);
   }
@@ -648,6 +665,30 @@ export default function SchedulePage() {
               <button type="button" onClick={() => setDropError(null)}>
                 <X className="size-4" />
               </button>
+            </div>
+          ) : null}
+
+          {dropNote ? (
+            <div className="mb-3 flex items-start justify-between gap-3 rounded-md bg-primary/10 px-3 py-2 text-sm">
+              <span>
+                Booked {dropNote.days} days, {sayDate(dropNote.from)} to {sayDate(dropNote.to)}. That is Terra's
+                estimate for the work, not a lock.
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  className="font-medium text-primary hover:underline"
+                  onClick={() => {
+                    open(dropNote.id);
+                    setDropNote(null);
+                  }}
+                >
+                  Change it
+                </button>
+                <button type="button" onClick={() => setDropNote(null)}>
+                  <X className="size-4" />
+                </button>
+              </span>
             </div>
           ) : null}
 
