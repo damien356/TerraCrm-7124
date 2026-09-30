@@ -604,6 +604,54 @@ export const jobTasks = sqliteTable(
   ],
 );
 
+/**
+ * The days one dispatch is booked for. A three day carpet lay is ONE task with
+ * three of these, never three tasks: the labour, the offers, the checklist, the
+ * photos and the installer invoice all hang off the task id, so splitting the
+ * run into separate tasks would triple every one of them.
+ *
+ * Day one mirrors `jobTasks.scheduledDate`, and the run mirrors
+ * `scheduledFrom`/`scheduledTo`, so anything reading a single date still works.
+ */
+export const taskDays = sqliteTable(
+  "task_days",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    taskId: integer("task_id").notNull().references(() => jobTasks.id, { onDelete: "cascade" }),
+    /** YYYY-MM-DD. Days in a run can skip weekends, so these are not contiguous. */
+    date: text("date").notNull(),
+    /** 1-based position in the run, for "day 2 of 3" on the installer's phone. */
+    seq: integer("seq").notNull().default(1),
+    /**
+     * The window the customer is told to expect them in, e.g. 07:00 → 11:00.
+     * This is what the installer's job card leads with, not the start time.
+     */
+    arrivalStart: text("arrival_start"),
+    arrivalEnd: text("arrival_end"),
+    /** No window: the installer and the site sort the time out between them. */
+    coordinate: integer("coordinate", { mode: "boolean" }).notNull().default(false),
+    /**
+     * Covers this one day when it isn't the task's own installer. Null means
+     * whoever the task is assigned to, which is the normal case.
+     */
+    installerId: integer("installer_id").references(() => installers.id, { onDelete: "set null" }),
+    /** booked · complete · cancelled */
+    status: text("status").notNull().default("booked"),
+    /**
+     * Set when the office booked over a clash or a day off on purpose. Kept so
+     * the reason a double booking exists is on the record, not in someone's head.
+     */
+    overrideNote: text("override_note"),
+    ...timestamps,
+  },
+  (t) => [
+    index("task_days_task_idx").on(t.taskId),
+    index("task_days_date_idx").on(t.date),
+    index("task_days_installer_idx").on(t.installerId),
+    unique("task_days_unique").on(t.taskId, t.date),
+  ],
+);
+
 /** Direct offers and broadcasts. First accept wins; the rest auto-close. */
 export const taskOffers = sqliteTable(
   "task_offers",

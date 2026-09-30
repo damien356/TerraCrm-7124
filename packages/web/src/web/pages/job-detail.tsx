@@ -7,6 +7,7 @@ import { JobForecastCard, MeasureUpModal } from "../components/costing";
 import { JobCashCard } from "../components/job-cash";
 import { PaymentTermsCard } from "../components/payment-terms";
 import { JobConversation } from "../components/conversation";
+import { BookInstallerPanel } from "../components/book-installer";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge, TASK_STATUS_COLOUR, TASK_STATUS_LABEL, tintFor } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -298,6 +299,7 @@ export default function JobDetailPage() {
   const [taskModal, setTaskModal] = React.useState(false);
   const [contactModal, setContactModal] = React.useState(false);
   const [measuring, setMeasuring] = React.useState<{ id: number; title: string } | null>(null);
+  const [booking, setBooking] = React.useState<number | null>(null);
   const [note, setNote] = React.useState("");
   const [material, setMaterial] = React.useState({ description: "", qty: "", unit: "m2" });
 
@@ -463,9 +465,13 @@ export default function JobDetailPage() {
                         >
                           Measure up
                         </button>
-                        <Link to="/schedule" className="text-xs font-medium text-primary hover:underline">
-                          Dispatch
-                        </Link>
+                        <button
+                          type="button"
+                          onClick={() => setBooking(t.id)}
+                          className="text-xs font-medium text-primary hover:underline"
+                        >
+                          Book
+                        </button>
                         <button
                           type="button"
                           onClick={() => removeTask.mutate({ id: t.id })}
@@ -707,6 +713,22 @@ export default function JobDetailPage() {
         open={measuring != null}
         onClose={() => setMeasuring(null)}
       />
+
+      {booking != null ? (
+        <div className="fixed inset-0 z-40 flex justify-end">
+          <button
+            type="button"
+            aria-label="Close booking"
+            className="flex-1 bg-black/30"
+            onClick={() => setBooking(null)}
+          />
+          <BookInstallerPanel
+            taskId={booking}
+            onClose={() => setBooking(null)}
+            onBooked={() => void job.refetch()}
+          />
+        </div>
+      ) : null}
     </Page>
   );
 }

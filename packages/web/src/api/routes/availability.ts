@@ -5,7 +5,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
 import { parseUnavailability } from "../lib/parse-unavailability";
-import { blockedInstallerIds } from "../lib/availability";
+import { blockedInstallerIds, checkDays, nonWorkingWeekdays } from "../lib/availability";
 
 /**
  * Blackout dates. Damien types it the way he'd say it — "cant work dec 1-17
@@ -115,5 +115,31 @@ export const availability = {
   blockedOn: adminOnly.input(z.object({ date: z.string() })).handler(async ({ input }) => {
     const ids = await blockedInstallerIds(input.date);
     return [...ids];
+  }),
+
+  /**
+   * One installer across the exact days a booking would use: day off, booked
+   * out, or already on something. Read live by the Book Installer panel so the
+   * office sees the clash before they press the button, not after.
+   */
+  checkDays: adminOnly
+    .input(
+      z.object({
+        installerId: z.number(),
+        dates: z.array(z.string()).max(60),
+        exceptTaskId: z.number().nullable().optional(),
+      }),
+    )
+    .handler(async ({ input }) => {
+      return checkDays({
+        installerId: input.installerId,
+        dates: input.dates,
+        exceptTaskId: input.exceptTaskId ?? null,
+      });
+    }),
+
+  /** The weekdays an installer never works, so a run can step over them. */
+  nonWorkingWeekdays: adminOnly.input(z.object({ installerId: z.number() })).handler(async ({ input }) => {
+    return nonWorkingWeekdays(input.installerId);
   }),
 };

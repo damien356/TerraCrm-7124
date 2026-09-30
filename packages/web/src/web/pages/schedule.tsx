@@ -1,7 +1,8 @@
 import * as React from "react";
 import { Link } from "wouter";
-import { ChevronLeft, ChevronRight, Radio, Send, Sofa, UserMinus, Users2, X } from "lucide-react";
+import { Calendar, ChevronLeft, ChevronRight, Radio, Send, Sofa, UserMinus, Users2, X } from "lucide-react";
 import { Page } from "../components/layout";
+import { BookInstallerPanel } from "../components/book-installer";
 import { Loading, Spinner } from "../components/ui/card";
 import { Badge, TASK_STATUS_COLOUR, TASK_STATUS_LABEL, tintFor } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -61,11 +62,14 @@ function TaskBlock({
   onOpen,
   onDragStart,
   compact,
+  note,
 }: {
   task: any;
   onOpen: () => void;
   onDragStart: (e: React.DragEvent) => void;
   compact?: boolean;
+  /** "Day 2 of 4" on a run that spans more than one day. */
+  note?: string;
 }) {
   const tint = tintFor(task.skill?.groupName);
   return (
@@ -84,6 +88,9 @@ function TaskBlock({
       <p className="mt-0.5 truncate text-[11px] leading-tight text-[#1C1B1A]/65">
         #{task.jobNumber} · {task.siteSuburb || task.siteAddress || "no site"}
       </p>
+      {note ? (
+        <p className="mt-0.5 truncate text-[10px] font-semibold uppercase leading-tight text-[#1C1B1A]/55">{note}</p>
+      ) : null}
       {!compact ? (
         <div className="mt-1 flex flex-wrap items-center gap-1">
           {task.startTime ? (
@@ -111,7 +118,16 @@ function TaskBlock({
 
 /* ------------------------------ side panel ------------------------------ */
 
-function DispatchPanel({ taskId, onClose }: { taskId: number; onClose: () => void }) {
+function DispatchPanel({
+  taskId,
+  onClose,
+  onBook,
+}: {
+  taskId: number;
+  onClose: () => void;
+  /** Back to the booking panel, which is where most jobs get sorted. */
+  onBook: () => void;
+}) {
   const task = useTask(taskId);
   const offers = useOffersForTask(taskId);
   const [payOverride, setPayOverride] = React.useState("");
@@ -158,7 +174,12 @@ function DispatchPanel({ taskId, onClose }: { taskId: number; onClose: () => voi
         <Loading />
       ) : (
         <div className="board-scroll max-h-[calc(100vh-120px)] overflow-y-auto px-4 py-3">
-          <div className="flex flex-wrap items-center gap-1.5">
+          <Button size="sm" className="w-full" onClick={onBook}>
+            <Calendar className="size-3.5" />
+            Book an installer on it
+          </Button>
+
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
             <Badge colour={TASK_STATUS_COLOUR[t.status]}>{TASK_STATUS_LABEL[t.status] ?? t.status}</Badge>
             {t.skill ? <Badge>{t.skill.name}</Badge> : <Badge>no skill set</Badge>}
             {t.crewSize > 1 ? (
@@ -363,11 +384,17 @@ export default function SchedulePage() {
   const installers = useInstallers();
   const reschedule = useRescheduleTask();
   const [selected, setSelected] = React.useState<number | null>(null);
+  const [panel, setPanel] = React.useState<"book" | "offers">("book");
   const [dragId, setDragId] = React.useState<number | null>(null);
   const [dropError, setDropError] = React.useState<string | null>(null);
 
   const tasks = board.data?.tasks ?? [];
   const unassigned = board.data?.unassigned ?? [];
+
+  function open(id: number) {
+    setSelected(id);
+    setPanel("book");
+  }
 
   function drop(installerId: number | null, date: string | null) {
     if (dragId == null) return;
@@ -459,11 +486,15 @@ export default function SchedulePage() {
                     </th>
                     {week.days.map((d) => {
                       const date = iso(d);
-                      const cell = tasks.filter(
-                        (t) =>
-                          t.scheduledDate === date &&
-                          (t.assignedInstallerId === inst.id || t.secondInstallerId === inst.id),
-                      );
+                      // A booking can run over several days, so the task shows on
+                      // every day it holds, and a day handed to someone else
+                      // shows on that person's row instead.
+                      const cell = tasks.filter((t) => {
+                        const day = t.days.find((d) => d.date === date);
+                        if (!day && !t.dates.includes(date)) return false;
+                        const lead = day?.installerId ?? t.assignedInstallerId;
+                        return lead === inst.id || t.secondInstallerId === inst.id;
+                      });
                       return (
                         <td
                           key={date}
@@ -472,14 +503,18 @@ export default function SchedulePage() {
                           className="h-20 border-b border-border px-1.5 py-1.5 align-top transition-colors hover:bg-secondary/50"
                         >
                           <div className="space-y-1">
-                            {cell.map((t) => (
-                              <TaskBlock
-                                key={t.id}
-                                task={t}
-                                onOpen={() => setSelected(t.id)}
-                                onDragStart={() => setDragId(t.id)}
-                              />
-                            ))}
+                            {cell.map((t) => {
+                              const seq = t.dates.indexOf(date) + 1;
+                              return (
+                                <TaskBlock
+                                  key={t.id}
+                                  task={t}
+                                  note={t.dates.length > 1 && seq > 0 ? `Day ${seq} of ${t.dates.length}` : undefined}
+                                  onOpen={() => open(t.id)}
+                                  onDragStart={() => setDragId(t.id)}
+                                />
+                              );
+                            })}
                           </div>
                         </td>
                       );
@@ -504,7 +539,7 @@ export default function SchedulePage() {
                       <div className="flex flex-wrap gap-2">
                         {unassigned.map((t) => (
                           <div key={t.id} className="w-[190px]">
-                            <TaskBlock task={t} onOpen={() => setSelected(t.id)} onDragStart={() => setDragId(t.id)} />
+                            <TaskBlock task={t} onOpen={() => open(t.id)} onDragStart={() => setDragId(t.id)} />
                           </div>
                         ))}
                       </div>
@@ -529,7 +564,16 @@ export default function SchedulePage() {
         </Page>
       </div>
 
-      {selected ? <DispatchPanel taskId={selected} onClose={() => setSelected(null)} /> : null}
+      {selected == null ? null : panel === "book" ? (
+        <BookInstallerPanel
+          taskId={selected}
+          onClose={() => setSelected(null)}
+          onBooked={() => board.refetch()}
+          onOffers={() => setPanel("offers")}
+        />
+      ) : (
+        <DispatchPanel taskId={selected} onClose={() => setSelected(null)} onBook={() => setPanel("book")} />
+      )}
     </div>
   );
 }
