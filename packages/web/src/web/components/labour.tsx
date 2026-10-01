@@ -15,6 +15,7 @@ import {
   useSetRate,
   useUpdateRateItem,
 } from "../queries/labour";
+import { useBootstrap } from "../queries/settings";
 import { STANDARD_MARKUP_PCT, markupPctUsed, sellExGstWithMarkup } from "../../api/lib/pricing";
 
 export const RATE_UNITS = ["m2", "lm", "each", "step", "hour", "day", "job", "percent", "km"] as const;
@@ -268,6 +269,8 @@ export function LabourRatesTab() {
   const book = useRateBook({ on, search: search.trim() || undefined, includeInactive });
   const setRate = useSetRate();
   const update = useUpdateRateItem();
+  const boot = useBootstrap();
+  const skillOptions = boot.data?.allSkills ?? [];
 
   const rows = book.data?.rows ?? [];
   const groups = RATE_GROUPS.filter((g) => rows.some((r) => r.groupName === g)).concat(
@@ -329,8 +332,11 @@ export function LabourRatesTab() {
 
       {editing ? (
         <p className="mb-3 rounded-md border border-[var(--gold)]/40 bg-[var(--gold)]/5 px-3 py-2 text-xs text-foreground">
-          Edit mode. Change the name or the note under it, it saves when you tap out of the box. The bin deletes the
-          item. Quotes already made keep their own wording and price.
+          Edit mode. Change the name, the note, the skill under it, or what it is priced per (m², lm, each, per job
+          and so on). Text saves when you tap out of the box, the dropdowns save straight away. If you change what it
+          is priced per, check the rate still makes sense, $40 a lm is not $40 a m². The skill decides which installers
+          see the item on their rate card. The bin deletes the item. Quotes already made keep their own wording and
+          price.
         </p>
       ) : null}
       {notice ? (
@@ -384,9 +390,26 @@ export function LabourRatesTab() {
                           className="h-8 text-xs"
                           onSave={(notes) => update.mutate({ id: row.id, notes: notes || null })}
                         />
-                        <div className="text-xs text-muted-foreground">
-                          {row.skillName ?? "no skill"}
-                          {row.active ? "" : " · switched off"}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Select
+                            aria-label={`Skill for ${row.name}`}
+                            value={row.skillId == null ? "" : String(row.skillId)}
+                            onChange={(e) =>
+                              update.mutate({ id: row.id, skillId: e.target.value ? Number(e.target.value) : null })
+                            }
+                            className="h-8 max-w-full flex-1 text-xs"
+                          >
+                            <option value="">No skill</option>
+                            {skillOptions
+                              .filter((sk) => sk.active || sk.id === row.skillId)
+                              .map((sk) => (
+                                <option key={sk.id} value={sk.id}>
+                                  {sk.name}
+                                  {sk.active ? "" : " (switched off)"}
+                                </option>
+                              ))}
+                          </Select>
+                          {row.active ? null : <span className="text-xs text-muted-foreground">switched off</span>}
                         </div>
                       </div>
                     ) : (
@@ -405,9 +428,24 @@ export function LabourRatesTab() {
                       </div>
                     )}
 
-                    <div className="flex w-24 items-center gap-1.5" title="The unit is fixed once an item is made">
+                    <div className="flex w-28 items-center gap-1.5">
                       <Label className="mb-0">Per</Label>
-                      <span className="text-sm font-medium text-foreground">{UNIT_LABEL[row.unit] ?? row.unit}</span>
+                      {editing ? (
+                        <Select
+                          aria-label={`Unit for ${row.name}`}
+                          value={row.unit}
+                          onChange={(e) => update.mutate({ id: row.id, unit: e.target.value as never })}
+                          className="h-8 w-20"
+                        >
+                          {RATE_UNITS.map((u) => (
+                            <option key={u} value={u}>
+                              {UNIT_LABEL[u] ?? u}
+                            </option>
+                          ))}
+                        </Select>
+                      ) : (
+                        <span className="text-sm font-medium text-foreground">{UNIT_LABEL[row.unit] ?? row.unit}</span>
+                      )}
                     </div>
 
                     <RateInput
