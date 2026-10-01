@@ -48,31 +48,38 @@ export function useRateHistory(itemId: number | null, installerId: number | null
   );
 }
 
-function useLabourMutation(name: "setRate" | "setRates" | "clearOverride" | "itemCreate" | "itemUpdate") {
+/** Every labour write refreshes the rate book, the cards and the quote picker. */
+function useRefreshLabour() {
   const queryClient = useQueryClient();
-  return orpc.labour[name].mutationOptions({
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: orpc.labour.key() });
-    },
-  });
+  return () => queryClient.invalidateQueries({ queryKey: orpc.labour.key() });
 }
 
 export function useSetRate() {
-  return useMutation(useLabourMutation("setRate"));
+  const onSuccess = useRefreshLabour();
+  return useMutation(orpc.labour.setRate.mutationOptions({ onSuccess }));
 }
 
 export function useSetRates() {
-  return useMutation(useLabourMutation("setRates"));
+  const onSuccess = useRefreshLabour();
+  return useMutation(orpc.labour.setRates.mutationOptions({ onSuccess }));
 }
 
 export function useClearOverride() {
-  return useMutation(useLabourMutation("clearOverride"));
+  const onSuccess = useRefreshLabour();
+  return useMutation(orpc.labour.clearOverride.mutationOptions({ onSuccess }));
 }
 
 export function useCreateRateItem() {
-  return useMutation(useLabourMutation("itemCreate"));
+  const onSuccess = useRefreshLabour();
+  return useMutation(orpc.labour.itemCreate.mutationOptions({ onSuccess }));
 }
 
 export function useUpdateRateItem() {
-  return useMutation(useLabourMutation("itemUpdate"));
+  const onSuccess = useRefreshLabour();
+  return useMutation(orpc.labour.itemUpdate.mutationOptions({ onSuccess }));
+}
+
+export function useDeleteRateItem() {
+  const onSuccess = useRefreshLabour();
+  return useMutation(orpc.labour.itemDelete.mutationOptions({ onSuccess }));
 }

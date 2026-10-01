@@ -23,7 +23,68 @@ import {
 } from "../queries/settings";
 
 const SKILL_GROUPS = Object.keys(SKILL_TINT);
-const STAGES = ["lead", "open", "scheduled", "complete", "closed"];
+/**
+ * The stage codes the server actually reads (dashboard, cashflow, finance,
+ * intel). This list used to offer "lead" and miss "won" and "active", so the
+ * Won and In Progress rows showed "lead" while the data held the right code.
+ */
+const STAGES: { code: string; label: string; meaning: string }[] = [
+  { code: "open", label: "Lead or quoting", meaning: "Counts as a lead on the dashboard. Cashflow treats it as pipeline, maybe money." },
+  { code: "won", label: "Won", meaning: "Customer said yes. Cashflow counts it as expected money." },
+  { code: "scheduled", label: "Booked in", meaning: "Has a date. Counts in Scheduled on the dashboard and as committed money." },
+  { code: "active", label: "On site", meaning: "Work underway. Counts in Scheduled on the dashboard and as committed money." },
+  { code: "complete", label: "Done", meaning: "Work finished, money still to come in. Counts as committed and as delivered work." },
+  { code: "closed", label: "Closed", meaning: "Paid or cancelled. Off the open jobs list and out of cashflow." },
+];
+const STAGE_CODES = STAGES.map((s) => s.code);
+
+function StageOptions({ current }: { current?: string }) {
+  return (
+    <>
+      {current && !STAGE_CODES.includes(current) ? <option value={current}>{current} (not used)</option> : null}
+      {STAGES.map((s) => (
+        <option key={s.code} value={s.code}>
+          {s.label}
+        </option>
+      ))}
+    </>
+  );
+}
+
+function StageGuide() {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <Card className="mb-3">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+      >
+        <span>
+          <span className="block text-sm font-medium text-foreground">What the Stage does</span>
+          <span className="block text-xs text-muted-foreground">
+            The status name is your wording. The stage is what the system counts it as.
+          </span>
+        </span>
+        <span className="text-xs text-muted-foreground">{open ? "Hide" : "Show"}</span>
+      </button>
+      {open ? (
+        <div className="divide-y divide-border border-t border-border">
+          {STAGES.map((s) => (
+            <div key={s.code} className="px-4 py-2">
+              <div className="text-sm font-medium text-foreground">{s.label}</div>
+              <div className="text-xs text-muted-foreground">{s.meaning}</div>
+            </div>
+          ))}
+          <p className="px-4 py-2 text-xs text-muted-foreground">
+            Several statuses can share a stage. Complete and Invoiced are both Done, Paid and Cancelled are both
+            Closed. The Order number sets the order statuses are listed in on the jobs pages.
+          </p>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
 /**
  * The category values actually in the price book. Kept in step with
  * CATEGORY_LABEL in pages/products.tsx — this list had drifted and offered
@@ -455,10 +516,12 @@ function StatusesTab({ statuses }: { statuses: StatusRow[] }) {
         </Button>
       </div>
 
+      <StageGuide />
+
       <Card>
         <CardHeader
           title="Job statuses"
-          subtitle="Drag order is set by the number on the right. Stage drives the dashboard counts."
+          subtitle="Order sets where it sits in the list. Stage is what the system counts it as."
         />
         <div className="divide-y divide-border">
           {rows.map((s) => (
@@ -507,11 +570,7 @@ function StatusLine({ status }: { status: StatusRow }) {
           onChange={(e) => update.mutate({ id: status.id, stage: e.target.value })}
           className="h-8 w-36"
         >
-          {STAGES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
+          <StageOptions current={status.stage} />
         </Select>
       </div>
       <div className="flex items-center gap-1.5">
@@ -526,8 +585,8 @@ function StatusLine({ status }: { status: StatusRow }) {
           className="h-8 w-16"
         />
       </div>
-      <label htmlFor={`settings_cb4`} className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-        <Checkbox id={`settings_cb4`}
+      <label htmlFor={`status_active_${status.id}`} className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+        <Checkbox id={`status_active_${status.id}`}
           checked={status.active}
           onChange={(e) => update.mutate({ id: status.id, active: e.target.checked })}
         />
@@ -590,11 +649,7 @@ function NewStatusModal({ open, onClose, nextSort }: { open: boolean; onClose: (
           </Field>
           <Field label="Stage" hint="What it counts as">
             <Select value={stage} onChange={(e) => setStage(e.target.value)}>
-              {STAGES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
+              <StageOptions />
             </Select>
           </Field>
         </div>

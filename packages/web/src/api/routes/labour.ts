@@ -277,6 +277,32 @@ export const labour = {
     }),
 
   /**
+   * Delete a rate item from Settings. Old quotes keep their own copy of the
+   * words and price, so they never change. An item already measured on a job
+   * task is switched off instead, because deleting it would take those
+   * measured lines off the job with it. Switched off items stay findable
+   * under "Show switched off" and can be turned back on.
+   */
+  itemDelete: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+    const [item] = await db.select().from(schema.labourRateItems).where(eq(schema.labourRateItems.id, input.id));
+    if (!item) return { result: "gone" as const, onJobs: 0 };
+    const [{ n }] = await db
+      .select({ n: sql<number>`count(*)` })
+      .from(schema.taskLabourLines)
+      .where(eq(schema.taskLabourLines.itemId, input.id));
+    const onJobs = Number(n ?? 0);
+    if (onJobs > 0) {
+      await db
+        .update(schema.labourRateItems)
+        .set({ active: false, updatedAt: new Date() })
+        .where(eq(schema.labourRateItems.id, input.id));
+      return { result: "switched_off" as const, onJobs };
+    }
+    await db.delete(schema.labourRateItems).where(eq(schema.labourRateItems.id, input.id));
+    return { result: "deleted" as const, onJobs: 0 };
+  }),
+
+  /**
    * Set a rate. No installerId = Terra's default, which every installer without
    * their own number follows from that date.
    */

@@ -270,14 +270,13 @@ export function learnKey(line: Pick<Extraction["lines"][number], "supplierHint" 
 }
 
 /**
- * "23 lm of underlay" against an underlay sold by the m2 is a quarter of
- * what is needed. Say so, with the broadloom sum, rather than guess a width.
+ * He said one unit and the product sells by another, so the quantity is
+ * probably wrong. Say so rather than guess a conversion (carpet comes 3.6 m
+ * or 4 m wide, and underlay is priced per lineal metre of carpet).
  */
 function unitCheck(qty: number, said: string | null | undefined, sells: string) {
   if (!said || said === sells) return "";
-  return said === "lm" && sells === "m2"
-    ? `You said ${qty} lm and it sells by the m2 (on 3.66 m wide carpet that is about ${Math.round(qty * 3.66)} m2). Check the quantity.`
-    : `You said ${qty} ${said} and it sells by the ${sells}. Check the quantity.`;
+  return `You said ${qty} ${said} and it sells by the ${sells}. Check the quantity.`;
 }
 
 async function priceMaterialLine(line: Extraction["lines"][number]): Promise<PricedLine> {

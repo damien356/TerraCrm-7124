@@ -1,5 +1,5 @@
 import * as React from "react";
-import { History, Plus, Search, Undo2 } from "lucide-react";
+import { History, Pencil, Plus, Search, Trash2, Undo2 } from "lucide-react";
 import { Card, CardHeader, Empty, Loading, Spinner } from "./ui/card";
 import { Badge, tintFor } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -8,6 +8,7 @@ import { Modal } from "./ui/modal";
 import {
   useClearOverride,
   useCreateRateItem,
+  useDeleteRateItem,
   useRateBook,
   useRateCard,
   useRateHistory,
@@ -199,6 +200,58 @@ function SellCell({ rate, unit, markupPercent }: { rate: number | null; unit: st
 }
 
 /* ------------------------------------------------------------------ *
+ * Edit mode text box: saves when you leave it, Enter saves too.
+ * ------------------------------------------------------------------ */
+
+function TextEdit({
+  value,
+  placeholder,
+  onSave,
+  required,
+  className,
+}: {
+  value: string;
+  placeholder?: string;
+  onSave: (v: string) => void;
+  required?: boolean;
+  className?: string;
+}) {
+  const [text, setText] = React.useState(value);
+  const cancelled = React.useRef(false);
+  React.useEffect(() => setText(value), [value]);
+  function commit() {
+    if (cancelled.current) {
+      cancelled.current = false;
+      return;
+    }
+    const t = text.trim();
+    if (t === value.trim()) return;
+    if (required && !t) {
+      setText(value);
+      return;
+    }
+    onSave(t);
+  }
+  return (
+    <Input
+      value={text}
+      placeholder={placeholder}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        if (e.key === "Escape") {
+          cancelled.current = true;
+          setText(value);
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      className={className}
+    />
+  );
+}
+
+/* ------------------------------------------------------------------ *
  * Settings -> Labour rates. Terra's own numbers.
  * ------------------------------------------------------------------ */
 
@@ -208,6 +261,9 @@ export function LabourRatesTab() {
   const [includeInactive, setIncludeInactive] = React.useState(false);
   const [newOpen, setNewOpen] = React.useState(false);
   const [historyFor, setHistoryFor] = React.useState<{ itemId: number; name: string } | null>(null);
+  const [editing, setEditing] = React.useState(false);
+  const [deleting, setDeleting] = React.useState<{ id: number; name: string } | null>(null);
+  const [notice, setNotice] = React.useState<string | null>(null);
 
   const book = useRateBook({ on, search: search.trim() || undefined, includeInactive });
   const setRate = useSetRate();
@@ -248,11 +304,43 @@ export function LabourRatesTab() {
           />
           Show switched off
         </label>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={editing}
+          onClick={() => setEditing((v) => !v)}
+          className="flex h-9 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm"
+        >
+          <span
+            className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${editing ? "bg-[var(--gold)]" : "bg-border"}`}
+          >
+            <span
+              className={`absolute top-0.5 size-4 rounded-full bg-white shadow transition-all ${editing ? "left-[18px]" : "left-0.5"}`}
+            />
+          </span>
+          <Pencil className="size-3.5 text-muted-foreground" />
+          Edit or delete items
+        </button>
         <Button onClick={() => setNewOpen(true)}>
           <Plus className="size-4" />
           New rate item
         </Button>
       </div>
+
+      {editing ? (
+        <p className="mb-3 rounded-md border border-[var(--gold)]/40 bg-[var(--gold)]/5 px-3 py-2 text-xs text-foreground">
+          Edit mode. Change the name or the note under it, it saves when you tap out of the box. The bin deletes the
+          item. Quotes already made keep their own wording and price.
+        </p>
+      ) : null}
+      {notice ? (
+        <p className="mb-3 rounded-md border border-border bg-secondary px-3 py-2 text-xs text-foreground">
+          {notice}{" "}
+          <button type="button" onClick={() => setNotice(null)} className="ml-1 text-muted-foreground hover:underline">
+            OK
+          </button>
+        </p>
+      ) : null}
 
       <p className="mb-4 text-xs text-muted-foreground">
         These are Terra's rates, what the work COSTS. Every installer follows them unless he has his own number on his
@@ -282,32 +370,44 @@ export function LabourRatesTab() {
               <div className="divide-y divide-border">
                 {groupRows.map((row) => (
                   <div key={row.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5">
-                    <div className="min-w-[200px] flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-sm ${row.active ? "" : "text-muted-foreground line-through"}`}>
-                          {row.name}
-                        </span>
-                        {row.kind !== "work" ? <Badge>{row.kind}</Badge> : null}
+                    {editing ? (
+                      <div className="min-w-[200px] flex-1 space-y-1.5">
+                        <TextEdit
+                          value={row.name}
+                          required
+                          className="h-8 text-sm"
+                          onSave={(name) => update.mutate({ id: row.id, name })}
+                        />
+                        <TextEdit
+                          value={row.notes ?? ""}
+                          placeholder="Note or description (optional)"
+                          className="h-8 text-xs"
+                          onSave={(notes) => update.mutate({ id: row.id, notes: notes || null })}
+                        />
+                        <div className="text-xs text-muted-foreground">
+                          {row.skillName ?? "no skill"}
+                          {row.active ? "" : " · switched off"}
+                        </div>
                       </div>
-                      <div className="mt-0.5 text-xs text-muted-foreground">
-                        {row.skillName ?? "no skill"}
-                        {row.effectiveFrom ? ` · rate set ${row.effectiveFrom}` : ""}
+                    ) : (
+                      <div className="min-w-[200px] flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-sm ${row.active ? "" : "text-muted-foreground line-through"}`}>
+                            {row.name}
+                          </span>
+                          {row.kind !== "work" ? <Badge>{row.kind}</Badge> : null}
+                        </div>
+                        {row.notes ? <div className="mt-0.5 text-xs text-foreground/80">{row.notes}</div> : null}
+                        <div className="mt-0.5 text-xs text-muted-foreground">
+                          {row.skillName ?? "no skill"}
+                          {row.effectiveFrom ? ` · rate set ${row.effectiveFrom}` : ""}
+                        </div>
                       </div>
-                    </div>
+                    )}
 
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex w-24 items-center gap-1.5" title="The unit is fixed once an item is made">
                       <Label className="mb-0">Per</Label>
-                      <Select
-                        value={row.unit}
-                        onChange={(e) => update.mutate({ id: row.id, unit: e.target.value as never })}
-                        className="h-8 w-20"
-                      >
-                        {RATE_UNITS.map((u) => (
-                          <option key={u} value={u}>
-                            {UNIT_LABEL[u]}
-                          </option>
-                        ))}
-                      </Select>
+                      <span className="text-sm font-medium text-foreground">{UNIT_LABEL[row.unit] ?? row.unit}</span>
                     </div>
 
                     <RateInput
@@ -355,6 +455,24 @@ export function LabourRatesTab() {
                     >
                       <History className="size-4" />
                     </button>
+
+                    {editing ? (
+                      row.active ? (
+                        <button
+                          type="button"
+                          onClick={() => setDeleting({ id: row.id, name: row.name })}
+                          className="rounded-md p-1.5 text-[var(--destructive)] transition-colors hover:bg-[var(--destructive)]/10"
+                          title="Delete this item"
+                          aria-label={`Delete ${row.name}`}
+                        >
+                          <Trash2 className="size-4" />
+                        </button>
+                      ) : (
+                        <Button size="sm" variant="outline" onClick={() => update.mutate({ id: row.id, active: true })}>
+                          Turn back on
+                        </Button>
+                      )
+                    ) : null}
                   </div>
                 ))}
                 {groupRows.length === 0 ? <Empty>Nothing here.</Empty> : null}
@@ -370,12 +488,64 @@ export function LabourRatesTab() {
       </div>
 
       <NewRateItemModal open={newOpen} onClose={() => setNewOpen(false)} />
+      <DeleteRateItemModal item={deleting} onClose={() => setDeleting(null)} onDone={setNotice} />
       <RateHistoryModal
         itemId={historyFor?.itemId ?? null}
         name={historyFor?.name ?? ""}
         onClose={() => setHistoryFor(null)}
       />
     </>
+  );
+}
+
+function DeleteRateItemModal({
+  item,
+  onClose,
+  onDone,
+}: {
+  item: { id: number; name: string } | null;
+  onClose: () => void;
+  onDone: (message: string) => void;
+}) {
+  const del = useDeleteRateItem();
+  const [error, setError] = React.useState<string | null>(null);
+
+  async function confirm() {
+    if (!item) return;
+    setError(null);
+    try {
+      const r = await del.mutateAsync({ id: item.id });
+      onDone(
+        r.result === "switched_off"
+          ? `"${item.name}" is measured on ${r.onJobs} job${r.onJobs === 1 ? "" : "s"}, so it was switched off instead of deleted, to keep those jobs right. It is hidden now. Tick "Show switched off" to bring it back.`
+          : `"${item.name}" deleted.`,
+      );
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <Modal
+      open={item != null}
+      onClose={onClose}
+      title={`Delete ${item?.name ?? ""}?`}
+      subtitle="It comes off the rate book and off every installer's card. Quotes already made keep their own wording and price."
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="destructive" onClick={confirm} disabled={del.isPending}>
+            {del.isPending ? <Spinner className="border-white/40 border-t-white" /> : <Trash2 className="size-4" />}
+            Delete
+          </Button>
+        </>
+      }
+    >
+      {error ? <p className="text-sm text-[var(--destructive)]">{error}</p> : null}
+    </Modal>
   );
 }
 
