@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useLocation, useParams } from "wouter";
-import { AlertTriangle, ArrowLeft, ArrowRight, Check, Plus, Send, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, Check, Plus, Repeat, Search, Send, Trash2, X } from "lucide-react";
 import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -11,16 +11,18 @@ import { LabourPicker, ProductPicker } from "../components/quote-pickers";
 import {
   useAcceptQuote,
   useAddQuoteItem,
+  useChangeQuoteProduct,
   useConvertQuote,
   useDeclineQuote,
   useQuote,
   useRemoveQuoteItem,
   useReviseQuote,
   useSendQuote,
+  useSuggestedProducts,
   useUpdateQuote,
   useUpdateQuoteItem,
 } from "../queries/quotes";
-import { useProducts } from "../queries/settings";
+import { useProducts } from "../queries/products";
 import { QUOTE_STATUS_COLOUR } from "./quotes";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
@@ -49,13 +51,139 @@ type Item = {
   flagged?: boolean;
   flagReason?: string | null;
   voicePhrase?: string | null;
+  productId?: number | null;
 };
+
+/* ---------------------------- change product ---------------------------- */
+
+/** Typing should not fire a query per keystroke. */
+function useDebounced(value: string, ms = 250) {
+  const [out, setOut] = React.useState(value);
+  React.useEffect(() => {
+    const t = setTimeout(() => setOut(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return out;
+}
+
+type Choice = { id: number; label: string; detail: string };
+
+/** Price list search, only mounted once something is typed. */
+function SearchResults({ q, render }: { q: string; render: (rows: Choice[]) => React.ReactNode }) {
+  const found = useProducts({ search: q });
+  const rows: Choice[] = (found.data ?? []).slice(0, 40).map((p) => {
+    const named = [p.brand, p.range].filter(Boolean).join(" ");
+    return {
+      id: p.id,
+      label: (p.colour ? (named ? `${named} in ${p.colour}` : p.colour) : named) || p.supplier,
+      detail: [p.supplier, p.backing, p.sellPrice != null ? `${money(p.sellPrice)}/${p.unit}` : "no sell price"]
+        .filter(Boolean)
+        .join(" · "),
+    };
+  });
+  return (
+    <div className="mt-2 max-h-72 overflow-y-auto">
+      {found.isLoading ? (
+        <Spinner />
+      ) : rows.length ? (
+        render(rows)
+      ) : (
+        <p className="text-sm text-muted-foreground">Nothing matches that.</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One window to put the right product on a line: the closest few first, a
+ * search under them for anything else. A tap swaps it, price and all.
+ */
+function ChangeProduct({ item, onClose }: { item: Item; onClose: () => void }) {
+  const suggested = useSuggestedProducts(item.id, true);
+  const change = useChangeQuoteProduct();
+  const [search, setSearch] = React.useState("");
+  const debounced = useDebounced(search.trim());
+  const [error, setError] = React.useState<string | null>(null);
+
+  const near: Choice[] = (suggested.data ?? []).map((p) => ({
+    id: p.id,
+    label: p.label,
+    detail: [p.supplier, p.backing, p.sellPrice != null ? `${money(p.sellPrice)}/${p.unit}` : "no sell price"]
+      .filter(Boolean)
+      .join(" · "),
+  }));
+
+  const use = (productId: number) => {
+    setError(null);
+    change
+      .mutateAsync({ id: item.id, productId })
+      .then(onClose)
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  };
+
+  const list = (rows: Choice[]) => (
+    <div className="space-y-1.5">
+      {rows.map((c) => (
+        <button
+          key={c.id}
+          type="button"
+          disabled={change.isPending}
+          onClick={() => use(c.id)}
+          className="flex w-full items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2 text-left transition-colors hover:border-[var(--gold)] disabled:opacity-60"
+        >
+          <span className="min-w-0">
+            <span className="block line-clamp-2 text-sm font-medium leading-snug">{c.label}</span>
+            <span className="block truncate text-xs text-muted-foreground">{c.detail}</span>
+          </span>
+          <span className="shrink-0 text-xs font-semibold text-[var(--gold-deep)]">Use</span>
+        </button>
+      ))}
+    </div>
+  );
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Change product"
+      subtitle={`${item.description}, ${item.qty} ${item.unit}. The quantity stays, the price comes off the price book.`}
+      width="max-w-lg"
+    >
+      <div className="space-y-4">
+        <div>
+          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Closest matches</p>
+          {suggested.isLoading ? (
+            <Spinner />
+          ) : near.length ? (
+            list(near)
+          ) : (
+            <p className="text-sm text-muted-foreground">Nothing close in the price book. Search below, or close this and type the price in.</p>
+          )}
+        </div>
+        <div>
+          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Or search the price list</p>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="pl-9 text-base sm:text-sm"
+              placeholder="A range, a colour or a supplier"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          {debounced.length >= 2 ? <SearchResults q={debounced} render={list} /> : null}
+        </div>
+        {error ? <p className="text-xs font-medium text-destructive">{error}</p> : null}
+      </div>
+    </Modal>
+  );
+}
 
 function LineRow({ item, locked }: { item: Item; locked: boolean }) {
   const update = useUpdateQuoteItem();
   const remove = useRemoveQuoteItem();
-  const products = useProducts();
-  const [fixProductId, setFixProductId] = React.useState("");
+  const [changing, setChanging] = React.useState(false);
+  const isProductLine = item.kind === "supply" || item.productId != null || Boolean(item.voicePhrase);
   const [draft, setDraft] = React.useState({
     description: item.description,
     qty: String(item.qty),
@@ -94,46 +222,6 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
             <AlertTriangle className="size-3.5" /> {item.flagReason ?? "Needs review"}
           </span>
         ) : null}
-        {item.flagged && item.voicePhrase ? (
-          <div className="mb-1 flex items-center gap-1.5">
-            <Select
-              className="h-7 min-w-[220px] flex-1 text-xs"
-              value={fixProductId}
-              disabled={locked}
-              onChange={(e) => setFixProductId(e.target.value)}
-            >
-              <option value="">Pick the right product…</option>
-              {(products.data ?? []).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {[p.brand, p.range, p.colour].filter(Boolean).join(" — ")}
-                  {p.sellPrice ? ` · ${money(p.sellPrice)}/${p.unit}` : ""}
-                </option>
-              ))}
-            </Select>
-            <Button
-              variant="outline"
-              className="h-7 px-2 text-xs"
-              disabled={!fixProductId || update.isPending}
-              onClick={() => {
-                const chosen = (products.data ?? []).find((p) => String(p.id) === fixProductId);
-                if (!chosen) return;
-                update.mutate({
-                  id: item.id,
-                  productId: chosen.id,
-                  description: [chosen.brand, chosen.range, chosen.colour].filter(Boolean).join(", ") || item.description,
-                  unit: chosen.unit || item.unit,
-                  unitPrice: chosen.sellPrice ?? item.unitPrice,
-                  unitCost: chosen.costPrice ?? item.unitCost,
-                  flagged: false,
-                  flagReason: null,
-                });
-                setFixProductId("");
-              }}
-            >
-              <Check className="size-3.5" /> Confirm
-            </Button>
-          </div>
-        ) : null}
         <Input
           className="h-8"
           value={draft.description}
@@ -145,6 +233,20 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
             update.mutate({ id: item.id, description: draft.description })
           }
         />
+        {isProductLine && !locked ? (
+          <button
+            type="button"
+            onClick={() => setChanging(true)}
+            className={
+              item.flagged
+                ? "mt-1 inline-flex items-center gap-1 rounded-md bg-[var(--gold)] px-2.5 py-1 text-xs font-semibold text-[var(--sidebar)]"
+                : "mt-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-[var(--gold-deep)] hover:bg-[var(--gold-wash)]"
+            }
+          >
+            <Repeat className="size-3.5" /> Change product
+          </button>
+        ) : null}
+        {changing ? <ChangeProduct item={item} onClose={() => setChanging(false)} /> : null}
       </td>
       <td className="px-2 py-1.5">
         <Input
@@ -253,7 +355,7 @@ function AddLine({ quoteId }: { quoteId: number }) {
         </Select>
         <Input
           className="min-w-[200px] flex-1"
-          placeholder="Description — e.g. Supply & lay carpet, lounge + hall"
+          placeholder="Description, e.g. Supply & lay carpet, lounge + hall"
           value={form.description}
           onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
           onKeyDown={(e) => e.key === "Enter" && submit()}
@@ -428,14 +530,14 @@ export default function QuoteBuilderPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
         <Card>
           <CardHeader
             title="Lines"
-            subtitle={locked ? "Locked — make a new version to change the price." : "Cost is yours only. It never leaves this screen."}
+            subtitle={locked ? "Locked. Make a new version to change the price." : "Cost is yours only. It never leaves this screen."}
           />
           {q.items.length === 0 ? (
-            <Empty>No lines yet. Add the supply and the labour — labour lines become the dispatches on the job.</Empty>
+            <Empty>No lines yet. Add the supply and the labour. Labour lines become the dispatches on the job.</Empty>
           ) : (
             <div className="board-scroll overflow-x-auto">
               <table className="w-full min-w-[860px] text-sm">
@@ -536,7 +638,7 @@ export default function QuoteBuilderPage() {
                 disabled={locked}
                 onChange={(e) => setNotes(e.target.value)}
                 onBlur={() => notes !== null && run(() => update.mutateAsync({ id: q.id, notes: notes || null }))}
-                placeholder="Anything the customer should read — timing, prep, exclusions."
+                placeholder="Anything the customer should read: timing, prep, exclusions."
               />
             </div>
           </Card>
@@ -667,7 +769,7 @@ export default function QuoteBuilderPage() {
             <span>
               Furniture is on site
               <span className="block text-xs text-muted-foreground">
-                Forces every install dispatch to 2 men — nobody can be sent on their own.
+                Forces every install dispatch to 2 men. Nobody can be sent on their own.
               </span>
             </span>
           </label>

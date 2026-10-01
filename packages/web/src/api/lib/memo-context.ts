@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
+import { desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import type { Mentions } from "../agent/memo";
@@ -108,7 +108,7 @@ async function jobLines(jobIds: number[]) {
   return out;
 }
 
-async function jobsForContact(contactId: number, limit = 8) {
+export async function jobsForContact(contactId: number, limit = 8) {
   const rows = await db
     .select({ id: schema.jobs.id })
     .from(schema.jobs)
@@ -119,7 +119,11 @@ async function jobsForContact(contactId: number, limit = 8) {
         sql`exists (select 1 from job_contacts jc where jc.job_id = ${schema.jobs.id} and jc.contact_id = ${contactId})`,
       ),
     )
-    .orderBy(desc(schema.jobs.number))
+    // Cancelled jobs go to the bottom, so "his latest job" is the newest live one.
+    .orderBy(
+      sql`exists (select 1 from job_statuses js where js.id = ${schema.jobs.statusId} and lower(js.name) like 'cancel%')`,
+      desc(schema.jobs.number),
+    )
     .limit(limit);
   return rows.map((r) => r.id);
 }
@@ -166,8 +170,9 @@ export async function buildCardContext(link: { jobId: number | null; contactId: 
   if (contact) for (const id of await jobsForContact(contact.id)) jobIds.add(id);
   const jl = await jobLines([...jobIds]);
   if (jl.size) {
-    lines.push("Jobs:");
-    for (const id of jobIds) if (jl.has(id)) lines.push(`- ${jl.get(id)}`);
+    lines.push("Jobs (newest first, cancelled last):");
+    const latest = contact ? (await jobsForContact(contact.id, 1))[0] : null;
+    for (const id of jobIds) if (jl.has(id)) lines.push(`- ${jl.get(id)}${id === latest ? " (latest job)" : ""}`);
   }
 
   if (link.jobId) {
@@ -242,15 +247,87 @@ function editDistance(a: string, b: string) {
   return dp[a.length]![b.length]!;
 }
 
-function nameScore(spoken: string, c: Contact) {
+/** Letter pairs in common, 0..1. Survives the vowels speech to text swaps about. */
+function pairScore(a: string, b: string) {
+  const pairs = (s: string) => {
+    const out: string[] = [];
+    for (let i = 0; i < s.length - 1; i++) out.push(s.slice(i, i + 2));
+    return out;
+  };
+  const pa = pairs(a);
+  const pb = pairs(b);
+  if (!pa.length || !pb.length) return 0;
+  const left = [...pb];
+  let hit = 0;
+  for (const p of pa) {
+    const i = left.indexOf(p);
+    if (i >= 0) {
+      hit++;
+      left.splice(i, 1);
+    }
+  }
+  return (2 * hit) / (pa.length + pb.length);
+}
+
+/** A rough sound key: c/k/q alike, ph is f, doubled letters and inner vowels gone. */
+function soundKey(s: string) {
+  const t = s
+    .toLowerCase()
+    .replace(/[^a-z]/g, "")
+    .replace(/ph/g, "f")
+    .replace(/[ckq]/g, "k")
+    .replace(/[sz]/g, "s")
+    .replace(/(.)\1+/g, "$1");
+  return t.slice(0, 1) + t.slice(1).replace(/[aeiouyhw]/g, "");
+}
+
+/**
+ * How well a spoken name fits a client. Exact name parts count most, then one
+ * letter off, then a sounds-alike surname ("Cornobbio" for "Ciobanu": same
+ * first sound, shared letter pairs), then a prefix.
+ */
+function nameScore(spoken: string, c: Pick<Contact, "firstName" | "lastName">) {
   const parts = tokens(`${c.firstName} ${c.lastName}`);
   let score = 0;
   for (const t of tokens(spoken)) {
     if (parts.includes(t)) score += 3;
     else if (t.length >= 4 && parts.some((p) => editDistance(p, t) <= 1)) score += 2;
+    else if (t.length >= 4 && fuzzy(t, parts) > 0) score += fuzzy(t, parts);
     else if (t.length >= 3 && parts.some((p) => p.startsWith(t))) score += 1;
   }
   return score;
+}
+
+/** 1.2 to 2 for a sounds-alike name part, 0 when nothing is close. */
+function fuzzy(t: string, parts: string[]) {
+  let best = 0;
+  for (const p of parts) {
+    if (p.length < 3) continue;
+    const pair = pairScore(p, t);
+    const ka = soundKey(p);
+    const kb = soundKey(t);
+    const sameStart = ka[0] === kb[0];
+    const close = pair >= 0.5 || (sameStart && pair >= 0.25) || (sameStart && ka.length >= 3 && editDistance(ka, kb) <= 1);
+    if (close) best = Math.max(best, Math.min(2, 1.2 + pair));
+  }
+  return best;
+}
+
+/** Every active client's name, kept for a minute. 1,650 rows, scored in code. */
+let nameCache: { at: number; rows: { id: number; firstName: string; lastName: string }[] } | null = null;
+async function allNames() {
+  if (nameCache && Date.now() - nameCache.at < 60_000) return nameCache.rows;
+  const rows = await db
+    .select({ id: schema.contacts.id, firstName: schema.contacts.firstName, lastName: schema.contacts.lastName })
+    .from(schema.contacts)
+    .where(eq(schema.contacts.active, true));
+  nameCache = { at: Date.now(), rows };
+  return rows;
+}
+
+/** For tests and the rerun path: forget the cached names after a client is added. */
+export function forgetNames() {
+  nameCache = null;
 }
 
 export interface Candidate {
@@ -269,23 +346,32 @@ export async function findCandidates(m: Mentions): Promise<{ text: string | null
     scores.set(c.id, cur);
   };
 
-  for (const name of m.personNames) {
-    const ts = tokens(name).filter((t) => t.length >= 3);
-    if (!ts.length) continue;
-    // Pull anyone sharing a name start, then score properly in code. Speech to
-    // text gets "Nguyen" as "Win" often enough that the score, not the SQL, decides.
-    const conds = ts.flatMap((t) => [
-      like(sql`lower(${schema.contacts.firstName})`, `${t.slice(0, 3)}%`),
-      like(sql`lower(${schema.contacts.lastName})`, `${t.slice(0, 3)}%`),
-    ]);
-    const rows = await db
-      .select()
-      .from(schema.contacts)
-      .where(and(eq(schema.contacts.active, true), or(...conds)))
-      .limit(300);
-    for (const c of rows) {
-      const s = nameScore(name, c);
-      if (s >= 2) bump(c, s, `name "${name}"`);
+  if (m.personNames.length) {
+    // Score every client in code, not with a LIKE: speech to text gets
+    // "Ciobanu" as "Cornobbio" and "Nguyen" as "Win", so no prefix would find them.
+    const names = await allNames();
+    const hits = new Map<number, { score: number; why: string }>();
+    for (const name of m.personNames) {
+      const said = tokens(name);
+      if (!said.length) continue;
+      // A surname said on its own only has the sounds-alike score to go on.
+      const floor = said.length === 1 && said[0]!.length >= 5 ? 1.45 : 2;
+      for (const c of names) {
+        const s = nameScore(name, c);
+        if (s >= floor && s > (hits.get(c.id)?.score ?? 0)) hits.set(c.id, { score: s, why: `name "${name}"` });
+      }
+    }
+    const best = [...hits.entries()].sort((a, b) => b[1].score - a[1].score).slice(0, 60);
+    if (best.length) {
+      const rows = await db
+        .select()
+        .from(schema.contacts)
+        .where(inArray(schema.contacts.id, best.map(([id]) => id)));
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      for (const [id, h] of best) {
+        const c = byId.get(id);
+        if (c) bump(c, h.score, h.why);
+      }
     }
   }
 
@@ -372,8 +458,10 @@ export async function findCandidates(m: Mentions): Promise<{ text: string | null
     const lines = contactLines(t.contact);
     lines.push(`Why it came up: ${t.why.join(", ")}`);
     if (jl.size) {
-      lines.push("Jobs:");
-      for (const id of ids) if (jl.has(id)) lines.push(`- ${jl.get(id)}`);
+      lines.push("Jobs (newest first, cancelled last):");
+      ids.forEach((id, i) => {
+        if (jl.has(id)) lines.push(`- ${jl.get(id)}${i === 0 ? " (latest job)" : ""}`);
+      });
     }
     blocks.push(lines.join("\n"));
     list.push({
@@ -386,4 +474,67 @@ export async function findCandidates(m: Mentions): Promise<{ text: string | null
     });
   }
   return { text: blocks.join("\n\n"), list };
+}
+
+/* ---------------------------------------------------------------------------
+ * Jobs a memo action can be moved to, labelled so a person can tell them apart.
+ * Old imports have titles like "ServiceM8 job 1775430" or a pasted note, so the
+ * label leads with the number, the site and the status, and keeps the title short.
+ * ------------------------------------------------------------------------- */
+
+export interface JobChoice {
+  id: number;
+  number: number;
+  label: string;
+  detail: string;
+}
+
+const junkTitle = (t: string | null | undefined) =>
+  !t || /^servicem8 job \d+$/i.test(t.trim()) || /^untitled$/i.test(t.trim()) || /^pick ?up from:?$/i.test(t.trim());
+export const shortTitle = (t: string | null | undefined, max = 42) => {
+  if (junkTitle(t)) return "";
+  const clean = t!.replace(/\s+/g, " ").trim();
+  return clean.length > max ? `${clean.slice(0, max - 1).trimEnd()}…` : clean;
+};
+
+export async function jobChoicesFor(contactId: number | null, extra: (number | null)[] = []): Promise<JobChoice[]> {
+  const ids = new Set<number>();
+  if (contactId) for (const id of await jobsForContact(contactId, 20)) ids.add(id);
+  for (const id of extra) if (id) ids.add(id);
+  if (!ids.size) return [];
+  const rows = await db
+    .select({ job: schema.jobs, status: schema.jobStatuses.name, site: schema.sites })
+    .from(schema.jobs)
+    .leftJoin(schema.jobStatuses, eq(schema.jobStatuses.id, schema.jobs.statusId))
+    .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
+    .where(inArray(schema.jobs.id, [...ids]));
+  const dead = (r: (typeof rows)[number]) => (/^cancel/i.test(r.status ?? "") ? 1 : 0);
+  return rows
+    .sort((a, b) => dead(a) - dead(b) || b.job.number - a.job.number)
+    .map((r) => {
+      const title = shortTitle(r.job.title);
+      const where = [r.site?.address, r.site?.suburb].filter(Boolean).join(", ");
+      return {
+        id: r.job.id,
+        number: r.job.number,
+        label: `#${r.job.number}${title ? ` ${title}` : where ? ` ${where}` : ""}`,
+        detail: [r.status, title && where ? where : null, r.job.scheduledStart ? `install ${day(r.job.scheduledStart)}` : null]
+          .filter(Boolean)
+          .join(" · "),
+      };
+    });
+}
+
+/** A short "#4335 Hybrid to hall" for the action card. */
+export async function shortJobLabel(jobId: number | null) {
+  if (!jobId) return null;
+  const [r] = await db
+    .select({ job: schema.jobs, site: schema.sites })
+    .from(schema.jobs)
+    .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
+    .where(eq(schema.jobs.id, jobId));
+  if (!r) return null;
+  const title = shortTitle(r.job.title);
+  const where = [r.site?.address, r.site?.suburb].filter(Boolean).join(", ");
+  return `#${r.job.number}${title ? ` ${title}` : where ? ` ${where}` : ""}`;
 }

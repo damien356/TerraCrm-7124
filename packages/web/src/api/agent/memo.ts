@@ -234,6 +234,14 @@ export async function planMemo(input: PlanInput): Promise<MemoPlan> {
             `
       }
 
+      PICKING THE JOB
+      - jobId must be one of the jobs listed under the client you chose. Never
+        use a job listed under a different candidate.
+      - "The latest job", "his job", "the current job" with nothing more specific
+        means the job marked (latest job). If he names a product, room, suburb or
+        job number, pick the job that fits that instead.
+      - Leave jobId null when it is about the client in general.
+
       Installers: ${input.installers.length ? input.installers.join(", ") : "(none)"}
       Job statuses (id: name): ${input.statuses.map((s) => `${s.id}: ${s.name}`).join(", ")}
 

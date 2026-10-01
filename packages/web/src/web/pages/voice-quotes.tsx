@@ -42,8 +42,8 @@ function Recorder({ onProcessed }: { onProcessed: (result: unknown) => void }) {
   return (
     <Card>
       <CardHeader
-        title="New voice quote"
-        subtitle='Talk through the job like you would to Damien on site. Materials, stairs, anything with a dollar figure, say the customer&apos;s name if you know it.'
+        title="Quote only recorder"
+        subtitle="Makes a draft quote and nothing else. The Voice memo button does quotes too, plus notes, reminders, emails and bookings, so use that one day to day."
       />
       <div className="flex flex-col items-center gap-4 px-4 py-10">
         {rec.stage === "idle" || rec.stage === "error" ? (
@@ -295,11 +295,11 @@ export default function VoiceDraftsPage() {
       subtitle="Memos and quotes you've recorded, and anything still waiting on a tap"
       actions={
         <>
-          <Button variant="secondary" onClick={() => setQuoting((v) => !v)}>
-            <FileText className="size-4" /> {quoting ? "Hide voice quote" : "Voice quote"}
-          </Button>
           <Button onClick={() => open({ jobId: null, contactId: null })}>
             <Mic className="size-4" /> Voice memo
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setQuoting((v) => !v)} className="text-muted-foreground">
+            <FileText className="size-4" /> {quoting ? "Hide quote only recorder" : "Quote only recorder"}
           </Button>
         </>
       }

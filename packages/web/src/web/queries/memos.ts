@@ -111,6 +111,20 @@ export function useResolveClient() {
   return useMutation(orpc.memos.resolveClient.mutationOptions({ onSettled: invalidate }));
 }
 
+/** The settled client's jobs, for Change job on an action. Only fetched once the list is opened. */
+export function useMemoJobChoices(id: number, enabled: boolean) {
+  return useQuery(orpc.memos.jobChoices.queryOptions({ input: { id }, enabled, staleTime: 30_000 }));
+}
+export function useSetActionJob() {
+  const invalidate = useInvalidateAll();
+  return useMutation(orpc.memos.setActionJob.mutationOptions({ onSettled: invalidate }));
+}
+/** Fix what I heard: run the memo again from corrected words. */
+export function useRerunMemo() {
+  const invalidate = useInvalidateAll();
+  return useMutation(orpc.memos.rerun.mutationOptions({ onSettled: invalidate }));
+}
+
 /* ------------------------------ office tasks ------------------------------ */
 
 export function useOfficeTasks() {

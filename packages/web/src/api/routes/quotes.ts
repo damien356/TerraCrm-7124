@@ -5,6 +5,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
 import { sellExGstWithMarkup } from "../lib/pricing";
+import { suggestProducts } from "../agent/price";
 
 /**
  * Quotes are admin-only, end to end. Installers must never reach any procedure
@@ -36,6 +37,12 @@ export async function recalc(quoteId: number) {
     .where(eq(schema.quotes.id, quoteId));
 
   return { subtotal, gst, total };
+}
+
+/** "Andes Peak in Merida", the way it reads on the customer's quote. */
+function productLineName(p: { brand: string | null; range: string | null; colour: string | null }) {
+  const named = [p.brand, p.range].filter(Boolean).join(" ");
+  return p.colour ? (named ? `${named} in ${p.colour}` : p.colour) : named;
 }
 
 function round2(n: number) {
@@ -551,6 +558,101 @@ export const quotes = {
       }
 
       const totals = await recalc(before.quoteId);
+      return { item: row, totals };
+    }),
+
+  /**
+   * The handful of price book products closest to what a line says, for the
+   * Change product list. Reads the line's own words and, on a voice line,
+   * what was said.
+   */
+  suggestProducts: adminOnly.input(z.object({ itemId: z.number() })).handler(async ({ input }) => {
+    const [item] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, input.itemId));
+    if (!item) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
+    const rows = await suggestProducts(`${item.description} ${item.voicePhrase ?? ""}`, 6);
+    return rows
+      .filter((p) => p.id !== item.productId)
+      .map((p) => ({
+        id: p.id,
+        label: productLineName(p) || p.supplier,
+        supplier: p.supplier,
+        backing: p.backing,
+        unit: p.unit,
+        sellPrice: p.sellPrice,
+      }));
+  }),
+
+  /**
+   * Swap the product on a line in one tap: name, unit, sell and cost come off
+   * the price book, the quantity stays. On a voice line the pick is learned,
+   * so the same words find this product next time.
+   */
+  changeProduct: adminOnly
+    .input(z.object({ id: z.number(), productId: z.number() }))
+    .handler(async ({ input }) => {
+      const [before] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, input.id));
+      if (!before) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
+      const quote = await quoteOrThrow(before.quoteId);
+      if (quote.status !== "draft" && quote.status !== "needs_review")
+        throw new ORPCError("BAD_REQUEST", { message: "This quote has gone out. Revise it to change a product." });
+      const [product] = await db.select().from(schema.products).where(eq(schema.products.id, input.productId));
+      if (!product) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
+
+      const unitPrice = product.sellPrice ?? 0;
+      // Compare with the unit he said, not a wrong pick made a moment ago.
+      const said = before.flagReason?.match(/^Was ([\d.]+) (\S+), this product sells by/);
+      const saidUnit = said?.[2] ?? before.unit;
+      const unitClash = Boolean(product.unit && saidUnit && product.unit !== saidUnit);
+      const flagReason = unitClash
+        ? `Was ${said?.[1] ?? before.qty} ${saidUnit}, this product sells by ${product.unit}. Check the quantity.`
+        : unitPrice === 0
+          ? "That product has no sell price yet. Put the price in."
+          : null;
+
+      const [row] = await db
+        .update(schema.quoteItems)
+        .set({
+          productId: product.id,
+          kind: product.category === "labour" ? "labour" : "supply",
+          description: productLineName(product) || product.sku || before.description,
+          unit: product.unit || before.unit,
+          unitPrice,
+          unitCost: product.costPrice ?? null,
+          total: round2(before.qty * unitPrice),
+          flagged: Boolean(flagReason),
+          flagReason,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.quoteItems.id, input.id))
+        .returning();
+
+      const totals = await recalc(before.quoteId);
+
+      // Next time he says the same thing, this is the pick. A failure here
+      // must not undo the swap he just made.
+      if (before.voicePhrase) {
+        await db
+          .insert(schema.voicePhraseProductMatches)
+          .values({ phrase: before.voicePhrase, productId: product.id, confirmCount: 1, lastConfirmedAt: new Date() })
+          .onConflictDoUpdate({
+            target: [schema.voicePhraseProductMatches.phrase, schema.voicePhraseProductMatches.productId],
+            set: { confirmCount: sql`${schema.voicePhraseProductMatches.confirmCount} + 1`, lastConfirmedAt: new Date(), updatedAt: new Date() },
+          })
+          .catch((e: unknown) => console.error("[quotes] could not learn product pick:", e));
+        // And the one he swapped away from was wrong for these words.
+        if (before.productId && before.productId !== product.id) {
+          const wrong = and(
+            eq(schema.voicePhraseProductMatches.phrase, before.voicePhrase),
+            eq(schema.voicePhraseProductMatches.productId, before.productId),
+          );
+          await db
+            .update(schema.voicePhraseProductMatches)
+            .set({ confirmCount: sql`${schema.voicePhraseProductMatches.confirmCount} - 1`, updatedAt: new Date() })
+            .where(wrong)
+            .then(() => db.delete(schema.voicePhraseProductMatches).where(and(wrong, sql`${schema.voicePhraseProductMatches.confirmCount} <= 0`)))
+            .catch((e: unknown) => console.error("[quotes] could not unlearn product pick:", e));
+        }
+      }
       return { item: row, totals };
     }),
 

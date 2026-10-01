@@ -10,7 +10,11 @@ import { findMentions, noDashes, planMemo, type MemoAction, type MemoPlan } from
 import {
   buildCardContext,
   findCandidates,
+  forgetNames,
+  jobChoicesFor,
   jobCustomer,
+  jobsForContact,
+  shortJobLabel,
   localToDate,
   nowStrings,
   sayLocal,
@@ -59,6 +63,10 @@ export interface StoredAction extends MemoAction {
   bookingLine: string | null;
   /** Human label for the job the action is on. */
   jobLabel: string | null;
+  /** The record this action made, so it can be moved to another job or taken back on a redo. */
+  ref?: { table: "activity_log" | "office_tasks" | "quotes"; id: number } | null;
+  /** Set by hand: this one is about the client, on no job. */
+  noJob?: boolean;
 }
 
 export interface StoredMemo {
@@ -67,7 +75,9 @@ export interface StoredMemo {
   summary: string;
   contextJobId: number | null;
   newJobId: number | null;
-  client: MemoPlan["client"] & { name: string | null; candidates: Candidate[] };
+  client: MemoPlan["client"] & { name: string | null; candidates: Candidate[]; byHand?: boolean };
+  /** What it first heard, when the words have since been fixed by hand. */
+  heardAs?: string | null;
   actions: StoredAction[];
 }
 
@@ -113,11 +123,7 @@ async function profileFor(actor: Actor) {
   return p ?? null;
 }
 
-async function jobLabel(jobId: number | null) {
-  if (!jobId) return null;
-  const [j] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, jobId));
-  return j ? `#${j.number}${j.title ? ` ${j.title}` : ""}` : null;
-}
+const jobLabel = shortJobLabel;
 
 /** The client is settled enough to act on. */
 const clientReady = (m: StoredMemo) => m.client.kind === "context" || m.client.kind === "existing" || m.client.kind === "none";
@@ -128,7 +134,7 @@ const clientReady = (m: StoredMemo) => m.client.kind === "context" || m.client.k
  * rest of its actions on that job, so the email goes on the new job's thread.
  */
 const targetJob = (m: StoredMemo, a: StoredAction) =>
-  a.jobId ?? (a.onNewJob ? m.newJobId : null) ?? m.contextJobId ?? m.newJobId ?? null;
+  a.noJob ? null : (a.jobId ?? (a.onNewJob ? m.newJobId : null) ?? m.contextJobId ?? m.newJobId ?? null);
 
 /* ---------------------------------------------------------------------------
  * Executing the plan
@@ -181,6 +187,7 @@ async function runOne(captureId: number, m: StoredMemo, a: StoredAction, actor: 
           createdByName: actor.name,
         })
         .returning();
+      a.ref = row ? { table: "office_tasks", id: row.id } : null;
       a.state = "done";
       a.resultLabel = remindAt ? `Reminder set for ${sayLocal(remindAt)}` : a.dueDate ? `Task added, due ${a.dueDate}` : "Task added";
       a.resultHref = "/";
@@ -192,42 +199,54 @@ async function runOne(captureId: number, m: StoredMemo, a: StoredAction, actor: 
       const jobId = targetJob(m, a);
       const body = a.detail || transcript;
       if (jobId) {
-        await db.insert(schema.activityLog).values({
-          jobId,
-          contactId: contact?.id ?? null,
-          entityType: "job",
-          entityId: jobId,
-          action: "note",
-          detail: body,
-          actorName: actor.name,
-          actorRole: actor.role,
-        });
+        const [row] = await db
+          .insert(schema.activityLog)
+          .values({
+            jobId,
+            contactId: contact?.id ?? null,
+            entityType: "job",
+            entityId: jobId,
+            action: "note",
+            detail: body,
+            actorName: actor.name,
+            actorRole: actor.role,
+          })
+          .returning();
+        a.ref = row ? { table: "activity_log", id: row.id } : null;
         a.state = "done";
         a.resultLabel = `Note added to job ${a.jobLabel ?? ""}`.trim();
         a.resultHref = `/jobs/${jobId}`;
       } else if (contact) {
-        await db.insert(schema.activityLog).values({
-          contactId: contact.id,
-          entityType: "contact",
-          entityId: contact.id,
-          action: "note",
-          detail: body,
-          actorName: actor.name,
-          actorRole: actor.role,
-        });
+        const [row] = await db
+          .insert(schema.activityLog)
+          .values({
+            contactId: contact.id,
+            entityType: "contact",
+            entityId: contact.id,
+            action: "note",
+            detail: body,
+            actorName: actor.name,
+            actorRole: actor.role,
+          })
+          .returning();
+        a.ref = row ? { table: "activity_log", id: row.id } : null;
         a.state = "done";
         a.resultLabel = `Note added to ${fullName(contact)}`;
         a.resultHref = `/clients/${contact.id}`;
       } else {
         // Nobody to hang it on, so it becomes an office task rather than vanishing.
         const profile = await profileFor(actor);
-        await db.insert(schema.officeTasks).values({
-          title: body.slice(0, 120),
-          detail: body,
-          assignedProfileId: profile?.id ?? null,
-          assignedName: actor.name,
-          createdByName: actor.name,
-        });
+        const [row] = await db
+          .insert(schema.officeTasks)
+          .values({
+            title: body.slice(0, 120),
+            detail: body,
+            assignedProfileId: profile?.id ?? null,
+            assignedName: actor.name,
+            createdByName: actor.name,
+          })
+          .returning();
+        a.ref = row ? { table: "office_tasks", id: row.id } : null;
         a.state = "done";
         a.resultLabel = "No client, so it was added as a task";
         a.resultHref = "/";
@@ -236,6 +255,14 @@ async function runOne(captureId: number, m: StoredMemo, a: StoredAction, actor: 
     }
 
     case "create_job": {
+      // A redo of a memo that already made its job keeps that job.
+      if (m.newJobId) {
+        a.state = "done";
+        a.jobLabel = await jobLabel(m.newJobId);
+        a.resultLabel = `Job ${a.jobLabel ?? ""} already made`.trim();
+        a.resultHref = `/jobs/${m.newJobId}`;
+        return;
+      }
       let siteId: number | null = null;
       if (contact?.address) {
         const [site] = await db.select().from(schema.sites).where(eq(schema.sites.contactId, contact.id)).limit(1);
@@ -268,7 +295,7 @@ async function runOne(captureId: number, m: StoredMemo, a: StoredAction, actor: 
       a.state = "done";
       a.resultLabel = `Job #${job.number} created`;
       a.resultHref = `/jobs/${job.id}`;
-      a.jobLabel = `#${job.number}${job.title ? ` ${job.title}` : ""}`;
+      a.jobLabel = await jobLabel(job.id);
       await db.update(schema.voiceQuoteCaptures).set({ jobId: job.id }).where(eq(schema.voiceQuoteCaptures.id, captureId));
       return;
     }
@@ -279,6 +306,7 @@ async function runOne(captureId: number, m: StoredMemo, a: StoredAction, actor: 
         { contactId: contact?.id ?? null, companyId: null, jobId: targetJob(m, a) },
         actor,
       );
+      a.ref = { table: "quotes", id: built.quote.id };
       a.state = "done";
       a.resultLabel =
         `Quote #${built.quote.number} drafted, ${built.lineCount} line${built.lineCount === 1 ? "" : "s"}` +
@@ -351,6 +379,102 @@ async function runActions(captureId: number, m: StoredMemo, actor: Actor, transc
   }
 }
 
+
+/* ---------------------------------------------------------------------------
+ * Keeping every action on the right job
+ * ------------------------------------------------------------------------- */
+
+/** Jobs the settled client can have actions on: their own, the card's, the one this memo made. */
+async function allowedJobs(m: StoredMemo) {
+  const ids = new Set<number>();
+  if (m.contextJobId) ids.add(m.contextJobId);
+  if (m.newJobId) ids.add(m.newJobId);
+  const own = m.client.contactId ? await jobsForContact(m.client.contactId, 60) : [];
+  for (const id of own) ids.add(id);
+  return { ids, latest: own[0] ?? null };
+}
+
+/**
+ * The model reads several candidates' jobs on a global memo and once put
+ * Michael Ciobanu's email on another Michael's job. Any job that is not the
+ * settled client's is swapped for that client's latest job (it meant a job),
+ * or dropped when they have none. Returns the actions it moved.
+ */
+async function fitJobs(m: StoredMemo) {
+  if (!clientReady(m) || !m.client.contactId) return [] as StoredAction[];
+  const { ids, latest } = await allowedJobs(m);
+  const moved: StoredAction[] = [];
+  for (const a of m.actions) {
+    if (a.state === "dismissed" || a.state === "sent") continue;
+    if (a.jobId && !ids.has(a.jobId)) {
+      a.jobId = latest;
+      a.jobLabel = await jobLabel(targetJob(m, a));
+      moved.push(a);
+    }
+  }
+  return moved;
+}
+
+/** Moves what a done action made onto the job (or client record) it now points at. */
+async function moveMade(m: StoredMemo, a: StoredAction) {
+  if (!a.ref || a.state !== "done") return;
+  const jobId = targetJob(m, a);
+  const contactId = clientReady(m) ? m.client.contactId : null;
+  if (a.ref.table === "activity_log") {
+    await db
+      .update(schema.activityLog)
+      .set(
+        jobId
+          ? { jobId, contactId, entityType: "job", entityId: jobId }
+          : contactId
+            ? { jobId: null, contactId, entityType: "contact", entityId: contactId }
+            : { jobId: null },
+      )
+      .where(eq(schema.activityLog.id, a.ref.id));
+    a.resultLabel = jobId ? `Note added to job ${a.jobLabel ?? ""}`.trim() : `Note added to ${m.client.name ?? "the client"}`;
+    a.resultHref = jobId ? `/jobs/${jobId}` : contactId ? `/clients/${contactId}` : a.resultHref;
+  } else if (a.ref.table === "office_tasks") {
+    await db.update(schema.officeTasks).set({ jobId, updatedAt: new Date() }).where(eq(schema.officeTasks.id, a.ref.id));
+  } else if (a.ref.table === "quotes") {
+    await db
+      .update(schema.quotes)
+      .set({ jobId, ...(contactId ? { contactId } : {}), updatedAt: new Date() })
+      .where(eq(schema.quotes.id, a.ref.id));
+  }
+}
+
+/**
+ * A redo takes back what the first go made, where that is safe: notes,
+ * tasks, reminders and a quote nobody has sent yet. A job it made is kept and
+ * reused. Messages already sent stay sent and stay on the list.
+ */
+async function takeBack(m: StoredMemo) {
+  const kept: StoredAction[] = [];
+  for (const a of m.actions) {
+    if (a.state === "sent") {
+      kept.push(a);
+      continue;
+    }
+    if (a.state !== "done") continue;
+    if (a.kind === "create_job") continue; // newJobId carries it
+    if (!a.ref) {
+      kept.push(a); // made before refs were kept, so it cannot be found to undo
+      continue;
+    }
+    if (a.ref.table === "activity_log") await db.delete(schema.activityLog).where(eq(schema.activityLog.id, a.ref.id));
+    else if (a.ref.table === "office_tasks") await db.delete(schema.officeTasks).where(eq(schema.officeTasks.id, a.ref.id));
+    else if (a.ref.table === "quotes") {
+      const [q] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, a.ref.id));
+      if (q && q.status === "draft") {
+        await db.delete(schema.quoteItems).where(eq(schema.quoteItems.quoteId, q.id));
+        await db.update(schema.voiceQuoteCaptures).set({ quoteId: null }).where(eq(schema.voiceQuoteCaptures.quoteId, q.id));
+        await db.delete(schema.quotes).where(eq(schema.quotes.id, q.id));
+      } else kept.push(a);
+    }
+  }
+  return kept;
+}
+
 const startInput = z.object({
   audioKey: z.string().min(1),
   durationSeconds: z.number().nullable().optional(),
@@ -367,97 +491,132 @@ async function runMemo(captureId: number, input: z.infer<typeof startInput>, act
       .update(schema.voiceQuoteCaptures)
       .set({ transcript, status: "routing", updatedAt: new Date() })
       .where(eq(schema.voiceQuoteCaptures.id, captureId));
+    await routeMemo(captureId, transcript, { jobId: input.jobId ?? null, contactId: input.contactId ?? null }, actor);
+  } catch (err) {
+    await failMemo(captureId, err);
+  }
+}
 
-    const fromCard = Boolean(input.jobId || input.contactId);
-    let contextText: string | null = null;
-    let cardContact: typeof schema.contacts.$inferSelect | null = null;
-    let candidates: Candidate[] = [];
-    let candidateText: string | null = null;
+async function failMemo(captureId: number, err: unknown) {
+  const message = err instanceof Error ? err.message : "Something went wrong with that memo.";
+  console.error(`[memos] capture ${captureId} failed:`, err);
+  await db
+    .update(schema.voiceQuoteCaptures)
+    .set({ status: "failed", errorMessage: message, updatedAt: new Date() })
+    .where(eq(schema.voiceQuoteCaptures.id, captureId));
+}
 
-    if (fromCard) {
-      const ctx = await buildCardContext({ jobId: input.jobId ?? null, contactId: input.contactId ?? null });
-      contextText = ctx.text;
-      cardContact = ctx.contact;
-    } else {
-      const mentions = await findMentions(transcript);
-      const found = await findCandidates(mentions);
-      candidates = found.list;
-      candidateText = found.text;
+/** What a redo carries over from the first go. */
+interface Carry {
+  /** The client he picked or created by hand. Kept, and read like a card. */
+  client: StoredMemo["client"] | null;
+  newJobId: number | null;
+  kept: StoredAction[];
+  heardAs: string | null;
+  source: StoredMemo["source"];
+}
+
+/** Words to actions: find who, plan, run. Shared by a fresh recording and a redo. */
+async function routeMemo(
+  captureId: number,
+  transcript: string,
+  link: { jobId: number | null; contactId: number | null },
+  actor: Actor,
+  carry?: Carry,
+) {
+  const keepClient = carry?.client && carry.client.contactId ? carry.client : null;
+  const fromCard = Boolean(link.jobId || link.contactId);
+  let contextText: string | null = null;
+  let cardContact: typeof schema.contacts.$inferSelect | null = null;
+  let candidates: Candidate[] = [];
+  let candidateText: string | null = null;
+
+  if (fromCard || keepClient) {
+    const ctx = await buildCardContext({ jobId: link.jobId, contactId: link.contactId ?? keepClient?.contactId ?? null });
+    contextText = ctx.text;
+    cardContact = ctx.contact;
+  } else {
+    const mentions = await findMentions(transcript);
+    const found = await findCandidates(mentions);
+    candidates = found.list;
+    candidateText = found.text;
+  }
+
+  const [installers, statuses] = await Promise.all([
+    db.select({ name: schema.installers.name }).from(schema.installers).where(eq(schema.installers.active, true)),
+    db
+      .select({ id: schema.jobStatuses.id, name: schema.jobStatuses.name })
+      .from(schema.jobStatuses)
+      .where(eq(schema.jobStatuses.active, true)),
+  ]);
+
+  const plan = await planMemo({
+    transcript,
+    ...nowStrings(),
+    speakerName: actor.name || "Damien",
+    context: contextText,
+    candidates: candidateText,
+    installers: installers.map((i) => i.name),
+    statuses,
+  });
+
+  // The card, or the client he picked by hand, wins over anything the model thinks it heard.
+  let client: StoredMemo["client"];
+  if (keepClient && !fromCard) {
+    client = { ...keepClient, kind: "existing", name: cardContact ? fullName(cardContact) : keepClient.name };
+  } else if (fromCard) {
+    client = {
+      ...plan.client,
+      kind: cardContact ? "context" : "none",
+      contactId: cardContact?.id ?? null,
+      name: cardContact ? fullName(cardContact) : null,
+      candidates: [],
+    };
+  } else {
+    let kind = plan.client.kind === "context" ? "unsure" : plan.client.kind;
+    let contactId = plan.client.contactId;
+    // Only a contact that was actually offered can be picked.
+    if ((kind === "existing" || kind === "unsure") && !candidates.some((c) => c.id === contactId)) {
+      kind = candidates.length ? "unsure" : "none";
+      contactId = candidates[0]?.id ?? null;
     }
+    const picked = candidates.find((c) => c.id === contactId);
+    client = { ...plan.client, kind, contactId, name: picked?.name ?? null, candidates };
+  }
 
-    const [installers, statuses] = await Promise.all([
-      db.select({ name: schema.installers.name }).from(schema.installers).where(eq(schema.installers.active, true)),
-      db
-        .select({ id: schema.jobStatuses.id, name: schema.jobStatuses.name })
-        .from(schema.jobStatuses)
-        .where(eq(schema.jobStatuses.active, true)),
-    ]);
-
-    const plan = await planMemo({
-      transcript,
-      ...nowStrings(),
-      speakerName: actor.name || "Damien",
-      context: contextText,
-      candidates: candidateText,
-      installers: installers.map((i) => i.name),
-      statuses,
-    });
-
-    // The card wins over anything the model thinks it heard.
-    let client: StoredMemo["client"];
-    if (fromCard) {
-      client = {
-        ...plan.client,
-        kind: cardContact ? "context" : "none",
-        contactId: cardContact?.id ?? null,
-        name: cardContact ? fullName(cardContact) : null,
-        candidates: [],
-      };
-    } else {
-      let kind = plan.client.kind === "context" ? "unsure" : plan.client.kind;
-      let contactId = plan.client.contactId;
-      // Only a contact that was actually offered can be picked.
-      if ((kind === "existing" || kind === "unsure") && !candidates.some((c) => c.id === contactId)) {
-        kind = candidates.length ? "unsure" : "none";
-        contactId = candidates[0]?.id ?? null;
-      }
-      const picked = candidates.find((c) => c.id === contactId);
-      client = { ...plan.client, kind, contactId, name: picked?.name ?? null, candidates };
-    }
-
-    const memo: StoredMemo = {
-      kind: "memo",
-      source: input.jobId ? "job" : input.contactId ? "contact" : "global",
-      summary: noDashes(plan.summary),
-      contextJobId: input.jobId ?? null,
-      newJobId: null,
-      client,
-      actions: plan.actions.map((a, i) => ({
+  const kept = carry?.kept ?? [];
+  const memo: StoredMemo = {
+    kind: "memo",
+    source: carry?.source ?? (link.jobId ? "job" : link.contactId ? "contact" : "global"),
+    summary: noDashes(plan.summary),
+    contextJobId: link.jobId,
+    newJobId: carry?.newJobId ?? null,
+    client,
+    heardAs: carry?.heardAs ?? null,
+    actions: [
+      ...kept.map((a, i) => ({ ...a, id: i })),
+      ...plan.actions.map((a, i) => ({
         ...a,
-        id: i,
-        state: "pending",
+        id: kept.length + i,
+        state: "pending" as const,
         resultLabel: null,
         resultHref: null,
         error: null,
         to: null,
         bookingLine: null,
         jobLabel: null,
+        ref: null,
       })),
-    };
+    ],
+  };
 
-    await runActions(captureId, memo, actor, transcript);
-    await saveMemo(captureId, memo, {
-      status: "ready",
-      contactId: client.contactId && clientReady(memo) ? client.contactId : null,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Something went wrong with that memo.";
-    console.error(`[memos] capture ${captureId} failed:`, err);
-    await db
-      .update(schema.voiceQuoteCaptures)
-      .set({ status: "failed", errorMessage: message, updatedAt: new Date() })
-      .where(eq(schema.voiceQuoteCaptures.id, captureId));
-  }
+  await fitJobs(memo);
+  await runActions(captureId, memo, actor, transcript);
+  await saveMemo(captureId, memo, {
+    status: "ready",
+    errorMessage: null,
+    contactId: client.contactId && clientReady(memo) ? client.contactId : null,
+  });
 }
 
 function view(row: typeof schema.voiceQuoteCaptures.$inferSelect) {
@@ -701,23 +860,137 @@ export const memos = {
     )
     .handler(async ({ input, context }) => {
       const { row, memo } = await loadMemo(input.id);
+      const before = memo.client.contactId;
       if (input.create) {
         const mobile = input.create.mobile ? (normaliseMobile(input.create.mobile) ?? input.create.mobile) : null;
         const c = await createContact({ ...input.create, mobile, source: "phone" }, context.actor);
         if (!c) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "The client was not created." });
-        memo.client = { ...memo.client, kind: "existing", contactId: c.id, name: fullName(c) };
+        memo.client = { ...memo.client, kind: "existing", contactId: c.id, name: fullName(c), byHand: true };
+        forgetNames();
       } else if (input.contactId) {
         const c = await contactById(input.contactId);
         if (!c) throw new ORPCError("NOT_FOUND", { message: "Client not found." });
-        memo.client = { ...memo.client, kind: "existing", contactId: c.id, name: fullName(c) };
+        memo.client = { ...memo.client, kind: "existing", contactId: c.id, name: fullName(c), byHand: true };
       } else if (input.none) {
-        memo.client = { ...memo.client, kind: "none", contactId: null, name: null };
+        memo.client = { ...memo.client, kind: "none", contactId: null, name: null, byHand: true };
       } else {
         throw new ORPCError("BAD_REQUEST", { message: "Pick a client, create one, or say none." });
       }
+      // A different person means a different set of jobs. Anything already
+      // made for the wrong one follows the change.
+      await fitJobs(memo);
+      if (before !== memo.client.contactId) for (const a of memo.actions) await moveMade(memo, a);
       await runActions(input.id, memo, context.actor, row.transcript);
       await saveMemo(input.id, memo, { contactId: memo.client.contactId });
       return { ok: true, contactId: memo.client.contactId };
+    }),
+
+  /** The settled client's jobs, newest first, for the Change job list on each action. */
+  jobChoices: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+    const { memo } = await loadMemo(input.id);
+    // An unsure match still lists its best guess's jobs; picking the client re-fits them anyway.
+    const contactId = memo.client.kind === "new" || memo.client.kind === "none" ? null : memo.client.contactId;
+    return jobChoicesFor(contactId, [memo.contextJobId, memo.newJobId]);
+  }),
+
+  /**
+   * Put one action on a different job, or on the client record (jobId null).
+   * Works before and after: a draft just changes where it will go, a note or
+   * reminder already made is moved.
+   */
+  setActionJob: adminOnly
+    .input(actionRef.extend({ jobId: z.number().nullable() }))
+    .handler(async ({ input }) => {
+      const { memo } = await loadMemo(input.id);
+      const a = actionOf(memo, input.actionId);
+      if (a.state === "sent") throw new ORPCError("BAD_REQUEST", { message: "That one has already gone, so it can't move." });
+      if (a.kind === "create_job") throw new ORPCError("BAD_REQUEST", { message: "That is the job itself." });
+      if (input.jobId) {
+        const [job] = await db.select({ id: schema.jobs.id }).from(schema.jobs).where(eq(schema.jobs.id, input.jobId));
+        if (!job) throw new ORPCError("NOT_FOUND", { message: "That job no longer exists." });
+        // Same rule as the model: only this client's jobs (or the card's / new job).
+        if (memo.client.contactId && memo.client.kind !== "new" && memo.client.kind !== "none") {
+          const { ids } = await allowedJobs(memo);
+          if (!ids.has(input.jobId))
+            throw new ORPCError("BAD_REQUEST", { message: "That job belongs to a different client." });
+        }
+      }
+      a.jobId = input.jobId;
+      a.onNewJob = input.jobId != null && input.jobId === memo.newJobId;
+      // Without this, no job would fall back to the card's job or the new one.
+      a.noJob = input.jobId === null;
+      a.jobLabel = input.jobId ? await jobLabel(input.jobId) : null;
+      if (a.kind === "schedule" && a.bookingLine) {
+        const [job] = input.jobId ? await db.select().from(schema.jobs).where(eq(schema.jobs.id, input.jobId)) : [];
+        a.bookingLine = a.bookingLine.replace(/(?:^|\s)#?@?\d{3,}(?=\s|$)/, job ? ` ${job.number}` : "").trim();
+        if (job && !a.bookingLine.includes(String(job.number))) a.bookingLine = `${a.bookingLine} ${job.number}`.trim();
+      }
+      await moveMade(memo, a);
+      await saveMemo(input.id, memo);
+      return { ok: true, jobLabel: a.jobLabel };
+    }),
+
+  /**
+   * Fix what I heard: run the memo again from corrected words, no new
+   * recording. Takes back the notes, reminders and draft quote the first go
+   * made, keeps any job it made and anything already sent.
+   */
+  rerun: adminOnly
+    .input(z.object({ id: z.number(), transcript: z.string().trim().min(3).max(4000) }))
+    .handler(async ({ input, context }) => {
+      const [row] = await db.select().from(schema.voiceQuoteCaptures).where(eq(schema.voiceQuoteCaptures.id, input.id));
+      if (!row) throw new ORPCError("NOT_FOUND", { message: "Memo not found" });
+      if (row.status === "transcribing" || row.status === "routing")
+        throw new ORPCError("BAD_REQUEST", { message: "Still working on that one." });
+      if (!isMemo(row.extractedJson)) throw new ORPCError("BAD_REQUEST", { message: "That one is a voice quote, not a memo." });
+      // A memo that failed before it had a plan still gets a redo from typed words.
+      const memo: StoredMemo = readMemo(row) ?? {
+        kind: "memo",
+        source: row.jobId ? "job" : row.contactId ? "contact" : "global",
+        summary: "",
+        contextJobId: row.jobId,
+        newJobId: null,
+        client: {
+          kind: row.contactId ? "context" : "none",
+          contactId: row.contactId,
+          name: null,
+          candidates: [],
+          firstName: null,
+          lastName: null,
+          mobile: null,
+          email: null,
+          address: null,
+          suburb: null,
+          postcode: null,
+          notes: null,
+        },
+        heardAs: null,
+        actions: [],
+      };
+      const kept = await takeBack(memo);
+      const carry: Carry = {
+        client: memo.client.byHand && memo.client.contactId ? memo.client : null,
+        newJobId: memo.newJobId,
+        kept,
+        heardAs: memo.heardAs ?? row.transcript,
+        source: memo.source,
+      };
+      await db
+        .update(schema.voiceQuoteCaptures)
+        .set({
+          transcript: input.transcript,
+          status: "routing",
+          errorMessage: null,
+          extractedJson: JSON.stringify({ ...memo, actions: [] }),
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.voiceQuoteCaptures.id, input.id));
+      const link = {
+        jobId: memo.source === "job" ? memo.contextJobId : null,
+        contactId: memo.source === "contact" ? memo.client.contactId : null,
+      };
+      routeMemo(input.id, input.transcript, link, context.actor, carry).catch((err) => failMemo(input.id, err));
+      return { ok: true };
     }),
 
   /** Customer on a job, for the card buttons to label themselves. */

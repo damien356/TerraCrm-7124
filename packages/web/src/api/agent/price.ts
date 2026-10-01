@@ -1,4 +1,4 @@
-import { eq, or, like, desc } from "drizzle-orm";
+import { and, eq, or, like, desc, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { sellExGst } from "../lib/pricing";
@@ -146,9 +146,120 @@ async function findLearnedProduct(phraseKey: string): Promise<ProductRow | null>
     .from(schema.voicePhraseProductMatches)
     .innerJoin(schema.products, eq(schema.products.id, schema.voicePhraseProductMatches.productId))
     .where(eq(schema.voicePhraseProductMatches.phrase, phraseKey))
-    .orderBy(desc(schema.voicePhraseProductMatches.confirmCount))
+    .orderBy(desc(schema.voicePhraseProductMatches.confirmCount), desc(schema.voicePhraseProductMatches.lastConfirmedAt))
     .limit(1);
   return rows[0]?.product ?? null;
+}
+
+/* ---------------------------------------------------------------------------
+ * Who he named, and what the line should read when nothing in the book fits.
+ * ------------------------------------------------------------------------- */
+
+/** Words that say nothing about which supplier: "Advantage Flooring supplier" is Advantage. */
+const GENERIC = new Set(["flooring", "floors", "floor", "supplier", "suppliers", "carpets", "carpet", "floorcoverings", "the", "and", "from"]);
+const core = (s: string) => normalise(s).split(" ").filter((w) => w && !GENERIC.has(w));
+
+function sameWord(a: string, b: string) {
+  if (a === b) return true;
+  if (a.length >= 5 && b.length >= 5 && (a.startsWith(b) || b.startsWith(a))) return true;
+  return false;
+}
+
+/** The supplier he named, if it is one Terra buys from (whether or not it has products loaded). */
+async function namedSupplier(hint: string | null): Promise<{ name: string; productCount: number } | null> {
+  if (!hint) return null;
+  const said = core(hint);
+  if (!said.length) return null;
+  const [table, inBook] = await Promise.all([
+    db.select({ name: schema.suppliers.name }).from(schema.suppliers),
+    db
+      .select({ name: schema.products.supplier, n: sql<number>`count(*)` })
+      .from(schema.products)
+      .where(eq(schema.products.active, true))
+      .groupBy(schema.products.supplier),
+  ]);
+  const counts = new Map(inBook.map((r) => [r.name, Number(r.n)]));
+  const names = [...new Set([...table.map((t) => t.name), ...counts.keys()])];
+  for (const name of names) {
+    const words = core(name);
+    if (words.length && words.every((w) => said.some((x) => sameWord(w, x)))) return { name, productCount: counts.get(name) ?? 0 };
+  }
+  return null;
+}
+
+const titleCase = (s: string) => s.replace(/\b([a-z])/g, (c) => c.toUpperCase());
+
+/** "Advantage Flooring Hip Hop in Winter", built from what he said, never "43 linear metres of carpet". */
+function spokenProductName(line: Extraction["lines"][number], supplier: string | null) {
+  const parts = [supplier ?? line.supplierHint, line.brandHint, line.rangeHint].filter(Boolean).map((x) => titleCase(String(x).trim()));
+  const named = [...new Set(parts)].join(" ");
+  const colour = line.colourHint ? titleCase(line.colourHint.trim()) : "";
+  if (named && colour) return `${named} in ${colour}`;
+  return named || colour || null;
+}
+
+/**
+ * The closest products in the book to a spoken line, best first. Feeds the
+ * "Change product" list on a quote line, so the office picks from a handful
+ * of real options instead of scrolling four thousand.
+ */
+export async function suggestProducts(phrase: string, limit = 6) {
+  const words = normalise(phrase)
+    .split(" ")
+    .filter((w) => w.length > 2 && !/^\d+$/.test(w) && !["linear", "metres", "meters", "square", "colour", "color", "of", "got"].includes(w))
+    .filter((w) => !GENERIC.has(w));
+  if (!words.length) return [];
+  const rows = await db
+    .select()
+    .from(schema.products)
+    .where(
+      and(
+        eq(schema.products.active, true),
+        or(
+          ...words.map((w) =>
+            or(
+              like(schema.products.supplier, `%${w}%`),
+              like(schema.products.brand, `%${w}%`),
+              like(schema.products.range, `%${w}%`),
+              like(schema.products.colour, `%${w}%`),
+            ),
+          ),
+        ),
+      ),
+    )
+    .limit(800);
+  const scored = rows.map((p) => {
+    const range = normalise(p.range);
+    const colour = normalise(p.colour);
+    const who = normalise(`${p.supplier} ${p.brand}`);
+    let score = 0;
+    for (const w of words) {
+      if (range.split(" ").includes(w)) score += 3;
+      else if (range.includes(w)) score += 1.5;
+      if (colour.split(" ").includes(w)) score += 2;
+      else if (colour.includes(w)) score += 1;
+      if (who.split(" ").includes(w)) score += 1;
+    }
+    return { p, score };
+  });
+  return scored
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((x) => x.p);
+}
+
+const NOT_PRODUCT = new Set([
+  "linear", "lineal", "metre", "metres", "meter", "meters", "square", "sqm", "lm", "m2", "m", "of", "the", "a",
+  "colour", "color", "supplier", "got", "about", "roughly", "and", "in",
+]);
+/** The product-naming words of a line, for remembering a pick. */
+export function learnKey(line: Pick<Extraction["lines"][number], "supplierHint" | "brandHint" | "rangeHint" | "colourHint" | "spokenDescription">) {
+  const named = [line.supplierHint, line.brandHint, line.rangeHint, line.colourHint].filter(Boolean).join(" ");
+  return normalise(named || line.spokenDescription)
+    .split(" ")
+    .filter((w) => w && !/^\d+$/.test(w) && !NOT_PRODUCT.has(w))
+    .join(" ");
 }
 
 async function priceMaterialLine(line: Extraction["lines"][number]): Promise<PricedLine> {
@@ -163,7 +274,10 @@ async function priceMaterialLine(line: Extraction["lines"][number]): Promise<Pri
   const qty = line.qty;
   const unit = line.unit ?? "m2";
   const spoken = line.spokenDescription ?? "Material (unspecified)";
-  const phraseKey = normalise(spoken);
+  // What gets learned is WHICH product he named, not how much of it: the
+  // key leaves out quantities and units, so "43 lm of Hip Hop in Winter" and
+  // "20 lm of Hip Hop in Winter" teach and find the same pick.
+  const phraseKey = learnKey(line);
 
   const learned = phraseKey ? await findLearnedProduct(phraseKey) : null;
   if (learned) {
@@ -182,19 +296,41 @@ async function priceMaterialLine(line: Extraction["lines"][number]): Promise<Pri
     };
   }
 
-  const match = await findBestProduct(hints);
+  const [match, supplier] = await Promise.all([findBestProduct(hints), namedSupplier(line.supplierHint)]);
+  const asSaid = spokenProductName(line, supplier?.name ?? null) ?? spoken;
 
-  if (!match) {
+  // He named a supplier and the best guess is someone else's product. That is
+  // never the right line (it once quoted Victoria Carpets Appleton for
+  // Advantage Flooring Hip Hop), so the line keeps his words and waits.
+  if (supplier && match && match.product.supplier !== supplier.name) {
     return {
       productId: null,
       kind: "supply",
-      description: spoken,
+      description: asSaid,
       qty,
       unit,
       unitPrice: 0,
       unitCost: null,
       flagged: true,
-      flagReason: "No matching product found in the price book. Priced at $0. Pick the right product and reprice before sending.",
+      flagReason:
+        supplier.productCount === 0
+          ? `${supplier.name} has no products in the price book yet, so this is priced at $0. Put the price in, or tap Change product.`
+          : `Couldn't find that in ${supplier.name}'s price list. Priced at $0. Tap Change product, or put the price in.`,
+      voicePhrase: phraseKey || null,
+    };
+  }
+
+  if (!match) {
+    return {
+      productId: null,
+      kind: "supply",
+      description: asSaid,
+      qty,
+      unit,
+      unitPrice: 0,
+      unitCost: null,
+      flagged: true,
+      flagReason: "Nothing like it in the price book. Priced at $0. Tap Change product, or put the price in.",
       voicePhrase: phraseKey || null,
     };
   }
@@ -206,7 +342,7 @@ async function priceMaterialLine(line: Extraction["lines"][number]): Promise<Pri
   return {
     productId: product.id,
     kind: product.category === "labour" ? "labour" : "supply",
-    description: confident ? description : `${spoken} (best guess: ${description})`,
+    description,
     qty,
     unit: product.unit || unit,
     unitPrice: product.sellPrice ?? 0,
@@ -214,7 +350,7 @@ async function priceMaterialLine(line: Extraction["lines"][number]): Promise<Pri
     flagged: !confident,
     flagReason: confident
       ? null
-      : `Damien said "${spoken}". Closest match in the price book is "${description}", but it is not a strong match. Check the product before sending.`,
+      : `Best guess from what was said ("${asSaid}"). Check it, or tap Change product.`,
     voicePhrase: confident ? null : phraseKey || null,
   };
 }

@@ -16,6 +16,7 @@ import {
   MessageSquare,
   Plus,
   Mic,
+  Pencil,
   RefreshCw,
   Send,
   Square,
@@ -37,7 +38,10 @@ import {
   useAddDispatchFromMemo,
   useBookFromMemo,
   useMarkBooked,
+  useMemoJobChoices,
+  useRerunMemo,
   useResolveClient,
+  useSetActionJob,
   useSendDraft,
   useStartMemo,
   useVoiceMemo,
@@ -275,7 +279,6 @@ function Examples({ inContext }: { inContext: boolean }) {
 
 export function MemoResult({ id, onAnother }: { id: number; onAnother?: () => void }) {
   const q = useVoiceMemo(id);
-  const [showTranscript, setShowTranscript] = React.useState(false);
   const d = q.data;
 
   if (!d || d.status === "transcribing" || d.status === "routing") {
@@ -297,7 +300,7 @@ export function MemoResult({ id, onAnother }: { id: number; onAnother?: () => vo
         <p className="flex items-center gap-1.5 text-sm text-destructive">
           <AlertTriangle className="size-4" /> {d.errorMessage ?? "That memo could not be worked out."}
         </p>
-        {d.transcript ? <p className="rounded-md bg-secondary px-3 py-2 text-sm text-muted-foreground">"{d.transcript}"</p> : null}
+        {d.transcript ? <HeardBox key={d.transcript} id={d.id} transcript={d.transcript} heardAs={null} /> : null}
         {onAnother ? (
           <Button variant="outline" onClick={onAnother}>
             <RefreshCw className="size-4" /> Record again
@@ -314,16 +317,10 @@ export function MemoResult({ id, onAnother }: { id: number; onAnother?: () => vo
     <div className="space-y-4">
       <div>
         <p className="text-[15px] font-semibold leading-snug">{m.summary || "Voice memo"}</p>
-        <button
-          type="button"
-          onClick={() => setShowTranscript((v) => !v)}
-          className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-        >
-          {showTranscript ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-          What you said
-        </button>
-        {showTranscript && d.transcript ? (
-          <p className="mt-1.5 rounded-md bg-secondary px-3 py-2 text-sm text-muted-foreground">"{d.transcript}"</p>
+        {d.transcript ? (
+          <div className="mt-2">
+            <HeardBox key={d.transcript} id={d.id} transcript={d.transcript} heardAs={m.heardAs ?? null} />
+          </div>
         ) : null}
       </div>
 
@@ -343,6 +340,86 @@ export function MemoResult({ id, onAnother }: { id: number; onAnother?: () => vo
             <Mic className="size-4" /> Another memo
           </Button>
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ------------------------------ what you said ------------------------------ */
+
+/**
+ * The words it heard, always on show, with one tap to fix a misheard name or
+ * product and run it again. No re-recording.
+ */
+function HeardBox({ id, transcript, heardAs }: { id: number; transcript: string; heardAs: string | null }) {
+  const rerun = useRerunMemo();
+  const [editing, setEditing] = React.useState(false);
+  const [text, setText] = React.useState(transcript);
+  const [error, setError] = React.useState<string | null>(null);
+  const changed = text.trim() !== transcript.trim() && text.trim().length > 2;
+  const box = React.useRef<HTMLTextAreaElement>(null);
+  React.useEffect(() => {
+    if (editing) box.current?.focus();
+  }, [editing]);
+
+  const redo = () => {
+    setError(null);
+    rerun
+      .mutateAsync({ id, transcript: text.trim() })
+      .then(() => setEditing(false))
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  };
+
+  return (
+    <div className="rounded-md bg-secondary/70 px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">What you said</span>
+        {!editing ? (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-[var(--gold-deep)] hover:bg-[var(--gold-wash)]"
+          >
+            <Pencil className="size-3.5" /> Fix what I heard
+          </button>
+        ) : null}
+      </div>
+      {editing ? (
+        <div className="mt-1.5 space-y-2">
+          <Textarea
+            ref={box}
+            rows={4}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            className="bg-card text-base sm:text-sm"
+          />
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            Fix any names or words, then Redo. The notes, reminders and draft quote from the first go are taken back and
+            worked out again. Anything already sent stays sent.
+          </p>
+          {error ? <p className="text-xs font-medium text-destructive">{error}</p> : null}
+          <div className="flex items-center gap-2">
+            <Button size="sm" disabled={!changed || rerun.isPending} onClick={redo}>
+              <RefreshCw className="size-3.5" /> {rerun.isPending ? "Redoing…" : "Redo"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setEditing(false);
+                setText(transcript);
+                setError(null);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-0.5 text-sm text-foreground/80">"{transcript}"</p>
+      )}
+      {heardAs && heardAs.trim() !== transcript.trim() ? (
+        <p className="mt-1 text-[11px] text-muted-foreground">First heard as "{heardAs}"</p>
       ) : null}
     </div>
   );
@@ -552,9 +629,14 @@ function ActionCard({ memoId, memo, action: a }: { memoId: number; memo: Memo; a
   const k = KIND[a.kind];
   const Icon = k.icon;
   const settled = a.state === "done" || a.state === "sent";
+  const [picking, setPicking] = React.useState(false);
+  const [moved, setMoved] = React.useState<string | null>(null);
+  // A job made by this memo is the job itself; a sent message has already gone.
+  const canMove =
+    a.kind !== "create_job" && a.state !== "sent" && a.state !== "dismissed" && a.state !== "waiting_client";
 
   return (
-    <div className={cn("rounded-md border px-3 py-2.5", settled ? "border-border bg-card" : "border-border bg-card")}>
+    <div className="rounded-md border border-border bg-card px-3 py-2.5">
       <div className="flex items-start gap-2.5">
         <span
           className={cn(
@@ -569,13 +651,118 @@ function ActionCard({ memoId, memo, action: a }: { memoId: number; memo: Memo; a
           {settled ? <Check className="size-3.5" /> : <Icon className="size-3.5" />}
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-baseline gap-x-2">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">{k.label}</span>
-            {a.jobLabel ? <span className="text-[11px] text-muted-foreground">Job {a.jobLabel}</span> : null}
+            {canMove ? (
+              <button
+                type="button"
+                onClick={() => setPicking((v) => !v)}
+                aria-expanded={picking}
+                className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-secondary/60 px-2 py-0.5 text-[11px] text-foreground transition-colors hover:border-[var(--gold)]"
+              >
+                <Briefcase className="size-3 shrink-0 text-muted-foreground" />
+                <span className="truncate">{a.jobLabel ? `Job ${a.jobLabel}` : "No job, client only"}</span>
+                <span className="shrink-0 font-semibold text-[var(--gold-deep)]">Change job</span>
+                {picking ? <ChevronDown className="size-3 shrink-0" /> : <ChevronRight className="size-3 shrink-0" />}
+              </button>
+            ) : a.jobLabel ? (
+              <span className="text-[11px] text-muted-foreground">Job {a.jobLabel}</span>
+            ) : null}
           </div>
+          {picking ? (
+            <JobPicker
+              memoId={memoId}
+              action={a}
+              onDone={(note) => {
+                setPicking(false);
+                setMoved(note);
+              }}
+            />
+          ) : null}
+          {moved ? <p className="mt-1 text-[11px] font-medium text-[var(--success)]">{moved}</p> : null}
           <ActionBody memoId={memoId} memo={memo} action={a} />
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Every job of the settled client, newest first, plus "client only". One tap moves the action. */
+function JobPicker({ memoId, action: a, onDone }: { memoId: number; action: Action; onDone: (note: string) => void }) {
+  const choices = useMemoJobChoices(memoId, true);
+  const setJob = useSetActionJob();
+  const [error, setError] = React.useState<string | null>(null);
+  const needsJob = a.kind === "schedule" || a.kind === "job_status";
+  const current = a.noJob ? null : (a.jobId ?? null);
+  const list = choices.data ?? [];
+
+  const pick = (jobId: number | null) => {
+    setError(null);
+    setJob
+      .mutateAsync({ id: memoId, actionId: a.id, jobId })
+      .then((r) => {
+        const where = jobId ? `job ${r.jobLabel ?? ""}`.trim() : "the client, no job";
+        onDone(
+          a.state === "done"
+            ? `Moved to ${where}.`
+            : a.kind === "email" || a.kind === "sms"
+              ? `Now on ${where}. Check the wording still suits it.`
+              : `Now on ${where}.`,
+        );
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  };
+
+  return (
+    <div className="mt-1.5 rounded-md border border-[var(--gold)]/50 bg-[var(--gold-wash)] p-2">
+      <p className="px-1 pb-1 text-xs font-semibold">Which job is this for?</p>
+      {choices.isLoading ? (
+        <div className="flex justify-center py-2">
+          <Spinner />
+        </div>
+      ) : list.length === 0 ? (
+        <p className="px-1 pb-1 text-xs text-muted-foreground">
+          No jobs on file for this client{needsJob ? "." : ", so it stays on their client record."}
+        </p>
+      ) : (
+        <div className="max-h-64 space-y-1 overflow-y-auto">
+          {list.map((j, i) => (
+            <button
+              key={j.id}
+              type="button"
+              disabled={setJob.isPending}
+              onClick={() => (j.id === current ? onDone("") : pick(j.id))}
+              className={cn(
+                "flex w-full items-center justify-between gap-2 rounded-md border bg-card px-2.5 py-2 text-left transition-colors hover:border-[var(--gold)] disabled:opacity-60",
+                j.id === current ? "border-[var(--gold)]" : "border-border",
+              )}
+            >
+              <span className="min-w-0">
+                <span className="block line-clamp-2 text-sm font-medium leading-snug">{j.label}</span>
+                {j.detail || i === 0 ? (
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {[i === 0 ? "Latest job" : null, j.detail].filter(Boolean).join(" · ")}
+                  </span>
+                ) : null}
+              </span>
+              <span className="shrink-0 text-xs font-medium text-[var(--gold-deep)]">
+                {j.id === current ? "On this one" : "Use"}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      {!needsJob ? (
+        <button
+          type="button"
+          disabled={setJob.isPending || current === null}
+          onClick={() => pick(null)}
+          className="mt-1.5 w-full rounded-md px-2 py-1.5 text-left text-xs font-medium text-muted-foreground hover:bg-card hover:text-foreground disabled:opacity-60"
+        >
+          {current === null ? "On the client only (no job)" : "No job, put it on the client only"}
+        </button>
+      ) : null}
+      {error ? <p className="px-1 pt-1 text-xs font-medium text-destructive">{error}</p> : null}
     </div>
   );
 }
@@ -609,7 +796,8 @@ function ActionBody({ memoId, memo, action: a }: { memoId: number; memo: Memo; a
     );
   if ((a.kind === "email" || a.kind === "sms") && (a.state === "draft" || a.state === "failed"))
     return <DraftEditor memoId={memoId} memo={memo} action={a} />;
-  if (a.kind === "schedule" && a.state === "confirm") return <BookingConfirm memoId={memoId} memo={memo} action={a} />;
+  if (a.kind === "schedule" && a.state === "confirm")
+    return <BookingConfirm key={`${a.jobId ?? "none"}-${a.bookingLine ?? ""}`} memoId={memoId} memo={memo} action={a} />;
   if (a.kind === "job_status" && a.state === "confirm") return <StatusConfirm memoId={memoId} action={a} />;
   if (a.state === "failed")
     return <p className="mt-0.5 text-sm text-destructive">{a.error ?? "That one didn't work."}</p>;

@@ -83,3 +83,18 @@ export function useReviseQuote() {
 export function useConvertQuote() {
   return useMutation(useQuoteMutation("convertToJob"));
 }
+
+/** Swap the product on a line; name, unit and price come off the price book. */
+export function useChangeQuoteProduct() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.quotes.changeProduct.mutationOptions({
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: orpc.quotes.key() }),
+    }),
+  );
+}
+
+/** The closest products to what a line says, for Change product. */
+export function useSuggestedProducts(itemId: number, enabled: boolean) {
+  return useQuery(orpc.quotes.suggestProducts.queryOptions({ input: { itemId }, enabled, staleTime: 30_000 }));
+}
