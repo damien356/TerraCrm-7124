@@ -11,16 +11,36 @@ export function useVoiceCapture(id: number | null) {
   );
 }
 
+type ProcessInput = Parameters<typeof client.voiceQuotes.start>[0];
+
+/**
+ * Kick the recording off on the server, then poll until the quote is made.
+ * One long request used to hit the server's 10 second idle cut-off and show
+ * "Load failed" even when the quote had been created fine.
+ */
+export async function processVoiceQuote(input: ProcessInput) {
+  const { captureId } = await client.voiceQuotes.start(input);
+  const deadline = Date.now() + 4 * 60_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const s = await client.voiceQuotes.status({ id: captureId });
+    if (s.status === "done" && s.result) return s.result;
+    if (s.status === "failed") throw new Error(s.errorMessage ?? "That recording could not be processed.");
+  }
+  throw new Error("Still working on it. Check Recent captures in a minute.");
+}
+
 export function useProcessVoiceQuote() {
   const queryClient = useQueryClient();
-  return useMutation(
-    orpc.voiceQuotes.process.mutationOptions({
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: orpc.voiceQuotes.key() });
-        queryClient.invalidateQueries({ queryKey: orpc.quotes.key() });
-      },
-    }),
-  );
+  return useMutation({
+    mutationFn: processVoiceQuote,
+    // Settled, not success: a failed run still leaves a capture row behind,
+    // and the office should see it in Recent captures straight away.
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: orpc.voiceQuotes.key() });
+      queryClient.invalidateQueries({ queryKey: orpc.quotes.key() });
+    },
+  });
 }
 
 /** Straight to storage from the browser, same pattern as job media uploads. */

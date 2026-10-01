@@ -20,6 +20,7 @@ import {
   useUpdateQuote,
   useUpdateQuoteItem,
 } from "../queries/quotes";
+import { useProducts } from "../queries/settings";
 import { QUOTE_STATUS_COLOUR } from "./quotes";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
