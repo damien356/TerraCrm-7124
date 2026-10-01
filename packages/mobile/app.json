@@ -34,8 +34,9 @@
         "NSCameraUsageDescription": "Terra uses the camera for job photos: the damage walk before you start, progress shots, and the completion photos the office needs to invoice.",
         "NSPhotoLibraryUsageDescription": "Terra needs your photo library so you can attach existing job photos and site plans.",
         "NSPhotoLibraryAddUsageDescription": "Terra saves job photos back to your camera roll so you keep your own copy.",
-        "NSLocationWhenInUseUsageDescription": "Terra shares your location with the office only while you have a job running, so they can see the crew on the map. It stops when you mark the job complete.",
-        "NSMicrophoneUsageDescription": "Terra uses the microphone when you record a voice quote on site. The recording is turned into a draft quote for the office to check."
+        "NSLocationWhenInUseUsageDescription": "Terra uses your location to mark you Arrived and Left site at the jobs you're booked on. If you switch on location sharing, it also shows the office where you are while a job is running.",
+        "NSMicrophoneUsageDescription": "Terra uses the microphone when you record a voice quote on site. The recording is turned into a draft quote for the office to check.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "If you switch on Arrive and leave by location, Terra watches a circle round each site you're booked at today or tomorrow, so you're marked Arrived and Left site with the app closed. It only reports crossing in or out of a site circle, never your route."
       }
     },
     "name": "Terra",
@@ -56,7 +57,10 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Terra shares your location with the office only while you have a job running, so they can see the crew on the map. It stops when you mark the job complete."
+          "locationWhenInUsePermission": "Terra uses your location to mark you Arrived and Left site at the jobs you're booked on. If you switch on location sharing, it also shows the office where you are while a job is running.",
+          "locationAlwaysAndWhenInUsePermission": "If you switch on Arrive and leave by location, Terra watches a circle round each site you're booked at today or tomorrow, so you're marked Arrived and Left site with the app closed. It only reports crossing in or out of a site circle, never your route.",
+          "locationAlwaysPermission": "If you switch on Arrive and leave by location, Terra watches a circle round each site you're booked at today or tomorrow, so you're marked Arrived and Left site with the app closed. It only reports crossing in or out of a site circle, never your route.",
+          "isIosBackgroundLocationEnabled": true
         }
       ],
       [
@@ -89,7 +93,8 @@
           "microphonePermission": "Terra uses the microphone when you record a voice quote on site. The recording is turned into a draft quote for the office to check.",
           "enableBackgroundPlayback": false
         }
-      ]
+      ],
+      "./plugins/terra-siri/app.plugin.js"
     ],
     "owner": "terra-flooring",
     "updates": {

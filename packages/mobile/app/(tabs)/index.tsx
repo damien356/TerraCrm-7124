@@ -145,7 +145,7 @@ export default function TodayScreen() {
           >
             <Ionicons name="notifications" size={18} color="#8A5A11" />
             <Text style={{ fontFamily: Fonts.medium, fontSize: 13.5, color: "#8A5A11", flex: 1 }}>
-              {offers.data?.length} job{(offers.data?.length ?? 0) > 1 ? "s" : ""} waiting on your answer — check the
+              {offers.data?.length} job{(offers.data?.length ?? 0) > 1 ? "s" : ""} waiting on your answer. Check the
               Offers tab.
             </Text>
           </View>

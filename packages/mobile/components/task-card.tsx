@@ -158,7 +158,7 @@ export function TaskCard({
                         </Text>
                       </Text>
                       <Text style={{ fontFamily: Fonts.medium, fontSize: 13, color: c.foreground }}>
-                        {line.total != null ? fmtMoney2(line.total) : "—"}
+                        {line.total != null ? fmtMoney2(line.total) : "-"}
                       </Text>
                     </View>
                   ))}

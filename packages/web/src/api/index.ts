@@ -36,7 +36,10 @@ import { segments } from "./routes/segments";
 import { voiceQuotes } from "./routes/voiceQuotes";
 import { memos } from "./routes/memos";
 import { officeTasks } from "./routes/officeTasks";
+import { voice } from "./routes/voice";
+import { visits } from "./routes/visits";
 import { bootReminders } from "./lib/reminders";
+import { handleInboundSms, inboundSecretOk } from "./lib/sms-inbound";
 
 // Terra Ops — Terra Flooring only. Admin procedures are built on `adminOnly`,
 // the installer app talks exclusively to `field` (installerOnly, scoped to the
@@ -65,6 +68,10 @@ export const router = {
   /** Office to-dos and timed reminders, mostly made by voice memos. */
   officeTasks,
   field,
+  /** Hands-free crew: Siri asks, confirm-back before anything is sent. */
+  voice,
+  /** Arrived and left site, by geofence or by hand, and the every-day photo rule. */
+  visits,
   /** The installer's own invoice to Terra for a completed task. */
   installerInvoices,
   /** Presigned direct-to-storage uploads for photos, video and plans. */
@@ -131,6 +138,28 @@ const app = createApp(router);
 
 // Better Auth (email/password + Runable managed Google) — Hono v4 single wildcard.
 app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
+
+// Replies to the two-way SMS number. ClickSend does not sign posts, so the URL carries a secret.
+app.post("/api/webhooks/clicksend/inbound/:secret", async (c) => {
+  if (!inboundSecretOk(c.req.param("secret"))) return c.json({ ok: false }, 404);
+  const type = c.req.header("content-type") ?? "";
+  let raw: Record<string, unknown> = {};
+  try {
+    raw = type.includes("application/json")
+      ? ((await c.req.json()) as Record<string, unknown>)
+      : (Object.fromEntries(Object.entries(await c.req.parseBody()).map(([k, v]) => [k, typeof v === "string" ? v : ""])) as Record<string, unknown>);
+  } catch {
+    return c.json({ ok: false, reason: "unreadable" }, 400);
+  }
+  try {
+    const out = await handleInboundSms(raw);
+    return c.json({ ok: true, ...out }, 200);
+  } catch (e) {
+    console.error("[sms-inbound] failed", e);
+    /* A 500 makes ClickSend retry, which is what we want for a hiccup. */
+    return c.json({ ok: false }, 500);
+  }
+});
 
 // Marketing journeys tick here. Gated to the published server only — see lib/journey-boot.
 bootJourneyEngine();

@@ -15,7 +15,7 @@ const c = Colors.light;
 const BUCKETS = [
   { key: "plan", label: "Plans", icon: "document-text-outline", blurb: "What you're working off." },
   { key: "access", label: "Site access", icon: "key-outline", blurb: "Parking, lift, gate code, stairs." },
-  { key: "area", label: "Areas", icon: "grid-outline", blurb: "Room by room — shoot what you're covering." },
+  { key: "area", label: "Areas", icon: "grid-outline", blurb: "Room by room. Shoot what you're covering." },
   { key: "damage", label: "Damage", icon: "warning-outline", blurb: "Anything already wrong, BEFORE you start." },
   { key: "found", label: "What we found", icon: "search-outline", blurb: "Subfloor, moisture, nasties. Office gets told." },
   { key: "completion", label: "Completion", icon: "checkmark-done-outline", blurb: "Finished work. Needed to close the job." },
@@ -81,7 +81,7 @@ export function JobFileSection({
         });
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "That didn't upload — try again when you've got signal.");
+      setError(e instanceof Error ? e.message : "That didn't upload. Try again when you've got signal.");
     } finally {
       setBusy(false);
     }
@@ -104,7 +104,7 @@ export function JobFileSection({
         >
           <Text style={{ fontFamily: Fonts.bold, fontSize: 14, color: "#8A5A11" }}>Walk the site first</Text>
           <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: "#8A5A11", marginTop: 3, lineHeight: 18 }}>
-            Photograph anything already damaged before you start — scratched skirting, cracked tiles, marked walls. If
+            Photograph anything already damaged before you start, like scratched skirting, cracked tiles, marked walls. If
             it's all clean, tick it off. You can't start the job until one of those is done.
           </Text>
           <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>

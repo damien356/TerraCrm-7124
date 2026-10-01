@@ -5,8 +5,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { Colors, Fonts, tintFor } from "@/constants/theme";
 import { authClient } from "@/lib/auth";
+import { releaseCrewPhone } from "@/lib/crew-phone";
 import { crewLabel, daysUntil, fmtDateTime, fmtDayLabel, fmtMoney } from "@/lib/format";
 import { useHistory, useMe, useSetLocationConsent } from "@/queries/field";
+import { HandsFreeCard } from "@/components/hands-free-card";
 import { currentUpdate, updatesSupported } from "@/lib/updates";
 import appJson from "@/app.json";
 
@@ -52,7 +54,7 @@ function ExpiryRow({ label, value }: { label: string; value: Date | string | nul
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 }}>
         <Ionicons name="alert-circle-outline" size={16} color={c.warning} />
         <Text style={{ fontFamily: Fonts.sans, fontSize: 13.5, color: c.mutedForeground }}>
-          {label}: not on file — send it to the office.
+          {label}: not on file. Send it to the office.
         </Text>
       </View>
     );
@@ -69,7 +71,7 @@ function ExpiryRow({ label, value }: { label: string; value: Date | string | nul
       />
       <Text style={{ fontFamily: Fonts.sans, fontSize: 13.5, color: colour }}>
         {label}: {fmtDateTime(value)}
-        {expired ? " — expired" : soon ? ` — ${days} days left` : ""}
+        {expired ? ", expired" : soon ? `, ${days} days left` : ""}
       </Text>
     </View>
   );
@@ -226,9 +228,11 @@ export default function MeScreen() {
               >
                 Your position only goes to the office between you hitting Start job and marking it complete. Nothing is
                 sent before, after, or on your days off. Switch it off and your whole location history is deleted on the
-                spot. It stays your call — the office can't switch it on for you.
+                spot. It stays your call. The office can't switch it on for you.
               </Text>
             </View>
+
+            <HandsFreeCard />
 
             <Pressable
               onPress={() => setSkillsOpen((v) => !v)}
@@ -256,7 +260,7 @@ export default function MeScreen() {
             </Pressable>
             {!skillsOpen ? null : skills.length === 0 ? (
               <Text style={{ fontFamily: Fonts.sans, fontSize: 13.5, color: c.mutedForeground }}>
-                Nothing ticked yet — the office sets your trades and rates.
+                Nothing ticked yet. The office sets your trades and rates.
               </Text>
             ) : (
               skills.map((s) => {
@@ -357,7 +361,7 @@ export default function MeScreen() {
             )}
 
             <Pressable
-              onPress={() => void authClient.signOut()}
+              onPress={() => void releaseCrewPhone().finally(() => void authClient.signOut())}
               style={({ pressed }) => ({
                 marginTop: 28,
                 borderWidth: 1,

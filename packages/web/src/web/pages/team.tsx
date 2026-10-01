@@ -1,12 +1,13 @@
 import * as React from "react";
-import { HardHat, KeyRound, ShieldCheck } from "lucide-react";
+import { HardHat, KeyRound, ShieldCheck, Smartphone } from "lucide-react";
 import { Page } from "../components/layout";
-import { Card, Empty, Loading, Spinner } from "../components/ui/card";
+import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Select } from "../components/ui/field";
 import { useLinkLogin, useLogins, useSetLoginActive, useSetLoginRole } from "../queries/team";
 import { useInstallers } from "../queries/installers";
+import { useRevokeVoiceKey, useVoiceKeys } from "../queries/visits";
 
 function when(iso: string | null) {
   if (!iso) return "—";
@@ -172,6 +173,59 @@ export default function TeamPage() {
           </table>
         </Card>
       )}
+
+      <VoiceKeys />
     </Page>
+  );
+}
+
+/**
+ * Siri works while the app is closed, so each crew phone holds its own key.
+ * Turning one off here cuts that phone off Siri straight away. Switching the
+ * login off, or moving it to another installer card, does the same.
+ */
+function VoiceKeys() {
+  const keys = useVoiceKeys();
+  const revoke = useRevokeVoiceKey();
+  const live = (keys.data ?? []).filter((k) => !k.revokedAt);
+  const off = (keys.data ?? []).filter((k) => k.revokedAt).slice(0, 5);
+
+  return (
+    <Card className="mt-4">
+      <CardHeader
+        title="Siri on crew phones"
+        subtitle="Each phone that has turned on Hey Siri for Terra. Turn one off if a phone is lost or changes hands."
+        action={<Smartphone className="size-4 text-muted-foreground" />}
+      />
+      {keys.isPending ? (
+        <Loading label="Loading phones…" />
+      ) : live.length === 0 && off.length === 0 ? (
+        <Empty>No phones yet. An installer turns Siri on from the Me tab in the Terra app.</Empty>
+      ) : (
+        <div className="divide-y divide-border">
+          {live.map((k) => (
+            <div key={k.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium">
+                  {k.installerName} <span className="font-normal text-muted-foreground">· {k.deviceName || "iPhone"}</span>
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Turned on {when(k.createdAt ? new Date(k.createdAt).toISOString() : null)} · last used{" "}
+                  {k.lastUsedAt ? when(new Date(k.lastUsedAt).toISOString()).toLowerCase() : "never"}
+                </p>
+              </div>
+              <Button variant="ghost" disabled={revoke.isPending} onClick={() => revoke.mutate({ id: k.id })}>
+                Turn off
+              </Button>
+            </div>
+          ))}
+          {off.map((k) => (
+            <div key={k.id} className="px-4 py-2 text-xs text-muted-foreground opacity-70">
+              {k.installerName} · {k.deviceName || "iPhone"} · turned off {when(new Date(k.revokedAt!).toISOString()).toLowerCase()}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }

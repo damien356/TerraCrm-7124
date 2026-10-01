@@ -2,6 +2,7 @@ import { Link } from "wouter";
 import { AlertTriangle, ArrowRight, Clock, MapPin, Radio, Users2 } from "lucide-react";
 import { Page } from "../components/layout";
 import { OfficeTasksCard } from "../components/office-tasks";
+import { CrewUpdatesCard } from "../components/crew-updates";
 import { Card, CardHeader, Empty, Loading, Stat } from "../components/ui/card";
 import { Badge, TASK_STATUS_COLOUR, TASK_STATUS_LABEL } from "../components/ui/badge";
 import { useDashboard } from "../queries/dashboard";
@@ -69,7 +70,8 @@ export default function DashboardPage() {
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
+        <div className="space-y-4 lg:col-span-2">
+        <Card>
           <CardHeader title="On the tools today" subtitle={`${d.todayTasks.length} dispatches`} />
           {d.todayTasks.length === 0 ? (
             <Empty>Nothing scheduled for today.</Empty>
@@ -112,6 +114,9 @@ export default function DashboardPage() {
             </div>
           )}
         </Card>
+
+        <CrewUpdatesCard />
+        </div>
 
         <div className="space-y-4">
           <OfficeTasksCard />

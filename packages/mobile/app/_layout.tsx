@@ -25,6 +25,8 @@ import {
   registerForPush,
 } from "../lib/push";
 import { stageUpdate, updatesSupported } from "../lib/updates";
+// Defines the background geofence task at load, so iOS can wake Terra straight into it.
+import { fencesSupported, syncSiteFences } from "../lib/site-fences";
 import { useWhoami } from "../queries/session";
 import { Colors } from "../constants/theme";
 import appJson from "../app.json";
@@ -46,6 +48,7 @@ function Navigation() {
   const pushToken = useRef<string | null>(null);
   const landed = useRef(false);
 
+  const signedInAs = session.data?.user?.id ?? null;
   const onLogin = segments[0] === "login";
   const inCallback = segments[0] === "auth";
 
@@ -73,6 +76,18 @@ function Navigation() {
     });
     void clearBadge();
   }, [session.data]);
+
+  // Point the site circles at today's and tomorrow's jobs, once signed in and
+  // every time Terra comes back to the front. Does nothing unless the
+  // installer switched on arriving by location.
+  useEffect(() => {
+    if (!signedInAs || !fencesSupported) return;
+    void syncSiteFences();
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") void syncSiteFences();
+    });
+    return () => sub.remove();
+  }, [signedInAs]);
 
   // Look for a new over-the-air build when the app comes back to the front, and
   // stage it quietly. It takes effect on the next cold start, so nobody loses
@@ -119,6 +134,7 @@ function Navigation() {
       <Stack.Screen name="task/invoice/[id]" options={{ presentation: "card" }} />
       <Stack.Screen name="rate-card" options={{ presentation: "card" }} />
       <Stack.Screen name="voice-quote" options={{ presentation: "card", gestureEnabled: false }} />
+      <Stack.Screen name="site-arrival" options={{ presentation: "card" }} />
     </Stack>
   );
 }

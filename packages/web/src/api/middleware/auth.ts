@@ -15,7 +15,7 @@ export interface Actor {
   installerId: number | null;
 }
 
-async function resolveActor(headers: Headers): Promise<Actor | null> {
+export async function resolveActor(headers: Headers): Promise<Actor | null> {
   const session = await auth.api.getSession({ headers });
   if (!session) return null;
 

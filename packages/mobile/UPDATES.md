@@ -139,3 +139,11 @@ it to confirm an update or a rollback actually landed.
 - Production updates are not published without stating the category first.
 - The upload keystore lives on Expo's servers and is the only key that can sign
   this package. Do not delete it.
+
+## Change log
+
+- **2026-10-01, Siri, CarPlay and arrive by location (iPhone): category 3.**
+  Adds App Intents (`plugins/terra-siri`), background location and
+  `expo-task-manager`, plus new location wording in `app.json`. Needs a new EAS
+  build and a TestFlight or App Store release. An OTA update cannot carry it.
+  The backend and the web Ops view for it are category 1 and go live on publish.

@@ -1054,6 +1054,41 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
       </Card>
 
       <Card>
+        <CardHeader
+          title="Arriving at site"
+          subtitle="The crew app marks Arrived and Left site by itself when a phone crosses the circle round the address."
+        />
+        <div className="space-y-3 px-4 py-4">
+          <Field label="Site circle" hint="Metres from the address. 100 to 1000. Bigger suits acreage and big builds.">
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                min={100}
+                max={1000}
+                step={25}
+                value={draft.site_circle_m ?? "150"}
+                onChange={(e) => setDraft((d) => ({ ...d, site_circle_m: e.target.value }))}
+                onBlur={(e) => {
+                  const n = Math.round(Number(e.target.value));
+                  const v = String(Number.isFinite(n) && n > 0 ? Math.min(1000, Math.max(100, n)) : 150);
+                  setDraft((d) => ({ ...d, site_circle_m: v }));
+                  commit("site_circle_m", v);
+                }}
+                className="tabular w-28"
+              />
+              <span className="text-sm text-muted-foreground">m</span>
+              {tick("site_circle_m")}
+            </div>
+          </Field>
+          <div className="rounded-md bg-secondary px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+            Inside the circle under 5 minutes is a drive past and is not counted. Arriving only stamps Arrived, it
+            never starts the dispatch. Leaving without that day's completion photos turns the visit red on the dashboard
+            until the photos go in or they come back the same day.
+          </div>
+        </div>
+      </Card>
+
+      <Card>
         <CardHeader title="Your details" subtitle="Used on quotes and outgoing messages." />
         <div className="grid gap-3 px-4 py-4 sm:grid-cols-2">
           <Field label="Business name">
@@ -1104,6 +1139,7 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
                   "business_name",
                   "business_phone",
                   "gst_rate",
+                  "site_circle_m",
                 ].includes(k),
             )
             .map((k) => (

@@ -263,6 +263,11 @@ export const installers = sqliteTable("installers", {
    * can't submit an invoice.
    */
   nextInvoiceNumber: integer("next_invoice_number"),
+  /**
+   * Which maps app "Hey Siri, direct me to my next job in Terra" opens.
+   * apple · google · waze. Picked by the installer on the Me tab.
+   */
+  navApp: text("nav_app").notNull().default("apple"),
   ...timestamps,
 });
 
@@ -2320,4 +2325,112 @@ export const installerInvoices = sqliteTable(
     index("installer_invoices_job_idx").on(t.jobId),
     index("installer_invoices_status_idx").on(t.status),
   ],
+);
+
+/* ---------------------------------------------------------------------------
+ * Hands-free crew: site visits and Siri.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * One stretch of time an installer spent at a job site. The phone stamps these
+ * itself when it crosses the circle round the site (geofence), or the installer
+ * taps Arrived and Left site by hand when they have not allowed "Always"
+ * location. A three day lay with a lunch run each day is six visits.
+ *
+ * Arriving never starts the task. It is a time stamp for the office, nothing
+ * more: the damage walk and the Start tap stay with the installer.
+ */
+export const siteVisits = sqliteTable(
+  "site_visits",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    taskId: integer("task_id").notNull().references(() => jobTasks.id, { onDelete: "cascade" }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    installerId: integer("installer_id").notNull().references(() => installers.id, { onDelete: "cascade" }),
+    /** YYYY-MM-DD, Gold Coast time, of the arrival. The day the photo rule is checked against. */
+    visitDate: text("visit_date").notNull(),
+    arrivedAt: integer("arrived_at", { mode: "timestamp" }).notNull(),
+    leftAt: integer("left_at", { mode: "timestamp" }),
+    /** geofence · manual */
+    arriveSource: text("arrive_source").notNull().default("manual"),
+    leaveSource: text("leave_source"),
+    /**
+     * Set when a geofence visit is too short to be real, e.g. driving past or
+     * parking down the street. Kept, not deleted, so a bad fence can be seen.
+     */
+    voidedAt: integer("voided_at", { mode: "timestamp" }),
+    voidReason: text("void_reason"),
+    /** When the office was told they had arrived. Once per visit. */
+    announcedAt: integer("announced_at", { mode: "timestamp" }),
+    /** left_without_completion_photos, or null. */
+    flag: text("flag"),
+    /** Photos that day against what the trade needs, at the moment they left. */
+    photosHad: integer("photos_had"),
+    photosNeeded: integer("photos_needed"),
+    /** Cleared by the photos turning up that day, or by them coming back. */
+    flagClearedAt: integer("flag_cleared_at", { mode: "timestamp" }),
+    flagClearedReason: text("flag_cleared_reason"),
+    ...timestamps,
+  },
+  (t) => [
+    index("site_visits_task_idx").on(t.taskId, t.visitDate),
+    index("site_visits_installer_idx").on(t.installerId, t.arrivedAt),
+    index("site_visits_flag_idx").on(t.flag),
+  ],
+);
+
+/**
+ * Every Siri action that does something: a text, a call, a note. Siri reads
+ * back what it is about to do, and only a "yes" within two minutes makes it
+ * happen. The read back and the answer are both kept, so "I never sent that"
+ * can be settled.
+ */
+export const voiceActions = sqliteTable(
+  "voice_actions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** sha256 of the one-time confirm code. The code itself is never stored. */
+    tokenHash: text("token_hash").notNull(),
+    installerId: integer("installer_id").notNull().references(() => installers.id, { onDelete: "cascade" }),
+    taskId: integer("task_id").references(() => jobTasks.id, { onDelete: "set null" }),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    /** late_client · late_office · call_contact · call_office · note */
+    kind: text("kind").notNull(),
+    /** Exactly what Siri said back to them. */
+    readBack: text("read_back").notNull(),
+    /** JSON: the text body, the number, the minutes. What confirm acts on. */
+    payload: text("payload").notNull().default("{}"),
+    /** pending · confirmed · cancelled · expired · failed */
+    status: text("status").notNull().default("pending"),
+    /** yes · no · silence, as the phone reported it. */
+    answer: text("answer"),
+    resultDetail: text("result_detail"),
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    answeredAt: integer("answered_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (t) => [
+    unique("voice_actions_token_unique").on(t.tokenHash),
+    index("voice_actions_installer_idx").on(t.installerId, t.createdAt),
+  ],
+);
+
+/**
+ * A key per phone, so Siri can reach Terra while the app is closed and the
+ * phone is in a pocket. Only a hash is stored. Revoking one cuts that phone
+ * off Siri straight away without signing anyone out of the app.
+ */
+export const voiceKeys = sqliteTable(
+  "voice_keys",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    installerId: integer("installer_id").notNull().references(() => installers.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull(),
+    keyHash: text("key_hash").notNull(),
+    deviceName: text("device_name").notNull().default(""),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp" }),
+    revokedAt: integer("revoked_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (t) => [unique("voice_keys_hash_unique").on(t.keyHash), index("voice_keys_installer_idx").on(t.installerId)],
 );

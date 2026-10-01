@@ -7,6 +7,9 @@ import { installerOnly } from "../middleware/auth";
 import { pushToOffice } from "../lib/push";
 import { signMany } from "../lib/s3";
 import { acceptOffer, declineOffer, expireStale, releaseTask } from "./offers";
+import { addLocalDays, todayLocal } from "../lib/local-date";
+import { taskIdsOn } from "../lib/crew-days";
+import { completionPhotosOn, minCompletionPhotos, recheckPhotoFlags } from "../lib/site-visits";
 
 /**
  * THE INSTALLER API. Every single query here filters by `context.installerId`.
@@ -126,16 +129,6 @@ export async function ownTaskOrThrow(taskId: number, installerId: number) {
 /** Buckets the crew may add to. Plans are office-only — they can look, not upload. */
 const CREW_BUCKETS = ["access", "area", "damage", "found", "completion", "defect"] as const;
 
-/** How many completion photos this task's trade demands before it can be closed. */
-async function minCompletionPhotos(skillId: number | null) {
-  if (!skillId) return 4;
-  const [skill] = await db
-    .select({ n: schema.skills.minCompletionPhotos })
-    .from(schema.skills)
-    .where(eq(schema.skills.id, skillId));
-  return skill?.n ?? 4;
-}
-
 async function countMedia(taskId: number, bucket: string) {
   const rows = await db
     .select({ id: schema.jobMedia.id })
@@ -202,10 +195,13 @@ export const field = {
 
   /** Today's work. */
   today: installerOnly.handler(async ({ context }) => {
-    const today = new Date().toISOString().slice(0, 10);
+    /* Gold Coast date, not UTC, or before 10 am "today" is yesterday. And a
+     * multi-day run shows on every one of its days, not only day one. */
+    const ids = await taskIdsOn(context.installerId, todayLocal(), ["assigned", "in_progress", "complete"]);
+    if (ids.length === 0) return [];
     return taskCardsFor(context.installerId, [
       sql`(${schema.jobTasks.assignedInstallerId} = ${context.installerId} or ${schema.jobTasks.secondInstallerId} = ${context.installerId})`,
-      eq(schema.jobTasks.scheduledDate, today),
+      inArray(schema.jobTasks.id, ids),
       inArray(schema.jobTasks.status, ["assigned", "in_progress", "complete"]),
     ]);
   }),
@@ -214,8 +210,8 @@ export const field = {
   upcoming: installerOnly
     .input(z.object({ from: z.string().optional(), to: z.string().optional() }).default({}))
     .handler(async ({ input, context }) => {
-      const from = input.from ?? new Date().toISOString().slice(0, 10);
-      const to = input.to ?? new Date(Date.now() + 28 * 86400_000).toISOString().slice(0, 10);
+      const from = input.from ?? todayLocal();
+      const to = input.to ?? addLocalDays(todayLocal(), 28);
       return taskCardsFor(context.installerId, [
         sql`(${schema.jobTasks.assignedInstallerId} = ${context.installerId} or ${schema.jobTasks.secondInstallerId} = ${context.installerId})`,
         isNotNull(schema.jobTasks.scheduledDate),
@@ -629,6 +625,8 @@ export const field = {
         damageNone: task.damageNone,
         completionNeeded: need,
         completionHave: signed.filter((m) => m.bucket === "completion" && m.taskId === task.id).length,
+        /** The every-day rule: today's completion photos, Gold Coast date. */
+        completionTodayHave: await completionPhotosOn(task.id, todayLocal()),
       },
     };
   }),
@@ -689,6 +687,11 @@ export const field = {
           .update(schema.jobTasks)
           .set({ damageCheckedAt: new Date(), updatedAt: new Date() })
           .where(eq(schema.jobTasks.id, task.id));
+      }
+
+      /* A completion photo may be the one that clears today's red flag. */
+      if (input.bucket === "completion") {
+        await recheckPhotoFlags(task.id).catch((e) => console.error("[visits] recheck failed", e));
       }
 
       if (input.bucket === "found") {

@@ -4,6 +4,7 @@ import { ArrowLeft, MessagesSquare, Plus, Sofa, Trash2, Users } from "lucide-rea
 import { Page } from "../components/layout";
 import { MemoButton } from "../components/voice-memo";
 import { JobFile } from "../components/job-file";
+import { JobVisits } from "../components/crew-updates";
 import { JobForecastCard, MeasureUpModal } from "../components/costing";
 import { JobCashCard } from "../components/job-cash";
 import { PaymentTermsCard } from "../components/payment-terms";
@@ -760,6 +761,8 @@ export default function JobDetailPage() {
               </ul>
             )}
           </Card>
+
+          <JobVisits jobId={j.id} />
 
           <Card>
             <CardHeader title="History" subtitle="Everything that's happened on this job." />

@@ -27,6 +27,8 @@ import {
 } from "@/queries/field";
 import { useShiftLocation } from "@/hooks/use-shift-location";
 import { JobFileSection } from "@/components/job-file";
+import { SiteVisitCard } from "@/components/site-visit";
+import { useVoiceSettings } from "@/queries/crew";
 
 const c = Colors.light;
 
@@ -68,6 +70,7 @@ export default function TaskScreen() {
   const finish = useCompleteTask();
   const release = useReleaseTask();
   const addNote = useAddFieldNote();
+  const voiceSettings = useVoiceSettings();
 
   // On-shift location. Off unless they switched sharing on AND this job is running.
   const sharing = useShiftLocation({
@@ -117,8 +120,15 @@ export default function TaskScreen() {
   function openMaps() {
     if (!address) return;
     const q = encodeURIComponent(address);
+    // The maps app they picked on the Me tab, same as Siri's "direct me".
+    const picked = voiceSettings.data?.navApp ?? "apple";
+    const app = picked === "apple" && Platform.OS !== "ios" ? "google" : picked;
     const url =
-      Platform.OS === "ios" ? `http://maps.apple.com/?daddr=${q}` : `https://www.google.com/maps/dir/?api=1&destination=${q}`;
+      app === "waze"
+        ? `https://waze.com/ul?q=${q}&navigate=yes`
+        : app === "google"
+          ? `https://www.google.com/maps/dir/?api=1&destination=${q}&travelmode=driving`
+          : `https://maps.apple.com/?daddr=${q}&dirflg=d`;
     void Linking.openURL(url);
   }
 
@@ -240,7 +250,7 @@ export default function TaskScreen() {
           >
             <Ionicons name="bed-outline" size={18} color="#8A5A11" />
             <Text style={{ fontFamily: Fonts.medium, fontSize: 13.5, color: "#8A5A11", flex: 1 }}>
-              Furniture on site — two of you on this one, allow time to shift it.
+              Furniture on site. Two of you on this one, allow time to shift it.
             </Text>
           </View>
         ) : null}
@@ -296,6 +306,8 @@ export default function TaskScreen() {
             </Text>
           </View>
         ) : null}
+
+        <SiteVisitCard taskId={t.id} live={t.status === "assigned" || t.status === "in_progress"} />
 
         <Section title="WHERE">
           <Card>
@@ -451,7 +463,7 @@ export default function TaskScreen() {
                 </View>
               ))}
               <Text style={{ fontFamily: Fonts.sans, fontSize: 11.5, color: c.mutedForeground, marginTop: 4 }}>
-                Quantities only — pricing stays with the office.
+                Quantities only. Pricing stays with the office.
               </Text>
             </Card>
           </Section>
@@ -531,7 +543,7 @@ export default function TaskScreen() {
                       </Text>
                     </View>
                     <Text style={{ fontFamily: Fonts.bold, fontSize: 14, color: c.foreground }}>
-                      {line.total != null ? fmtMoney2(line.total) : "—"}
+                      {line.total != null ? fmtMoney2(line.total) : "-"}
                     </Text>
                   </View>
                 ))}
@@ -705,7 +717,7 @@ export default function TaskScreen() {
             <Text style={{ fontFamily: Fonts.sans, fontSize: 13.5, color: c.mutedForeground, marginTop: 5, lineHeight: 19 }}>
               {sheet === "handback"
                 ? "It goes back to the office to re-book, and they'll see your reason. A reason is required."
-                : "Goes straight onto the job so the office sees it — extra work, a problem, a delay."}
+                : "Goes straight onto the job so the office sees it. Extra work, a problem, a delay."}
             </Text>
             <TextInput
               value={text}

@@ -41,7 +41,7 @@ export default function ScheduleScreen() {
       >
         <Text style={{ fontFamily: Fonts.bold, fontSize: 26, color: c.foreground }}>Coming up</Text>
         <Text style={{ fontFamily: Fonts.sans, fontSize: 14, color: c.mutedForeground, marginTop: 4 }}>
-          Next four weeks — {upcoming.data?.length ?? 0} job{(upcoming.data?.length ?? 0) === 1 ? "" : "s"} booked,{" "}
+          Next four weeks. {upcoming.data?.length ?? 0} job{(upcoming.data?.length ?? 0) === 1 ? "" : "s"} booked,{" "}
           {fmtMoney(total)} in fixed-price work.
         </Text>
 

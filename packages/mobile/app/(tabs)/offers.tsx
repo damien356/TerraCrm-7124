@@ -100,14 +100,14 @@ export default function OffersScreen() {
     try {
       await accept.mutateAsync({ offerId: offer.offerId, chosenDate: chosen ?? null });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't take that job — someone may have beaten you to it.");
+      setError(e instanceof Error ? e.message : "Couldn't take that job. Someone may have beaten you to it.");
     }
   }
 
   async function onDecline() {
     if (!declining) return;
     if (reason.trim().length < 3) {
-      setError("Give the office a reason — even a few words.");
+      setError("Give the office a reason, even a few words.");
       return;
     }
     setError(null);
@@ -248,7 +248,7 @@ export default function OffersScreen() {
                         {offer.scheduledDate
                           ? fmtDayLabel(offer.scheduledDate)
                           : days.length > 1
-                            ? `${fmtDayLabel(days[0])} – ${fmtDayLabel(days[days.length - 1])}`
+                            ? `${fmtDayLabel(days[0])} to ${fmtDayLabel(days[days.length - 1])}`
                             : fmtDayLabel(days[0] ?? null)}
                       </Text>
                       <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: c.mutedForeground }}>
@@ -373,7 +373,7 @@ export default function OffersScreen() {
                             lineHeight: 17,
                           }}
                         >
-                          {offer.chosenDate ? `${fmtDayLabel(offer.chosenDate)} — ` : ""}confirms automatically around{" "}
+                          {offer.chosenDate ? `${fmtDayLabel(offer.chosenDate)}, ` : ""}confirms automatically around{" "}
                           {holdClock(offer.provisionalUntil)}. Nothing else to do.
                         </Text>
                       </View>
