@@ -34,6 +34,9 @@ import { devices } from "./routes/devices";
 import { templates } from "./routes/templates";
 import { segments } from "./routes/segments";
 import { voiceQuotes } from "./routes/voiceQuotes";
+import { memos } from "./routes/memos";
+import { officeTasks } from "./routes/officeTasks";
+import { bootReminders } from "./lib/reminders";
 
 // Terra Ops — Terra Flooring only. Admin procedures are built on `adminOnly`,
 // the installer app talks exclusively to `field` (installerOnly, scoped to the
@@ -57,6 +60,10 @@ export const router = {
   quotes,
   /** Damien dictates a job note on site, this turns the recording into a draft quote. */
   voiceQuotes,
+  /** Voice memos: from a job card, a client record, or the global mic. One router, any action. */
+  memos,
+  /** Office to-dos and timed reminders, mostly made by voice memos. */
+  officeTasks,
   field,
   /** The installer's own invoice to Terra for a completed task. */
   installerInvoices,
@@ -127,5 +134,7 @@ app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
 // Marketing journeys tick here. Gated to the published server only — see lib/journey-boot.
 bootJourneyEngine();
+// Timed reminders push to the phone. Same published-server-only gate, see lib/reminders.
+bootReminders();
 
 export default app;

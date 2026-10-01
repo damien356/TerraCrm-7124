@@ -3,7 +3,47 @@ import { and, asc, desc, eq, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { adminOnly, type Actor } from "../middleware/auth";
+
+export const createContactInput = z.object({
+  firstName: z.string().min(1),
+  lastName: z.string().default(""),
+  mobile: z.string().nullable().optional(),
+  phone: z.string().nullable().optional(),
+  email: z.string().nullable().optional(),
+  address: z.string().nullable().optional(),
+  suburb: z.string().nullable().optional(),
+  postcode: z.string().nullable().optional(),
+  source: z.string().default("other"),
+  notes: z.string().nullable().optional(),
+  marketingOptIn: z.boolean().default(false),
+  /** Optionally file them under a company straight away. */
+  companyId: z.number().nullable().optional(),
+  companyRole: z.string().default("other"),
+});
+
+/** Shared with voice memos, which offer a new client straight out of a recording. */
+export async function createContact(input: z.input<typeof createContactInput>, actor: Pick<Actor, "name" | "role">) {
+  const parsed = createContactInput.parse(input);
+  const { companyId, companyRole, ...values } = parsed;
+  const [row] = await db.insert(schema.contacts).values(values).returning();
+  if (companyId && row) {
+    await db
+      .insert(schema.companyContacts)
+      .values({ companyId, contactId: row.id, role: companyRole })
+      .onConflictDoNothing();
+  }
+  await db.insert(schema.activityLog).values({
+    contactId: row!.id,
+    entityType: "contact",
+    entityId: row!.id,
+    action: "created",
+    detail: `${row!.firstName} ${row!.lastName}`.trim(),
+    actorName: actor.name,
+    actorRole: actor.role,
+  });
+  return row;
+}
 
 /**
  * A contact is a PERSON and exists once, forever. Companies are optional
@@ -128,44 +168,8 @@ export const contacts = {
   }),
 
   create: adminOnly
-    .input(
-      z.object({
-        firstName: z.string().min(1),
-        lastName: z.string().default(""),
-        mobile: z.string().nullable().optional(),
-        phone: z.string().nullable().optional(),
-        email: z.string().nullable().optional(),
-        address: z.string().nullable().optional(),
-        suburb: z.string().nullable().optional(),
-        postcode: z.string().nullable().optional(),
-        source: z.string().default("other"),
-        notes: z.string().nullable().optional(),
-        marketingOptIn: z.boolean().default(false),
-        /** Optionally file them under a company straight away. */
-        companyId: z.number().nullable().optional(),
-        companyRole: z.string().default("other"),
-      }),
-    )
-    .handler(async ({ input, context }) => {
-      const { companyId, companyRole, ...values } = input;
-      const [row] = await db.insert(schema.contacts).values(values).returning();
-      if (companyId && row) {
-        await db
-          .insert(schema.companyContacts)
-          .values({ companyId, contactId: row.id, role: companyRole })
-          .onConflictDoNothing();
-      }
-      await db.insert(schema.activityLog).values({
-        contactId: row!.id,
-        entityType: "contact",
-        entityId: row!.id,
-        action: "created",
-        detail: `${row!.firstName} ${row!.lastName}`.trim(),
-        actorName: context.actor.name,
-        actorRole: context.actor.role,
-      });
-      return row;
-    }),
+    .input(createContactInput)
+    .handler(({ input, context }) => createContact(input, context.actor)),
 
   update: adminOnly
     .input(

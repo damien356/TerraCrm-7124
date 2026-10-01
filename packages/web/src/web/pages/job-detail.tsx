@@ -2,6 +2,7 @@ import * as React from "react";
 import { Link, useParams, useSearch } from "wouter";
 import { ArrowLeft, MessagesSquare, Plus, Sofa, Trash2, Users } from "lucide-react";
 import { Page } from "../components/layout";
+import { MemoButton } from "../components/voice-memo";
 import { JobFile } from "../components/job-file";
 import { JobForecastCard, MeasureUpModal } from "../components/costing";
 import { JobCashCard } from "../components/job-cash";
@@ -441,6 +442,7 @@ export default function JobDetailPage() {
               </option>
             ))}
           </Select>
+          <MemoButton jobId={j.id} />
           <Button onClick={() => setTaskModal(true)}>
             <Plus className="size-4" />
             Add dispatch

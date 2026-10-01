@@ -407,3 +407,35 @@ export async function openUnassigned(input: {
     .returning();
   return created!;
 }
+
+/**
+ * The client-level thread: a person with no job or quote to hang the talk off,
+ * e.g. a voice memo email to a brand new enquiry. Reuses their open one.
+ */
+export async function ensureForContact(contactId: number, subject: string) {
+  const [existing] = await db
+    .select()
+    .from(schema.conversations)
+    .where(
+      and(
+        eq(schema.conversations.contactId, contactId),
+        isNull(schema.conversations.jobId),
+        isNull(schema.conversations.quoteId),
+        eq(schema.conversations.state, "open"),
+      ),
+    )
+    .orderBy(desc(schema.conversations.lastMessageAt))
+    .limit(1);
+  if (existing) return existing;
+
+  const [created] = await db
+    .insert(schema.conversations)
+    .values({
+      ref: "Terra Flooring",
+      subject: subject.slice(0, 200) || "Terra Flooring",
+      contactId,
+      state: "open",
+    })
+    .returning();
+  return created!;
+}

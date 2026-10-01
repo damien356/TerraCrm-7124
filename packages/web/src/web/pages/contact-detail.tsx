@@ -2,6 +2,7 @@ import * as React from "react";
 import { Link, useParams } from "wouter";
 import { ArrowLeft, Building2, Mail, MapPin, Phone, Trash2 } from "lucide-react";
 import { Page } from "../components/layout";
+import { MemoButton } from "../components/voice-memo";
 import { Card, CardHeader, Empty, Loading, Stat } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -59,6 +60,7 @@ export default function ContactDetailPage() {
       }
       actions={
         <>
+          <MemoButton contactId={c.id} />
           <Button variant="secondary" onClick={() => setLinkModal(true)}>
             <Building2 className="size-4" />
             Link a company

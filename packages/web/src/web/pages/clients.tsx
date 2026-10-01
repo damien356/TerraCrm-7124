@@ -2,6 +2,7 @@ import * as React from "react";
 import { Link } from "wouter";
 import { Plus, Search } from "lucide-react";
 import { Page } from "../components/layout";
+import { MemoButton } from "../components/voice-memo";
 import { Card, Empty, Loading, Spinner } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import {
@@ -304,12 +305,15 @@ export default function ClientsPage() {
                     className="border-b border-border last:border-0 hover:bg-secondary/50"
                   >
                     <td className="px-3 py-2.5">
-                      <Link
-                        to={`/clients/${c.id}`}
-                        className="font-medium text-primary hover:underline"
-                      >
-                        {c.name}
-                      </Link>
+                      <span className="flex items-center gap-1">
+                        <Link
+                          to={`/clients/${c.id}`}
+                          className="font-medium text-primary hover:underline"
+                        >
+                          {c.name}
+                        </Link>
+                        <MemoButton contactId={c.id} compact />
+                      </span>
                       <p className="text-xs text-muted-foreground">
                         {c.mobile ?? c.email ?? "No contact details"}
                         {c.suburb ? ` · ${c.suburb}` : ""}

@@ -3,7 +3,7 @@ import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { adminOnly, type Actor } from "../middleware/auth";
 import { conversationReplyTo, CONVERSATION_FROM, sendEmail } from "../lib/email";
 import { normaliseMobile, sendSms, smsParts, SMS_OPT_OUT } from "../lib/sms";
 import {
@@ -135,6 +135,190 @@ const unreadForSql = (me: number) => sql`(
       0)
 )`;
 
+/** Shared by the thread composer and by voice memo drafts, so a memo's email
+ * or SMS goes out exactly the way a typed one does: logged on the thread, opt-out
+ * on customer texts, two-way number, threaded email headers. */
+export const sendInput = z.object({
+  conversationId: z.number().optional(),
+  jobId: z.number().optional(),
+  quoteId: z.number().optional(),
+  audience: z.enum(AUDIENCE),
+  channel: z.enum(CHANNEL),
+  subject: z.string().optional(),
+  body: z.string().min(1),
+  contactId: z.number().nullish(),
+  installerId: z.number().nullish(),
+  supplierId: z.number().nullish(),
+});
+
+export async function sendConversationMessage(input: z.infer<typeof sendInput>, actor: Actor) {
+  if (!ALLOWED[input.audience].includes(input.channel)) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: `A ${input.audience} message cannot go out as ${input.channel}.`,
+    });
+  }
+
+  const conv = input.conversationId
+    ? (await db.select().from(schema.conversations).where(eq(schema.conversations.id, input.conversationId)).limit(1))[0]
+    : input.jobId
+      ? await ensureForJob(input.jobId)
+      : input.quoteId
+        ? await ensureForQuote(input.quoteId)
+        : null;
+  if (!conv) throw new ORPCError("BAD_REQUEST", { message: "No conversation to send on." });
+
+  const [profile] = await db
+    .select({ id: schema.profiles.id })
+    .from(schema.profiles)
+    .where(eq(schema.profiles.userId, actor.userId))
+    .limit(1);
+
+  const common = {
+    conversationId: conv.id,
+    jobId: conv.jobId,
+    contactId: input.contactId ?? null,
+    installerId: input.installerId ?? null,
+    supplierId: input.supplierId ?? null,
+    authorName: actor.name || "Office",
+    authorProfileId: profile?.id ?? null,
+    direction: "out" as const,
+  };
+
+  /* ---------------- internal note: never leaves the building ------------- */
+  if (input.audience === "internal") {
+    const msg = await logMessage({
+      ...common,
+      channel: "note",
+      audience: "internal",
+      body: input.body,
+      status: "sent",
+    });
+    const mentioned = await resolveMentions(input.body);
+    if (mentioned.length) {
+      await db
+        .insert(schema.messageMentions)
+        .values(mentioned.map((profileId) => ({ messageId: msg.id, profileId })));
+    }
+    return { ok: true as const, messageId: msg.id, mentioned: mentioned.length };
+  }
+
+  /* ---------------------------- SMS ------------------------------------- */
+  if (input.channel === "sms") {
+    const to =
+      input.audience === "installer"
+        ? (await db.select().from(schema.installers).where(eq(schema.installers.id, input.installerId ?? 0)).limit(1))[0]
+            ?.mobile
+        : (await db.select().from(schema.contacts).where(eq(schema.contacts.id, input.contactId ?? 0)).limit(1))[0]
+            ?.mobile;
+
+    if (!normaliseMobile(to)) {
+      throw new ORPCError("BAD_REQUEST", { message: "No mobile on file for that recipient." });
+    }
+
+    /* A customer text gets the opt-out. Crew are staff, not a marketing
+     * list, so theirs does not. */
+    const body = input.audience === "customer" ? input.body + SMS_OPT_OUT : input.body;
+    /* Operational texts invite a reply, so they must go from the two-way
+     * number. Anything else sends a question into a void. */
+    const out = await sendSms({ to: to!, body, sender: "number", needsReply: true });
+
+    const msg = await logMessage({
+      ...common,
+      channel: "sms",
+      audience: input.audience,
+      body,
+      toAddress: normaliseMobile(to),
+      providerId: out.ok ? out.providerId : null,
+      status: out.ok ? "sent" : "failed",
+      statusDetail: out.ok ? null : out.reason,
+      failedAt: out.ok ? null : new Date(),
+    });
+
+    if (input.contactId) {
+      const [c] = await db.select().from(schema.contacts).where(eq(schema.contacts.id, input.contactId)).limit(1);
+      await addParticipant(conv.id, {
+        role: "customer",
+        contactId: input.contactId,
+        name: fullName(c),
+        email: c?.email ?? null,
+        mobile: c?.mobile ?? null,
+      });
+    }
+    if (input.installerId) {
+      const [i] = await db.select().from(schema.installers).where(eq(schema.installers.id, input.installerId)).limit(1);
+      await addParticipant(conv.id, {
+        role: "installer",
+        installerId: input.installerId,
+        name: i?.name ?? "",
+        mobile: i?.mobile ?? null,
+      });
+    }
+
+    if (!out.ok) return { ok: false as const, messageId: msg.id, reason: out.reason };
+    return { ok: true as const, messageId: msg.id };
+  }
+
+  /* --------------------------- email ------------------------------------ */
+  if (input.channel === "email") {
+    const person =
+      input.audience === "supplier"
+        ? (await db.select().from(schema.suppliers).where(eq(schema.suppliers.id, input.supplierId ?? 0)).limit(1))[0]
+        : (await db.select().from(schema.contacts).where(eq(schema.contacts.id, input.contactId ?? 0)).limit(1))[0];
+    const to = (person as { email?: string | null } | undefined)?.email;
+    if (!to) throw new ORPCError("BAD_REQUEST", { message: "No email address on file for that recipient." });
+
+    const subject = subjectWithRef(input.subject ?? conv.subject, conv.ref);
+    const headers = await threadHeaders(conv.id);
+
+    const out = await sendEmail({
+      to,
+      subject,
+      text: input.body,
+      html: input.body
+        .split(/\n{2,}/)
+        .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
+        .join(""),
+      from: CONVERSATION_FROM,
+      /* Unique per conversation, so their reply identifies itself. */
+      replyTo: conversationReplyTo(conv.id),
+      inReplyTo: headers.inReplyTo,
+      references: headers.references,
+    });
+
+    const msg = await logMessage({
+      ...common,
+      channel: "email",
+      audience: input.audience,
+      subject,
+      body: input.body,
+      toAddress: to,
+      /* Resend's id is what a delivery webhook comes back keyed on. */
+      providerId: out.ok ? out.providerId : null,
+      inReplyTo: headers.inReplyTo ?? null,
+      referencesHeader: headers.references ?? null,
+      status: out.ok ? "sent" : "failed",
+      statusDetail: out.ok ? null : out.reason,
+      failedAt: out.ok ? null : new Date(),
+    });
+
+    if (input.contactId) {
+      const c = person as typeof schema.contacts.$inferSelect | undefined;
+      await addParticipant(conv.id, {
+        role: "customer",
+        contactId: input.contactId,
+        name: fullName(c),
+        email: c?.email ?? null,
+        mobile: c?.mobile ?? null,
+      });
+    }
+
+    if (!out.ok) return { ok: false as const, messageId: msg.id, reason: out.reason };
+    return { ok: true as const, messageId: msg.id };
+  }
+
+  throw new ORPCError("BAD_REQUEST", { message: "Nothing sends on that channel yet." });
+}
+
 export const conversations = {
   /** The thread on a job. Opens it, or adopts the quote's thread, on first look. */
   forJob: adminOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
@@ -231,187 +415,8 @@ export const conversations = {
    * send an internal note to a customer is rejected rather than reinterpreted.
    */
   send: adminOnly
-    .input(
-      z.object({
-        conversationId: z.number().optional(),
-        jobId: z.number().optional(),
-        quoteId: z.number().optional(),
-        audience: z.enum(AUDIENCE),
-        channel: z.enum(CHANNEL),
-        subject: z.string().optional(),
-        body: z.string().min(1),
-        contactId: z.number().nullish(),
-        installerId: z.number().nullish(),
-        supplierId: z.number().nullish(),
-      }),
-    )
-    .handler(async ({ input, context }) => {
-      if (!ALLOWED[input.audience].includes(input.channel)) {
-        throw new ORPCError("BAD_REQUEST", {
-          message: `A ${input.audience} message cannot go out as ${input.channel}.`,
-        });
-      }
-
-      const conv = input.conversationId
-        ? (await db.select().from(schema.conversations).where(eq(schema.conversations.id, input.conversationId)).limit(1))[0]
-        : input.jobId
-          ? await ensureForJob(input.jobId)
-          : input.quoteId
-            ? await ensureForQuote(input.quoteId)
-            : null;
-      if (!conv) throw new ORPCError("BAD_REQUEST", { message: "No conversation to send on." });
-
-      const [profile] = await db
-        .select({ id: schema.profiles.id })
-        .from(schema.profiles)
-        .where(eq(schema.profiles.userId, context.actor.userId))
-        .limit(1);
-
-      const common = {
-        conversationId: conv.id,
-        jobId: conv.jobId,
-        contactId: input.contactId ?? null,
-        installerId: input.installerId ?? null,
-        supplierId: input.supplierId ?? null,
-        authorName: context.actor.name || "Office",
-        authorProfileId: profile?.id ?? null,
-        direction: "out" as const,
-      };
-
-      /* ---------------- internal note: never leaves the building ------------- */
-      if (input.audience === "internal") {
-        const msg = await logMessage({
-          ...common,
-          channel: "note",
-          audience: "internal",
-          body: input.body,
-          status: "sent",
-        });
-        const mentioned = await resolveMentions(input.body);
-        if (mentioned.length) {
-          await db
-            .insert(schema.messageMentions)
-            .values(mentioned.map((profileId) => ({ messageId: msg.id, profileId })));
-        }
-        return { ok: true as const, messageId: msg.id, mentioned: mentioned.length };
-      }
-
-      /* ---------------------------- SMS ------------------------------------- */
-      if (input.channel === "sms") {
-        const to =
-          input.audience === "installer"
-            ? (await db.select().from(schema.installers).where(eq(schema.installers.id, input.installerId ?? 0)).limit(1))[0]
-                ?.mobile
-            : (await db.select().from(schema.contacts).where(eq(schema.contacts.id, input.contactId ?? 0)).limit(1))[0]
-                ?.mobile;
-
-        if (!normaliseMobile(to)) {
-          throw new ORPCError("BAD_REQUEST", { message: "No mobile on file for that recipient." });
-        }
-
-        /* A customer text gets the opt-out. Crew are staff, not a marketing
-         * list, so theirs does not. */
-        const body = input.audience === "customer" ? input.body + SMS_OPT_OUT : input.body;
-        /* Operational texts invite a reply, so they must go from the two-way
-         * number. Anything else sends a question into a void. */
-        const out = await sendSms({ to: to!, body, sender: "number", needsReply: true });
-
-        const msg = await logMessage({
-          ...common,
-          channel: "sms",
-          audience: input.audience,
-          body,
-          toAddress: normaliseMobile(to),
-          providerId: out.ok ? out.providerId : null,
-          status: out.ok ? "sent" : "failed",
-          statusDetail: out.ok ? null : out.reason,
-          failedAt: out.ok ? null : new Date(),
-        });
-
-        if (input.contactId) {
-          const [c] = await db.select().from(schema.contacts).where(eq(schema.contacts.id, input.contactId)).limit(1);
-          await addParticipant(conv.id, {
-            role: "customer",
-            contactId: input.contactId,
-            name: fullName(c),
-            email: c?.email ?? null,
-            mobile: c?.mobile ?? null,
-          });
-        }
-        if (input.installerId) {
-          const [i] = await db.select().from(schema.installers).where(eq(schema.installers.id, input.installerId)).limit(1);
-          await addParticipant(conv.id, {
-            role: "installer",
-            installerId: input.installerId,
-            name: i?.name ?? "",
-            mobile: i?.mobile ?? null,
-          });
-        }
-
-        if (!out.ok) return { ok: false as const, messageId: msg.id, reason: out.reason };
-        return { ok: true as const, messageId: msg.id };
-      }
-
-      /* --------------------------- email ------------------------------------ */
-      if (input.channel === "email") {
-        const person =
-          input.audience === "supplier"
-            ? (await db.select().from(schema.suppliers).where(eq(schema.suppliers.id, input.supplierId ?? 0)).limit(1))[0]
-            : (await db.select().from(schema.contacts).where(eq(schema.contacts.id, input.contactId ?? 0)).limit(1))[0];
-        const to = (person as { email?: string | null } | undefined)?.email;
-        if (!to) throw new ORPCError("BAD_REQUEST", { message: "No email address on file for that recipient." });
-
-        const subject = subjectWithRef(input.subject ?? conv.subject, conv.ref);
-        const headers = await threadHeaders(conv.id);
-
-        const out = await sendEmail({
-          to,
-          subject,
-          text: input.body,
-          html: input.body
-            .split(/\n{2,}/)
-            .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
-            .join(""),
-          from: CONVERSATION_FROM,
-          /* Unique per conversation, so their reply identifies itself. */
-          replyTo: conversationReplyTo(conv.id),
-          inReplyTo: headers.inReplyTo,
-          references: headers.references,
-        });
-
-        const msg = await logMessage({
-          ...common,
-          channel: "email",
-          audience: input.audience,
-          subject,
-          body: input.body,
-          toAddress: to,
-          /* Resend's id is what a delivery webhook comes back keyed on. */
-          providerId: out.ok ? out.providerId : null,
-          inReplyTo: headers.inReplyTo ?? null,
-          referencesHeader: headers.references ?? null,
-          status: out.ok ? "sent" : "failed",
-          statusDetail: out.ok ? null : out.reason,
-          failedAt: out.ok ? null : new Date(),
-        });
-
-        if (input.contactId) {
-          const c = person as typeof schema.contacts.$inferSelect | undefined;
-          await addParticipant(conv.id, {
-            role: "customer",
-            contactId: input.contactId,
-            name: fullName(c),
-            email: c?.email ?? null,
-            mobile: c?.mobile ?? null,
-          });
-        }
-
-        if (!out.ok) return { ok: false as const, messageId: msg.id, reason: out.reason };
-        return { ok: true as const, messageId: msg.id };
-      }
-
-      throw new ORPCError("BAD_REQUEST", { message: "Nothing sends on that channel yet." });
-    }),
+    .input(sendInput)
+    .handler(({ input, context }) => sendConversationMessage(input, context.actor)),
 
   /**
    * Pin a message into "Important job information". Access codes, the colour

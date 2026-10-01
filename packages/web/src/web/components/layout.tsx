@@ -34,6 +34,8 @@ import {
 import { authClient } from "../lib/auth";
 import { useBootstrap } from "../queries/settings";
 import { Loading } from "./ui/card";
+import { GlobalMemoButton, MemoProvider } from "./voice-memo";
+import { DueReminders } from "./office-tasks";
 import { cn } from "@/lib/utils";
 
 type NavIcon = typeof Users;
@@ -68,7 +70,7 @@ const NAV: NavEntry[] = [
     icon: Workflow,
     children: [
       { to: "/quotes", label: "Quotes", icon: FileText },
-      { to: "/voice-quotes", label: "Voice quotes", icon: Mic },
+      { to: "/voice-quotes", label: "Voice drafts", icon: Mic },
     ],
   },
   { to: "/jobs", label: "Jobs", icon: ClipboardList },
@@ -288,6 +290,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   );
 
   return (
+    <MemoProvider>
     <div className="flex min-h-screen bg-background">
       <aside className="sticky top-0 hidden h-screen w-[228px] shrink-0 flex-col border-r border-[var(--sidebar-border)] bg-[var(--sidebar)] px-3 py-4 lg:flex">
         {sidebar}
@@ -329,9 +332,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <img src="/images/terra-mark-reverse.png" alt="Terra Flooring" className="size-7 shrink-0" />
           <p className="text-[14px] font-bold tracking-[-0.01em] text-white">Terra Ops</p>
         </div>
-        <main className="min-w-0 flex-1">{children}</main>
+        <main className="min-w-0 flex-1 pb-20">{children}</main>
       </div>
+      {/* Voice memo from anywhere: say who and what, it works out the rest. */}
+      <GlobalMemoButton />
+      <DueReminders />
     </div>
+    </MemoProvider>
   );
 }
 

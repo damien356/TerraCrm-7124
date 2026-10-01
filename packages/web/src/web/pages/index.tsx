@@ -1,6 +1,7 @@
 import { Link } from "wouter";
 import { AlertTriangle, ArrowRight, Clock, MapPin, Radio, Users2 } from "lucide-react";
 import { Page } from "../components/layout";
+import { OfficeTasksCard } from "../components/office-tasks";
 import { Card, CardHeader, Empty, Loading, Stat } from "../components/ui/card";
 import { Badge, TASK_STATUS_COLOUR, TASK_STATUS_LABEL } from "../components/ui/badge";
 import { useDashboard } from "../queries/dashboard";
@@ -113,6 +114,8 @@ export default function DashboardPage() {
         </Card>
 
         <div className="space-y-4">
+          <OfficeTasksCard />
+
           <Card>
             <CardHeader
               title="Offers out"

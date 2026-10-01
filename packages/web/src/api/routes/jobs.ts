@@ -3,7 +3,101 @@ import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { adminOnly, type Actor } from "../middleware/auth";
+
+export const createJobInput = z.object({
+  title: z.string().default(""),
+  statusId: z.number().nullable().optional(),
+  siteId: z.number().nullable().optional(),
+  contactId: z.number().nullable().optional(),
+  companyId: z.number().nullable().optional(),
+  billToType: z.enum(["contact", "company"]).default("contact"),
+  billToContactId: z.number().nullable().optional(),
+  billToCompanyId: z.number().nullable().optional(),
+  furnitureOnSite: z.boolean().default(false),
+  description: z.string().nullable().optional(),
+  accessNotes: z.string().nullable().optional(),
+  source: z.string().default("other"),
+  value: z.number().default(0),
+  /**
+   * The person at the builder who sent the work. Stored as a normal
+   * `job_contacts` row at role 'supervisor', not a column on the job, so
+   * it reads back through the same link every other person on the job uses.
+   */
+  supervisorContactId: z.number().nullable().optional(),
+});
+
+/** Shared with voice memos, so a job said out loud lands exactly like one typed in. */
+export async function createJob(input: z.input<typeof createJobInput>, actor: Pick<Actor, "name" | "role">) {
+  const parsed = createJobInput.parse(input);
+  const { supervisorContactId, ...jobInput } = parsed;
+  const [maxRow] = await db.select({ max: sql<number>`coalesce(max(${schema.jobs.number}), 200)` }).from(schema.jobs);
+  const number = Number(maxRow?.max ?? 200) + 1;
+
+  const [status] = jobInput.statusId
+    ? [{ id: jobInput.statusId }]
+    : await db
+        .select({ id: schema.jobStatuses.id })
+        .from(schema.jobStatuses)
+        .where(eq(schema.jobStatuses.active, true))
+        .orderBy(asc(schema.jobStatuses.sortOrder))
+        .limit(1);
+
+  const [row] = await db
+    .insert(schema.jobs)
+    .values({
+      ...jobInput,
+      number,
+      statusId: status?.id ?? null,
+      billToContactId:
+        jobInput.billToType === "contact" ? (jobInput.billToContactId ?? jobInput.contactId ?? null) : null,
+      billToCompanyId:
+        jobInput.billToType === "company" ? (jobInput.billToCompanyId ?? jobInput.companyId ?? null) : null,
+    })
+    .returning();
+
+  if (row && jobInput.contactId) {
+    await db
+      .insert(schema.jobContacts)
+      .values({
+        jobId: row.id,
+        contactId: jobInput.contactId,
+        role: "job_contact",
+        isPrimary: true,
+        onSiteContact: true,
+        receivesSms: true,
+        receivesEmail: true,
+        canApproveQuote: true,
+      })
+      .onConflictDoNothing();
+  }
+
+  if (row && supervisorContactId) {
+    await db
+      .insert(schema.jobContacts)
+      .values({
+        jobId: row.id,
+        contactId: supervisorContactId,
+        role: "supervisor",
+        isPrimary: true,
+        receivesEmail: true,
+        canApproveQuote: true,
+      })
+      .onConflictDoNothing();
+  }
+
+  await db.insert(schema.activityLog).values({
+    jobId: row!.id,
+    entityType: "job",
+    entityId: row!.id,
+    action: "created",
+    detail: `Job #${number} created`,
+    actorName: actor.name,
+    actorRole: actor.role,
+  });
+
+  return row;
+}
 
 /**
  * A job is the commercial container. The WORK inside it lives in job_tasks —
@@ -154,98 +248,8 @@ export const jobs = {
   }),
 
   create: adminOnly
-    .input(
-      z.object({
-        title: z.string().default(""),
-        statusId: z.number().nullable().optional(),
-        siteId: z.number().nullable().optional(),
-        contactId: z.number().nullable().optional(),
-        companyId: z.number().nullable().optional(),
-        billToType: z.enum(["contact", "company"]).default("contact"),
-        billToContactId: z.number().nullable().optional(),
-        billToCompanyId: z.number().nullable().optional(),
-        furnitureOnSite: z.boolean().default(false),
-        description: z.string().nullable().optional(),
-        accessNotes: z.string().nullable().optional(),
-        source: z.string().default("other"),
-        value: z.number().default(0),
-        /**
-         * The person at the builder who sent the work. Stored as a normal
-         * `job_contacts` row at role 'supervisor', not a column on the job, so
-         * it reads back through the same link every other person on the job uses.
-         */
-        supervisorContactId: z.number().nullable().optional(),
-      }),
-    )
-    .handler(async ({ input, context }) => {
-      const { supervisorContactId, ...jobInput } = input;
-      const [maxRow] = await db.select({ max: sql<number>`coalesce(max(${schema.jobs.number}), 200)` }).from(schema.jobs);
-      const number = Number(maxRow?.max ?? 200) + 1;
-
-      const [status] = jobInput.statusId
-        ? [{ id: jobInput.statusId }]
-        : await db
-            .select({ id: schema.jobStatuses.id })
-            .from(schema.jobStatuses)
-            .where(eq(schema.jobStatuses.active, true))
-            .orderBy(asc(schema.jobStatuses.sortOrder))
-            .limit(1);
-
-      const [row] = await db
-        .insert(schema.jobs)
-        .values({
-          ...jobInput,
-          number,
-          statusId: status?.id ?? null,
-          billToContactId:
-            jobInput.billToType === "contact" ? (jobInput.billToContactId ?? jobInput.contactId ?? null) : null,
-          billToCompanyId:
-            jobInput.billToType === "company" ? (jobInput.billToCompanyId ?? jobInput.companyId ?? null) : null,
-        })
-        .returning();
-
-      if (row && jobInput.contactId) {
-        await db
-          .insert(schema.jobContacts)
-          .values({
-            jobId: row.id,
-            contactId: jobInput.contactId,
-            role: "job_contact",
-            isPrimary: true,
-            onSiteContact: true,
-            receivesSms: true,
-            receivesEmail: true,
-            canApproveQuote: true,
-          })
-          .onConflictDoNothing();
-      }
-
-      if (row && supervisorContactId) {
-        await db
-          .insert(schema.jobContacts)
-          .values({
-            jobId: row.id,
-            contactId: supervisorContactId,
-            role: "supervisor",
-            isPrimary: true,
-            receivesEmail: true,
-            canApproveQuote: true,
-          })
-          .onConflictDoNothing();
-      }
-
-      await db.insert(schema.activityLog).values({
-        jobId: row!.id,
-        entityType: "job",
-        entityId: row!.id,
-        action: "created",
-        detail: `Job #${number} created`,
-        actorName: context.actor.name,
-        actorRole: context.actor.role,
-      });
-
-      return row;
-    }),
+    .input(createJobInput)
+    .handler(({ input, context }) => createJob(input, context.actor)),
 
   update: adminOnly
     .input(

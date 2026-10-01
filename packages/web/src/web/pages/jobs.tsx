@@ -2,6 +2,7 @@ import * as React from "react";
 import { Link } from "wouter";
 import { Plus, Search, Sofa } from "lucide-react";
 import { Page } from "../components/layout";
+import { MemoButton } from "../components/voice-memo";
 import { Card, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -268,9 +269,12 @@ export default function JobsPage() {
                 {(jobs.data ?? []).map((j) => (
                   <tr key={j.id} className="border-b border-border last:border-0 hover:bg-secondary/50">
                     <td className="px-4 py-2.5">
-                      <Link to={`/jobs/${j.id}`} className="font-medium text-primary hover:underline">
-                        #{j.number}
-                      </Link>
+                      <span className="flex items-center gap-1">
+                        <Link to={`/jobs/${j.id}`} className="font-medium text-primary hover:underline">
+                          #{j.number}
+                        </Link>
+                        <MemoButton jobId={j.id} compact />
+                      </span>
                       <p className="max-w-[240px] truncate text-xs text-muted-foreground">{j.title || "Untitled"}</p>
                     </td>
                     <td className="px-4 py-2.5">

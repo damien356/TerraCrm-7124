@@ -1623,6 +1623,10 @@ export const officeTasks = sqliteTable(
     completedAt: integer("completed_at", { mode: "timestamp" }),
     completedByName: text("completed_by_name"),
     ...timestamps,
+    /** When to nudge the assignee's phone. Null is a task with no timed reminder. */
+    remindAt: integer("remind_at", { mode: "timestamp" }),
+    /** Set once the push has gone, so a reminder fires exactly once. */
+    remindedAt: integer("reminded_at", { mode: "timestamp" }),
   },
   (t) => [
     index("office_tasks_job_idx").on(t.jobId),

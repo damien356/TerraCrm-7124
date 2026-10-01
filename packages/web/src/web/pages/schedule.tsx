@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { Page } from "../components/layout";
+import { MemoButton } from "../components/voice-memo";
 import { BookInstallerPanel } from "../components/book-installer";
 import { CommandBox } from "../components/command-box";
 import { Loading, Spinner } from "../components/ui/card";
@@ -462,9 +463,12 @@ function DispatchPanel({
             </Link>
           ) : null}
         </div>
-        <button type="button" onClick={onClose} className="rounded-md p-1 text-muted-foreground hover:bg-secondary">
-          <X className="size-4" />
-        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {t ? <MemoButton jobId={t.jobId} compact /> : null}
+          <button type="button" onClick={onClose} className="rounded-md p-1 text-muted-foreground hover:bg-secondary">
+            <X className="size-4" />
+          </button>
+        </div>
       </div>
 
       {task.isLoading || !t ? (

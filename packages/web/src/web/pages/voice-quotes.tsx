@@ -1,93 +1,26 @@
 import * as React from "react";
 import { Link } from "wouter";
-import { Mic, Square, Upload, AlertTriangle, CheckCircle2, ArrowRight } from "lucide-react";
+import { Mic, Square, Upload, AlertTriangle, CheckCircle2, ArrowRight, FileText } from "lucide-react";
 import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { useProcessVoiceQuote, uploadVoiceRecording, useVoiceCaptures } from "../queries/voiceQuotes";
+import { useRecorder, usePlaybackUrl } from "../components/voice-recorder";
+import { useProcessVoiceQuote, uploadVoiceRecording } from "../queries/voiceQuotes";
+import { useVoiceDrafts } from "../queries/memos";
+import { useMemoLauncher } from "../components/voice-memo";
 
 function fmtDateTime(value: Date | string | null) {
-  if (!value) return "—";
+  if (!value) return "";
   const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "—";
+  if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 }
 
-const CAPTURE_STATUS_COLOUR: Record<string, string> = {
-  captured: "#7A736D",
-  transcribing: "#D08A1E",
-  extracting: "#D08A1E",
-  priced: "#3F7D3A",
-  failed: "#B4342A",
-};
-
-type Stage = "idle" | "recording" | "recorded" | "uploading" | "processing" | "done" | "error";
-
-function useRecorder() {
-  const [stage, setStage] = React.useState<Stage>("idle");
-  const [error, setError] = React.useState<string | null>(null);
-  const [blob, setBlob] = React.useState<Blob | null>(null);
-  const [seconds, setSeconds] = React.useState(0);
-  const mediaRecorderRef = React.useRef<MediaRecorder | null>(null);
-  const chunksRef = React.useRef<Blob[]>([]);
-  const timerRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const start = async () => {
-    setError(null);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
-      const recorder = new MediaRecorder(stream, { mimeType });
-      chunksRef.current = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-      recorder.onstop = () => {
-        const recordedBlob = new Blob(chunksRef.current, { type: mimeType });
-        setBlob(recordedBlob);
-        setStage("recorded");
-        stream.getTracks().forEach((t) => t.stop());
-      };
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      setSeconds(0);
-      setStage("recording");
-      timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
-    } catch {
-      setError("Could not access the microphone. Check the browser has permission and try again.");
-      setStage("error");
-    }
-  };
-
-  const stop = () => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    mediaRecorderRef.current?.stop();
-  };
-
-  const reset = () => {
-    setBlob(null);
-    setSeconds(0);
-    setStage("idle");
-    setError(null);
-  };
-
-  return { stage, setStage, error, setError, blob, seconds, start, stop, reset };
-}
 
 function Recorder({ onProcessed }: { onProcessed: (result: unknown) => void }) {
   const rec = useRecorder();
-
-  // One object URL per recording, freed when the recording changes or the card
-  // unmounts. Creating it inline in render made a fresh URL on every re-render
-  // and never released any of them.
-  const playbackUrl = React.useMemo(() => (rec.blob ? URL.createObjectURL(rec.blob) : null), [rec.blob]);
-  React.useEffect(
-    () => () => {
-      if (playbackUrl) URL.revokeObjectURL(playbackUrl);
-    },
-    [playbackUrl],
-  );
+  const playbackUrl = usePlaybackUrl(rec.blob);
   const process = useProcessVoiceQuote();
 
   const submit = async () => {
@@ -227,53 +160,157 @@ function ResultCard({ result, onDismiss }: { result: ProcessResult; onDismiss: (
   );
 }
 
-function HistoryList() {
-  const { data, isLoading } = useVoiceCaptures();
+type Draft = NonNullable<ReturnType<typeof useVoiceDrafts>["data"]>[number];
+
+/** What on this memo still wants a tap from him. */
+function openCount(d: Draft) {
+  const m = d.memo;
+  if (!m) return 0;
+  const clientOpen = m.client.kind === "unsure" || m.client.kind === "new" ? 1 : 0;
+  return clientOpen + m.actions.filter((a) => a.state === "draft" || a.state === "confirm" || a.state === "waiting_client" || a.state === "failed").length;
+}
+
+const ACTION_WORD: Record<string, string> = {
+  note: "note",
+  task: "task",
+  reminder: "reminder",
+  create_job: "new job",
+  quote: "quote",
+  email: "email",
+  sms: "text",
+  schedule: "booking",
+  job_status: "status",
+};
+
+type Filter = "all" | "open" | "memo" | "quote";
+
+function DraftsList() {
+  const { data, isLoading } = useVoiceDrafts();
+  const { open } = useMemoLauncher();
+  const [filter, setFilter] = React.useState<Filter>("all");
+  const rows = (data ?? []).filter((d) =>
+    filter === "all" ? true : filter === "open" ? openCount(d) > 0 : d.kind === filter,
+  );
+  const openTotal = (data ?? []).filter((d) => openCount(d) > 0).length;
+
+  const tabs: { key: Filter; label: string }[] = [
+    { key: "all", label: "All" },
+    { key: "open", label: `Needs a tap${openTotal ? ` (${openTotal})` : ""}` },
+    { key: "memo", label: "Memos" },
+    { key: "quote", label: "Quotes" },
+  ];
+
   return (
     <Card>
-      <CardHeader title="Recent captures" subtitle="Every recording, whatever it produced" />
+      <CardHeader
+        title="Voice drafts"
+        subtitle="Every recording, from a job, a client or the mic button, and what it made"
+        action={
+          <div className="flex flex-wrap gap-1">
+            {tabs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setFilter(t.key)}
+                className={
+                  filter === t.key
+                    ? "rounded-md bg-[var(--sidebar)] px-2.5 py-1 text-xs font-medium text-white"
+                    : "rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-secondary"
+                }
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        }
+      />
       {isLoading ? (
         <Loading />
-      ) : !data || data.length === 0 ? (
-        <Empty>No voice quotes recorded yet.</Empty>
+      ) : rows.length === 0 ? (
+        <Empty>{filter === "open" ? "Nothing waiting on you." : "Nothing recorded yet. Tap the mic, bottom right."}</Empty>
       ) : (
         <div className="divide-y divide-border">
-          {data.map((c) => (
-            <div key={c.id} className="flex items-center justify-between gap-3 px-4 py-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm">{c.transcript || "(no transcript yet)"}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {fmtDateTime(c.createdAt)} · {c.capturedByName}
-                </p>
+          {rows.map((d) => {
+            const m = d.memo;
+            const waiting = openCount(d);
+            const working = d.status === "transcribing" || d.status === "routing";
+            const kinds = m ? [...new Set(m.actions.filter((a) => a.state !== "dismissed").map((a) => ACTION_WORD[a.kind] ?? a.kind))] : [];
+            const inner = (
+              <div className="flex items-start justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-secondary/50">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">
+                    {m?.summary || d.transcript || (working ? "Working on it…" : "(no transcript)")}
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {fmtDateTime(d.createdAt)} · {d.capturedByName}
+                    {m?.client.name ? ` · ${m.client.name}` : ""}
+                    {m ? ` · ${m.source === "global" ? "mic button" : m.source === "job" ? "from a job" : "from a client"}` : ""}
+                    {kinds.length ? ` · ${kinds.join(", ")}` : ""}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Badge colour={d.kind === "memo" ? "#906F3C" : "#4A6A8A"}>{d.kind === "memo" ? "Memo" : "Quote"}</Badge>
+                  {working ? (
+                    <Spinner />
+                  ) : d.status === "failed" ? (
+                    <Badge colour="#B4342A">failed</Badge>
+                  ) : waiting > 0 ? (
+                    <Badge colour="#D08A1E">{waiting} to do</Badge>
+                  ) : d.kind === "quote" && d.quote ? (
+                    <span className="text-xs font-medium text-primary">Quote #{d.quote.number}</span>
+                  ) : (
+                    <CheckCircle2 className="size-4 text-[#3F7D3A]" />
+                  )}
+                </div>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <Badge colour={CAPTURE_STATUS_COLOUR[c.status]}>{c.status.replace("_", " ")}</Badge>
-                {c.quoteId ? (
-                  <Link href={`/quotes/${c.quoteId}`} className="text-sm font-medium text-primary hover:underline">
-                    Quote
-                  </Link>
-                ) : null}
-              </div>
-            </div>
-          ))}
+            );
+            if (d.kind === "memo")
+              return (
+                <button key={d.id} type="button" className="block w-full" onClick={() => open({ memoId: d.id })}>
+                  {inner}
+                </button>
+              );
+            return d.quoteId ? (
+              <Link key={d.id} href={`/quotes/${d.quoteId}`} className="block">
+                {inner}
+              </Link>
+            ) : (
+              <div key={d.id}>{inner}</div>
+            );
+          })}
         </div>
       )}
     </Card>
   );
 }
 
-export default function VoiceQuotesPage() {
+export default function VoiceDraftsPage() {
   const [result, setResult] = React.useState<ProcessResult | null>(null);
+  const [quoting, setQuoting] = React.useState(false);
+  const { open } = useMemoLauncher();
 
   return (
-    <Page title="Voice quotes" subtitle="Record a job note on site, get a priced draft quote back">
+    <Page
+      title="Voice drafts"
+      subtitle="Memos and quotes you've recorded, and anything still waiting on a tap"
+      actions={
+        <>
+          <Button variant="secondary" onClick={() => setQuoting((v) => !v)}>
+            <FileText className="size-4" /> {quoting ? "Hide voice quote" : "Voice quote"}
+          </Button>
+          <Button onClick={() => open({ jobId: null, contactId: null })}>
+            <Mic className="size-4" /> Voice memo
+          </Button>
+        </>
+      }
+    >
       <div className="mx-auto max-w-[900px] space-y-4">
         {result ? (
           <ResultCard result={result} onDismiss={() => setResult(null)} />
-        ) : (
+        ) : quoting ? (
           <Recorder onProcessed={(r) => setResult(r as ProcessResult)} />
-        )}
-        <HistoryList />
+        ) : null}
+        <DraftsList />
       </div>
     </Page>
   );
