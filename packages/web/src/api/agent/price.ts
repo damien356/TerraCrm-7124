@@ -9,7 +9,7 @@ import type { Extraction } from "./extract";
  * Pass 2: turn a structured `Extraction` (see `extract.ts`) into priced
  * quote lines, shaped exactly like `quoteItems` rows so the caller can insert
  * them straight in. This is the ONLY place that touches the products table
- * and the labour rate book for the voice pipeline — the extraction model
+ * and the labour rate book for the voice pipeline (the extraction model)
  * never sees either.
  */
 
@@ -36,6 +36,8 @@ function tokenScore(a: string, b: string): number {
   const at = new Set(normalise(a).split(" ").filter(Boolean));
   const bt = new Set(normalise(b).split(" ").filter(Boolean));
   if (at.size === 0 || bt.size === 0) return 0;
+  // "Cobble Ridge" heard for "Cobbleridge" is the same name.
+  if ([...at].join("") === [...bt].join("")) return 1;
   let hit = 0;
   for (const t of at) if (bt.has(t)) hit++;
   return hit / Math.max(at.size, bt.size);
@@ -85,9 +87,9 @@ function scoreProduct(
 }
 
 /**
- * A confident match is required before a material line prices itself
- * silently. Below this, the line still gets the best guess (so the office has
- * a number to start from) but is flagged for a human to confirm.
+ * A confident match is required before a material line takes a product and
+ * a price. Below this the line stays at $0 in his words, flagged, with the
+ * closest product named for one tap.
  */
 const CONFIDENT_MATCH_THRESHOLD = 0.6;
 
@@ -103,10 +105,12 @@ async function findBestProduct(hints: {
   for (const h of [hints.supplierHint, hints.brandHint, hints.rangeHint, hints.colourHint]) {
     if (h) patterns.push(...normalise(h).split(" ").filter((w) => w.length > 2));
   }
+  // Also look for a spoken two word range run together, "cobble ridge" as "cobbleridge".
+  if (hints.rangeHint && normalise(hints.rangeHint).includes(" ")) patterns.push(normalise(hints.rangeHint).replace(/ /g, ""));
 
   let candidates: ProductRow[];
   if (patterns.length === 0) {
-    // Nothing specific said beyond the sentence itself — narrow by category
+    // Nothing specific said beyond the sentence itself, narrow by category
     // only, then score every product in it. Categories are small enough
     // (a few hundred each) for this to be cheap.
     candidates = hints.category && hints.category !== "unknown"
@@ -255,11 +259,25 @@ const NOT_PRODUCT = new Set([
 ]);
 /** The product-naming words of a line, for remembering a pick. */
 export function learnKey(line: Pick<Extraction["lines"][number], "supplierHint" | "brandHint" | "rangeHint" | "colourHint" | "spokenDescription">) {
-  const named = [line.supplierHint, line.brandHint, line.rangeHint, line.colourHint].filter(Boolean).join(" ");
-  return normalise(named || line.spokenDescription)
+  // A colour alone ("green") is too loose to learn from, so it falls back to
+  // the words he said ("green foam underlay").
+  const hasName = Boolean(line.supplierHint || line.brandHint || line.rangeHint);
+  const named = hasName ? [line.supplierHint, line.brandHint, line.rangeHint, line.colourHint].filter(Boolean).join(" ") : "";
+  return normalise(named || line.spokenDescription || line.colourHint)
     .split(" ")
     .filter((w) => w && !/^\d+$/.test(w) && !NOT_PRODUCT.has(w))
     .join(" ");
+}
+
+/**
+ * "23 lm of underlay" against an underlay sold by the m2 is a quarter of
+ * what is needed. Say so, with the broadloom sum, rather than guess a width.
+ */
+function unitCheck(qty: number, said: string | null | undefined, sells: string) {
+  if (!said || said === sells) return "";
+  return said === "lm" && sells === "m2"
+    ? `You said ${qty} lm and it sells by the m2 (on 3.66 m wide carpet that is about ${Math.round(qty * 3.66)} m2). Check the quantity.`
+    : `You said ${qty} ${said} and it sells by the ${sells}. Check the quantity.`;
 }
 
 async function priceMaterialLine(line: Extraction["lines"][number]): Promise<PricedLine> {
@@ -282,6 +300,7 @@ async function priceMaterialLine(line: Extraction["lines"][number]): Promise<Pri
   const learned = phraseKey ? await findLearnedProduct(phraseKey) : null;
   if (learned) {
     const description = [learned.brand, learned.range, learned.colour].filter(Boolean).join(", ") || spoken;
+    const note = unitCheck(qty, line.unit, learned.unit || unit);
     return {
       productId: learned.id,
       kind: learned.category === "labour" ? "labour" : "supply",
@@ -290,8 +309,8 @@ async function priceMaterialLine(line: Extraction["lines"][number]): Promise<Pri
       unit: learned.unit || unit,
       unitPrice: learned.sellPrice ?? 0,
       unitCost: learned.costPrice ?? null,
-      flagged: false,
-      flagReason: null,
+      flagged: Boolean(note),
+      flagReason: note || null,
       voicePhrase: phraseKey,
     };
   }
@@ -336,22 +355,49 @@ async function priceMaterialLine(line: Extraction["lines"][number]): Promise<Pri
   }
 
   const { product, score } = match;
+  const guessName = [product.supplier, product.range, product.colour].filter(Boolean).join(" ");
+
+  // Not a confident match means it is most likely not in the price book yet
+  // (green foam underlay once came back as a vinyl). A guessed price on the
+  // quote is worse than none, so the line keeps his words at $0 and names the
+  // closest product, which Change product offers first.
+  if (score < CONFIDENT_MATCH_THRESHOLD) {
+    const words = line.spokenDescription?.trim();
+    const named = titleCase(words && words.length <= 60 ? words : asSaid);
+    // Only point at the closest product when it is the same sort of thing.
+    const sameKind = !line.category || line.category === "unknown" || product.category === line.category;
+    return {
+      productId: null,
+      kind: "supply",
+      description: line.category === "underlay" && !/underlay/i.test(named) ? `${named} Underlay` : named,
+      qty,
+      unit,
+      unitPrice: 0,
+      unitCost: null,
+      flagged: true,
+      flagReason: sameKind
+        ? `Not in the price book yet, so this is priced at $0. Closest is ${guessName}. Tap Change product to use it or pick another, or put the price in.`
+        : "Not in the price book yet, so this is priced at $0. Add it to the price book, tap Change product, or put the price in.",
+      voicePhrase: phraseKey || null,
+    };
+  }
+
   const description = [product.brand, product.range, product.colour].filter(Boolean).join(", ") || spoken;
-  const confident = score >= CONFIDENT_MATCH_THRESHOLD;
+  const sells = product.unit || unit;
+  const unitNote = unitCheck(qty, line.unit, sells);
+  const flagged = Boolean(unitNote);
 
   return {
     productId: product.id,
     kind: product.category === "labour" ? "labour" : "supply",
     description,
     qty,
-    unit: product.unit || unit,
+    unit: sells,
     unitPrice: product.sellPrice ?? 0,
     unitCost: product.costPrice ?? null,
-    flagged: !confident,
-    flagReason: confident
-      ? null
-      : `Best guess from what was said ("${asSaid}"). Check it, or tap Change product.`,
-    voicePhrase: confident ? null : phraseKey || null,
+    flagged,
+    flagReason: flagged ? unitNote : null,
+    voicePhrase: null,
   };
 }
 

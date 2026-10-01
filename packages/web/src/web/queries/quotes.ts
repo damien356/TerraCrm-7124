@@ -98,3 +98,23 @@ export function useChangeQuoteProduct() {
 export function useSuggestedProducts(itemId: number, enabled: boolean) {
   return useQuery(orpc.quotes.suggestProducts.queryOptions({ input: { itemId }, enabled, staleTime: 30_000 }));
 }
+
+/** What was said about the customer on a quote with nobody on it, and the closest clients. */
+export function useQuoteCustomerHelp(id: number, enabled: boolean) {
+  return useQuery(orpc.quotes.customerHelp.queryOptions({ input: { id }, enabled, staleTime: 30_000 }));
+}
+
+export function useSetQuoteCustomer() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.quotes.setCustomer.mutationOptions({
+      onSuccess: () =>
+        Promise.all([
+          queryClient.invalidateQueries({ queryKey: orpc.quotes.key() }),
+          queryClient.invalidateQueries({ queryKey: orpc.contacts.key() }),
+          queryClient.invalidateQueries({ queryKey: orpc.voiceQuotes.key() }),
+          queryClient.invalidateQueries({ queryKey: orpc.memos.key() }),
+        ]),
+    }),
+  );
+}

@@ -6,6 +6,10 @@ import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
 import { sellExGstWithMarkup } from "../lib/pricing";
 import { suggestProducts } from "../agent/price";
+import { customerCandidates, SAID_DETAILS_NOTE, spokenForQuote, UNMATCHED_NOTE } from "../lib/quote-customer";
+import { forgetNames } from "../lib/memo-context";
+import { normaliseMobile } from "../lib/sms";
+import { createContact } from "./contacts";
 
 /**
  * Quotes are admin-only, end to end. Installers must never reach any procedure
@@ -566,6 +570,75 @@ export const quotes = {
    * Change product list. Reads the line's own words and, on a voice line,
    * what was said.
    */
+  /**
+   * For a quote with nobody on it: what Damien said about the customer and
+   * the closest clients already in the system, so the quote page can show
+   * "Customer not found" with matches and a filled-in new client form.
+   */
+  customerHelp: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+    await quoteOrThrow(input.id);
+    const spoken = await spokenForQuote(input.id);
+    const candidates = spoken ? (await customerCandidates(spoken)).slice(0, 4) : [];
+    return { spoken, candidates };
+  }),
+
+  /** Put a customer on a quote: someone already in the system, or a new client made here. */
+  setCustomer: adminOnly
+    .input(
+      z.object({
+        id: z.number(),
+        contactId: z.number().optional(),
+        create: z
+          .object({
+            firstName: z.string().trim().min(1),
+            lastName: z.string().trim().default(""),
+            mobile: z.string().trim().nullable().optional(),
+            email: z.string().trim().nullable().optional(),
+            address: z.string().trim().nullable().optional(),
+            suburb: z.string().trim().nullable().optional(),
+            postcode: z.string().trim().nullable().optional(),
+          })
+          .optional(),
+      }),
+    )
+    .handler(async ({ input, context }) => {
+      const quote = await quoteOrThrow(input.id);
+      let contact: typeof schema.contacts.$inferSelect | undefined;
+      if (input.create) {
+        const mobile = input.create.mobile ? (normaliseMobile(input.create.mobile) ?? input.create.mobile) : null;
+        contact = await createContact({ ...input.create, mobile, source: "phone" }, context.actor);
+        forgetNames();
+      } else if (input.contactId) {
+        [contact] = await db.select().from(schema.contacts).where(eq(schema.contacts.id, input.contactId));
+      }
+      if (!contact) throw new ORPCError("BAD_REQUEST", { message: "Pick a client or fill in a new one." });
+
+      await db
+        .update(schema.quotes)
+        .set({
+          contactId: contact.id,
+          notes: quote.notes?.replace(UNMATCHED_NOTE, "").replace(SAID_DETAILS_NOTE, "") ?? null,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.quotes.id, input.id));
+      await db
+        .update(schema.voiceQuoteCaptures)
+        .set({ contactId: contact.id, updatedAt: new Date() })
+        .where(eq(schema.voiceQuoteCaptures.quoteId, input.id));
+      const name = `${contact.firstName} ${contact.lastName}`.trim();
+      await db.insert(schema.activityLog).values({
+        contactId: contact.id,
+        jobId: quote.jobId,
+        entityType: "quote",
+        entityId: quote.id,
+        action: "customer_set",
+        detail: `${name} put on quote #${quote.number}${input.create ? " as a new client" : ""}`,
+        actorName: context.actor.name,
+        actorRole: context.actor.role,
+      });
+      return { contactId: contact.id, name };
+    }),
+
   suggestProducts: adminOnly.input(z.object({ itemId: z.number() })).handler(async ({ input }) => {
     const [item] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, input.itemId));
     if (!item) throw new ORPCError("NOT_FOUND", { message: "Line not found" });

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { desc, eq, like, sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -9,10 +9,11 @@ import { transcribeAudio } from "../agent/transcribe";
 import { extractVoiceQuote } from "../agent/extract";
 import { priceExtraction } from "../agent/price";
 import { recalc } from "./quotes";
+import { customerCandidates, spokenCustomer, strongMatch } from "../lib/quote-customer";
 
 /**
  * Damien records a rough job note on site, this turns it into a draft quote.
- * Recording -> transcript (Whisper) -> structured lines (GPT, labour rate book
+ * Recording -> transcript (gpt-4o-transcribe) -> structured lines (GPT, labour rate book
  * only) -> priced lines (products table + labour rates, in code) -> a real
  * quote, same tables and totals as one built by hand in the quote builder.
  *
@@ -238,6 +239,8 @@ export async function buildQuoteFromTranscript(
   transcript: string,
   link: { contactId: number | null; companyId: number | null; jobId: number | null },
   actor: Pick<Actor, "name" | "role">,
+  // Voice memos settle the client themselves, so they skip the name match.
+  opts: { findCustomer: boolean } = { findCustomer: true },
 ) {
   const labourItems = await db
     .select({
@@ -251,30 +254,27 @@ export async function buildQuoteFromTranscript(
   const extraction = await extractVoiceQuote(transcript, labourItems);
   const pricedLines = await priceExtraction(extraction);
 
-  // Try to match the spoken name to an existing contact or company.
-  // Never create a new record silently, an unmatched name just rides
-  // along on the quote's notes so the office can attach it by hand.
+  // Who it is for. A strong match (their phone or email, or their full name
+  // and nobody close behind) is attached. Anything less is left for Damien:
+  // the quote shows "Customer not found" with the closest few and a new
+  // client form filled in from what he said. Never creates anyone silently.
   let contactId = link.contactId;
   let companyId = link.companyId;
   let matchedCustomerName: string | null = null;
+  const spoken = spokenCustomer(extraction, transcript);
   if (contactId) {
     const [ct] = await db.select().from(schema.contacts).where(eq(schema.contacts.id, contactId));
     if (ct) matchedCustomerName = `${ct.firstName} ${ct.lastName}`.trim();
-  } else if (!companyId && extraction.customerSpokenName) {
-    const q = `%${extraction.customerSpokenName.toLowerCase()}%`;
-    const [contactMatch] = await db
-      .select()
-      .from(schema.contacts)
-      .where(like(sql`lower(${schema.contacts.firstName} || ' ' || ${schema.contacts.lastName})`, q))
-      .limit(1);
-    if (contactMatch) {
-      contactId = contactMatch.id;
-      matchedCustomerName = `${contactMatch.firstName} ${contactMatch.lastName}`.trim();
-    } else {
+  } else if (!companyId && opts.findCustomer && (spoken.name || spoken.mobile || spoken.email)) {
+    const hit = strongMatch(spoken, await customerCandidates(spoken));
+    if (hit) {
+      contactId = hit.id;
+      matchedCustomerName = hit.name;
+    } else if (spoken.name && !spoken.isNew && spoken.name.length >= 4) {
       const [companyMatch] = await db
         .select()
         .from(schema.companies)
-        .where(like(sql`lower(${schema.companies.name})`, q))
+        .where(eq(sql`lower(${schema.companies.name})`, spoken.name.toLowerCase()))
         .limit(1);
       if (companyMatch) {
         companyId = companyMatch.id;
@@ -298,6 +298,8 @@ export async function buildQuoteFromTranscript(
       `Damien said the customer's name as "${extraction.customerSpokenName}", no matching contact or company was found. Attach the right one before sending.`,
     );
   }
+  const said = [spoken.mobile, spoken.email, spoken.address, spoken.suburb].filter(Boolean);
+  if (!matchedCustomerName && said.length) notesParts.push(`Customer details said: ${said.join(", ")}.`);
   if (extraction.generalNotes) notesParts.push(extraction.generalNotes);
   notesParts.push(`Created from a voice recording. Transcript: "${transcript}"`);
 

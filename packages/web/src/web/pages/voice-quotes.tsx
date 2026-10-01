@@ -9,6 +9,7 @@ import { useRecorder, usePlaybackUrl } from "../components/voice-recorder";
 import { useProcessVoiceQuote, uploadVoiceRecording } from "../queries/voiceQuotes";
 import { useVoiceDrafts } from "../queries/memos";
 import { useMemoLauncher } from "../components/voice-memo";
+import { QuoteCustomerPanel } from "../components/quote-customer";
 
 function fmtDateTime(value: Date | string | null) {
   if (!value) return "";
@@ -118,6 +119,7 @@ type ProcessResult = {
 };
 
 function ResultCard({ result, onDismiss }: { result: ProcessResult; onDismiss: () => void }) {
+  const [attached, setAttached] = React.useState<string | null>(null);
   return (
     <Card>
       <CardHeader
@@ -138,12 +140,12 @@ function ResultCard({ result, onDismiss }: { result: ProcessResult; onDismiss: (
         ) : (
           <p className="text-sm text-muted-foreground">Every line matched with confidence.</p>
         )}
-        {result.matchedCustomerName ? (
-          <p className="text-sm text-muted-foreground">Matched to existing customer: {result.matchedCustomerName}</p>
-        ) : (
+        {result.matchedCustomerName || attached ? (
           <p className="text-sm text-muted-foreground">
-            No customer was matched. Open the quote and attach one before sending.
+            {attached ? `Customer added: ${attached}` : `Matched to existing customer: ${result.matchedCustomerName}`}
           </p>
+        ) : (
+          <QuoteCustomerPanel quoteId={result.quote.id} onDone={setAttached} />
         )}
         <div className="flex items-center gap-2 pt-2">
           <Link href={`/quotes/${result.quote.id}`}>

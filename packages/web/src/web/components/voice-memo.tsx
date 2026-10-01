@@ -497,7 +497,7 @@ function ClientChooser({ memoId, memo, onDone }: { memoId: number; memo: Memo; o
         {mode === "new"
           ? c.kind === "new"
             ? "New client? Check the details, then create."
-            : "Nobody matched. Create them as a new client?"
+            : "Customer not found. Create them as a new client?"
           : c.kind === "unsure"
             ? "Is it one of these?"
             : "Who is it about?"}

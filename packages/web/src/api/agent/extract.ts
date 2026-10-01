@@ -5,7 +5,7 @@ import { gateway } from "./gateway";
 
 /**
  * Pass 1 of the voice quote pipeline: turn a raw transcript into structured
- * lines. This model never sees the price book (4,000+ products) — it only
+ * lines. This model never sees the price book (4,000+ products). It only
  * knows the fixed, small labour rate book (under 90 items), so it can match a
  * labour item directly. Materials come back as spoken hints (supplier,
  * range, colour...) and get matched against the products table in code,
@@ -53,11 +53,16 @@ export const extractionSchema = z.object({
     .string()
     .nullable()
     .describe("The customer or company name Damien mentioned, if any. Null if he named none."),
+  customerIsNew: z.boolean().describe("True when Damien says it is a new client or customer."),
+  customerMobile: z.string().nullable().describe("The customer's phone number if said, digits only, e.g. 0400003003."),
+  customerEmail: z.string().nullable().describe("The customer's email if said, e.g. janedoe@gmail.com."),
+  customerAddress: z.string().nullable().describe("Street address of the job or customer if said, without the suburb."),
+  customerSuburb: z.string().nullable().describe("Suburb if said."),
   lines: z.array(extractionLineSchema),
   generalNotes: z
     .string()
     .nullable()
-    .describe("Anything Damien said that is relevant but does not fit a line — access issues, timing, etc."),
+    .describe("Anything Damien said that is relevant but does not fit a line: access issues, timing, etc."),
 });
 
 export type Extraction = z.infer<typeof extractionSchema>;
@@ -75,14 +80,14 @@ export async function extractVoiceQuote(
     schema: extractionSchema,
     prompt: dedent`
       You are turning a flooring installer's spoken job note into structured quote
-      lines for Terra Flooring. Damien dictates a rough quote on site — materials,
+      lines for Terra Flooring. Damien dictates a rough quote on site: materials,
       install labour, and sometimes a flat dollar figure for something like moving
       furniture. Break his transcript into lines.
 
       Rules:
       - A material line is a flooring product (carpet, vinyl, underlay, etc) sold by
         the price book. Capture whatever supplier/brand/range/colour he mentions as
-        hints — do not invent one he did not say.
+        hints. Do not invent one he did not say.
       - A labour line is installation work. Match it to the CLOSEST item in the
         labour rate book below by id. If he says "stairs" with no further detail,
         prefer the standard straight step item unless he clearly means winders.
@@ -94,7 +99,9 @@ export async function extractVoiceQuote(
         labour line even if a "Furniture shift" item exists in the rate book.
       - Quantities are numbers, not words: "forty lineal metres" is qty 40, unit "lm".
       - If he names a customer or company, put it in customerSpokenName exactly as
-        said. Otherwise null.
+        said. Otherwise null. Any phone number, email, street address or suburb he
+        gives for the customer goes in the customer fields, not in generalNotes.
+        Emails are spoken: "jane doe at gmail dot com" is janedoe@gmail.com.
 
       Labour rate book (id: name (group, unit)):
       ${labourList}

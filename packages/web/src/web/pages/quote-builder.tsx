@@ -8,6 +8,7 @@ import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { LabourPicker, ProductPicker } from "../components/quote-pickers";
+import { QuoteCustomerPanel } from "../components/quote-customer";
 import {
   useAcceptQuote,
   useAddQuoteItem,
@@ -31,9 +32,9 @@ const KINDS = ["supply", "labour", "prep", "removal", "accessory", "other"];
 const UNITS = ["m2", "lm", "each", "hour", "job"];
 
 function fmtDateTime(value: Date | string | null) {
-  if (!value) return "—";
+  if (!value) return "Not yet";
   const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "—";
+  if (Number.isNaN(d.getTime())) return "Not yet";
   return d.toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 }
 
@@ -434,7 +435,7 @@ export default function QuoteBuilderPage() {
 
   const q = quote.data;
   const locked = q.status === "accepted" || q.status === "declined" || q.status === "expired";
-  const customer = q.contact ? `${q.contact.firstName} ${q.contact.lastName}` : "No customer set";
+  const customer = q.contact ? `${q.contact.firstName} ${q.contact.lastName}` : q.company ? "" : "No customer yet";
   const deposit = q.total * (q.depositPercent / 100);
 
   async function run(fn: () => Promise<unknown>) {
@@ -459,7 +460,7 @@ export default function QuoteBuilderPage() {
           <Badge colour={QUOTE_STATUS_COLOUR[q.status]}>{q.status}</Badge>
           <span className="text-muted-foreground">
             {customer}
-            {q.company ? ` · billed to ${q.company.name}` : ""}
+            {q.company ? `${customer ? " · " : ""}billed to ${q.company.name}` : ""}
             {q.site ? ` · ${q.site.address}` : ""}
           </span>
         </span>
@@ -527,6 +528,12 @@ export default function QuoteBuilderPage() {
       {error ? (
         <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
+        </div>
+      ) : null}
+
+      {!q.contact && !q.company && !locked ? (
+        <div className="mb-4">
+          <QuoteCustomerPanel quoteId={q.id} />
         </div>
       ) : null}
 

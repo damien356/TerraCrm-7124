@@ -305,6 +305,7 @@ async function runOne(captureId: number, m: StoredMemo, a: StoredAction, actor: 
         a.quoteBrief || transcript,
         { contactId: contact?.id ?? null, companyId: null, jobId: targetJob(m, a) },
         actor,
+        { findCustomer: false },
       );
       a.ref = { table: "quotes", id: built.quote.id };
       a.state = "done";
