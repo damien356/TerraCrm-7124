@@ -4,8 +4,8 @@ import { CheckCircle2, Copy, Inbox, Link2Off, LogIn, RefreshCw, TriangleAlert } 
 import { Card, CardHeader, Loading, Spinner } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
-import { Checkbox } from "./ui/field";
-import { useCheckMailNow, useConnectMailbox, useDisconnectMailbox, useMailStatus } from "../queries/mail";
+import { Checkbox, Input } from "./ui/field";
+import { useCheckMailNow, useConnectMailbox, useDisconnectMailbox, useMailStatus, useSetPriceSms } from "../queries/mail";
 import { useSetAutoSend } from "../queries/payables";
 
 /**
@@ -231,6 +231,8 @@ export function EmailAgentCard() {
               </label>
             </div>
 
+            <PriceSmsSetting saved={s.priceSmsTo} smsReady={s.smsReady} />
+
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-xs text-muted-foreground">
               <span>{s.messagesRead} emails looked at so far.</span>
               <Link to="/finance/suppliers-owed" className="font-medium text-primary hover:underline">
@@ -253,7 +255,7 @@ export function EmailAgentCard() {
 function RedirectUri({ uri, copied, onCopy }: { uri: string; copied: boolean; onCopy: () => void }) {
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-2">
-      <code className="rounded bg-secondary px-2 py-1 text-xs text-foreground">{uri}</code>
+      <code className="min-w-0 max-w-full break-all rounded bg-secondary px-2 py-1 text-xs text-foreground">{uri}</code>
       <button
         type="button"
         className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
@@ -263,6 +265,55 @@ function RedirectUri({ uri, copied, onCopy }: { uri: string; copied: boolean; on
       >
         <Copy className="size-3" /> {copied ? "Copied" : "Copy"}
       </button>
+    </div>
+  );
+}
+
+/** Where the "price over $50" text goes. Blank means no texts, the Needs you list still shows every flag. */
+function PriceSmsSetting({ saved, smsReady }: { saved: string; smsReady: boolean }) {
+  const save = useSetPriceSms();
+  const [value, setValue] = React.useState(saved);
+  const [msg, setMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
+  React.useEffect(() => setValue(saved), [saved]);
+  const dirty = value.trim() !== saved;
+  return (
+    <div className="space-y-2 border-t border-border pt-4">
+      <div>
+        <span className="block text-sm font-medium">Text me when a price is out by more than $50</span>
+        <span className="block text-xs text-muted-foreground">
+          Every price difference over $10 shows on Suppliers owed under Needs you. One over $50 also sends a text to this mobile, once per
+          invoice. Leave it blank for no texts.
+        </span>
+      </div>
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setMsg(null);
+          try {
+            const r = await save.mutateAsync({ mobile: value });
+            setMsg({ ok: true, text: r.mobile ? `Saved. Texts go to ${r.mobile}.` : "Saved. No texts." });
+          } catch (err) {
+            setMsg({ ok: false, text: errText(err) });
+          }
+        }}
+      >
+        <Input
+          id="price_sms_to"
+          type="tel"
+          inputMode="tel"
+          placeholder="04xx xxx xxx"
+          className="w-full sm:w-56"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <Button type="submit" size="sm" variant="outline" disabled={!dirty || save.isPending}>
+          {save.isPending ? <Spinner className="size-3.5" /> : null}
+          Save
+        </Button>
+      </form>
+      {msg ? <p className={msg.ok ? "text-xs text-muted-foreground" : "text-xs text-destructive"}>{msg.text}</p> : null}
+      {!smsReady ? <p className="text-xs text-muted-foreground">ClickSend isn't set up on this server, so no texts will go yet.</p> : null}
     </div>
   );
 }

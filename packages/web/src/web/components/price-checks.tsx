@@ -133,7 +133,7 @@ export function InvoicePriceChecks({ invoiceId }: { invoiceId: number }) {
       {q.isLoading ? (
         <p className="px-3 py-2.5 text-xs text-muted-foreground">Checking…</p>
       ) : flags.length === 0 ? (
-        <p className="px-3 py-2.5 text-xs text-muted-foreground">Every rate on this invoice matches Ops, or is too small to matter (under 50c, or under $5 and 1%).</p>
+        <p className="px-3 py-2.5 text-xs text-muted-foreground">Every rate on this invoice matches Ops, or is out by $10 or less.</p>
       ) : (
         <ul className="divide-y divide-border">
           {flags.map((f) => (

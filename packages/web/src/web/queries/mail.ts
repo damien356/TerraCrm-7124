@@ -20,3 +20,4 @@ function useMailRefresh() {
 
 export const useDisconnectMailbox = () => useMutation(orpc.mail.disconnect.mutationOptions({ onSuccess: useMailRefresh() }));
 export const useCheckMailNow = () => useMutation(orpc.mail.checkNow.mutationOptions({ onSuccess: useMailRefresh() }));
+export const useSetPriceSms = () => useMutation(orpc.mail.setPriceSms.mutationOptions({ onSuccess: useMailRefresh() }));

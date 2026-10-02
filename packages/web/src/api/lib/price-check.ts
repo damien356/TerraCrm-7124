@@ -2,6 +2,7 @@ import { and, eq, inArray, ne } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { isChargeLive, priceProduct, sellExGst, todayISO, type SpecialRow } from "./pricing";
+import { sendSms } from "./sms";
 
 /* ---------------------------------------------------------------------------
  * PRICE CHECKS.
@@ -12,12 +13,15 @@ import { isChargeLive, priceProduct, sellExGst, todayISO, type SpecialRow } from
  * rate and logs which invoice proved it. Ignore leaves the price list alone.
  *
  * Damien's rules:
- *  - A changed standard product cost, once approved, moves the sell price by
- *    the same markup the product already carries.
+ *  - A changed standard product cost, once approved, resets the sell price
+ *    with the standard chain, cost x 1.3 x 1.05 x 1.4 (`sellExGst`).
+ *    Damien's call, 2 Oct 2026.
  *  - A special or clearance price on an invoice never moves the sell price.
  *    It is extra margin, so it is shown, never offered as a price list change.
- *  - Small rounding noise is not worth his time: a difference has to be at
- *    least 50c on the invoice AND either over $5 or over 1%.
+ *  - Small differences are not worth his time: only over $10 on the invoice
+ *    gets flagged (Damien, 2 Oct 2026).
+ *  - A new flag over $50 also texts him, if a mobile is set under Settings >
+ *    Email agent. One text per invoice, and only when the flag is new.
  * ------------------------------------------------------------------------- */
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -25,10 +29,14 @@ const $ = (n: number) => `\u0024${Math.abs(n).toLocaleString("en-AU", { minimumF
 const lc = (s: string) => s.toLowerCase();
 const squash = (s: string | null | undefined) => (s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
-/** Worth Damien's time: 50c or more, and over $5 or over 1%. Compares invoice totals, not rates. */
+/** Damien's line: flag anything over $10 on the invoice. Compares invoice totals, not rates. */
+export const FLAG_OVER_EX_GST = 10;
+/** A new flag over this also texts him. */
+export const TEXT_OVER_EX_GST = 50;
+export const PRICE_SMS_KEY = "price_flag_sms_to";
+
 export function worthFlagging(opsExGst: number, billedExGst: number) {
-  const d = Math.abs(billedExGst - opsExGst);
-  return d >= 0.5 && (d > 5 || d > Math.abs(opsExGst) * 0.01);
+  return Math.abs(r2(billedExGst - opsExGst)) > FLAG_OVER_EX_GST;
 }
 
 type InvLine = { description: string; qty: number | null; unit: string | null; unitPriceExGst: number | null; totalExGst: number | null };
@@ -223,7 +231,7 @@ export async function draftFlags(invoiceId: number): Promise<FlagDraft[]> {
       });
       continue;
     }
-    const sellTo = p.sellPrice !== null && standard > 0 ? r2((billed * p.sellPrice) / standard) : sellExGst(billed);
+    const sellTo = sellExGst(billed);
     flags.push({
       ...base,
       kind: "product_cost",
@@ -232,7 +240,7 @@ export async function draftFlags(invoiceId: number): Promise<FlagDraft[]> {
       title: `${name}: ${who} billed ${$(billed)} a ${p.unit}, Ops has ${$(standard)}`,
       detail:
         `${billed > standard ? "Up" : "Down"} ${$(billed - standard)} a ${p.unit}, ${billed > standard ? "costing" : "saving"} ${$(impact)} on ${ref}. ` +
-        `Approve sets the cost to ${$(billed)} and the sell price ${p.sellPrice !== null ? `from ${$(p.sellPrice)} ` : ""}to ${$(sellTo)}, same markup.` +
+        `Approve sets the cost to ${$(billed)} and the sell price ${p.sellPrice !== null ? `from ${$(p.sellPrice)} ` : ""}to ${$(sellTo)} (cost x 1.3 x 1.05 x 1.4).` +
         (billed < standard ? " If this is a one-off special, press Ignore and the price list stays." : ""),
       change: { target: "product", productId: p.id, field: "costPrice", from: standard, to: billed, sellFrom: p.sellPrice, sellTo },
     });
@@ -419,6 +427,7 @@ export async function checkInvoicePrices(invoiceId: number) {
     const existing = await db.select().from(schema.priceFlags).where(eq(schema.priceFlags.invoiceId, invoiceId));
     const byKey = new Map(existing.map((e) => [e.dedupeKey, e]));
     const keep = new Set<string>();
+    const fresh: FlagDraft[] = [];
     for (const d of drafts) {
       keep.add(d.key);
       const row = {
@@ -439,15 +448,45 @@ export async function checkInvoicePrices(invoiceId: number) {
         dedupeKey: d.key,
       };
       const e = byKey.get(d.key);
-      if (!e) await db.insert(schema.priceFlags).values(row);
+      if (!e) {
+        await db.insert(schema.priceFlags).values(row);
+        fresh.push(d);
+      }
       else if (e.status === "open") await db.update(schema.priceFlags).set({ ...row, updatedAt: new Date() }).where(eq(schema.priceFlags.id, e.id));
     }
     const stale = existing.filter((e) => e.status === "open" && !keep.has(e.dedupeKey)).map((e) => e.id);
     if (stale.length) await db.delete(schema.priceFlags).where(inArray(schema.priceFlags.id, stale));
+    await textBigFlags(invoiceId, fresh);
     return drafts.length;
   } catch (e) {
     console.error(`[price-check] invoice ${invoiceId}:`, (e as Error).message);
     return 0;
+  }
+}
+
+/**
+ * Text Damien when a NEW flag is over $50. One text per invoice, never on a
+ * recheck of a flag he has already seen. A special billed under the price
+ * list is good news with nothing to decide, so it never texts. No mobile set
+ * under Settings > Email agent means no text. Never throws.
+ */
+async function textBigFlags(invoiceId: number, fresh: FlagDraft[]) {
+  const big = fresh.filter((d) => d.kind !== "invoice_special" && Math.abs(d.impactExGst) > TEXT_OVER_EX_GST);
+  if (!big.length) return;
+  try {
+    const [to] = await db.select().from(schema.settings).where(eq(schema.settings.key, PRICE_SMS_KEY));
+    if (!to?.value?.trim()) return;
+    const [inv] = await db.select().from(schema.supplierInvoices).where(eq(schema.supplierInvoices.id, invoiceId));
+    const [sup] = inv?.supplierId ? await db.select({ name: schema.suppliers.name }).from(schema.suppliers).where(eq(schema.suppliers.id, inv.supplierId)) : [];
+    const total = r2(big.reduce((t, d) => t + d.impactExGst, 0));
+    const first = big[0]!.title.length > 70 ? `${big[0]!.title.slice(0, 67)}...` : big[0]!.title;
+    const body =
+      `Terra Ops: ${sup?.name ?? "Supplier"} invoice ${inv?.invoiceNumber ?? ""} is ${$(total)} ex GST ${total >= 0 ? "over" : "under"} the price list. ` +
+      `${first}${big.length > 1 ? ` (+${big.length - 1} more)` : ""}. Approve or ignore under Suppliers owed.`;
+    const out = await sendSms({ to: to.value, body, sender: "auto" });
+    if (!out.ok) console.error(`[price-check] text for invoice ${invoiceId} not sent: ${out.reason}`);
+  } catch (e) {
+    console.error(`[price-check] text for invoice ${invoiceId}:`, (e as Error).message);
   }
 }
 
@@ -485,8 +524,8 @@ export async function approveFlag(flagId: number, actor: string) {
       await checkInvoicePrices(flag.invoiceId);
       throw new FlagError(`The price list changed since this was checked (now ${p.costPrice === null ? "no price" : $(p.costPrice)}). Look at it again.`);
     }
-    // Same markup the product already carries. Specials never come through here.
-    const sell = p.sellPrice !== null && p.costPrice > 0 ? r2((change.to * p.sellPrice) / p.costPrice) : sellExGst(change.to);
+    // Standard chain, cost x 1.3 x 1.05 x 1.4. Specials never come through here.
+    const sell = sellExGst(change.to);
     await db.update(schema.products).set({ costPrice: change.to, sellPrice: sell, updatedAt: new Date() }).where(eq(schema.products.id, p.id));
     outcome = `Cost ${$(change.from)} to ${$(change.to)} a ${p.unit}, sell ${p.sellPrice === null ? "none" : $(p.sellPrice)} to ${$(sell)}. Off ${source}.`;
     await db.insert(schema.activityLog).values({
@@ -506,10 +545,15 @@ export async function approveFlag(flagId: number, actor: string) {
       await checkInvoicePrices(flag.invoiceId);
       throw new FlagError(`${r.name} changed since this was checked. Look at it again.`);
     }
-    await db.update(schema.supplierFeeRules).set({ [change.field]: change.to, updatedAt: new Date() }).where(eq(schema.supplierFeeRules.id, r.id));
     const say = (v: number | string) =>
       change.field === "percent" ? `${v}%` : change.field === "amount" ? $(Number(v)) : v === "goods_and_charges" ? "goods plus charges" : "goods only";
     outcome = `${r.name}: ${say(change.from)} to ${say(change.to)}. Off ${source}.`;
+    // The rule's own wording can say the opposite of what was just approved. Put the change first so nobody reads a stale condition.
+    const stamp = `UPDATED ${auDay(todayISO())}, approved by ${actor}: ${outcome} This overrides anything below that says otherwise.`;
+    await db
+      .update(schema.supplierFeeRules)
+      .set({ [change.field]: change.to, condition: r.condition ? `${stamp} ${r.condition}` : stamp, updatedAt: new Date() })
+      .where(eq(schema.supplierFeeRules.id, r.id));
     await db.insert(schema.activityLog).values({
       entityType: "supplier_fee_rule",
       entityId: r.id,
