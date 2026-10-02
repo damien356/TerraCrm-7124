@@ -755,6 +755,8 @@ export type SupplierChargeRule = {
   basis: string;
   amount: number | null;
   percent: number | null;
+  /** "goods" (default) or "goods_and_charges". See supplier_fee_rules.percent_base. */
+  percentBase?: string | null;
   amountIncludesGst: boolean;
   isCredit: boolean;
   autoApply: boolean;
@@ -903,6 +905,11 @@ export function resolveSupplierCharges(
 
   const charges: ResolvedCharge[] = [];
   const excluded: SupplierChargeQuote["excluded"] = [];
+  // A percentage Damien has approved as "on goods plus charges" waits until
+  // every other charge is known. The only exception to rule 2 above, and only
+  // ever set on a rule by hand, after an invoice proved the supplier works it
+  // that way.
+  const onCharges: SupplierChargeRule[] = [];
 
   for (const r of rules) {
     if (!isChargeLive(r, today)) {
@@ -926,6 +933,10 @@ export function resolveSupplierCharges(
 
     const units = chargeUnits(r.basis, order);
     const isPercent = r.basis === "percent_of_order";
+    if (isPercent && r.percentBase === "goods_and_charges") {
+      onCharges.push(r);
+      continue;
+    }
 
     // A live per-unit charge with no units to bill is NOT a $0.00 line on the
     // quote — it is a quantity the office has not entered yet. Chaparral's
@@ -958,6 +969,26 @@ export function resolveSupplierCharges(
       isCredit: r.isCredit,
       note: chargeNote(r, units, exGst, goodsExGst),
     });
+  }
+
+  if (onCharges.length) {
+    const base = round2(goodsExGst + charges.filter((c) => !c.isCredit && !FREIGHT_KINDS.has(c.kind)).reduce((t, c) => t + c.exGst, 0));
+    for (const r of onCharges) {
+      const exGst = round2((base * (r.percent ?? 0)) / 100);
+      const signed = r.isCredit ? -exGst : exGst;
+      charges.push({
+        id: r.id,
+        name: r.name,
+        kind: r.kind,
+        basis: r.basis,
+        units: 1,
+        rateExGst: null,
+        percent: r.percent ?? 0,
+        exGst: signed,
+        isCredit: r.isCredit,
+        note: `${r.percent ?? 0}% of \u0024${base.toFixed(2)} goods and charges = \u0024${exGst.toFixed(2)}.`,
+      });
+    }
   }
 
   const sum = (pick: (c: ResolvedCharge) => boolean) =>

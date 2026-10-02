@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useSearch } from "wouter";
 import { AlertTriangle, Calculator, Fuel, Plus, Trash2, Truck } from "lucide-react";
 import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading } from "../components/ui/card";
@@ -579,7 +580,9 @@ function Row({ label, value, muted, strong }: { label: string; value: string; mu
 
 export default function SuppliersPage() {
   const list = useSuppliers(true);
-  const [selectedId, setSelectedId] = React.useState<number | null>(null);
+  // ?id=12 opens that supplier, e.g. from Suppliers owed.
+  const wanted = Number(new URLSearchParams(useSearch()).get("id")) || null;
+  const [selectedId, setSelectedId] = React.useState<number | null>(wanted);
   const [newOpen, setNewOpen] = React.useState(false);
   const [newFeeOpen, setNewFeeOpen] = React.useState(false);
 
@@ -778,7 +781,7 @@ export default function SuppliersPage() {
                             />
                           )}
                           <p className="mt-1 text-right text-[11px] text-muted-foreground">
-                            {BASIS_LABEL[f.basis]}
+                            {f.basis === "percent_of_order" && f.percentBase === "goods_and_charges" ? "% of goods and charges" : BASIS_LABEL[f.basis]}
                             {f.amountIncludesGst ? " · inc GST" : ""}
                           </p>
                         </div>

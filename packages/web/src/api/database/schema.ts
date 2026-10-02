@@ -942,6 +942,15 @@ export const supplierFeeRules = sqliteTable(
     amount: real("amount"),
     /** Percentage for percent_of_order fees, e.g. 15 for a part-roll cutting fee. */
     percent: real("percent"),
+    /**
+     * What a percentage is worked out on.
+     *   goods              the goods only (the normal case)
+     *   goods_and_charges  goods plus the other charges on the order, not
+     *                      freight. Hurford's work their fuel surcharge out
+     *                      this way (invoice 474003: fuel on goods + broken pack).
+     * Only ever changed by Damien approving a price check, never by itself.
+     */
+    percentBase: text("percent_base").notNull().default("goods"),
     /** false = `amount` is ex-GST (the normal case on a supplier schedule). */
     amountIncludesGst: integer("amount_includes_gst", { mode: "boolean" }).notNull().default(false),
     /** A credit, not a charge — Armstrong pays $50 back per crate returned. */
@@ -2433,4 +2442,295 @@ export const voiceKeys = sqliteTable(
     ...timestamps,
   },
   (t) => [unique("voice_keys_hash_unique").on(t.keyHash), index("voice_keys_installer_idx").on(t.installerId)],
+);
+
+/* ---------------------------------------------------------------------------
+ * Purchasing and supplier invoices.
+ *
+ * A PO is raised from a job in Ops and numbered off the job: 4113-A, 4113-B.
+ * The supplier is asked to quote that number and send the invoice to
+ * billing@. The email agent reads billing@ (and damien@, read only), pulls
+ * each invoice and statement apart, and matches the invoice to its PO.
+ *
+ * Costs on a PO are what Terra PAYS, so a live special lowers them. That is
+ * the buying side of the pricing rule: the customer's sell price never moves.
+ * ------------------------------------------------------------------------- */
+
+export const purchaseOrders = sqliteTable(
+  "purchase_orders",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** "4113-A". Job number plus a letter, unique for ever. */
+    number: text("number").notNull(),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "restrict" }),
+    supplierId: integer("supplier_id").notNull().references(() => suppliers.id, { onDelete: "restrict" }),
+    /** draft · sent · invoiced · cancelled */
+    status: text("status").notNull().default("draft"),
+    /** warehouse · site */
+    deliverTo: text("deliver_to").notNull().default("warehouse"),
+    deliveryAddress: text("delivery_address").notNull().default(""),
+    goodsExGst: real("goods_ex_gst").notNull().default(0),
+    /** Supplier charges that are not freight: fuel levy, cutting, baling. */
+    chargesExGst: real("charges_ex_gst").notNull().default(0),
+    freightExGst: real("freight_ex_gst").notNull().default(0),
+    totalExGst: real("total_ex_gst").notNull().default(0),
+    notes: text("notes").notNull().default(""),
+    /** JSON: { pickedFeeIds, rolls, pallets, boxes }. What the charges were worked off, so a re-price agrees. */
+    pricingInputs: text("pricing_inputs").notNull().default("{}"),
+    /** email · other (phoned, portal). How it reached the supplier. */
+    sentVia: text("sent_via"),
+    sentTo: text("sent_to"),
+    sentAt: integer("sent_at", { mode: "timestamp" }),
+    /** The forecast line this PO feeds. */
+    jobCostId: integer("job_cost_id").references(() => jobCosts.id, { onDelete: "set null" }),
+    createdByProfileId: integer("created_by_profile_id").references(() => profiles.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [
+    unique("purchase_orders_number_unique").on(t.number),
+    index("purchase_orders_job_idx").on(t.jobId),
+    index("purchase_orders_supplier_idx").on(t.supplierId, t.status),
+  ],
+);
+
+export const purchaseOrderLines = sqliteTable(
+  "purchase_order_lines",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    poId: integer("po_id").notNull().references(() => purchaseOrders.id, { onDelete: "cascade" }),
+    jobMaterialId: integer("job_material_id").references(() => jobMaterials.id, { onDelete: "set null" }),
+    productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
+    /** goods · charge (fuel, baling, handling) · freight */
+    kind: text("kind").notNull().default("goods"),
+    description: text("description").notNull(),
+    qty: real("qty").notNull().default(0),
+    unit: text("unit").notNull().default("m2"),
+    unitCostExGst: real("unit_cost_ex_gst").notNull().default(0),
+    totalExGst: real("total_ex_gst").notNull().default(0),
+    /** Standard cost when a special made this line cheaper. Shown, never charged. */
+    standardUnitCostExGst: real("standard_unit_cost_ex_gst"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [index("po_lines_po_idx").on(t.poId)],
+);
+
+/**
+ * A Google mailbox the agent may read. Only three addresses are ever allowed,
+ * fixed in code (lib/gmail.ts). `canSend` is true for team@ only and is
+ * re-checked in code on every send, never trusted from this row alone.
+ */
+export const mailAccounts = sqliteTable(
+  "mail_accounts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    address: text("address").notNull(),
+    canSend: integer("can_send", { mode: "boolean" }).notNull().default(false),
+    /** AES-GCM sealed with MAIL_TOKEN_KEY. Never returned by any route. */
+    refreshTokenSealed: text("refresh_token_sealed"),
+    /** Space separated, exactly what Google granted. */
+    scopes: text("scopes").notNull().default(""),
+    /** epoch seconds of the newest message already looked at. */
+    syncedThrough: integer("synced_through"),
+    lastCheckedAt: integer("last_checked_at", { mode: "timestamp" }),
+    lastError: text("last_error"),
+    connectedByProfileId: integer("connected_by_profile_id").references(() => profiles.id, { onDelete: "set null" }),
+    connectedAt: integer("connected_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (t) => [unique("mail_accounts_address_unique").on(t.address)],
+);
+
+/** Every email the agent has opened, so nothing is read twice. */
+export const mailMessages = sqliteTable(
+  "mail_messages",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    accountId: integer("account_id").notNull().references(() => mailAccounts.id, { onDelete: "cascade" }),
+    gmailId: text("gmail_id").notNull(),
+    threadId: text("thread_id"),
+    fromAddress: text("from_address").notNull().default(""),
+    subject: text("subject").notNull().default(""),
+    receivedAt: integer("received_at", { mode: "timestamp" }),
+    /** done · skipped · error */
+    status: text("status").notNull().default("done"),
+    /** What was found: "2 invoices, 1 statement", or why it was skipped. */
+    note: text("note").notNull().default(""),
+    attempts: integer("attempts").notNull().default(1),
+    ...timestamps,
+  },
+  (t) => [
+    unique("mail_messages_account_gmail_unique").on(t.accountId, t.gmailId),
+    index("mail_messages_status_idx").on(t.status),
+  ],
+);
+
+export const supplierInvoices = sqliteTable(
+  "supplier_invoices",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    supplierId: integer("supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
+    /** The name exactly as printed, kept for when no supplier matched. */
+    supplierNameRaw: text("supplier_name_raw").notNull().default(""),
+    invoiceNumber: text("invoice_number").notNull(),
+    /** supplier id (or squashed name) + squashed invoice number. One row per real invoice. */
+    dedupeKey: text("dedupe_key").notNull(),
+    /** invoice · credit */
+    docType: text("doc_type").notNull().default("invoice"),
+    /** The order reference as printed, before any matching. */
+    poRefRaw: text("po_ref_raw"),
+    /** Other references printed (customer order no, delivery docket, job). Read for bare job numbers. */
+    otherRefs: text("other_refs"),
+    poId: integer("po_id").references(() => purchaseOrders.id, { onDelete: "set null" }),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    invoiceDate: text("invoice_date"),
+    dueDate: text("due_date"),
+    goodsExGst: real("goods_ex_gst"),
+    freightExGst: real("freight_ex_gst"),
+    totalExGst: real("total_ex_gst"),
+    gst: real("gst"),
+    totalIncGst: real("total_inc_gst").notNull().default(0),
+    /** JSON array of the printed lines: description, qty, unit, unitPrice, total. */
+    lines: text("lines").notNull().default("[]"),
+    /**
+     * matched     ties to its PO and the money agrees
+     * different   ties to its PO but the money does not
+     * needs_you   could not be tied to a PO with confidence
+     */
+    matchStatus: text("match_status").notNull().default("needs_you"),
+    /** How it was matched or why not, in plain words. */
+    matchNote: text("match_note").notNull().default(""),
+    /** Invoice ex-GST minus PO ex-GST. Positive = charged more than ordered. */
+    diffExGst: real("diff_ex_gst"),
+    /** unpaid · paid */
+    payState: text("pay_state").notNull().default("unpaid"),
+    paidNote: text("paid_note").notNull().default(""),
+    paidAt: integer("paid_at", { mode: "timestamp" }),
+    /** Someone looked at a difference or a no-PO invoice and okayed it. Takes it off "Needs you". */
+    checkedAt: integer("checked_at", { mode: "timestamp" }),
+    checkedBy: text("checked_by"),
+    pdfKey: text("pdf_key"),
+    pdfName: text("pdf_name"),
+    mailMessageId: integer("mail_message_id").references(() => mailMessages.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [
+    unique("supplier_invoices_dedupe_unique").on(t.dedupeKey),
+    index("supplier_invoices_supplier_idx").on(t.supplierId, t.payState),
+    index("supplier_invoices_po_idx").on(t.poId),
+    index("supplier_invoices_match_idx").on(t.matchStatus),
+  ],
+);
+
+export const supplierStatements = sqliteTable(
+  "supplier_statements",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    supplierId: integer("supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
+    supplierNameRaw: text("supplier_name_raw").notNull().default(""),
+    statementDate: text("statement_date"),
+    balanceIncGst: real("balance_inc_gst"),
+    overdueIncGst: real("overdue_inc_gst"),
+    /** JSON array: invoiceNumber, date, amount (inc GST, negative for credits). */
+    lines: text("lines").notNull().default("[]"),
+    pdfKey: text("pdf_key"),
+    pdfName: text("pdf_name"),
+    mailMessageId: integer("mail_message_id").references(() => mailMessages.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [index("supplier_statements_supplier_idx").on(t.supplierId, t.statementDate)],
+);
+
+/**
+ * "Please send invoice X to billing@." Written by the agent when a statement
+ * lists an invoice Ops never received. Always sent from team@.
+ */
+export const invoiceRequests = sqliteTable(
+  "invoice_requests",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    supplierId: integer("supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
+    supplierNameRaw: text("supplier_name_raw").notNull().default(""),
+    invoiceNumber: text("invoice_number").notNull(),
+    /** Same key as supplier_invoices.dedupe_key, so a received invoice closes its request. */
+    dedupeKey: text("dedupe_key").notNull(),
+    invoiceDate: text("invoice_date"),
+    amountIncGst: real("amount_inc_gst"),
+    statementId: integer("statement_id").references(() => supplierStatements.id, { onDelete: "set null" }),
+    toAddress: text("to_address"),
+    subject: text("subject").notNull().default(""),
+    body: text("body").notNull().default(""),
+    /** waiting_ok · sent · received · cancelled · no_email */
+    status: text("status").notNull().default("waiting_ok"),
+    sentAt: integer("sent_at", { mode: "timestamp" }),
+    gmailMessageId: text("gmail_message_id"),
+    error: text("error"),
+    ...timestamps,
+  },
+  (t) => [
+    unique("invoice_requests_dedupe_unique").on(t.dedupeKey),
+    index("invoice_requests_status_idx").on(t.status),
+  ],
+);
+
+/**
+ * PRICE CHECKS. A supplier invoice that bills a different rate from the Ops
+ * price list or the supplier's charge rules: a product price, a fuel
+ * surcharge, a broken pack or baling fee, freight.
+ *
+ * Nothing here ever changes a price by itself. Each row waits for Damien.
+ * Approve changes that one rate and logs it against the invoice. Ignore leaves
+ * the price list alone. A special or clearance price on an invoice is never
+ * offered as a price list change, because specials never move the sell price.
+ */
+export const priceFlags = sqliteTable(
+  "price_flags",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    invoiceId: integer("invoice_id").notNull().references(() => supplierInvoices.id, { onDelete: "cascade" }),
+    supplierId: integer("supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
+    /**
+     * product_cost    standard cost on the invoice is not the price list's (can approve)
+     * special_missed  billed at standard while Ops has a live special (chase a credit)
+     * invoice_special billed under the price list as a special (extra margin, info)
+     * product_other   rate differs but cannot be pinned to one price (info)
+     * fee_amount      flat or per-unit charge differs (can approve)
+     * fee_percent     percentage differs (can approve)
+     * fee_basis       same percentage, worked out on a different base (can approve)
+     * freight         freight billed that Ops did not expect (info)
+     * new_charge      a charge Ops has no rule for (info)
+     * missing_charge  an Ops surcharge the invoice did not bill (info)
+     */
+    kind: text("kind").notNull(),
+    productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
+    feeRuleId: integer("fee_rule_id").references(() => supplierFeeRules.id, { onDelete: "set null" }),
+    /** The invoice line as printed. */
+    lineText: text("line_text").notNull().default(""),
+    /** What Ops has, and what the invoice billed, in the same unit. */
+    opsValue: real("ops_value"),
+    invoiceValue: real("invoice_value"),
+    /** "m2", "%", "order". What the two values are per. */
+    unit: text("unit").notNull().default(""),
+    qty: real("qty"),
+    /** What the difference costs on this invoice, ex GST. Positive = billed more. */
+    impactExGst: real("impact_ex_gst").notNull().default(0),
+    title: text("title").notNull().default(""),
+    detail: text("detail").notNull().default(""),
+    /** JSON of what Approve would change. Null when there is nothing to change. */
+    change: text("change"),
+    /** open · approved · ignored */
+    status: text("status").notNull().default("open"),
+    decidedAt: integer("decided_at", { mode: "timestamp" }),
+    decidedBy: text("decided_by"),
+    /** What Approve actually did, in plain words. */
+    outcome: text("outcome").notNull().default(""),
+    /** invoice + kind + product or rule. One flag per thing per invoice. */
+    dedupeKey: text("dedupe_key").notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    unique("price_flags_dedupe_unique").on(t.dedupeKey),
+    index("price_flags_status_idx").on(t.status),
+    index("price_flags_invoice_idx").on(t.invoiceId),
+  ],
 );

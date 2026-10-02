@@ -7,6 +7,7 @@ import { JobFile } from "../components/job-file";
 import { JobVisits } from "../components/crew-updates";
 import { JobForecastCard, MeasureUpModal } from "../components/costing";
 import { JobCashCard } from "../components/job-cash";
+import { PurchaseOrdersCard } from "../components/purchase-orders";
 import { PaymentTermsCard } from "../components/payment-terms";
 import { JobConversation } from "../components/conversation";
 import { BookInstallerPanel } from "../components/book-installer";
@@ -736,6 +737,9 @@ export default function JobDetailPage() {
               </Button>
             </div>
           </Card>
+
+          {/* ordering the materials, and the supplier invoices that come back */}
+          <PurchaseOrdersCard jobId={j.id} />
         </div>
 
         {/* right rail */}

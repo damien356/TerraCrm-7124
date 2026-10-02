@@ -36,6 +36,8 @@ function useJobMutation(
       queryClient.invalidateQueries({ queryKey: orpc.jobs.key() });
       queryClient.invalidateQueries({ queryKey: orpc.tasks.key() });
       queryClient.invalidateQueries({ queryKey: orpc.dashboard.key() });
+      // The PO card lists the job's materials.
+      queryClient.invalidateQueries({ queryKey: orpc.purchasing.key() });
     },
   });
 }

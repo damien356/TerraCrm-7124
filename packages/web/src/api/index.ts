@@ -38,6 +38,12 @@ import { memos } from "./routes/memos";
 import { officeTasks } from "./routes/officeTasks";
 import { voice } from "./routes/voice";
 import { visits } from "./routes/visits";
+import { purchasing } from "./routes/purchasing";
+import { payables } from "./routes/payables";
+import { priceChecks } from "./routes/price-checks";
+import { mail } from "./routes/mail";
+import { bootMailAgent } from "./lib/mail-agent";
+import { finishConnect } from "./lib/gmail";
 import { bootReminders } from "./lib/reminders";
 import { handleInboundSms, inboundSecretOk } from "./lib/sms-inbound";
 
@@ -128,6 +134,14 @@ export const router = {
   segments,
   /** Phase 0 — Damien can pull all his data out himself, any time. */
   backups,
+  /** Purchase orders raised from a job: 4113-A, 4113-B. Sent from team@ with the PDF. */
+  purchasing,
+  /** Suppliers owed: invoices the email agent read, matched to POs. */
+  payables,
+  /** Invoice rates that differ from the price list. Damien approves each change. */
+  priceChecks,
+  /** The email agent's three mailboxes. Read only, team@ can also send. */
+  mail,
 };
 
 export type AppRouter = typeof router;
@@ -161,9 +175,28 @@ app.post("/api/webhooks/clicksend/inbound/:secret", async (c) => {
   }
 });
 
+// Google sends the mailbox sign-in back here. Checks happen in finishConnect: fresh state,
+// the right account, and no scope beyond read (and send for team@).
+app.get("/api/mail/oauth/callback", async (c) => {
+  const back = (q: Record<string, string>) => c.redirect(`/settings?${new URLSearchParams(q)}#email-agent`, 302);
+  const err = c.req.query("error");
+  if (err) return back({ mail: "error", reason: err === "access_denied" ? "Sign-in was cancelled." : err });
+  const code = c.req.query("code");
+  const state = c.req.query("state");
+  if (!code || !state) return back({ mail: "error", reason: "Google did not send a code back." });
+  try {
+    const r = await finishConnect(code, state);
+    return back({ mail: "connected", address: r.address });
+  } catch (e) {
+    return back({ mail: "error", reason: String((e as Error).message ?? e).slice(0, 300) });
+  }
+});
+
 // Marketing journeys tick here. Gated to the published server only — see lib/journey-boot.
 bootJourneyEngine();
 // Timed reminders push to the phone. Same published-server-only gate, see lib/reminders.
 bootReminders();
+// Reads supplier invoices from billing@, damien@ and team@ every 15 minutes. Same gate.
+bootMailAgent();
 
 export default app;

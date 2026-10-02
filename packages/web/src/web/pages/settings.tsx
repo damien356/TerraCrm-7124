@@ -8,6 +8,7 @@ import { Checkbox, Field, Input, Label, Select } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { downloadText, useDatasets, useExportCsv, useExportSnapshot } from "../queries/backups";
 import { LabourRatesTab, RATE_UNITS, UNIT_LABEL } from "../components/labour";
+import { EmailAgentCard } from "../components/email-agent";
 import { useOpeningBalance, useSetOpeningBalance } from "../queries/finance";
 import { longDate, moneyExact } from "../lib/money";
 import {
@@ -106,7 +107,7 @@ const CATEGORIES = [
 ];
 const UNITS = ["m2", "lm", "each", "roll", "box", "hour"];
 
-type Tab = "skills" | "statuses" | "products" | "labour" | "business" | "backups";
+type Tab = "skills" | "statuses" | "products" | "labour" | "business" | "email" | "backups";
 
 const TABS: Array<{ id: Tab; label: string; blurb: string }> = [
   { id: "skills", label: "Skills", blurb: "What a task can be. Installers get ticked against these." },
@@ -123,6 +124,11 @@ const TABS: Array<{ id: Tab; label: string; blurb: string }> = [
     blurb: "Bank balance the forecast starts from, offer expiry, what installers see, GST, your details.",
   },
   {
+    id: "email",
+    label: "Email agent",
+    blurb: "The mailboxes the agent reads supplier invoices from, and whether it may chase missing ones by itself.",
+  },
+  {
     id: "backups",
     label: "Your data",
     blurb: "Pull everything out as CSV or one JSON file, any time. Your data is yours.",
@@ -131,7 +137,10 @@ const TABS: Array<{ id: Tab; label: string; blurb: string }> = [
 
 /** Deep links land on the right tab: /settings?tab=business from the cashflow page. */
 function initialTab(): Tab {
-  const wanted = new URLSearchParams(window.location.search).get("tab");
+  const params = new URLSearchParams(window.location.search);
+  // Google's sign-in sends Damien back to /settings?mail=…#email-agent.
+  if (window.location.hash === "#email-agent" || params.has("mail")) return "email";
+  const wanted = params.get("tab");
   return TABS.some((t) => t.id === wanted) ? (wanted as Tab) : "skills";
 }
 
@@ -142,7 +151,7 @@ export default function SettingsPage() {
   return (
     <Page
       title="Settings"
-      subtitle="Everything here is data, not code. Rename it, add to it, switch it off — no rebuild needed."
+      subtitle="Everything here is data, not code. Rename it, add to it, switch it off. No rebuild needed."
       wide
     >
       <div className="mb-5 flex flex-wrap gap-1 rounded-lg border border-border bg-card p-1">
@@ -169,6 +178,7 @@ export default function SettingsPage() {
       {tab === "products" ? <ProductsTab /> : null}
       {tab === "labour" ? <LabourRatesTab /> : null}
       {boot.data && tab === "business" ? <BusinessTab settings={boot.data.settings} /> : null}
+      {tab === "email" ? <EmailAgentCard /> : null}
       {tab === "backups" ? <BackupsTab /> : null}
     </Page>
   );
@@ -476,8 +486,8 @@ function NewSkillModal({
           </Field>
           <Field label="Default crew size">
             <Select value={crew} onChange={(e) => setCrew(e.target.value)}>
-              <option value="1">1 — one man</option>
-              <option value="2">2 — needs two</option>
+              <option value="1">1, one man</option>
+              <option value="2">2, needs two</option>
             </Select>
           </Field>
         </div>
@@ -620,7 +630,7 @@ function NewStatusModal({ open, onClose, nextSort }: { open: boolean; onClose: (
       open={open}
       onClose={onClose}
       title="New job status"
-      subtitle="Use your own language — 'Waiting on stock', 'Measure booked', whatever you say on the phone."
+      subtitle="Use your own language: 'Waiting on stock', 'Measure booked', whatever you say on the phone."
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
@@ -764,13 +774,13 @@ function ProductLine({ product }: { product: ProductRow }) {
 
   return (
     <tr className={product.active ? "" : "opacity-50"}>
-      <td className="px-4 py-2">{product.supplier || "—"}</td>
+      <td className="px-4 py-2">{product.supplier || "-"}</td>
       <td className="px-4 py-2">
         <span className="font-medium">{product.brand}</span>
         {product.range ? <span className="text-muted-foreground"> · {product.range}</span> : null}
         {product.sku ? <div className="text-xs text-muted-foreground">{product.sku}</div> : null}
       </td>
-      <td className="px-4 py-2">{product.colour || "—"}</td>
+      <td className="px-4 py-2">{product.colour || "-"}</td>
       <td className="px-4 py-2">
         <Select
           value={product.category}
@@ -823,7 +833,7 @@ function ProductLine({ product }: { product: ProductRow }) {
       </td>
       <td className="tabular px-4 py-2 text-right">
         {margin === null ? (
-          <span className="text-muted-foreground">—</span>
+          <span className="text-muted-foreground">-</span>
         ) : (
           <span className={margin < 20 ? "text-destructive" : "text-[var(--success)]"}>{margin.toFixed(0)}%</span>
         )}
@@ -1154,7 +1164,7 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
                 {tick(k)}
               </div>
             ))}
-          {Object.keys(draft).length <= 7 ? <Empty>Nothing extra — the ones above are all of them.</Empty> : null}
+          {Object.keys(draft).length <= 7 ? <Empty>Nothing extra. The ones above are all of them.</Empty> : null}
         </div>
       </Card>
     </div>
@@ -1199,7 +1209,7 @@ function BackupsTab() {
     try {
       const res = await snapshot.mutateAsync({});
       downloadText(res.filename, res.json, "application/json");
-      setNote(`Full snapshot downloaded — ${res.rows} rows across every table.`);
+      setNote(`Full snapshot downloaded, ${res.rows} rows across every table.`);
     } finally {
       setBusy(null);
     }
@@ -1226,7 +1236,7 @@ function BackupsTab() {
       <Card>
         <CardHeader
           title="Take one thing at a time"
-          subtitle="Plain CSV — opens straight in Excel or Google Sheets."
+          subtitle="Plain CSV. Opens straight in Excel or Google Sheets."
         />
         {datasets.isLoading ? <Loading /> : null}
         <div className="divide-y divide-border">
