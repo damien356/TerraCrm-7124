@@ -7,6 +7,8 @@
  * above it. Nothing in the app may call ClickSend directly.
  * ------------------------------------------------------------------------- */
 
+import { inDemo } from "../database";
+
 const BASE = "https://rest.clicksend.com/v3";
 
 const auth = () =>
@@ -178,6 +180,8 @@ interface SendSmsArgs {
 }
 
 export async function sendSms({ to, body, sender = "auto", needsReply = false }: SendSmsArgs): Promise<SmsOutcome> {
+  /* The Google Play reviewer's demo: the screen behaves as if it sent, nothing leaves. */
+  if (inDemo()) return { ok: true, providerId: "demo-not-sent", price: 0 };
   if (!smsConfigured()) return { ok: false, deferred: true, reason: "ClickSend credentials not set" };
 
   const mobile = normaliseMobile(to);
@@ -231,7 +235,7 @@ export async function sendSms({ to, body, sender = "auto", needsReply = false }:
 /** What a send will cost, asked before sending. Does not send or charge. */
 export async function priceSms(to: string, body: string) {
   const mobile = normaliseMobile(to);
-  if (!mobile || !smsConfigured()) return null;
+  if (!mobile || !smsConfigured() || inDemo()) return null;
   const res = await fetch(`${BASE}/sms/price`, {
     method: "POST",
     headers: { Authorization: auth(), "Content-Type": "application/json" },
@@ -243,7 +247,7 @@ export async function priceSms(to: string, body: string) {
 
 /** Wallet balance in AUD, so the office is warned before a journey stalls. */
 export async function smsBalance() {
-  if (!smsConfigured()) return null;
+  if (!smsConfigured() || inDemo()) return null;
   const res = await fetch(`${BASE}/account`, { headers: { Authorization: auth() } });
   const json = (await res.json().catch(() => ({}))) as any;
   const bal = Number(json?.data?.balance);

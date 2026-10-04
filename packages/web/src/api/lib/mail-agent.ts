@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { and, eq, isNotNull, sql } from "drizzle-orm";
-import { db } from "../database";
+import { db, inDemo } from "../database";
 import * as schema from "../database/schema";
 import { readSupplierPdf } from "../agent/supplier-docs";
 import { putObject } from "./s3";
@@ -210,6 +210,7 @@ async function autoSendOn() {
 let running = false;
 
 export async function runMailAgent(limit = PER_RUN) {
+  if (inDemo()) return { runs: [] as MailboxRun[], sent: 0 };
   if (running) return { skipped: "already running" as const };
   running = true;
   try {

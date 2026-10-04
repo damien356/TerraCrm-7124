@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { db } from "../database";
+import { db, inDemo } from "../database";
 import * as schema from "../database/schema";
 import { readState, seal, sealConfigured, signState, unseal } from "./secret-box";
 
@@ -54,6 +54,7 @@ export function redirectUri() {
 type OAuthState = { a: string; p: number | null; e: number };
 
 export function connectUrl(address: string, profileId: number | null) {
+  if (inDemo()) throw new Error("Mailboxes can't be connected in the demo.");
   const m = mailboxFor(address);
   if (!m) throw new Error("Not an allowed mailbox");
   const state = signState({ a: m.address, p: profileId, e: Date.now() + 10 * 60_000 } satisfies OAuthState);
@@ -169,6 +170,8 @@ const accessCache = new Map<string, { token: string; exp: number }>();
 export class MailboxNotConnected extends Error {}
 
 async function accessToken(address: string): Promise<string> {
+  /* The demo never reads or sends real mail, even with a live token cached. */
+  if (inDemo()) throw new MailboxNotConnected("Mailboxes are not connected in the demo");
   const hit = accessCache.get(address);
   if (hit && hit.exp > Date.now()) return hit.token;
   const [row] = await db.select().from(schema.mailAccounts).where(eq(schema.mailAccounts.address, address));

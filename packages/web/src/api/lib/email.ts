@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { inDemo } from "../database";
 
 /* ---------------------------------------------------------------------------
  * Terra's outbound email. ONE pipe, and every marketing send in the app goes
@@ -124,6 +125,8 @@ export async function sendEmail({
   attachments,
 }: SendArgs): Promise<SendOutcome> {
   if (!emailConfigured()) return { ok: false, deferred: true, reason: "RESEND_API_KEY not set" };
+  /* The Google Play reviewer's demo: the screen behaves as if it sent, nothing leaves. */
+  if (inDemo()) return { ok: true, providerId: "demo-not-sent" };
 
   /* One-click unsubscribe. Gmail and Outlook both surface this as a button and
    * treat its absence on bulk mail as a spam signal, so it is not optional.

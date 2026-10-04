@@ -1,5 +1,5 @@
 import { desc, eq, inArray, like, or, sql } from "drizzle-orm";
-import { db } from "../database";
+import { db, inDemo } from "../database";
 import * as schema from "../database/schema";
 import type { Mentions } from "../agent/memo";
 
@@ -314,20 +314,24 @@ function fuzzy(t: string, parts: string[]) {
 }
 
 /** Every active client's name, kept for a minute. 1,650 rows, scored in code. */
-let nameCache: { at: number; rows: { id: number; firstName: string; lastName: string }[] } | null = null;
+type NameRows = { id: number; firstName: string; lastName: string }[];
+/* One per database, so the Play reviewer's demo is matched against demo clients only. */
+const nameCaches: Record<"live" | "demo", { at: number; rows: NameRows } | null> = { live: null, demo: null };
 async function allNames() {
+  const which = inDemo() ? "demo" : "live";
+  const nameCache = nameCaches[which];
   if (nameCache && Date.now() - nameCache.at < 60_000) return nameCache.rows;
   const rows = await db
     .select({ id: schema.contacts.id, firstName: schema.contacts.firstName, lastName: schema.contacts.lastName })
     .from(schema.contacts)
     .where(eq(schema.contacts.active, true));
-  nameCache = { at: Date.now(), rows };
+  nameCaches[which] = { at: Date.now(), rows };
   return rows;
 }
 
 /** For tests and the rerun path: forget the cached names after a client is added. */
 export function forgetNames() {
-  nameCache = null;
+  nameCaches[inDemo() ? "demo" : "live"] = null;
 }
 
 export interface Candidate {

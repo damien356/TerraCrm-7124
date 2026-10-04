@@ -1,5 +1,5 @@
 import { and, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
-import { db } from "../database";
+import { db, inDemo } from "../database";
 import * as schema from "../database/schema";
 import { localDate, localDayBounds } from "./local-date";
 import { pushToInstaller, pushToOffice } from "./push";
@@ -189,7 +189,10 @@ export async function announceArrival(visitId: number) {
   return true;
 }
 
-const timers = new Map<number, ReturnType<typeof setTimeout>>();
+/* Keyed by database as well as visit id. The Play reviewer's demo numbers its
+ * visits from 1 too, and its timer must never cancel a real crew member's. */
+const timers = new Map<string, ReturnType<typeof setTimeout>>();
+const timerKey = (visitId: number) => `${inDemo() ? "demo" : "live"}:${visitId}`;
 
 export async function arrive(args: {
   taskId: number;
@@ -248,11 +251,12 @@ export async function arrive(args: {
     await announceArrival(visit!.id);
   } else {
     const wait = Math.max(0, args.at.getTime() + MIN_VISIT_MS - Date.now()) + 1000;
+    const key = timerKey(visit!.id);
     const timer = setTimeout(() => {
-      timers.delete(visit!.id);
+      timers.delete(key);
       void announceArrival(visit!.id).catch((e) => console.error("[visits] announce failed", e));
     }, wait);
-    timers.set(visit!.id, timer);
+    timers.set(key, timer);
   }
   return { visit: visit!, outcome: "arrived" };
 }
@@ -273,9 +277,9 @@ export async function leave(args: {
   const at = args.at < open.arrivedAt ? new Date() : args.at;
 
   if (open.arriveSource === "geofence" && args.source === "geofence" && at.getTime() - open.arrivedAt.getTime() < MIN_VISIT_MS) {
-    const t = timers.get(open.id);
+    const t = timers.get(timerKey(open.id));
     if (t) clearTimeout(t);
-    timers.delete(open.id);
+    timers.delete(timerKey(open.id));
     const [voided] = await db
       .update(schema.siteVisits)
       .set({
@@ -311,9 +315,9 @@ export async function leave(args: {
     .where(eq(schema.siteVisits.id, open.id))
     .returning();
 
-  const t = timers.get(open.id);
+  const t = timers.get(timerKey(open.id));
   if (t) clearTimeout(t);
-  timers.delete(open.id);
+  timers.delete(timerKey(open.id));
   await announceArrival(open.id);
 
   if (task) {

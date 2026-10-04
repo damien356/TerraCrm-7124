@@ -11,7 +11,7 @@
  * ------------------------------------------------------------------------- */
 
 import { and, eq, inArray } from "drizzle-orm";
-import { db } from "../database";
+import { db, inDemo } from "../database";
 import * as schema from "../database/schema";
 
 const ENDPOINT = "https://exp.host/--/api/v2/push/send";
@@ -60,6 +60,8 @@ async function retire(tokens: string[]) {
  * the thing that triggered it.
  */
 export async function sendPush(userIds: string[], message: PushMessage): Promise<number> {
+  /* The Google Play reviewer's demo never pushes to any phone. */
+  if (inDemo()) return 0;
   const tokens = await tokensFor(userIds);
   if (tokens.length === 0) return 0;
 

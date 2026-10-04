@@ -1,5 +1,6 @@
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { inDemo } from "../database";
 
 export const s3 = new S3Client({
   region: "auto",
@@ -13,16 +14,26 @@ export const s3 = new S3Client({
 
 const BUCKET = process.env.S3_BUCKET;
 
+/**
+ * The Google Play reviewer's files live under demo/ and nowhere else. Every
+ * read, write and signed link goes through this, so a demo request can never
+ * open or overwrite a real job photo, invoice or PO, whatever key it passes.
+ */
+function scoped(key: string) {
+  if (!inDemo()) return key;
+  return key.startsWith("demo/") ? key : `demo/${key.replace(/^\/+/, "")}`;
+}
+
 /** Upload straight from the phone or browser — never through the API server. */
 export function signPut(key: string, contentType: string) {
-  return getSignedUrl(s3, new PutObjectCommand({ Bucket: BUCKET, Key: key, ContentType: contentType }), {
+  return getSignedUrl(s3, new PutObjectCommand({ Bucket: BUCKET, Key: scoped(key), ContentType: contentType }), {
     expiresIn: 900,
   });
 }
 
 /** Read links are short-lived and signed — job photos are not public. */
 export function signGet(key: string, expiresIn = 3600) {
-  return getSignedUrl(s3, new GetObjectCommand({ Bucket: BUCKET, Key: key }), { expiresIn });
+  return getSignedUrl(s3, new GetObjectCommand({ Bucket: BUCKET, Key: scoped(key) }), { expiresIn });
 }
 
 /** Sign a whole batch of rows at once. */
@@ -55,7 +66,7 @@ export function invoicePdfKey(installerId: number, taskId: number) {
 
 /** Read a stored file back into memory, to re-attach a generated PDF to an email. */
 export async function getObject(key: string) {
-  const res = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+  const res = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: scoped(key) }));
   if (!res.Body) throw new Error(`Nothing stored at ${key}`);
   return Buffer.from(await res.Body.transformToByteArray());
 }
@@ -74,7 +85,7 @@ export async function putObject(key: string, body: Buffer, contentType: string, 
   await s3.send(
     new PutObjectCommand({
       Bucket: BUCKET,
-      Key: key,
+      Key: scoped(key),
       Body: body,
       ContentType: contentType,
       ...(safeName ? { ContentDisposition: `attachment; filename="${safeName}"` } : {}),

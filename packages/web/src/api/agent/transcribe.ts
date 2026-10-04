@@ -1,7 +1,7 @@
 import { experimental_transcribe as transcribe } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { and, eq, isNotNull, ne, sql } from "drizzle-orm";
-import { db } from "../database";
+import { db, inDemo } from "../database";
 import * as schema from "../database/schema";
 
 /**
@@ -50,9 +50,13 @@ const TRADE_WORDS = [
   "measure and quote",
 ];
 
-let cached: { prompt: string; at: number } | null = null;
+/* One per database, so the Play reviewer's demo never hears real names and the
+ * real memos never pick up demo ones. */
+const cache: Record<"live" | "demo", { prompt: string; at: number } | null> = { live: null, demo: null };
 
 async function vocabulary(): Promise<string> {
+  const which = inDemo() ? "demo" : "live";
+  const cached = cache[which];
   if (cached && Date.now() - cached.at < 30 * 60_000) return cached.prompt;
   try {
     const [suppliers, brands, installers, suburbs] = await Promise.all([
@@ -80,7 +84,7 @@ async function vocabulary(): Promise<string> {
       `Words: ${TRADE_WORDS.join(", ")}.`,
       "Phone numbers are Australian, like 0412 345 678.",
     ].join(" ");
-    cached = { prompt, at: Date.now() };
+    cache[which] = { prompt, at: Date.now() };
     return prompt;
   } catch (err) {
     console.error("[transcribe] vocabulary lookup failed, carrying on without it", err);

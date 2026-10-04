@@ -2,9 +2,10 @@ import { createHash, randomBytes } from "node:crypto";
 import { ORPCError } from "@orpc/server";
 import { and, eq, isNull } from "drizzle-orm";
 import { base } from "../__core/app";
-import { db } from "../database";
+import { db, inDemo, runOnDemo } from "../database";
 import * as schema from "../database/schema";
-import { resolveActor } from "./auth";
+import { demoDatabase } from "../database/demo";
+import { onActorDb, resolveActor } from "./auth";
 
 /**
  * Siri runs while the Terra app is closed and the phone is in a pocket, so it
@@ -20,7 +21,14 @@ export const VOICE_KEY_HEADER = "x-terra-voice-key";
 export const hashSecret = (raw: string) => createHash("sha256").update(raw).digest("hex");
 
 /** A new key. Shown once to the phone that asked for it, never again. */
-export const newVoiceKey = () => `tvk_${randomBytes(32).toString("base64url")}`;
+export const newVoiceKey = () => `${inDemo() ? DEMO_KEY_PREFIX : "tvk_"}${randomBytes(32).toString("base64url")}`;
+
+/**
+ * Keys minted for the Google Play reviewer's phone. They live in the demo
+ * database, so a request carrying one is answered from there. A made up key
+ * with this prefix only ever gets as far as the demo database.
+ */
+const DEMO_KEY_PREFIX = "tvk_demo_";
 
 /** One time confirm codes for "Send it?". */
 export const newConfirmToken = () => `tvc_${randomBytes(24).toString("base64url")}`;
@@ -28,6 +36,30 @@ export const newConfirmToken = () => `tvc_${randomBytes(24).toString("base64url"
 export const crewVoice = base.use(async ({ context, next }) => {
   const raw = context.headers.get(VOICE_KEY_HEADER)?.trim();
   if (raw) {
+    if (raw.startsWith(DEMO_KEY_PREFIX)) {
+      const demo = await demoDatabase();
+      return runOnDemo(demo, () => byKey(raw));
+    }
+    return byKey(raw);
+  }
+
+  const actor = await resolveActor(context.headers);
+  if (!actor) throw new ORPCError("UNAUTHORIZED");
+  if (!actor.installerId) {
+    throw new ORPCError("FORBIDDEN", { message: "This login isn't linked to an installer record yet." });
+  }
+  const installerId = actor.installerId;
+  return onActorDb(actor, async () => {
+    const [inst] = await db
+      .select({ name: schema.installers.name })
+      .from(schema.installers)
+      .where(eq(schema.installers.id, installerId));
+    return next({
+      context: { installerId, installerName: inst?.name ?? actor.name, voiceKeyId: null as number | null },
+    });
+  });
+
+  async function byKey(raw: string) {
     const [row] = await db
       .select({
         id: schema.voiceKeys.id,
@@ -58,17 +90,4 @@ export const crewVoice = base.use(async ({ context, next }) => {
       context: { installerId: row.installerId, installerName: row.installerName, voiceKeyId: row.id as number | null },
     });
   }
-
-  const actor = await resolveActor(context.headers);
-  if (!actor) throw new ORPCError("UNAUTHORIZED");
-  if (!actor.installerId) {
-    throw new ORPCError("FORBIDDEN", { message: "This login isn't linked to an installer record yet." });
-  }
-  const [inst] = await db
-    .select({ name: schema.installers.name })
-    .from(schema.installers)
-    .where(eq(schema.installers.id, actor.installerId));
-  return next({
-    context: { installerId: actor.installerId, installerName: inst?.name ?? actor.name, voiceKeyId: null as number | null },
-  });
 });
