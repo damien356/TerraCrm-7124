@@ -247,13 +247,13 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
   const productRows = await d
     .insert(s.products)
     .values([
-      { supplierId: carpetSup.id, supplier: carpetSup.name, brand: "Demo", range: "Harbour Twist", colour: "Sand", category: "carpet", unit: "m2", costPrice: 30, sellPrice: 57 },
-      { supplierId: carpetSup.id, supplier: carpetSup.name, brand: "Demo", range: "Harbour Twist", colour: "Slate", category: "carpet", unit: "m2", costPrice: 30, sellPrice: 57 },
-      { supplierId: carpetSup.id, supplier: carpetSup.name, brand: "Demo", range: "Plush Loop", colour: "Oat", category: "carpet", unit: "m2", costPrice: 40, sellPrice: 76 },
-      { supplierId: carpetSup.id, supplier: carpetSup.name, brand: "Demo", range: "Comfort Underlay", colour: "10mm", category: "underlay", unit: "m2", costPrice: 6, sellPrice: 11.5 },
-      { supplierId: hardSup.id, supplier: hardSup.name, brand: "Demo", range: "Coastal Hybrid", colour: "Natural Oak", category: "hybrid", unit: "m2", costPrice: 35, sellPrice: 67 },
-      { supplierId: hardSup.id, supplier: hardSup.name, brand: "Demo", range: "Coastal Hybrid", colour: "Smoked Oak", category: "hybrid", unit: "m2", costPrice: 35, sellPrice: 67 },
-      { supplierId: hardSup.id, supplier: hardSup.name, brand: "Demo", range: "Easy Laminate", colour: "Grey Wash", category: "laminate", unit: "m2", costPrice: 22, sellPrice: 42 },
+      { supplierId: carpetSup.id, supplier: carpetSup.name, brand: "Demo", range: "Harbour Twist", colour: "Sand", category: "carpet", unit: "m2", costPrice: 30, sellPrice: 57, variantKey: "demo-harbour-twist-sand" },
+      { supplierId: carpetSup.id, supplier: carpetSup.name, brand: "Demo", range: "Harbour Twist", colour: "Slate", category: "carpet", unit: "m2", costPrice: 30, sellPrice: 57, variantKey: "demo-harbour-twist-slate" },
+      { supplierId: carpetSup.id, supplier: carpetSup.name, brand: "Demo", range: "Plush Loop", colour: "Oat", category: "carpet", unit: "m2", costPrice: 40, sellPrice: 76, variantKey: "demo-plush-loop-oat" },
+      { supplierId: carpetSup.id, supplier: carpetSup.name, brand: "Demo", range: "Comfort Underlay", colour: "10mm", category: "underlay", unit: "m2", costPrice: 6, sellPrice: 11.5, variantKey: "demo-comfort-underlay-10mm" },
+      { supplierId: hardSup.id, supplier: hardSup.name, brand: "Demo", range: "Coastal Hybrid", colour: "Natural Oak", category: "hybrid", unit: "m2", costPrice: 35, sellPrice: 67, variantKey: "demo-coastal-hybrid-natural-oak" },
+      { supplierId: hardSup.id, supplier: hardSup.name, brand: "Demo", range: "Coastal Hybrid", colour: "Smoked Oak", category: "hybrid", unit: "m2", costPrice: 35, sellPrice: 67, variantKey: "demo-coastal-hybrid-smoked-oak" },
+      { supplierId: hardSup.id, supplier: hardSup.name, brand: "Demo", range: "Easy Laminate", colour: "Grey Wash", category: "laminate", unit: "m2", costPrice: 22, sellPrice: 42, variantKey: "demo-easy-laminate-grey-wash" },
     ])
     .returning();
   const prod = (range: string, colour: string) => productRows.find((p) => p.range === range && p.colour === colour)!;
