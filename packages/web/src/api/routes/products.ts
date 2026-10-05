@@ -190,6 +190,9 @@ async function planBulkSpecial(input: z.infer<typeof bulkSpecialInput>) {
   if (input.endsOn < input.startsOn) {
     throw new ORPCError("BAD_REQUEST", { message: "The special cannot end before it starts." });
   }
+  if (input.endsOn < todayISO()) {
+    throw new ORPCError("BAD_REQUEST", { message: "The end date is in the past." });
+  }
   const today = todayISO();
   const products = await db.select().from(schema.products).where(inArray(schema.products.id, input.ids));
   const specials = await specialsFor(products.map((p) => p.id));

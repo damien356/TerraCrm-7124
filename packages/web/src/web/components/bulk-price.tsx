@@ -25,11 +25,6 @@ const ROUNDING = [
 function todayISO() {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Brisbane" });
 }
-function plusDays(iso: string, d: number) {
-  const t = new Date(`${iso}T00:00:00Z`);
-  t.setUTCDate(t.getUTCDate() + d);
-  return t.toISOString().slice(0, 10);
-}
 
 type PreviewRow = {
   id: number;
@@ -222,8 +217,9 @@ export function BulkSpecialModal({
   const [rounding, setRounding] = React.useState<BulkSpecialInput["rounding"]>("none");
   const [label, setLabel] = React.useState("Special");
   const [kind, setKind] = React.useState<BulkSpecialInput["kind"]>("promo");
-  const [startsOn, setStartsOn] = React.useState(today);
-  const [endsOn, setEndsOn] = React.useState(plusDays(today, 30));
+  // No defaults on purpose. A special without both dates cannot be saved.
+  const [startsOn, setStartsOn] = React.useState("");
+  const [endsOn, setEndsOn] = React.useState("");
   const [passOn, setPassOn] = React.useState(false);
   const [step, setStep] = React.useState<"form" | "confirm">("form");
   const [error, setError] = React.useState<string | null>(null);
@@ -233,11 +229,14 @@ export function BulkSpecialModal({
     if (open) {
       setStep("form");
       setError(null);
+      setStartsOn("");
+      setEndsOn("");
     }
   }, [open]);
 
   const n = Number(amount);
-  const valid = amount.trim() !== "" && Number.isFinite(n) && n >= 0 && endsOn >= startsOn && label.trim() !== "";
+  const datesOk = /^\d{4}-\d{2}-\d{2}$/.test(startsOn) && /^\d{4}-\d{2}-\d{2}$/.test(endsOn) && endsOn >= startsOn && endsOn >= today;
+  const valid = amount.trim() !== "" && Number.isFinite(n) && n >= 0 && datesOk && label.trim() !== "";
   const input: BulkSpecialInput = { ids, mode, amount: n, rounding, label: label.trim(), kind, startsOn, endsOn, passOnToCustomer: passOn };
   const preview = useBulkSpecialPreview(step === "confirm" && valid ? input : null);
   const p = preview.data;
@@ -305,9 +304,16 @@ export function BulkSpecialModal({
                 <option value="negotiated">Negotiated</option>
               </Select>
             </Field>
-            <Field label="Starts"><Input type="date" value={startsOn} onChange={(e) => setStartsOn(e.target.value)} /></Field>
-            <Field label="Ends (inclusive)"><Input type="date" value={endsOn} onChange={(e) => setEndsOn(e.target.value)} /></Field>
+            <Field label="Start date (required)"><Input type="date" required value={startsOn} onChange={(e) => setStartsOn(e.target.value)} /></Field>
+            <Field label="End date (required, inclusive)"><Input type="date" required value={endsOn} min={startsOn || today} onChange={(e) => setEndsOn(e.target.value)} /></Field>
           </div>
+          {!datesOk ? (
+            <p className="text-xs text-muted-foreground">
+              {!startsOn || !endsOn
+                ? "Pick a start and an end date. A special can't be saved without both."
+                : "The end date can't be before the start date, or in the past."}
+            </p>
+          ) : null}
           <Field label="Round the special cost">
             <Select value={rounding} onChange={(e) => setRounding(e.target.value as BulkSpecialInput["rounding"])}>
               {ROUNDING.map((r) => <option key={r.v} value={r.v}>{r.label}</option>)}
