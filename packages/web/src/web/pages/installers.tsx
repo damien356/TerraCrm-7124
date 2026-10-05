@@ -1,8 +1,6 @@
 import * as React from "react";
-import { useLocation } from "wouter";
-import { AlertTriangle, Check, HardHat, Plus, Star, Trash2 } from "lucide-react";
-import { Page } from "../components/layout";
-import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
+import { Check, Star, Trash2 } from "lucide-react";
+import { CardHeader, Loading, Spinner } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
@@ -11,7 +9,6 @@ import { InstallerRatesTab } from "../components/labour";
 import {
   useCreateInstaller,
   useInstaller,
-  useInstallers,
   useSetInstallerSkill,
   useUpdateInstaller,
   uploadInstallerLogo,
@@ -22,12 +19,6 @@ import {
   useRemoveUnavailability,
   useUnavailability,
 } from "../queries/availability";
-
-const CREW_CAPACITY: Record<string, string> = {
-  solo: "Works solo",
-  own_offsider: "Brings his own offsider",
-  needs_partner: "Needs a partner",
-};
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -40,19 +31,9 @@ function dateInput(value: Date | string | null) {
   return d.toISOString().slice(0, 10);
 }
 
-function expiryTone(value: Date | string | null) {
-  if (!value) return null;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  const days = Math.round((d.getTime() - Date.now()) / 86_400_000);
-  if (days < 0) return { colour: "#B4342A", label: `expired ${Math.abs(days)}d ago` };
-  if (days <= 30) return { colour: "#D08A1E", label: `${days}d left` };
-  return { colour: "#3F7D3A", label: d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "2-digit" }) };
-}
-
 /* ---------------------------- new installer ---------------------------- */
 
-function NewInstallerModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function NewInstallerModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const create = useCreateInstaller();
   const [form, setForm] = React.useState({
     name: "",
@@ -535,7 +516,7 @@ function InstallerInvoicingTab({ id }: { id: number }) {
   );
 }
 
-function InstallerPanel({ id, onClose }: { id: number; onClose: () => void }) {
+export function InstallerPanel({ id, onClose }: { id: number; onClose: () => void }) {
   const [panel, setPanel] = React.useState<"card" | "rates" | "invoicing">("card");
   const detail = useInstaller(id);
   const bootstrap = useBootstrap();
@@ -825,120 +806,3 @@ function InstallerPanel({ id, onClose }: { id: number; onClose: () => void }) {
 }
 
 /* -------------------------------- page -------------------------------- */
-
-export default function InstallersPage() {
-  const [location] = useLocation();
-  const [showInactive, setShowInactive] = React.useState(false);
-  const [creating, setCreating] = React.useState(false);
-  const [openId, setOpenId] = React.useState<number | null>(null);
-  const installers = useInstallers(showInactive);
-
-  // The schedule board links here with ?open=<id>.
-  React.useEffect(() => {
-    const q = window.location.search;
-    const match = /[?&]open=(\d+)/.exec(q);
-    if (match) setOpenId(Number(match[1]));
-  }, [location]);
-
-  const rows = installers.data ?? [];
-
-  return (
-    <Page
-      title="Installers"
-      subtitle="Tick a skill and he becomes dispatchable for it. Nothing else can be offered to him."
-      actions={
-        <>
-          <label htmlFor={`installers_cb3`} className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Checkbox id={`installers_cb3`} checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
-            Show inactive
-          </label>
-          <Button onClick={() => setCreating(true)}>
-            <Plus className="size-4" />
-            New installer
-          </Button>
-        </>
-      }
-    >
-      {installers.isLoading ? (
-        <Card>
-          <Loading />
-        </Card>
-      ) : rows.length === 0 ? (
-        <Card>
-          <Empty>No installers yet.</Empty>
-        </Card>
-      ) : (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {rows.map((i) => {
-            const ins = expiryTone(i.insuranceExpiry);
-            const lic = expiryTone(i.licenceExpiry);
-            return (
-              <button
-                key={i.id}
-                type="button"
-                onClick={() => setOpenId(i.id)}
-                className="card-surface flex flex-col gap-2.5 px-4 py-3 text-left transition-shadow hover:shadow-md"
-              >
-                <div className="flex items-start gap-2.5">
-                  <span
-                    className="mt-0.5 size-8 shrink-0 rounded-md"
-                    style={{ backgroundColor: i.colour }}
-                    aria-hidden
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold">{i.name}</p>
-                    <p className="tabular truncate text-xs text-muted-foreground">
-                      {i.mobile ?? "No mobile"} · {CREW_CAPACITY[i.crewCapacity] ?? i.crewCapacity}
-                    </p>
-                  </div>
-                  {!i.active ? <Badge colour="#7A736D">Inactive</Badge> : null}
-                </div>
-
-                <div className="flex flex-wrap gap-1">
-                  {i.skills.length === 0 ? (
-                    <span className="inline-flex items-center gap-1 text-xs text-destructive">
-                      <AlertTriangle className="size-3.5" />
-                      No skills ticked, can't be dispatched
-                    </span>
-                  ) : (
-                    i.skills.slice(0, 6).map((s) => (
-                      <Badge key={s.id}>
-                        <Check className="size-3" />
-                        {s.name}
-                      </Badge>
-                    ))
-                  )}
-                  {i.skills.length > 6 ? <Badge>+{i.skills.length - 6} more</Badge> : null}
-                </div>
-
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-xs text-muted-foreground">
-                  <span className="tabular">
-                    <span className="font-medium text-foreground">{i.openTaskCount}</span> open task
-                    {i.openTaskCount === 1 ? "" : "s"}
-                  </span>
-                  {i.serviceArea ? <span>{i.serviceArea}</span> : null}
-                  {i.unavailableDays.length ? (
-                    <span>Off {i.unavailableDays.map((d) => DAYS[d]).join(", ")}</span>
-                  ) : null}
-                  {ins ? <Badge colour={ins.colour}>Insurance {ins.label}</Badge> : null}
-                  {lic ? <Badge colour={lic.colour}>Licence {lic.label}</Badge> : null}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {rows.length > 0 ? (
-        <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
-          <HardHat className="size-3.5" />
-          Installers never see customer pricing, quotes, invoices or each other's tasks, that's enforced on the
-          server, not just hidden in the app.
-        </p>
-      ) : null}
-
-      <NewInstallerModal open={creating} onClose={() => setCreating(false)} />
-      {openId !== null ? <InstallerPanel id={openId} onClose={() => setOpenId(null)} /> : null}
-    </Page>
-  );
-}

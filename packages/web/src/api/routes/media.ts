@@ -2,7 +2,7 @@ import { z } from "zod";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { adminOnly, staffOnly } from "../middleware/auth";
 import { signMany } from "../lib/s3";
 
 /**
@@ -27,7 +27,7 @@ const bucketEnum = z.enum(BUCKETS);
 
 export const media = {
   /** Everything on a job, grouped by bucket, links signed for an hour. */
-  list: adminOnly
+  list: staffOnly
     .input(z.object({ jobId: z.number(), includeArchived: z.boolean().default(false) }))
     .handler(async ({ input }) => {
       const rows = await db
@@ -49,7 +49,7 @@ export const media = {
     }),
 
   /** Called after the browser has PUT the file straight to storage. */
-  attach: adminOnly
+  attach: staffOnly
     .input(
       z.object({
         jobId: z.number(),
@@ -83,7 +83,7 @@ export const media = {
       return row;
     }),
 
-  setCaption: adminOnly
+  setCaption: staffOnly
     .input(z.object({ id: z.number(), caption: z.string().nullable() }))
     .handler(async ({ input }) => {
       const [row] = await db
@@ -95,7 +95,7 @@ export const media = {
     }),
 
   /** Put a stray photo in the right bucket or area. */
-  move: adminOnly
+  move: staffOnly
     .input(z.object({ id: z.number(), bucket: bucketEnum, areaId: z.number().nullable().optional() }))
     .handler(async ({ input }) => {
       const [row] = await db
@@ -117,7 +117,7 @@ export const media = {
   }),
 
   /** Before/after set to send the customer or drop on a landing page. */
-  customerPack: adminOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
+  customerPack: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
     const rows = await db
       .select()
       .from(schema.jobMedia)

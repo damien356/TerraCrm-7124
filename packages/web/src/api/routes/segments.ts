@@ -3,7 +3,7 @@ import { desc, eq, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { adminOnly, staffOnly } from "../middleware/auth";
 import {
   PRODUCT_FAMILIES,
   describeRules,
@@ -84,7 +84,7 @@ export const segments = {
    * purpose: a segment list showing stale numbers is worse than no numbers,
    * because the office plans a send off them.
    */
-  list: adminOnly.handler(async () => {
+  list: staffOnly.handler(async () => {
     const rows = await db.select().from(schema.segments).orderBy(desc(schema.segments.updatedAt));
 
     /* How many sends have ever gone out against each one, so a segment that is
@@ -111,7 +111,7 @@ export const segments = {
   }),
 
   /** One segment, its counts, and a sample of who is in it. */
-  get: adminOnly.input(z.object({ id: z.number().int() })).handler(async ({ input }) => {
+  get: staffOnly.input(z.object({ id: z.number().int() })).handler(async ({ input }) => {
     const [row] = await db.select().from(schema.segments).where(eq(schema.segments.id, input.id));
     if (!row) throw new ORPCError("NOT_FOUND", { message: "Segment not found" });
 
@@ -149,7 +149,7 @@ export const segments = {
    * Counts and a sample for rules that have not been saved yet, so the editor
    * can show the office what a change does before they commit to it.
    */
-  preview: adminOnly
+  preview: staffOnly
     .input(z.object({ audience: audienceInput.default("homeowner"), rules: rulesInput }))
     .handler(async ({ input }) => {
       const rules = parseRules(JSON.stringify(input.rules));
@@ -167,9 +167,9 @@ export const segments = {
     }),
 
   /** Real suburbs, sources and product families with real counts behind them. */
-  options: adminOnly.handler(async () => segmentOptions()),
+  options: staffOnly.handler(async () => segmentOptions()),
 
-  create: adminOnly.input(upsertInput).handler(async ({ input }) => {
+  create: staffOnly.input(upsertInput).handler(async ({ input }) => {
     const [row] = await db
       .insert(schema.segments)
       .values({
@@ -184,7 +184,7 @@ export const segments = {
     return row!;
   }),
 
-  update: adminOnly
+  update: staffOnly
     .input(upsertInput.partial().extend({ id: z.number().int() }))
     .handler(async ({ input }) => {
       const [existing] = await db

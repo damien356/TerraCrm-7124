@@ -2,7 +2,7 @@ import { z } from "zod";
 import { asc, eq } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { adminOnly, staffOnly } from "../middleware/auth";
 
 /**
  * Areas are the rooms or zones the work covers — Kitchen 14 m², Hallway 8 m².
@@ -10,7 +10,7 @@ import { adminOnly } from "../middleware/auth";
  * they're covering instead of scrolling a pile of loose job photos.
  */
 export const areas = {
-  list: adminOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
+  list: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
     return db
       .select()
       .from(schema.jobAreas)
@@ -18,7 +18,7 @@ export const areas = {
       .orderBy(asc(schema.jobAreas.sortOrder), asc(schema.jobAreas.id));
   }),
 
-  create: adminOnly
+  create: staffOnly
     .input(
       z.object({
         jobId: z.number(),
@@ -37,7 +37,7 @@ export const areas = {
       return row;
     }),
 
-  update: adminOnly
+  update: staffOnly
     .input(
       z.object({
         id: z.number(),

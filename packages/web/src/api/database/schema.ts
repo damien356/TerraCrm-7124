@@ -19,9 +19,12 @@ export const profiles = sqliteTable("profiles", {
   userId: text("user_id").notNull().unique(),
   name: text("name").notNull().default(""),
   email: text("email").notNull().default(""),
-  /** "admin" = full access · "installer" = restricted to own tasks */
-  role: text("role").notNull().default("installer"),
+  /** "admin" = full access · "office" = day-to-day running · "field" (legacy value "installer") = own tasks only */
+  role: text("role").notNull().default("field"),
   installerId: integer("installer_id"),
+  phone: text("phone"),
+  /** Office only: an Admin can switch this on so the person sees cost prices and margins. */
+  canSeeCosts: integer("can_see_costs", { mode: "boolean" }).notNull().default(false),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   ...timestamps,
 });
@@ -241,6 +244,8 @@ export const installers = sqliteTable("installers", {
   colour: text("colour").notNull().default("#4A7FA5"),
   notes: text("notes"),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
+  /** Set when the person moves to Admin or Office. Card leaves dispatch, history stays. */
+  archivedAt: integer("archived_at", { mode: "timestamp" }),
   /**
    * Location sharing. ON-SHIFT ONLY: the app reports a position while a task is
    * in progress and stops the second it's marked complete. Never outside that.
@@ -1225,6 +1230,13 @@ export const productSpecials = sqliteTable(
     endsOn: text("ends_on").notNull(),
     /** Set when the office kills a special early. Window is left intact for history. */
     cancelledAt: integer("cancelled_at", { mode: "timestamp" }),
+    /**
+     * false (default) = Terra keeps the saving as extra margin and the customer
+     * price does not move. true = the discount is handed to the customer: new
+     * quotes mark up off the special cost for as long as the window is live.
+     * Quotes already written are never touched either way.
+     */
+    passOnToCustomer: integer("pass_on_to_customer", { mode: "boolean" }).notNull().default(false),
     /** Which document the special was read off. */
     source: text("source").notNull().default(""),
     notes: text("notes").notNull().default(""),
@@ -1254,11 +1266,14 @@ export const quotes = sqliteTable(
   "quotes",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    number: integer("number").notNull().unique(),
+    /** One number per quote. Each new version reuses it, so number + version is what is unique. */
+    number: integer("number").notNull(),
     version: integer("version").notNull().default(1),
     jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
     contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
     companyId: integer("company_id").references(() => companies.id, { onDelete: "set null" }),
+    /** The supervisor who asked for this quote. Required whenever a company is set. */
+    supervisorContactId: integer("supervisor_contact_id").references(() => contacts.id, { onDelete: "set null" }),
     siteId: integer("site_id").references(() => sites.id, { onDelete: "set null" }),
     /** draft · needs_review · sent · accepted · declined · expired */
     status: text("status").notNull().default("draft"),
@@ -1266,6 +1281,10 @@ export const quotes = sqliteTable(
     gst: real("gst").notNull().default(0),
     total: real("total").notNull().default(0),
     depositPercent: real("deposit_percent").notNull().default(0),
+    /** Highest discount % an Admin has approved for this quote to go out at. */
+    discountApprovedPercent: real("discount_approved_percent").notNull().default(0),
+    discountApprovedBy: text("discount_approved_by"),
+    discountApprovedAt: integer("discount_approved_at", { mode: "timestamp" }),
     validUntil: integer("valid_until", { mode: "timestamp" }),
     notes: text("notes"),
     terms: text("terms"),
@@ -1273,7 +1292,7 @@ export const quotes = sqliteTable(
     acceptedAt: integer("accepted_at", { mode: "timestamp" }),
     ...timestamps,
   },
-  (t) => [index("quotes_contact_idx").on(t.contactId)],
+  (t) => [index("quotes_contact_idx").on(t.contactId), unique("quotes_number_version_unique").on(t.number, t.version)],
 );
 
 export const quoteItems = sqliteTable(
@@ -1288,7 +1307,11 @@ export const quoteItems = sqliteTable(
     qty: real("qty").notNull().default(1),
     unit: text("unit").notNull().default("m2"),
     unitPrice: real("unit_price").notNull().default(0),
+    /** Price book price before anyone hand-edited the line. Null = never edited. The gap is the discount. */
+    listUnitPrice: real("list_unit_price"),
     unitCost: real("unit_cost"),
+    /** material · labour. Drives split material and labour invoices. Copied from the price book, editable per line. */
+    lineType: text("line_type").notNull().default("material"),
     total: real("total").notNull().default(0),
     sortOrder: integer("sort_order").notNull().default(0),
     /**
@@ -1307,6 +1330,36 @@ export const quoteItems = sqliteTable(
     ...timestamps,
   },
   (t) => [index("quote_items_quote_idx").on(t.quoteId)],
+);
+
+/* ---------------------------------------------------------------------------
+ * Quote price history. One row per product line the moment a quote is SENT, so
+ * "what were they last quoted" never depends on a quote that was later edited.
+ * Append only. Source 'backfill' rows come from quotes that existed before this
+ * table did.
+ * ------------------------------------------------------------------------- */
+
+export const quotePriceHistory = sqliteTable(
+  "quote_price_history",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    quoteId: integer("quote_id").references(() => quotes.id, { onDelete: "set null" }),
+    quoteItemId: integer("quote_item_id"),
+    productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    companyId: integer("company_id").references(() => companies.id, { onDelete: "set null" }),
+    supervisorContactId: integer("supervisor_contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    unit: text("unit").notNull().default("m2"),
+    unitPrice: real("unit_price").notNull(),
+    quotedByName: text("quoted_by_name").notNull().default(""),
+    /** quote · backfill */
+    source: text("source").notNull().default("quote"),
+    quotedAt: integer("quoted_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+  },
+  (t) => [
+    index("qph_company_product_idx").on(t.companyId, t.productId),
+    index("qph_contact_product_idx").on(t.contactId, t.productId),
+  ],
 );
 
 /* ---------------------------------------------------------------------------

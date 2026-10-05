@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { assertSupervisor, SUPERVISOR_REQUIRED_MESSAGE } from "../lib/supervisors";
 import { and, asc, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
 import { sellExGstWithMarkup } from "../lib/pricing";
+import { liveSellFor } from "../lib/live-sell";
 import { suggestProducts } from "../agent/price";
 import { customerCandidates, SAID_DETAILS_NOTE, spokenForQuote, UNMATCHED_NOTE } from "../lib/quote-customer";
 import { forgetNames } from "../lib/memo-context";
@@ -12,8 +14,9 @@ import { normaliseMobile } from "../lib/sms";
 import { createContact } from "./contacts";
 
 /**
- * Quotes are admin-only, end to end. Installers must never reach any procedure
- * in this file — pricing, margins and unit costs live here.
+ * Quotes are for Admin and Office. Field crew must never reach any procedure
+ * in this file. Cost and margin figures are hidden from anyone whose actor has
+ * canSeeCosts false, and only an Admin can set a unit cost.
  *
  * Money rules: line total = qty × unitPrice. Subtotal is the sum of lines,
  * GST is 10% (Australia), total = subtotal + gst. Every write recalculates the
@@ -21,6 +24,59 @@ import { createContact } from "./contacts";
  */
 
 const GST_RATE = 0.1;
+
+/** Labour, prep and removal lines are Labour. Everything else is Material. */
+export const lineTypeOf = (kind: string) => (["labour", "prep", "removal"].includes(kind) ? "labour" : "material");
+
+export const DISCOUNT_LIMIT_KEY = "office_discount_limit_percent";
+
+/** Office can discount a quote up to this % without Admin approval. Default 5. */
+export async function discountLimit(): Promise<number> {
+  const [r] = await db.select().from(schema.settings).where(eq(schema.settings.key, DISCOUNT_LIMIT_KEY));
+  const n = r ? Number(r.value) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : 5;
+}
+
+/** Overall discount % on a quote: how far hand-edited lines sit below the price book price. */
+export function discountPercentOf(items: { qty: number; unitPrice: number; listUnitPrice: number | null }[]): number {
+  let list = 0;
+  let off = 0;
+  for (const i of items) {
+    // A credit or minus line is a discount too, so it cannot slip past the limit.
+    const listAmount = Math.max(0, (i.listUnitPrice ?? i.unitPrice) * i.qty);
+    const sellAmount = i.unitPrice * i.qty;
+    list += listAmount;
+    off += Math.max(0, listAmount - sellAmount);
+  }
+  return list > 0 ? Math.round((off / list) * 10000) / 100 : 0;
+}
+
+/** Append one history row per product line on this quote. Called when the quote is sent. */
+async function recordPriceHistory(quote: typeof schema.quotes.$inferSelect, byName: string) {
+  const lines = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quote.id));
+  const already = await db
+    .select({ itemId: schema.quotePriceHistory.quoteItemId, unitPrice: schema.quotePriceHistory.unitPrice, unit: schema.quotePriceHistory.unit })
+    .from(schema.quotePriceHistory)
+    .where(eq(schema.quotePriceHistory.quoteId, quote.id));
+  const seen = new Set(already.map((h) => `${h.itemId}|${h.unitPrice}|${h.unit}`));
+  // Sending the same quote twice does not write the same price twice.
+  const priced = lines.filter((l) => l.productId && l.unitPrice > 0 && !seen.has(`${l.id}|${l.unitPrice}|${l.unit}`));
+  if (!priced.length) return;
+  await db.insert(schema.quotePriceHistory).values(
+    priced.map((l) => ({
+      quoteId: quote.id,
+      quoteItemId: l.id,
+      productId: l.productId,
+      contactId: quote.contactId,
+      companyId: quote.companyId,
+      supervisorContactId: quote.supervisorContactId,
+      unit: l.unit,
+      unitPrice: l.unitPrice,
+      quotedByName: byName,
+      source: "quote",
+    })),
+  );
+}
 
 /** Recalculate a quote header from its own line items. Returns the new totals.
  *  Exported for the voice quote pipeline, which inserts lines directly and
@@ -59,8 +115,58 @@ async function quoteOrThrow(id: number) {
   return row;
 }
 
+/** Accepted, declined and expired quotes are history. Change them by making a new version. */
+const LOCKED_STATUSES = ["accepted", "declined", "expired"];
+async function editableQuoteOrThrow(id: number) {
+  const quote = await quoteOrThrow(id);
+  if (LOCKED_STATUSES.includes(quote.status)) {
+    throw new ORPCError("BAD_REQUEST", { message: "This quote is locked. Make a new version to change it." });
+  }
+  return quote;
+}
+
+type DiscountLine = { id?: number; qty: number; unitPrice: number; listUnitPrice: number | null };
+
+/** Office cannot go past the discount limit, or past what an Admin approved. Admin is never blocked. */
+async function assertDiscountAllowed(quote: typeof schema.quotes.$inferSelect, items: DiscountLine[], actor: Actor) {
+  if (actor.role === "admin") return;
+  const pct = discountPercentOf(items);
+  const limit = await discountLimit();
+  if (pct > limit && pct > quote.discountApprovedPercent) {
+    throw new ORPCError("FORBIDDEN", {
+      message: `This quote is discounted ${pct}%. Office can go up to ${limit}%. An Admin needs to approve it first.`,
+    });
+  }
+}
+
+/** The checks every path to a customer goes through: Send, Accept and Convert to job. */
+async function assertReadyToGoOut(quote: typeof schema.quotes.$inferSelect, actor: Actor) {
+  if (quote.companyId && !quote.supervisorContactId) {
+    throw new ORPCError("BAD_REQUEST", { message: `Supervisor missing. ${SUPERVISOR_REQUIRED_MESSAGE}` });
+  }
+  const items = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quote.id));
+  await assertDiscountAllowed(quote, items, actor);
+}
+
+/** A quote that has gone out cannot be edited past the discount Office is allowed. */
+async function assertSentEditAllowed(
+  quote: typeof schema.quotes.$inferSelect,
+  change: DiscountLine,
+  actor: Actor,
+) {
+  if (quote.status !== "sent" || actor.role === "admin") return;
+  const items = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quote.id));
+  const next = change.id ? items.map((i) => (i.id === change.id ? { ...i, ...change } : i)) : [...items, change];
+  await assertDiscountAllowed(quote, next, actor);
+}
+
+/** Cost is never sent to someone who is not allowed to see it. */
+function hideCost<T extends { unitCost: number | null }>(row: T | undefined, actor: Actor): T | undefined {
+  return row && !actor.canSeeCosts ? { ...row, unitCost: null } : row;
+}
+
 export const quotes = {
-  list: adminOnly
+  list: staffOnly
     .input(
       z
         .object({
@@ -120,7 +226,7 @@ export const quotes = {
       }));
     }),
 
-  get: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     const [row] = await db
       .select({
         quote: schema.quotes,
@@ -164,29 +270,40 @@ export const quotes = {
     ]);
 
     const cost = items.reduce((sum, i) => sum + (i.unitCost ?? 0) * (i.qty ?? 0), 0);
+    const showCosts = context.actor.canSeeCosts;
+    const limit = await discountLimit();
+    const discountPercent = discountPercentOf(items);
+    const needsApproval =
+      context.actor.role !== "admin" && discountPercent > limit && discountPercent > row.quote.discountApprovedPercent;
 
     return {
       ...row.quote,
+      discountPercent,
+      discountLimit: limit,
+      discountNeedsApproval: needsApproval,
+      costsHidden: !showCosts,
       contact: row.contact,
       company: row.company,
       site: row.site,
       job: row.job?.id ? row.job : null,
-      items,
+      items: showCosts ? items : items.map((i) => ({ ...i, unitCost: null })),
       activity,
       versions,
-      /** Admin-only margin figures. Never expose these through field.ts. */
-      estimatedCost: round2(cost),
-      estimatedMargin: round2(row.quote.subtotal - cost),
-      estimatedMarginPercent: row.quote.subtotal > 0 ? round2(((row.quote.subtotal - cost) / row.quote.subtotal) * 100) : 0,
+      /** Only for Admin, or Office with the cost switch on. Never expose these through field.ts. */
+      estimatedCost: showCosts ? round2(cost) : null,
+      estimatedMargin: showCosts ? round2(row.quote.subtotal - cost) : null,
+      estimatedMarginPercent: !showCosts ? null : row.quote.subtotal > 0 ? round2(((row.quote.subtotal - cost) / row.quote.subtotal) * 100) : 0,
     };
   }),
 
-  create: adminOnly
+  create: staffOnly
     .input(
       z.object({
         jobId: z.number().nullable().optional(),
         contactId: z.number().nullable().optional(),
         companyId: z.number().nullable().optional(),
+        /** Required when companyId is set. */
+        supervisorContactId: z.number().nullable().optional(),
         siteId: z.number().nullable().optional(),
         depositPercent: z.number().min(0).max(100).default(0),
         validDays: z.number().int().min(1).max(365).default(30),
@@ -210,6 +327,7 @@ export const quotes = {
       }),
     )
     .handler(async ({ input, context }) => {
+      await assertSupervisor(input.companyId, input.supervisorContactId);
       const [maxRow] = await db
         .select({ max: sql<number>`coalesce(max(${schema.quotes.number}), 1000)` })
         .from(schema.quotes);
@@ -231,6 +349,7 @@ export const quotes = {
           jobId: input.jobId ?? null,
           contactId: input.contactId ?? null,
           companyId: input.companyId ?? null,
+          supervisorContactId: input.companyId ? (input.supervisorContactId ?? null) : null,
           siteId: input.siteId ?? null,
           status: "draft",
           depositPercent: input.depositPercent,
@@ -243,16 +362,28 @@ export const quotes = {
       if (!row) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Quote not created" });
 
       if (input.items.length) {
+        // A price book product typed in at a lower price is still a discount off the price book.
+        const listPrices = await Promise.all(
+          input.items.map(async (item) => {
+            if (item.productId == null) return null;
+            const [product] = await db.select().from(schema.products).where(eq(schema.products.id, item.productId));
+            if (!product) return null;
+            const sell = await liveSellFor(product);
+            return sell !== item.unitPrice ? sell : null;
+          }),
+        );
         await db.insert(schema.quoteItems).values(
           input.items.map((item, i) => ({
             quoteId: row.id,
             productId: item.productId ?? null,
             kind: item.kind,
+            lineType: lineTypeOf(item.kind),
             description: item.description,
             qty: item.qty,
             unit: item.unit,
             unitPrice: item.unitPrice,
-            unitCost: item.unitCost ?? null,
+            listUnitPrice: listPrices[i] ?? null,
+            unitCost: context.actor.role === "admin" ? (item.unitCost ?? null) : null,
             total: round2(item.qty * item.unitPrice),
             sortOrder: i,
             flagged: item.flagged,
@@ -277,13 +408,14 @@ export const quotes = {
       return { ...row, ...totals };
     }),
 
-  update: adminOnly
+  update: staffOnly
     .input(
       z.object({
         id: z.number(),
         jobId: z.number().nullable().optional(),
         contactId: z.number().nullable().optional(),
         companyId: z.number().nullable().optional(),
+        supervisorContactId: z.number().nullable().optional(),
         siteId: z.number().nullable().optional(),
         status: z.enum(["draft", "needs_review", "sent", "accepted", "declined", "expired"]).optional(),
         depositPercent: z.number().min(0).max(100).optional(),
@@ -294,7 +426,29 @@ export const quotes = {
     )
     .handler(async ({ input }) => {
       const { id, ...rest } = input;
-      await quoteOrThrow(id);
+      const current = await quoteOrThrow(id);
+      if (rest.status === "sent" || rest.status === "accepted") {
+        throw new ORPCError("BAD_REQUEST", { message: "Use Send or Accepted on the quote, so the checks run." });
+      }
+      if (current.status === "accepted") {
+        throw new ORPCError("BAD_REQUEST", { message: "This quote is accepted and locked. Make a new version to change it." });
+      }
+      const onlyStatus = Object.entries(rest).every(([k, v]) => k === "status" || v === undefined);
+      if (LOCKED_STATUSES.includes(current.status) && !onlyStatus) {
+        throw new ORPCError("BAD_REQUEST", { message: "This quote is locked. Make a new version to change it." });
+      }
+      const touchesWho = rest.companyId !== undefined || rest.supervisorContactId !== undefined;
+      if (touchesWho) {
+        const companyId = rest.companyId !== undefined ? rest.companyId : current.companyId;
+        let supervisorId = rest.supervisorContactId !== undefined ? rest.supervisorContactId : current.supervisorContactId;
+        // Moving the quote to another company drops a supervisor who is not in it.
+        if (rest.companyId !== undefined && rest.companyId !== current.companyId && rest.supervisorContactId === undefined) {
+          supervisorId = null;
+          rest.supervisorContactId = null;
+        }
+        if (!companyId) rest.supervisorContactId = null;
+        else if (supervisorId) await assertSupervisor(companyId, supervisorId);
+      }
       const [row] = await db
         .update(schema.quotes)
         .set({ ...rest, updatedAt: new Date() })
@@ -314,7 +468,7 @@ export const quotes = {
 
   /* ----------------------------- line items ----------------------------- */
 
-  addItem: adminOnly
+  addItem: staffOnly
     .input(
       z.object({
         quoteId: z.number(),
@@ -329,8 +483,19 @@ export const quotes = {
         flagReason: z.string().nullable().optional(),
       }),
     )
-    .handler(async ({ input }) => {
-      await quoteOrThrow(input.quoteId);
+    .handler(async ({ input, context }) => {
+      const quote = await editableQuoteOrThrow(input.quoteId);
+      if (context.actor.role !== "admin") input.unitCost = null;
+      // A price book product typed in at a lower price is still a discount off the price book.
+      let listUnitPrice: number | null = null;
+      if (input.productId != null) {
+        const [product] = await db.select().from(schema.products).where(eq(schema.products.id, input.productId));
+        if (product) {
+          const sell = await liveSellFor(product);
+          if (sell !== input.unitPrice) listUnitPrice = sell;
+        }
+      }
+      await assertSentEditAllowed(quote, { qty: input.qty, unitPrice: input.unitPrice, listUnitPrice }, context.actor);
       const [maxRow] = await db
         .select({ max: sql<number>`coalesce(max(${schema.quoteItems.sortOrder}), -1)` })
         .from(schema.quoteItems)
@@ -342,10 +507,12 @@ export const quotes = {
           quoteId: input.quoteId,
           productId: input.productId ?? null,
           kind: input.kind,
+          lineType: lineTypeOf(input.kind),
           description: input.description,
           qty: input.qty,
           unit: input.unit,
           unitPrice: input.unitPrice,
+          listUnitPrice,
           unitCost: input.unitCost ?? null,
           total: round2(input.qty * input.unitPrice),
           sortOrder: Number(maxRow?.max ?? -1) + 1,
@@ -355,14 +522,14 @@ export const quotes = {
         .returning();
 
       const totals = await recalc(input.quoteId);
-      return { item: row, totals };
+      return { item: hideCost(row, context.actor), totals };
     }),
 
   /** Add a line straight off the price list, carrying sell price and cost across. */
-  addProduct: adminOnly
+  addProduct: staffOnly
     .input(z.object({ quoteId: z.number(), productId: z.number(), qty: z.number().default(1) }))
-    .handler(async ({ input }) => {
-      await quoteOrThrow(input.quoteId);
+    .handler(async ({ input, context }) => {
+      await editableQuoteOrThrow(input.quoteId);
       const [product] = await db.select().from(schema.products).where(eq(schema.products.id, input.productId));
       if (!product) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
 
@@ -371,7 +538,7 @@ export const quotes = {
         .from(schema.quoteItems)
         .where(eq(schema.quoteItems.quoteId, input.quoteId));
 
-      const unitPrice = product.sellPrice ?? 0;
+      const unitPrice = await liveSellFor(product);
       // Reads the way Damien says it out loud: "Andes Peak in Merida", not a
       // string of dashes. This line goes out on the customer's quote.
       const named = [product.brand, product.range].filter(Boolean).join(" ");
@@ -387,6 +554,7 @@ export const quotes = {
           quoteId: input.quoteId,
           productId: product.id,
           kind: product.category === "labour" ? "labour" : "supply",
+          lineType: product.category === "labour" ? "labour" : "material",
           description: description || product.sku || "Product",
           qty: input.qty,
           unit: product.unit,
@@ -398,7 +566,7 @@ export const quotes = {
         .returning();
 
       const totals = await recalc(input.quoteId);
-      return { item: row, totals };
+      return { item: hideCost(row, context.actor), totals };
     }),
 
   /**
@@ -413,7 +581,7 @@ export const quotes = {
    * `installerId` is a note of intent, nothing more. It does not book him, it
    * does not offer him the work, and it does not reprice the line.
    */
-  addLabour: adminOnly
+  addLabour: staffOnly
     .input(
       z.object({
         quoteId: z.number(),
@@ -424,8 +592,8 @@ export const quotes = {
         description: z.string().optional(),
       }),
     )
-    .handler(async ({ input }) => {
-      await quoteOrThrow(input.quoteId);
+    .handler(async ({ input, context }) => {
+      await editableQuoteOrThrow(input.quoteId);
 
       const [item] = await db
         .select()
@@ -487,6 +655,7 @@ export const quotes = {
         .values({
           quoteId: input.quoteId,
           kind: item.kind === "work" ? "labour" : item.kind === "allowance" ? "other" : "labour",
+          lineType: "labour",
           description: input.description?.trim() || item.name,
           qty: input.qty,
           unit: item.unit,
@@ -500,20 +669,21 @@ export const quotes = {
         .returning();
 
       const totals = await recalc(input.quoteId);
+      const showCost = context.actor.canSeeCosts;
       return {
-        item: row,
+        item: hideCost(row, context.actor),
         totals,
         rateItem: { id: item.id, name: item.name, unit: item.unit, groupName: item.groupName },
-        cost,
+        cost: showCost ? cost : null,
         sell,
-        lineCost,
+        lineCost: showCost ? lineCost : null,
         minApplied,
         minimumCharge: live.minimumCharge,
         installerName,
       };
     }),
 
-  updateItem: adminOnly
+  updateItem: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -527,19 +697,35 @@ export const quotes = {
         flagged: z.boolean().optional(),
         flagReason: z.string().nullable().optional(),
         productId: z.number().nullable().optional(),
+        lineType: z.enum(["material", "labour"]).optional(),
       }),
     )
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
       const { id, ...rest } = input;
       const [before] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, id));
       if (!before) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
+      const quote = await editableQuoteOrThrow(before.quoteId);
+      // Only an Admin can change what Terra pays. Office edits price and quantity only.
+      if (context.actor.role !== "admin") delete rest.unitCost;
 
+      if (rest.kind !== undefined && rest.lineType === undefined) rest.lineType = lineTypeOf(rest.kind) as "material" | "labour";
       const qty = rest.qty ?? before.qty;
       const unitPrice = rest.unitPrice ?? before.unitPrice;
+      // Remember the price book price the first time a price is hand-edited.
+      // The gap between it and the new price is the discount.
+      const listUnitPrice =
+        rest.unitPrice !== undefined && rest.unitPrice !== before.unitPrice && before.listUnitPrice === null
+          ? before.unitPrice
+          : undefined;
+      await assertSentEditAllowed(
+        quote,
+        { id, qty, unitPrice, listUnitPrice: listUnitPrice ?? before.listUnitPrice },
+        context.actor,
+      );
 
       const [row] = await db
         .update(schema.quoteItems)
-        .set({ ...rest, total: round2(qty * unitPrice), updatedAt: new Date() })
+        .set({ ...rest, ...(listUnitPrice !== undefined ? { listUnitPrice } : {}), total: round2(qty * unitPrice), updatedAt: new Date() })
         .where(eq(schema.quoteItems.id, id))
         .returning();
 
@@ -562,7 +748,7 @@ export const quotes = {
       }
 
       const totals = await recalc(before.quoteId);
-      return { item: row, totals };
+      return { item: hideCost(row, context.actor), totals };
     }),
 
   /**
@@ -575,7 +761,7 @@ export const quotes = {
    * the closest clients already in the system, so the quote page can show
    * "Customer not found" with matches and a filled-in new client form.
    */
-  customerHelp: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  customerHelp: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
     await quoteOrThrow(input.id);
     const spoken = await spokenForQuote(input.id);
     const candidates = spoken ? (await customerCandidates(spoken)).slice(0, 4) : [];
@@ -583,7 +769,7 @@ export const quotes = {
   }),
 
   /** Put a customer on a quote: someone already in the system, or a new client made here. */
-  setCustomer: adminOnly
+  setCustomer: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -639,7 +825,7 @@ export const quotes = {
       return { contactId: contact.id, name };
     }),
 
-  suggestProducts: adminOnly.input(z.object({ itemId: z.number() })).handler(async ({ input }) => {
+  suggestProducts: staffOnly.input(z.object({ itemId: z.number() })).handler(async ({ input }) => {
     const [item] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, input.itemId));
     if (!item) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
     const rows = await suggestProducts(`${item.description} ${item.voicePhrase ?? ""}`, 6);
@@ -660,9 +846,9 @@ export const quotes = {
    * the price book, the quantity stays. On a voice line the pick is learned,
    * so the same words find this product next time.
    */
-  changeProduct: adminOnly
+  changeProduct: staffOnly
     .input(z.object({ id: z.number(), productId: z.number() }))
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
       const [before] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, input.id));
       if (!before) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
       const quote = await quoteOrThrow(before.quoteId);
@@ -671,7 +857,7 @@ export const quotes = {
       const [product] = await db.select().from(schema.products).where(eq(schema.products.id, input.productId));
       if (!product) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
 
-      const unitPrice = product.sellPrice ?? 0;
+      const unitPrice = await liveSellFor(product);
       // Compare with the unit he said, not a wrong pick made a moment ago.
       const said = before.flagReason?.match(/^Was ([\d.]+) (\S+), this product sells by/);
       const saidUnit = said?.[2] ?? before.unit;
@@ -690,6 +876,7 @@ export const quotes = {
           description: productLineName(product) || product.sku || before.description,
           unit: product.unit || before.unit,
           unitPrice,
+          listUnitPrice: null,
           unitCost: product.costPrice ?? null,
           total: round2(before.qty * unitPrice),
           flagged: Boolean(flagReason),
@@ -726,21 +913,23 @@ export const quotes = {
             .catch((e: unknown) => console.error("[quotes] could not unlearn product pick:", e));
         }
       }
-      return { item: row, totals };
+      return { item: hideCost(row, context.actor), totals };
     }),
 
   removeItem: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
     const [before] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, input.id));
     if (!before) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
+    await editableQuoteOrThrow(before.quoteId);
     await db.delete(schema.quoteItems).where(eq(schema.quoteItems.id, input.id));
     const totals = await recalc(before.quoteId);
     return { totals };
   }),
 
   /** Drag-reorder the lines on a quote. */
-  reorderItems: adminOnly
+  reorderItems: staffOnly
     .input(z.object({ quoteId: z.number(), orderedIds: z.array(z.number()) }))
     .handler(async ({ input }) => {
+      await editableQuoteOrThrow(input.quoteId);
       await Promise.all(
         input.orderedIds.map((id, i) =>
           db
@@ -754,8 +943,23 @@ export const quotes = {
 
   /* ------------------------------ lifecycle ----------------------------- */
 
-  send: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
-    const quote = await quoteOrThrow(input.id);
+  /** Admin signs off the quote's current discount so Office can send it. */
+  approveDiscount: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
+    await quoteOrThrow(input.id);
+    const items = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, input.id));
+    const pct = discountPercentOf(items);
+    const [row] = await db
+      .update(schema.quotes)
+      .set({ discountApprovedPercent: pct, discountApprovedBy: context.actor.name, discountApprovedAt: new Date(), updatedAt: new Date() })
+      .where(eq(schema.quotes.id, input.id))
+      .returning();
+    return row;
+  }),
+
+  send: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
+    const quote = await editableQuoteOrThrow(input.id);
+    await assertReadyToGoOut(quote, context.actor);
+    await recordPriceHistory(quote, context.actor.name);
     const [row] = await db
       .update(schema.quotes)
       .set({ status: "sent", sentAt: new Date(), updatedAt: new Date() })
@@ -776,10 +980,13 @@ export const quotes = {
     return row;
   }),
 
-  accept: adminOnly
+  accept: staffOnly
     .input(z.object({ id: z.number(), note: z.string().optional() }))
     .handler(async ({ input, context }) => {
       const quote = await quoteOrThrow(input.id);
+      if (quote.status === "accepted") throw new ORPCError("BAD_REQUEST", { message: "This quote is already accepted." });
+      if (quote.status === "expired") throw new ORPCError("BAD_REQUEST", { message: "This version has expired. Accept the current version." });
+      await assertReadyToGoOut(quote, context.actor);
 
       const [row] = await db
         .update(schema.quotes)
@@ -821,10 +1028,11 @@ export const quotes = {
       return row;
     }),
 
-  decline: adminOnly
+  decline: staffOnly
     .input(z.object({ id: z.number(), reason: z.string().min(1) }))
     .handler(async ({ input, context }) => {
       const quote = await quoteOrThrow(input.id);
+      if (quote.status === "accepted") throw new ORPCError("BAD_REQUEST", { message: "This quote is accepted and locked." });
       const [row] = await db
         .update(schema.quotes)
         .set({ status: "declined", updatedAt: new Date() })
@@ -846,7 +1054,7 @@ export const quotes = {
     }),
 
   /** Copy a quote into a new version so the original stays as sent history. */
-  revise: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
+  revise: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     const quote = await quoteOrThrow(input.id);
     const items = await db
       .select()
@@ -867,6 +1075,7 @@ export const quotes = {
         jobId: quote.jobId,
         contactId: quote.contactId,
         companyId: quote.companyId,
+        supervisorContactId: quote.supervisorContactId,
         siteId: quote.siteId,
         status: "draft",
         depositPercent: quote.depositPercent,
@@ -884,10 +1093,12 @@ export const quotes = {
           quoteId: row.id,
           productId: i.productId,
           kind: i.kind,
+          lineType: i.lineType,
           description: i.description,
           qty: i.qty,
           unit: i.unit,
           unitPrice: i.unitPrice,
+          listUnitPrice: i.listUnitPrice,
           unitCost: i.unitCost,
           total: i.total,
           sortOrder: idx,
@@ -915,7 +1126,7 @@ export const quotes = {
    * Turn an accepted quote into a job. Labour/prep/removal lines become
    * unassigned TASKS (the dispatch unit) and supply lines become materials.
    */
-  convertToJob: adminOnly
+  convertToJob: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -929,6 +1140,7 @@ export const quotes = {
       if (quote.jobId) {
         throw new ORPCError("BAD_REQUEST", { message: "This quote is already attached to a job" });
       }
+      await assertReadyToGoOut(quote, context.actor);
 
       const items = await db
         .select()
@@ -984,6 +1196,20 @@ export const quotes = {
             isPrimary: true,
             onSiteContact: true,
             receivesSms: true,
+            receivesEmail: true,
+            canApproveQuote: true,
+          })
+          .onConflictDoNothing();
+      }
+
+      if (quote.companyId && quote.supervisorContactId) {
+        await db
+          .insert(schema.jobContacts)
+          .values({
+            jobId: job.id,
+            contactId: quote.supervisorContactId,
+            role: "supervisor",
+            isPrimary: true,
             receivesEmail: true,
             canApproveQuote: true,
           })
@@ -1056,7 +1282,7 @@ export const quotes = {
     }),
 
   /** Dashboard/pipeline figures for the quotes screen. */
-  stats: adminOnly.handler(async () => {
+  stats: staffOnly.handler(async () => {
     const rows = await db
       .select({
         status: schema.quotes.status,

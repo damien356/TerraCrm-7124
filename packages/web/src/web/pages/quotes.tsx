@@ -1,4 +1,5 @@
 import * as React from "react";
+import { SupervisorPicker } from "../components/supervisor-picker";
 import { Link, useLocation } from "wouter";
 import { Plus, Search } from "lucide-react";
 import { Page } from "../components/layout";
@@ -41,6 +42,7 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
   const [form, setForm] = React.useState({
     contactId: "",
     companyId: "",
+    supervisorContactId: "",
     siteId: "",
     depositPercent: "0",
     validDays: "30",
@@ -55,10 +57,15 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
 
   async function submit() {
     setError(null);
+    if (form.companyId && !form.supervisorContactId) {
+      setError("Pick the supervisor who asked for this quote, or add them, before saving.");
+      return;
+    }
     try {
       const quote = await create.mutateAsync({
         contactId: form.contactId ? Number(form.contactId) : null,
         companyId: form.companyId ? Number(form.companyId) : null,
+        supervisorContactId: form.companyId && form.supervisorContactId ? Number(form.supervisorContactId) : null,
         siteId: form.siteId ? Number(form.siteId) : null,
         depositPercent: Number(form.depositPercent) || 0,
         validDays: Number(form.validDays) || 30,
@@ -108,7 +115,7 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
         <Field label="Bill the company?" hint="Leave as none for a private customer">
           <Combobox
             value={form.companyId}
-            onChange={(v) => set("companyId", v)}
+            onChange={(v) => setForm((f) => ({ ...f, companyId: v, supervisorContactId: "" }))}
             placeholder="Search companies…"
             emptyLabel="None — bills the person"
             options={(companies.data ?? []).map((c) => ({
@@ -117,6 +124,16 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
             }))}
           />
         </Field>
+        {form.companyId ? (
+          <div className="sm:col-span-2">
+            <SupervisorPicker
+              companyId={Number(form.companyId)}
+              value={form.supervisorContactId}
+              onChange={(v) => set("supervisorContactId", v)}
+              required
+            />
+          </div>
+        ) : null}
         <Field label="Site">
           <Select value={form.siteId} onChange={(e) => set("siteId", e.target.value)}>
             <option value="">No site yet</option>

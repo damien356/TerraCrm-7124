@@ -7,6 +7,8 @@ import { Card, CardHeader, Empty, Loading, Stat } from "../components/ui/card";
 import { Badge, TASK_STATUS_COLOUR, TASK_STATUS_LABEL } from "../components/ui/badge";
 import { useDashboard } from "../queries/dashboard";
 import { useExpiringDocs } from "../queries/installers";
+import { useGoneQuiet } from "../queries/intel";
+import { histDate } from "../lib/money";
 
 const money = (n: number) =>
   n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
@@ -21,6 +23,7 @@ function countdown(expiresAt: string | Date) {
 export default function DashboardPage() {
   const dash = useDashboard();
   const expiring = useExpiringDocs();
+  const quiet = useGoneQuiet();
 
   if (dash.isLoading) return <Loading label="Loading today…" />;
   if (dash.isError) return <Page title="Dashboard"><Card><Empty>Couldn't load the dashboard. {String(dash.error)}</Empty></Card></Page>;
@@ -148,6 +151,26 @@ export default function DashboardPage() {
               </div>
             )}
           </Card>
+
+          {quiet.data && quiet.data.rows.length > 0 ? (
+            <Card>
+              <CardHeader
+                title="Gone quiet"
+                subtitle={`Supervisors with nothing in ${quiet.data.months}+ months`}
+                action={<Link to="/supervisors" className="text-xs text-primary hover:underline">See all</Link>}
+              />
+              <div className="divide-y divide-border">
+                {quiet.data.rows.slice(0, 6).map((p) => (
+                  <Link key={p.id} to={`/supervisors/${p.id}`} className="block px-4 py-2.5 transition-colors hover:bg-secondary/60">
+                    <p className="truncate text-sm font-medium">{p.name}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {p.companyName ?? "No company"} · last sent {histDate(p.lastSent)}
+                    </p>
+                  </Link>
+                ))}
+              </div>
+            </Card>
+          ) : null}
 
           <Card>
             <CardHeader title="Needs a body" subtitle="Scheduled, nobody on it" />

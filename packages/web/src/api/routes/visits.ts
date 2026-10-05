@@ -2,7 +2,7 @@ import { z } from "zod";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { staffOnly } from "../middleware/auth";
 import { crewVoice } from "../middleware/voice";
 import { ownTaskOrThrow } from "./field";
 import { workDaysFor } from "../lib/crew-days";
@@ -180,7 +180,7 @@ export const visits = {
    * The Crew updates feed for the dashboard: who is on site now, every red
    * photo flag still open, and the last few days of crew messages.
    */
-  feed: adminOnly
+  feed: staffOnly
     .input(z.object({ days: z.number().int().min(1).max(30).default(3), limit: z.number().int().min(1).max(200).default(60) }).default({ days: 3, limit: 60 }))
     .handler(async ({ input }) => {
       const since = new Date(Date.now() - input.days * 86_400_000);
@@ -272,7 +272,7 @@ export const visits = {
     }),
 
   /** Every visit on one job, for the job page. Voided drive-pasts included, marked as such. */
-  forJob: adminOnly.input(z.object({ jobId: z.number().int() })).handler(async ({ input }) => {
+  forJob: staffOnly.input(z.object({ jobId: z.number().int() })).handler(async ({ input }) => {
     const rows = await db
       .select({ visit: schema.siteVisits, installerName: schema.installers.name, taskTitle: schema.jobTasks.title })
       .from(schema.siteVisits)

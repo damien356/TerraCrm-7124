@@ -5,7 +5,7 @@ import { base } from "../__core/app";
 import { db, inDemo, runOnDemo } from "../database";
 import * as schema from "../database/schema";
 import { demoDatabase } from "../database/demo";
-import { onActorDb, resolveActor } from "./auth";
+import { normaliseRole, onActorDb, resolveActor } from "./auth";
 
 /**
  * Siri runs while the Terra app is closed and the phone is in a pocket, so it
@@ -45,7 +45,7 @@ export const crewVoice = base.use(async ({ context, next }) => {
 
   const actor = await resolveActor(context.headers);
   if (!actor) throw new ORPCError("UNAUTHORIZED");
-  if (!actor.installerId) {
+  if (!actor.installerId || (actor.role !== "field" && !onActorDb(actor, () => inDemo()))) {
     throw new ORPCError("FORBIDDEN", { message: "This login isn't linked to an installer record yet." });
   }
   const installerId = actor.installerId;
@@ -76,10 +76,10 @@ export const crewVoice = base.use(async ({ context, next }) => {
 
     /* The login behind the key must still be live and still be this installer. */
     const [profile] = await db
-      .select({ active: schema.profiles.active, installerId: schema.profiles.installerId })
+      .select({ active: schema.profiles.active, installerId: schema.profiles.installerId, role: schema.profiles.role })
       .from(schema.profiles)
       .where(eq(schema.profiles.userId, row.userId));
-    if (!profile?.active || profile.installerId !== row.installerId) {
+    if (!profile?.active || (normaliseRole(profile.role) !== "field" && !inDemo()) || profile.installerId !== row.installerId) {
       throw new ORPCError("UNAUTHORIZED", { message: "This phone's Siri key is not valid." });
     }
 

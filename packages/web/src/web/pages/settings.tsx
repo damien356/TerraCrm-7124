@@ -990,6 +990,40 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
     <div className="grid gap-4 lg:grid-cols-2">
       <CashPositionCard />
       <Card>
+        <CardHeader title="Office quote discounts" subtitle="How far Office can discount a quote before an Admin has to approve it." />
+        <div className="space-y-4 px-4 py-4">
+          <Field label="Discount limit (%)" hint="Applies to everyone with Office access. Anything above it waits for an Admin before the quote can be sent.">
+            <div className="flex items-center gap-2">
+              <Input
+                value={draft.office_discount_limit_percent ?? "5"}
+                onChange={(e) => setDraft((d) => ({ ...d, office_discount_limit_percent: e.target.value }))}
+                onBlur={(e) => commit("office_discount_limit_percent", e.target.value)}
+                className="tabular w-24"
+              />
+              {tick("office_discount_limit_percent")}
+            </div>
+          </Field>
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader title="Supervisors" subtitle="When a supervisor counts as gone quiet." />
+        <div className="space-y-4 px-4 py-4">
+          <Field label="Gone quiet after (months)" hint="If a supervisor who has sent work before sends no job or quote request for this long, they show on the Supervisors page and the Dashboard.">
+            <div className="flex items-center gap-2">
+              <Input
+                value={draft.supervisor_quiet_months ?? "3"}
+                onChange={(e) => setDraft((d) => ({ ...d, supervisor_quiet_months: e.target.value }))}
+                onBlur={(e) => commit("supervisor_quiet_months", e.target.value)}
+                className="tabular w-24"
+              />
+              {tick("supervisor_quiet_months")}
+            </div>
+          </Field>
+        </div>
+      </Card>
+
+      <Card>
         <CardHeader title="Dispatch rules" subtitle="How offers behave when you send work out." />
         <div className="space-y-4 px-4 py-4">
           <Field

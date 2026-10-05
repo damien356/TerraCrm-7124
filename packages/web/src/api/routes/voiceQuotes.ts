@@ -3,7 +3,7 @@ import { desc, eq, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly, type Actor } from "../middleware/auth";
+import { staffOnly, type Actor } from "../middleware/auth";
 import { getObject, signGet, voiceAudioKey, signPut } from "../lib/s3";
 import { transcribeAudio } from "../agent/transcribe";
 import { extractVoiceQuote } from "../agent/extract";
@@ -37,7 +37,7 @@ type ProcessInput = z.infer<typeof processInput>;
 
 export const voiceQuotes = {
   /** Presigned upload for the recording itself, before anything is processed. */
-  presign: adminOnly
+  presign: staffOnly
     .input(
       z.object({ filename: z.string().min(1), contentType: z.string().min(1) }),
     )
@@ -47,7 +47,7 @@ export const voiceQuotes = {
       return { url, key };
     }),
 
-  list: adminOnly
+  list: staffOnly
     .input(
       z
         .object({ limit: z.number().int().min(1).max(200).default(50) })
@@ -64,7 +64,7 @@ export const voiceQuotes = {
       );
     }),
 
-  get: adminOnly
+  get: staffOnly
     .input(z.object({ id: z.number() }))
     .handler(async ({ input }) => {
       const [row] = await db
@@ -82,7 +82,7 @@ export const voiceQuotes = {
    * LLM call), no background job — the office is watching a spinner while
    * Damien's note turns into a quote.
    */
-  process: adminOnly.input(processInput).handler(async ({ input, context }) => {
+  process: staffOnly.input(processInput).handler(async ({ input, context }) => {
     const captureId = await startCapture(input, context.actor.name);
     return runPipeline(captureId, input, context.actor);
   }),
@@ -94,7 +94,7 @@ export const voiceQuotes = {
    * any request that is silent for that long, so the phone saw "Load failed"
    * even though the quote was made. The client polls `status` instead.
    */
-  start: adminOnly.input(processInput).handler(async ({ input, context }) => {
+  start: staffOnly.input(processInput).handler(async ({ input, context }) => {
     const captureId = await startCapture(input, context.actor.name);
     runPipeline(captureId, input, context.actor).catch((err) => {
       console.error(`[voice-quotes] capture ${captureId} failed:`, err);
@@ -103,7 +103,7 @@ export const voiceQuotes = {
   }),
 
   /** Where a background run has got to, and the finished result once priced. */
-  status: adminOnly
+  status: staffOnly
     .input(z.object({ id: z.number() }))
     .handler(async ({ input }) => {
       const [row] = await db
@@ -325,6 +325,7 @@ export async function buildQuoteFromTranscript(
         quoteId: quoteRow.id,
         productId: l.productId,
         kind: l.kind,
+        lineType: ["labour", "prep", "removal"].includes(l.kind) ? "labour" : "material",
         description: l.description,
         qty: l.qty,
         unit: l.unit,

@@ -1,4 +1,4 @@
-import { Route, Switch } from "wouter";
+import { Redirect, Route, Switch } from "wouter";
 import { Provider } from "./components/provider";
 import { Layout } from "./components/layout";
 import { AgentFeedback } from "@runablehq/website-runtime";
@@ -16,7 +16,6 @@ import ClientsPage from "./pages/clients";
 import ContactDetailPage from "./pages/contact-detail";
 import CompaniesPage from "./pages/companies";
 import CompanyDetailPage from "./pages/company-detail";
-import InstallersPage from "./pages/installers";
 import TeamPage from "./pages/team";
 import SuppliersPage from "./pages/suppliers";
 import ProductsPage from "./pages/products";
@@ -81,7 +80,7 @@ function App() {
           <Route path="/marketing/segments" component={SegmentsPage} />
           <Route path="/terra-ai" component={TerraAiPage} />
           <Route path="/review" component={ReviewPage} />
-          <Route path="/installers" component={InstallersPage} />
+          <Route path="/installers">{() => <Redirect to="/team" />}</Route>
           <Route path="/team" component={TeamPage} />
           <Route path="/suppliers" component={SuppliersPage} />
           <Route path="/products" component={ProductsPage} />

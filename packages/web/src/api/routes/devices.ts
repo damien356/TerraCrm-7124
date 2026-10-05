@@ -38,7 +38,7 @@ export const devices = {
       installerId: actor.installerId,
       installerName,
       /** The office screens are allowed. */
-      canSeeOffice: actor.role === "admin",
+      canSeeOffice: actor.role !== "field",
       /** The crew screens have an installer card behind them to load. */
       canSeeField: actor.installerId !== null,
     };

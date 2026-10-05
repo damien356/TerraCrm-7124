@@ -2,7 +2,7 @@ import { z } from "zod";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { adminOnly, staffOnly } from "../middleware/auth";
 
 /**
  * THE CREW MAP. Where everyone is, while they're on a job.
@@ -18,7 +18,7 @@ const LIVE_MINUTES = 45;
 
 export const crew = {
   /** Everyone on the clock right now, with their last known position. */
-  live: adminOnly
+  live: staffOnly
     .input(z.object({ staleMinutes: z.number().min(5).max(240).default(LIVE_MINUTES) }).default({ staleMinutes: LIVE_MINUTES }))
     .handler(async ({ input }) => {
       const cutoff = new Date(Date.now() - input.staleMinutes * 60_000);
@@ -84,7 +84,7 @@ export const crew = {
    * Who's on the clock, whether or not they're sharing. Lets the office see
    * "Mick is on a job but sharing is off" instead of guessing.
    */
-  onShift: adminOnly.handler(async () => {
+  onShift: staffOnly.handler(async () => {
     const running = await db
       .select({
         taskId: schema.jobTasks.id,
@@ -108,7 +108,7 @@ export const crew = {
   }),
 
   /** The office-side view of who has sharing switched on. Read-only — consent is theirs to give. */
-  sharingStatus: adminOnly.handler(async () => {
+  sharingStatus: staffOnly.handler(async () => {
     return db
       .select({
         id: schema.installers.id,
@@ -121,7 +121,7 @@ export const crew = {
   }),
 
   /** Today's breadcrumb trail for one installer, on-shift pings only. */
-  trail: adminOnly
+  trail: staffOnly
     .input(z.object({ installerId: z.number(), hours: z.number().min(1).max(24).default(12) }))
     .handler(async ({ input }) => {
       const cutoff = new Date(Date.now() - input.hours * 3_600_000);

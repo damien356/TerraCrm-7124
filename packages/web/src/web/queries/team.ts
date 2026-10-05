@@ -5,11 +5,7 @@ export function useLogins() {
   return useQuery(orpc.team.list.queryOptions({ staleTime: 15_000 }));
 }
 
-export function useUnlinkedInstallers() {
-  return useQuery(orpc.team.unlinkedInstallers.queryOptions({ staleTime: 15_000 }));
-}
-
-function useTeamMutation(name: "link" | "setRole" | "setActive") {
+function useTeamMutation(name: "setAccess" | "setCostAccess" | "updatePerson" | "setActive") {
   const queryClient = useQueryClient();
   return orpc.team[name].mutationOptions({
     onSuccess: () => {
@@ -19,12 +15,16 @@ function useTeamMutation(name: "link" | "setRole" | "setActive") {
   });
 }
 
-export function useLinkLogin() {
-  return useMutation(useTeamMutation("link"));
+export function useSetAccess() {
+  return useMutation(useTeamMutation("setAccess"));
 }
 
-export function useSetLoginRole() {
-  return useMutation(useTeamMutation("setRole"));
+export function useSetCostAccess() {
+  return useMutation(useTeamMutation("setCostAccess"));
+}
+
+export function useUpdatePerson() {
+  return useMutation(useTeamMutation("updatePerson"));
 }
 
 export function useSetLoginActive() {

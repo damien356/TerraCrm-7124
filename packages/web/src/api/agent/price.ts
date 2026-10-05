@@ -2,6 +2,7 @@ import { and, eq, or, like, desc, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { sellExGst } from "../lib/pricing";
+import { liveSellFor } from "../lib/live-sell";
 import { rateBook } from "../routes/labour";
 import type { Extraction } from "./extract";
 
@@ -306,7 +307,7 @@ async function priceMaterialLine(line: Extraction["lines"][number]): Promise<Pri
       description,
       qty,
       unit: learned.unit || unit,
-      unitPrice: learned.sellPrice ?? 0,
+      unitPrice: await liveSellFor(learned),
       unitCost: learned.costPrice ?? null,
       flagged: Boolean(note),
       flagReason: note || null,
@@ -392,7 +393,7 @@ async function priceMaterialLine(line: Extraction["lines"][number]): Promise<Pri
     description,
     qty,
     unit: sells,
-    unitPrice: product.sellPrice ?? 0,
+    unitPrice: await liveSellFor(product),
     unitCost: product.costPrice ?? null,
     flagged,
     flagReason: flagged ? unitNote : null,

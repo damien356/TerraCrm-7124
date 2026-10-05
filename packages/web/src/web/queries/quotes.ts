@@ -27,6 +27,7 @@ function useQuoteMutation(
     | "removeItem"
     | "reorderItems"
     | "send"
+    | "approveDiscount"
     | "accept"
     | "decline"
     | "revise"
@@ -66,6 +67,9 @@ export function useUpdateQuoteItem() {
 }
 export function useRemoveQuoteItem() {
   return useMutation(useQuoteMutation("removeItem"));
+}
+export function useApproveDiscount() {
+  return useMutation(useQuoteMutation("approveDiscount"));
 }
 export function useSendQuote() {
   return useMutation(useQuoteMutation("send"));

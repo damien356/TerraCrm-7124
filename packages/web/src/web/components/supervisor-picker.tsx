@@ -32,12 +32,15 @@ export function SupervisorPicker({
   value,
   onChange,
   disabledReason,
+  required = false,
 }: {
   companyId: number | null;
   /** Contact id as a string, or "" for nobody. */
   value: string;
   onChange: (contactId: string) => void;
   disabledReason?: string;
+  /** True when the work cannot be saved without a supervisor. */
+  required?: boolean;
 }) {
   const people = useCompanyPeople(companyId, SENDER_ROLES);
   const createContact = useCreateContact();
@@ -99,7 +102,10 @@ export function SupervisorPicker({
   }
 
   return (
-    <Field label="Supervisor" hint="The person at the builder who sent this work.">
+    <Field
+      label={required ? "Supervisor (required)" : "Supervisor"}
+      hint="The person at the company who sent this work. Not in the list? Add them below."
+    >
       <div className="space-y-2">
         <Combobox
           value={value}

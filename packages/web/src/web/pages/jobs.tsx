@@ -47,6 +47,10 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
 
   async function submit() {
     setError(null);
+    if (form.companyId && !form.supervisorContactId) {
+      setError("Pick the supervisor who sent this job, or add them, before saving.");
+      return;
+    }
     try {
       await create.mutateAsync({
         title: form.title,
@@ -129,6 +133,7 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
           companyId={form.companyId ? Number(form.companyId) : null}
           value={form.supervisorContactId}
           onChange={(v) => set("supervisorContactId", v)}
+          required
         />
         <Field label="Site">
           <Select value={form.siteId} onChange={(e) => set("siteId", e.target.value)}>
