@@ -52,7 +52,7 @@ function expiryTone(value: Date | string | null) {
 
 /* ---------------------------- new installer ---------------------------- */
 
-function NewInstallerModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function NewInstallerModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const create = useCreateInstaller();
   const [form, setForm] = React.useState({
     name: "",

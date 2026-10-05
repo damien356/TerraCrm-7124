@@ -2,7 +2,8 @@ import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
-import { adminOnly } from "../middleware/auth";
+import { adminOnly, staffOnly } from "../middleware/auth";
+import { goneQuiet, supervisorDetail, supervisorList } from "../lib/supervisors";
 
 /**
  * CLIENT, COMPANY AND SUPERVISOR INTELLIGENCE.
@@ -442,165 +443,32 @@ export const intel = {
   /* ---------------------------- supervisors ----------------------------- */
 
   /**
-   * Every person inside a company, ranked by the work they personally sent.
-   * Ambrose might be worth $500k, but one supervisor may have sent $350k of
-   * it, and that is the person to look after.
+   * Supervisors, starting clean: only people picked on a job or quote count.
+   * Office sees supervisors, jobs and revenue. Gross profit, win rate and the
+   * concentration donut are stripped on the server unless the caller can see costs.
    */
-  supervisors: adminOnly
+  supervisors: staffOnly
     .input(
       z
         .object({
           search: z.string().default(""),
           sort: z.enum(["revenue", "gp", "jobs", "recent"]).default("revenue"),
-          limit: z.number().int().min(10).max(500).default(100),
+          range: z.enum(["12m", "year", "all"]).default("12m"),
         })
-        .default({ search: "", sort: "revenue", limit: 100 }),
+        .default({ search: "", sort: "revenue", range: "12m" }),
     )
-    .handler(async ({ input }) => {
-      const term = `%${input.search.toLowerCase()}%`;
-      const order =
-        input.sort === "gp"
-          ? sql`gross_profit desc`
-          : input.sort === "jobs"
-            ? sql`delivered_jobs desc`
-            : input.sort === "recent"
-              ? sql`last_job_at desc`
-              : sql`revenue desc`;
+    .handler(({ input, context }) =>
+      supervisorList({ ...input, canSeeCosts: context.actor.canSeeCosts }),
+    ),
 
-      const rows = await db.all<
-        AggRow & {
-          id: number;
-          first_name: string;
-          last_name: string;
-          mobile: string | null;
-          email: string | null;
-          companies: string | null;
-          company_id: number | null;
-        }
-      >(sql`
-        select p.id, p.first_name, p.last_name, p.mobile, p.email,
-          (select group_concat(distinct co.name) from jobs j2
-             join companies co on co.id = j2.company_id
-             where j2.company_id is not null and ${senderFor("j2")} = p.id) as companies,
-          max(j.company_id) as company_id,
-          ${AGG}
-        from jobs j
-        left join job_statuses s on s.id = j.status_id
-        join contacts p on p.id = ${SENDER}
-        where j.company_id is not null
-        ${input.search ? sql`and lower(p.first_name || ' ' || p.last_name) like ${term}` : sql``}
-        group by p.id
-        having total_jobs > 0
-        order by ${order}
-        limit ${input.limit}
-      `);
+  /** Gone quiet list, for the Dashboard. */
+  goneQuiet: staffOnly.handler(() => goneQuiet()),
 
-      /**
-       * How much company work has nobody attached to it. Without this the
-       * ranked list reads like the whole picture when it is currently a
-       * sliver of it.
-       */
-      const [gap] = await db.all<{
-        jobs: number;
-        value: number;
-        attributed_jobs: number;
-        attributed_value: number;
-      }>(sql`
-        select
-          coalesce(sum(case when ${SENDER} is null then 1 end), 0) as jobs,
-          coalesce(sum(case when ${SENDER} is null and ${DELIVERED} then j.value end), 0) as value,
-          coalesce(sum(case when ${SENDER} is not null then 1 end), 0) as attributed_jobs,
-          coalesce(sum(case when ${SENDER} is not null and ${DELIVERED} then j.value end), 0) as attributed_value
-        from jobs j left join job_statuses s on s.id = j.status_id
-        where j.company_id is not null
-      `);
-
-      return {
-        rows: rows.map((r) => ({
-          id: r.id,
-          name: `${r.first_name} ${r.last_name}`.trim(),
-          mobile: r.mobile,
-          email: r.email,
-          companyId: r.company_id,
-          companies: (r.companies ?? "").split(",").filter(Boolean),
-          ...shapeAgg(r),
-        })),
-        attribution: {
-          unattributedJobs: Number(gap?.jobs ?? 0),
-          unattributedValue: Math.round((gap?.value ?? 0) * 100) / 100,
-          attributedJobs: Number(gap?.attributed_jobs ?? 0),
-          attributedValue: Math.round((gap?.attributed_value ?? 0) * 100) / 100,
-        },
-      };
-    }),
-
-  /** Every quote and job one person has personally sent Terra. */
-  supervisor: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
-    const [contact] = await db.all<{ id: number; first_name: string; last_name: string }>(
-      sql`select * from contacts where id = ${input.id}`,
-    );
-    if (!contact) throw new ORPCError("NOT_FOUND", { message: "Contact not found" });
-
-    const [agg] = await db.all<AggRow>(sql`
-      select ${AGG}
-      from jobs j left join job_statuses s on s.id = j.status_id
-      where ${SENDER} = ${input.id}
-    `);
-
-    const jobs = await db.all<{
-      id: number;
-      number: number;
-      title: string;
-      status: string;
-      stage: string;
-      value: number;
-      job_date: number | null;
-      cost: number;
-      has_costs: number;
-      company_id: number | null;
-      company_name: string | null;
-    }>(sql`
-      select j.id, j.number, j.title, s.name as status, s.stage, j.value,
-        ${JOB_DATE} as job_date, ${JOB_COSTS} as cost,
-        case when ${HAS_COSTS} then 1 else 0 end as has_costs,
-        j.company_id, (select co.name from companies co where co.id = j.company_id) as company_name
-      from jobs j left join job_statuses s on s.id = j.status_id
-      where ${SENDER} = ${input.id}
-      order by job_date desc
-      limit 300
-    `);
-
-    const quotes = await db.all<{
-      id: number;
-      number: number;
-      status: string;
-      total: number;
-      company_name: string | null;
-    }>(sql`
-      select q.id, q.number, q.status, q.total,
-        (select co.name from companies co where co.id = q.company_id) as company_name
-      from quotes q where q.contact_id = ${input.id}
-      order by q.number desc limit 100
-    `);
-
-    const companies = await db.all<{ id: number; name: string; role: string }>(sql`
-      select co.id, co.name, cc.role from company_contacts cc
-      join companies co on co.id = cc.company_id
-      where cc.contact_id = ${input.id}
-    `);
-
-    return {
-      contact,
-      lifetime: shapeAgg(agg ?? ({} as AggRow)),
-      companies,
-      jobs: jobs.map((j) => ({
-        ...j,
-        date: isoOrNull(j.job_date),
-        hasCosts: !!j.has_costs,
-        grossProfit: j.has_costs ? Math.round((j.value - j.cost) * 100) / 100 : null,
-      })),
-      quotes,
-    };
+  /** Every job and quote one supervisor has sent, with the company each came from. */
+  supervisor: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
+    const d = await supervisorDetail(input.id, context.actor.canSeeCosts);
+    if (!d) throw new ORPCError("NOT_FOUND", { message: "Supervisor not found" });
+    return d;
   }),
 
   /**

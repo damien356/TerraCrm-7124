@@ -323,11 +323,11 @@ export function BulkSpecialModal({
             <p className="label-xs mb-2">Who gets the saving</p>
             <label className="mb-2 flex items-start gap-2 text-sm">
               <input type="radio" className="mt-1" checked={!passOn} onChange={() => setPassOn(false)} />
-              <span><b>Keep the profit.</b> Sell price stays the same, the saving is extra margin for Terra.</span>
+              <span><b>Keep the extra profit.</b> The client price stays the same and the saving is extra margin for Terra.</span>
             </label>
             <label className="flex items-start gap-2 text-sm">
               <input type="radio" className="mt-1" checked={passOn} onChange={() => setPassOn(true)} />
-              <span><b>Give the client the discount.</b> New quotes are priced off the special cost until it ends. Quotes already written do not change.</span>
+              <span><b>Pass the saving to the client.</b> New quotes use the special price while it is on. Quotes already written do not change.</span>
             </label>
           </div>
         </div>

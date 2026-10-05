@@ -6,7 +6,8 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Select } from "../components/ui/field";
 import { useLogins, useSetAccess, useSetCostAccess, useSetLoginActive, useUpdatePerson } from "../queries/team";
-import { InstallerPanel } from "./installers";
+import { InstallerPanel, NewInstallerModal } from "./installers";
+import { useInstallers } from "../queries/installers";
 import { useRevokeVoiceKey, useVoiceKeys } from "../queries/visits";
 
 function when(iso: string | null) {
@@ -35,6 +36,8 @@ export default function TeamPage() {
   const updatePerson = useUpdatePerson();
   const [error, setError] = React.useState<string | null>(null);
   const [openId, setOpenId] = React.useState<number | null>(null);
+  const [newCard, setNewCard] = React.useState(false);
+  const cards = useInstallers(false);
   const [editing, setEditing] = React.useState<number | null>(null);
   const [draft, setDraft] = React.useState({ name: "", phone: "", email: "" });
 
@@ -229,6 +232,13 @@ export default function TeamPage() {
         </Card>
       )}
 
+      <CardsWithoutLogin
+        cards={(cards.data ?? []).filter((c) => !(people.data ?? []).some((p) => p.installerId === c.id))}
+        onOpen={setOpenId}
+        onAdd={() => setNewCard(true)}
+      />
+      <NewInstallerModal open={newCard} onClose={() => setNewCard(false)} />
+
       <VoiceKeys />
       {openId !== null ? <InstallerPanel id={openId} onClose={() => setOpenId(null)} /> : null}
     </Page>
@@ -279,6 +289,44 @@ function VoiceKeys() {
             <div key={k.id} className="px-4 py-2 text-xs text-muted-foreground opacity-70">
               {k.installerName} · {k.deviceName || "iPhone"} · turned off {when(new Date(k.revokedAt!).toISOString()).toLowerCase()}
             </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** Installer cards that no login points at, for example subbies who never use the app. */
+function CardsWithoutLogin({
+  cards,
+  onOpen,
+  onAdd,
+}: {
+  cards: { id: number; name: string; mobile: string | null }[];
+  onOpen: (id: number) => void;
+  onAdd: () => void;
+}) {
+  return (
+    <Card className="mt-4">
+      <CardHeader
+        title="Installer cards without a login"
+        subtitle="Installers who are dispatched from the board but do not use the app."
+        action={<Button size="sm" variant="ghost" onClick={onAdd}>Add installer</Button>}
+      />
+      {cards.length === 0 ? (
+        <Empty>Every installer card has a login.</Empty>
+      ) : (
+        <div className="divide-y divide-border">
+          {cards.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => onOpen(c.id)}
+              className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left hover:bg-secondary/60"
+            >
+              <span className="text-sm font-medium">{c.name}</span>
+              <span className="text-xs text-muted-foreground">{c.mobile ?? ""}</span>
+            </button>
           ))}
         </div>
       )}

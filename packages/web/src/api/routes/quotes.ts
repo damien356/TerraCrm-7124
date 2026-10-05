@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assertSupervisor, SUPERVISOR_REQUIRED_MESSAGE } from "../lib/supervisors";
 import { and, asc, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
@@ -219,6 +220,8 @@ export const quotes = {
         jobId: z.number().nullable().optional(),
         contactId: z.number().nullable().optional(),
         companyId: z.number().nullable().optional(),
+        /** Required when companyId is set. */
+        supervisorContactId: z.number().nullable().optional(),
         siteId: z.number().nullable().optional(),
         depositPercent: z.number().min(0).max(100).default(0),
         validDays: z.number().int().min(1).max(365).default(30),
@@ -242,6 +245,7 @@ export const quotes = {
       }),
     )
     .handler(async ({ input, context }) => {
+      await assertSupervisor(input.companyId, input.supervisorContactId);
       const [maxRow] = await db
         .select({ max: sql<number>`coalesce(max(${schema.quotes.number}), 1000)` })
         .from(schema.quotes);
@@ -263,6 +267,7 @@ export const quotes = {
           jobId: input.jobId ?? null,
           contactId: input.contactId ?? null,
           companyId: input.companyId ?? null,
+          supervisorContactId: input.companyId ? (input.supervisorContactId ?? null) : null,
           siteId: input.siteId ?? null,
           status: "draft",
           depositPercent: input.depositPercent,
@@ -316,6 +321,7 @@ export const quotes = {
         jobId: z.number().nullable().optional(),
         contactId: z.number().nullable().optional(),
         companyId: z.number().nullable().optional(),
+        supervisorContactId: z.number().nullable().optional(),
         siteId: z.number().nullable().optional(),
         status: z.enum(["draft", "needs_review", "sent", "accepted", "declined", "expired"]).optional(),
         depositPercent: z.number().min(0).max(100).optional(),
@@ -326,7 +332,19 @@ export const quotes = {
     )
     .handler(async ({ input }) => {
       const { id, ...rest } = input;
-      await quoteOrThrow(id);
+      const current = await quoteOrThrow(id);
+      const touchesWho = rest.companyId !== undefined || rest.supervisorContactId !== undefined;
+      if (touchesWho) {
+        const companyId = rest.companyId !== undefined ? rest.companyId : current.companyId;
+        let supervisorId = rest.supervisorContactId !== undefined ? rest.supervisorContactId : current.supervisorContactId;
+        // Moving the quote to another company drops a supervisor who is not in it.
+        if (rest.companyId !== undefined && rest.companyId !== current.companyId && rest.supervisorContactId === undefined) {
+          supervisorId = null;
+          rest.supervisorContactId = null;
+        }
+        if (!companyId) rest.supervisorContactId = null;
+        else if (supervisorId) await assertSupervisor(companyId, supervisorId);
+      }
       const [row] = await db
         .update(schema.quotes)
         .set({ ...rest, updatedAt: new Date() })
@@ -811,6 +829,9 @@ export const quotes = {
 
   send: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     const quote = await quoteOrThrow(input.id);
+    if (quote.companyId && !quote.supervisorContactId) {
+      throw new ORPCError("BAD_REQUEST", { message: `Supervisor missing. ${SUPERVISOR_REQUIRED_MESSAGE}` });
+    }
     if (context.actor.role !== "admin") {
       const items = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, input.id));
       const pct = discountPercentOf(items);
@@ -932,6 +953,7 @@ export const quotes = {
         jobId: quote.jobId,
         contactId: quote.contactId,
         companyId: quote.companyId,
+        supervisorContactId: quote.supervisorContactId,
         siteId: quote.siteId,
         status: "draft",
         depositPercent: quote.depositPercent,
@@ -953,6 +975,7 @@ export const quotes = {
           qty: i.qty,
           unit: i.unit,
           unitPrice: i.unitPrice,
+          listUnitPrice: i.listUnitPrice,
           unitCost: i.unitCost,
           total: i.total,
           sortOrder: idx,
@@ -993,6 +1016,9 @@ export const quotes = {
       const quote = await quoteOrThrow(input.id);
       if (quote.jobId) {
         throw new ORPCError("BAD_REQUEST", { message: "This quote is already attached to a job" });
+      }
+      if (quote.companyId && !quote.supervisorContactId) {
+        throw new ORPCError("BAD_REQUEST", { message: `Supervisor missing on the quote. ${SUPERVISOR_REQUIRED_MESSAGE}` });
       }
 
       const items = await db
@@ -1049,6 +1075,20 @@ export const quotes = {
             isPrimary: true,
             onSiteContact: true,
             receivesSms: true,
+            receivesEmail: true,
+            canApproveQuote: true,
+          })
+          .onConflictDoNothing();
+      }
+
+      if (quote.companyId && quote.supervisorContactId) {
+        await db
+          .insert(schema.jobContacts)
+          .values({
+            jobId: job.id,
+            contactId: quote.supervisorContactId,
+            role: "supervisor",
+            isPrimary: true,
             receivesEmail: true,
             canApproveQuote: true,
           })

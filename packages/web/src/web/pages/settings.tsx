@@ -997,6 +997,23 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
       </Card>
 
       <Card>
+        <CardHeader title="Supervisors" subtitle="When a supervisor counts as gone quiet." />
+        <div className="space-y-4 px-4 py-4">
+          <Field label="Gone quiet after (months)" hint="If a supervisor who has sent work before sends no job or quote request for this long, they show on the Supervisors page and the Dashboard.">
+            <div className="flex items-center gap-2">
+              <Input
+                value={draft.supervisor_quiet_months ?? "3"}
+                onChange={(e) => setDraft((d) => ({ ...d, supervisor_quiet_months: e.target.value }))}
+                onBlur={(e) => commit("supervisor_quiet_months", e.target.value)}
+                className="tabular w-24"
+              />
+              {tick("supervisor_quiet_months")}
+            </div>
+          </Field>
+        </div>
+      </Card>
+
+      <Card>
         <CardHeader title="Dispatch rules" subtitle="How offers behave when you send work out." />
         <div className="space-y-4 px-4 py-4">
           <Field

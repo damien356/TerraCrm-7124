@@ -42,13 +42,20 @@ export function useCompanyIntelDetail(id: number | null) {
   );
 }
 
-export function useSupervisors(input: { search?: string; sort?: IntelSort; limit?: number } = {}) {
+export type SupRange = "12m" | "year" | "all";
+
+export function useSupervisors(input: { search?: string; sort?: IntelSort; range?: SupRange } = {}) {
   return useQuery(
     orpc.intel.supervisors.queryOptions({
-      input: { search: input.search ?? "", sort: input.sort ?? "revenue", limit: input.limit ?? 100 },
+      input: { search: input.search ?? "", sort: input.sort ?? "revenue", range: input.range ?? "12m" },
       staleTime: 60_000,
     }),
   );
+}
+
+/** Supervisors who have sent work before but nothing for a while. Used by the Dashboard. */
+export function useGoneQuiet() {
+  return useQuery(orpc.intel.goneQuiet.queryOptions({ staleTime: 120_000 }));
 }
 
 export function useSupervisor(id: number | null) {

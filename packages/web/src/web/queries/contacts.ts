@@ -12,12 +12,13 @@ export function useContact(id: number | null) {
   );
 }
 
-function useContactMutation(name: "create" | "update" | "linkCompany" | "unlinkCompany") {
+function useContactMutation(name: "create" | "update" | "linkCompany" | "unlinkCompany" | "moveCompany") {
   const queryClient = useQueryClient();
   return orpc.contacts[name].mutationOptions({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: orpc.contacts.key() });
       queryClient.invalidateQueries({ queryKey: orpc.companies.key() });
+      queryClient.invalidateQueries({ queryKey: orpc.intel.key() });
     },
   });
 }
@@ -33,4 +34,8 @@ export function useLinkCompany() {
 }
 export function useUnlinkCompany() {
   return useMutation(useContactMutation("unlinkCompany"));
+}
+
+export function useMoveSupervisorCompany() {
+  return useMutation(useContactMutation("moveCompany"));
 }

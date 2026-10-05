@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isSupervisor, notifySupervisorChange } from "../lib/supervisors";
 import { and, asc, desc, eq, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
@@ -191,13 +192,82 @@ export const contacts = {
     )
     .handler(async ({ input }) => {
       const { id, ...rest } = input;
+      const [before] = await db.select().from(schema.contacts).where(eq(schema.contacts.id, id));
       const [row] = await db
         .update(schema.contacts)
         .set({ ...rest, updatedAt: new Date() })
         .where(eq(schema.contacts.id, id))
         .returning();
       if (!row) throw new ORPCError("NOT_FOUND", { message: "Contact not found" });
+      const emailChanged =
+        rest.email !== undefined && before && (before.email ?? "").trim().toLowerCase() !== (rest.email ?? "").trim().toLowerCase();
+      if (emailChanged && before?.email && (await isSupervisor(id))) {
+        await notifySupervisorChange({
+          name: `${row.firstName} ${row.lastName}`.trim(),
+          contactId: id,
+          oldEmail: before.email,
+          newEmail: rest.email ?? "",
+          mobile: row.mobile,
+        });
+      }
       return row;
+    }),
+
+  /**
+   * A supervisor moves to another company. History stays: old jobs and quotes
+   * keep the company they were for, and the old link becomes "former
+   * supervisor". Damien gets an email so he can chase work at the new place.
+   */
+  moveCompany: staffOnly
+    .input(
+      z.object({
+        contactId: z.number(),
+        toCompanyId: z.number(),
+        email: z.string().trim().nullable().optional(),
+      }),
+    )
+    .handler(async ({ input }) => {
+      const [c] = await db.select().from(schema.contacts).where(eq(schema.contacts.id, input.contactId));
+      if (!c) throw new ORPCError("NOT_FOUND", { message: "Contact not found" });
+      const [to] = await db.select().from(schema.companies).where(eq(schema.companies.id, input.toCompanyId));
+      if (!to) throw new ORPCError("NOT_FOUND", { message: "Company not found" });
+
+      const current = await db
+        .select({ link: schema.companyContacts, company: schema.companies })
+        .from(schema.companyContacts)
+        .innerJoin(schema.companies, eq(schema.companies.id, schema.companyContacts.companyId))
+        .where(and(eq(schema.companyContacts.contactId, input.contactId), eq(schema.companyContacts.role, "supervisor")));
+      const old = current.find((r) => r.link.companyId !== input.toCompanyId) ?? current[0];
+      if (current.some((r) => r.link.companyId === input.toCompanyId) && current.length === 1 && input.email === undefined) {
+        throw new ORPCError("BAD_REQUEST", { message: "They already work for that company" });
+      }
+
+      for (const r of current) {
+        if (r.link.companyId === input.toCompanyId) continue;
+        await db
+          .update(schema.companyContacts)
+          .set({ role: "former_supervisor", isPrimary: false })
+          .where(eq(schema.companyContacts.id, r.link.id));
+      }
+      await db
+        .insert(schema.companyContacts)
+        .values({ contactId: input.contactId, companyId: input.toCompanyId, role: "supervisor", isPrimary: true })
+        .onConflictDoNothing();
+
+      const emailChanged = input.email !== undefined && (input.email ?? "") !== (c.email ?? "");
+      if (emailChanged) {
+        await db.update(schema.contacts).set({ email: input.email || null, updatedAt: new Date() }).where(eq(schema.contacts.id, input.contactId));
+      }
+      await notifySupervisorChange({
+        name: `${c.firstName} ${c.lastName}`.trim(),
+        contactId: input.contactId,
+        oldCompany: old?.company.name ?? null,
+        newCompany: old?.link.companyId === input.toCompanyId ? null : to.name,
+        oldEmail: c.email,
+        newEmail: emailChanged ? (input.email ?? "") : undefined,
+        mobile: c.mobile,
+      });
+      return { ok: true };
     }),
 
   /** Attach an existing person to a company with a role. */

@@ -1256,6 +1256,8 @@ export const quotes = sqliteTable(
     jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
     contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
     companyId: integer("company_id").references(() => companies.id, { onDelete: "set null" }),
+    /** The supervisor who asked for this quote. Required whenever a company is set. */
+    supervisorContactId: integer("supervisor_contact_id").references(() => contacts.id, { onDelete: "set null" }),
     siteId: integer("site_id").references(() => sites.id, { onDelete: "set null" }),
     /** draft · needs_review · sent · accepted · declined · expired */
     status: text("status").notNull().default("draft"),

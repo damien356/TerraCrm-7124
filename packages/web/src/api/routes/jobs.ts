@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assertSupervisor } from "../lib/supervisors";
 import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
@@ -31,6 +32,7 @@ export const createJobInput = z.object({
 export async function createJob(input: z.input<typeof createJobInput>, actor: Pick<Actor, "name" | "role">) {
   const parsed = createJobInput.parse(input);
   const { supervisorContactId, ...jobInput } = parsed;
+  await assertSupervisor(jobInput.companyId, supervisorContactId);
   const [maxRow] = await db.select({ max: sql<number>`coalesce(max(${schema.jobs.number}), 200)` }).from(schema.jobs);
   const number = Number(maxRow?.max ?? 200) + 1;
 
@@ -376,6 +378,8 @@ export const jobs = {
   setSupervisor: staffOnly
     .input(z.object({ jobId: z.number(), contactId: z.number().nullable() }))
     .handler(async ({ input }) => {
+      const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, input.jobId));
+      if (job?.companyId) await assertSupervisor(job.companyId, input.contactId);
       await db
         .delete(schema.jobContacts)
         .where(and(eq(schema.jobContacts.jobId, input.jobId), eq(schema.jobContacts.role, "supervisor")));

@@ -9,6 +9,7 @@ import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { LabourPicker, ProductPicker } from "../components/quote-pickers";
+import { SupervisorPicker } from "../components/supervisor-picker";
 import { QuoteCustomerPanel } from "../components/quote-customer";
 import {
   useAcceptQuote,
@@ -555,6 +556,18 @@ export default function QuoteBuilderPage() {
       {error ? (
         <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
+        </div>
+      ) : null}
+
+      {q.company && !locked && !q.supervisorContactId ? (
+        <div className="mb-4 rounded-lg border border-[var(--warning)]/40 bg-[var(--warning)]/10 p-3">
+          <p className="mb-2 text-sm font-medium">Supervisor missing. This quote can't be sent until one is picked.</p>
+          <SupervisorPicker
+            companyId={q.company.id}
+            value=""
+            required
+            onChange={(v) => v && run(() => update.mutateAsync({ id: q.id, supervisorContactId: Number(v) }))}
+          />
         </div>
       ) : null}
 
