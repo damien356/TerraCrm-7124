@@ -984,7 +984,7 @@ export default function SchedulePage() {
                 return (
                   <div key={inst.id} className="flex border-b border-border">
                     <div className="sticky left-0 z-20 w-40 shrink-0 border-r border-border bg-card px-3 py-2">
-                      <Link to={`/installers?open=${inst.id}`} className="flex items-start gap-2">
+                      <Link to={`/team?open=${inst.id}`} className="flex items-start gap-2">
                         <span className="mt-1 size-2.5 shrink-0 rounded-full" style={{ backgroundColor: inst.colour }} />
                         <span className="min-w-0">
                           <span className="block truncate text-[13px] font-semibold">{inst.name}</span>

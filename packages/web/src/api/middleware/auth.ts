@@ -5,7 +5,7 @@ import { auth } from "../auth";
 import { db } from "../database";
 import * as schema from "../database/schema";
 
-export type Role = "admin" | "installer";
+export type Role = "admin" | "office" | "field";
 
 export interface Actor {
   userId: string;
@@ -13,6 +13,55 @@ export interface Actor {
   email: string;
   role: Role;
   installerId: number | null;
+  /** Admin always true. Office only when an Admin switched it on. Field never. */
+  canSeeCosts: boolean;
+}
+
+/** Old databases store "installer" for field crew. Anything unknown is treated as field (least access). */
+export function normaliseRole(raw: string | null | undefined): Role {
+  if (raw === "admin") return "admin";
+  if (raw === "office") return "office";
+  return "field";
+}
+
+/**
+ * Field crew always have an installer card. Creates one from the login's
+ * name, phone and email, or restores an archived one with its history.
+ * Guarded so parallel requests from a new login cannot create two cards.
+ */
+const inflight = new Map<string, Promise<number>>();
+export function ensureInstallerCard(userId: string): Promise<number> {
+  const running = inflight.get(userId);
+  if (running) return running;
+  const p = (async () => {
+    const [profile] = await db.select().from(schema.profiles).where(eq(schema.profiles.userId, userId));
+    if (!profile) throw new ORPCError("NOT_FOUND", { message: "Login not found" });
+    if (profile.installerId) {
+      const [card] = await db.select().from(schema.installers).where(eq(schema.installers.id, profile.installerId));
+      if (card) {
+        if (card.archivedAt || !card.active) {
+          await db
+            .update(schema.installers)
+            .set({ archivedAt: null, active: true, updatedAt: new Date() })
+            .where(eq(schema.installers.id, card.id));
+        }
+        return card.id;
+      }
+    }
+    const [created] = await db
+      .insert(schema.installers)
+      .values({
+        name: profile.name || profile.email || "New crew member",
+        mobile: profile.phone ?? null,
+        email: profile.email || null,
+        userId: profile.userId,
+      })
+      .returning({ id: schema.installers.id });
+    await db.update(schema.profiles).set({ installerId: created!.id }).where(eq(schema.profiles.userId, userId));
+    return created!.id;
+  })().finally(() => inflight.delete(userId));
+  inflight.set(userId, p);
+  return p;
 }
 
 export async function resolveActor(headers: Headers): Promise<Actor | null> {
@@ -24,11 +73,11 @@ export async function resolveActor(headers: Headers): Promise<Actor | null> {
     .from(schema.profiles)
     .where(eq(schema.profiles.userId, session.user.id));
 
-  // First user to ever sign in becomes the admin — after that, new signups
-  // default to installer and must be linked to an installer record by an admin.
+  // First user to ever sign in becomes the admin. Everyone after that signs up
+  // as Field crew (and gets an installer card). An Admin can change their level.
   if (!profile) {
     const existing = await db.select({ id: schema.profiles.id }).from(schema.profiles).limit(1);
-    const role: Role = existing.length === 0 ? "admin" : "installer";
+    const role: Role = existing.length === 0 ? "admin" : "field";
     const [created] = await db
       .insert(schema.profiles)
       .values({
@@ -38,23 +87,38 @@ export async function resolveActor(headers: Headers): Promise<Actor | null> {
         role,
       })
       .returning();
+    const installerId = role === "field" ? await ensureInstallerCard(session.user.id) : null;
     return {
       userId: session.user.id,
       name: created!.name,
       email: created!.email,
       role,
-      installerId: null,
+      installerId,
+      canSeeCosts: role === "admin",
     };
   }
 
   if (!profile.active) throw new ORPCError("FORBIDDEN", { message: "Account disabled" });
 
+  const role = normaliseRole(profile.role);
+  let installerId: number | null = null;
+  if (role === "field") {
+    installerId = profile.installerId ?? (await ensureInstallerCard(profile.userId));
+    // A restored card must be live. An archived card never grants access.
+    const [card] = await db
+      .select({ archivedAt: schema.installers.archivedAt })
+      .from(schema.installers)
+      .where(eq(schema.installers.id, installerId));
+    if (card?.archivedAt) installerId = await ensureInstallerCard(profile.userId);
+  }
+
   return {
     userId: profile.userId,
     name: profile.name || (session.user.name ?? ""),
     email: profile.email || (session.user.email ?? ""),
-    role: profile.role === "admin" ? "admin" : "installer",
-    installerId: profile.installerId ?? null,
+    role,
+    installerId,
+    canSeeCosts: role === "admin" || (role === "office" && profile.canSeeCosts),
   };
 }
 
@@ -71,12 +135,22 @@ export const authed = base.use(async ({ context, next }) => {
   return next({ context: { actor } });
 });
 
-/** Office/admin only — everything to do with money, quotes and other people's work. */
+/** Admin only: prices, costs, settings, logins, integrations and deleting records. */
 export const adminOnly = base.use(async ({ context, next }) => {
   const actor = await resolveActor(context.headers);
   if (!actor) throw new ORPCError("UNAUTHORIZED");
   if (actor.role !== "admin") {
     throw new ORPCError("FORBIDDEN", { message: "Admin access required" });
+  }
+  return next({ context: { actor } });
+});
+
+/** Admin or Office: the day-to-day running of the business. Never Field crew. */
+export const staffOnly = base.use(async ({ context, next }) => {
+  const actor = await resolveActor(context.headers);
+  if (!actor) throw new ORPCError("UNAUTHORIZED");
+  if (actor.role === "field") {
+    throw new ORPCError("FORBIDDEN", { message: "Office access required" });
   }
   return next({ context: { actor } });
 });
@@ -90,9 +164,9 @@ export const adminOnly = base.use(async ({ context, next }) => {
 export const installerOnly = base.use(async ({ context, next }) => {
   const actor = await resolveActor(context.headers);
   if (!actor) throw new ORPCError("UNAUTHORIZED");
-  if (!actor.installerId) {
+  if (actor.role !== "field" || !actor.installerId) {
     throw new ORPCError("FORBIDDEN", {
-      message: "This login isn't linked to an installer record yet.",
+      message: "This login is not Field crew.",
     });
   }
   return next({ context: { actor, installerId: actor.installerId } });

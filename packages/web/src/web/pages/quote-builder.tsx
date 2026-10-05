@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useBootstrap } from "../queries/settings";
 import { Link, useLocation, useParams } from "wouter";
 import { AlertTriangle, ArrowLeft, ArrowRight, Check, Plus, Repeat, Search, Send, Trash2, X } from "lucide-react";
 import { Page } from "../components/layout";
@@ -19,6 +20,7 @@ import {
   useRemoveQuoteItem,
   useReviseQuote,
   useSendQuote,
+  useApproveDiscount,
   useSuggestedProducts,
   useUpdateQuote,
   useUpdateQuoteItem,
@@ -180,7 +182,14 @@ function ChangeProduct({ item, onClose }: { item: Item; onClose: () => void }) {
   );
 }
 
+/** show: cost column visible. edit: may change costs (Admin only). */
+function useCostView() {
+  const actor = useBootstrap().data?.actor;
+  return { show: Boolean(actor?.canSeeCosts), edit: actor?.role === "admin" };
+}
+
 function LineRow({ item, locked }: { item: Item; locked: boolean }) {
+  const cost = useCostView();
   const update = useUpdateQuoteItem();
   const remove = useRemoveQuoteItem();
   const [changing, setChanging] = React.useState(false);
@@ -284,18 +293,20 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
           }
         />
       </td>
+      {cost.show ? (
       <td className="px-2 py-1.5">
         <Input
           className="tabular h-8 w-[92px] text-right"
           placeholder="cost"
           value={draft.unitCost}
-          disabled={locked}
+          disabled={locked || !cost.edit}
           onChange={(e) => setDraft((d) => ({ ...d, unitCost: e.target.value }))}
           onBlur={() =>
             update.mutate({ id: item.id, unitCost: draft.unitCost === "" ? null : Number(draft.unitCost) })
           }
         />
       </td>
+      ) : null}
       <td className="tabular px-3 py-1.5 text-right font-medium">{money(item.total)}</td>
       <td className="px-2 py-1.5 text-right">
         {locked ? null : (
@@ -316,6 +327,7 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
 /* ------------------------------ add-line row ----------------------------- */
 
 function AddLine({ quoteId }: { quoteId: number }) {
+  const cost = useCostView();
   const add = useAddQuoteItem();
   const [form, setForm] = React.useState({
     kind: "supply",
@@ -380,12 +392,14 @@ function AddLine({ quoteId }: { quoteId: number }) {
           value={form.unitPrice}
           onChange={(e) => setForm((f) => ({ ...f, unitPrice: e.target.value }))}
         />
+        {cost.edit ? (
         <Input
           className="tabular w-[96px] text-right"
           placeholder="cost"
           value={form.unitCost}
           onChange={(e) => setForm((f) => ({ ...f, unitCost: e.target.value }))}
         />
+        ) : null}
         <Button onClick={submit} disabled={!form.description || add.isPending}>
           {add.isPending ? <Spinner className="border-white/40 border-t-white" /> : <Plus className="size-4" />}
           Add line
@@ -405,6 +419,8 @@ export default function QuoteBuilderPage() {
   const quote = useQuote(Number.isFinite(id) ? id : null);
   const update = useUpdateQuote();
   const send = useSendQuote();
+  const approveDiscount = useApproveDiscount();
+  const actor = useBootstrap().data?.actor;
   const accept = useAcceptQuote();
   const decline = useDeclineQuote();
   const revise = useReviseQuote();
@@ -483,8 +499,19 @@ export default function QuoteBuilderPage() {
               Mark as reviewed
             </Button>
           ) : null}
+          {q.discountNeedsApproval ? (
+            <span className="text-xs text-amber-700">
+              Discount {q.discountPercent}% is over your {q.discountLimit}% limit. An Admin needs to approve it.
+            </span>
+          ) : null}
+          {q.discountPercent > 0 && actor?.role === "admin" && q.discountPercent > q.discountApprovedPercent && q.discountPercent > q.discountLimit ? (
+            <Button variant="outline" onClick={() => run(() => approveDiscount.mutateAsync({ id: q.id }))} disabled={approveDiscount.isPending}>
+              <Check className="size-4" />
+              Approve {q.discountPercent}% discount
+            </Button>
+          ) : null}
           {q.status === "draft" ? (
-            <Button variant="outline" onClick={() => run(() => send.mutateAsync({ id: q.id }))} disabled={send.isPending}>
+            <Button variant="outline" onClick={() => run(() => send.mutateAsync({ id: q.id }))} disabled={send.isPending || q.discountNeedsApproval}>
               <Send className="size-4" />
               Mark as sent
             </Button>
@@ -541,7 +568,7 @@ export default function QuoteBuilderPage() {
         <Card>
           <CardHeader
             title="Lines"
-            subtitle={locked ? "Locked. Make a new version to change the price." : "Cost is yours only. It never leaves this screen."}
+            subtitle={locked ? "Locked. Make a new version to change the price." : "Prices come off the price book."}
           />
           {q.items.length === 0 ? (
             <Empty>No lines yet. Add the supply and the labour. Labour lines become the dispatches on the job.</Empty>
@@ -555,7 +582,7 @@ export default function QuoteBuilderPage() {
                     <th className="th px-2 text-right">Qty</th>
                     <th className="th px-2">Unit</th>
                     <th className="th px-2 text-right">Sell</th>
-                    <th className="th px-2 text-right">Cost</th>
+                    {cost.show ? <th className="th px-2 text-right">Cost</th> : null}
                     <th className="th text-right">Line total</th>
                     <th aria-label="Row actions" />
                   </tr>
@@ -610,6 +637,7 @@ export default function QuoteBuilderPage() {
             </div>
           </Card>
 
+          {cost.show && q.estimatedCost != null ? (
           <Card>
             <CardHeader title="Your margin" subtitle="Admin only. Installers and customers never see this." />
             <div className="flex flex-col gap-2 px-4 py-3 text-sm">
@@ -625,7 +653,7 @@ export default function QuoteBuilderPage() {
                 <span className="text-muted-foreground">Margin %</span>
                 <span
                   className="tabular font-medium"
-                  style={{ color: q.estimatedMarginPercent < 20 ? "#B4342A" : "#3F7D3A" }}
+                  style={{ color: (q.estimatedMarginPercent ?? 0) < 20 ? "#B4342A" : "#3F7D3A" }}
                 >
                   {q.estimatedMarginPercent}%
                 </span>
@@ -635,6 +663,7 @@ export default function QuoteBuilderPage() {
               </p>
             </div>
           </Card>
+          ) : null}
 
           <Card>
             <CardHeader title="Notes on the quote" />

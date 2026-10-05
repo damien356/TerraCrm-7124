@@ -3,7 +3,7 @@ import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly, type Actor } from "../middleware/auth";
+import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
 
 export const createJobInput = z.object({
   title: z.string().default(""),
@@ -106,7 +106,7 @@ export async function createJob(input: z.input<typeof createJobInput>, actor: Pi
  * target independently of who the work is for.
  */
 export const jobs = {
-  list: adminOnly
+  list: staffOnly
     .input(
       z
         .object({
@@ -174,7 +174,7 @@ export const jobs = {
       }));
     }),
 
-  get: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
     const [row] = await db
       .select({
         job: schema.jobs,
@@ -247,11 +247,11 @@ export const jobs = {
     };
   }),
 
-  create: adminOnly
+  create: staffOnly
     .input(createJobInput)
     .handler(({ input, context }) => createJob(input, context.actor)),
 
-  update: adminOnly
+  update: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -323,7 +323,7 @@ export const jobs = {
     }),
 
   /* ------------------------- job contacts ------------------------- */
-  addContact: adminOnly
+  addContact: staffOnly
     .input(
       z.object({
         jobId: z.number(),
@@ -341,7 +341,7 @@ export const jobs = {
       return row ?? { ok: true };
     }),
 
-  updateContact: adminOnly
+  updateContact: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -373,7 +373,7 @@ export const jobs = {
    * supervisor, so this swaps the existing 'supervisor' link rather than
    * stacking another one on top. Pass a null contact to clear it.
    */
-  setSupervisor: adminOnly
+  setSupervisor: staffOnly
     .input(z.object({ jobId: z.number(), contactId: z.number().nullable() }))
     .handler(async ({ input }) => {
       await db
@@ -398,7 +398,7 @@ export const jobs = {
     }),
 
   /* --------------------------- materials -------------------------- */
-  addMaterial: adminOnly
+  addMaterial: staffOnly
     .input(
       z.object({
         jobId: z.number(),
@@ -415,7 +415,7 @@ export const jobs = {
       return row;
     }),
 
-  updateMaterial: adminOnly
+  updateMaterial: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -442,7 +442,7 @@ export const jobs = {
   }),
 
   /** Free-text note onto the job timeline. */
-  addNote: adminOnly
+  addNote: staffOnly
     .input(z.object({ jobId: z.number(), body: z.string().min(1) }))
     .handler(async ({ input, context }) => {
       const [row] = await db

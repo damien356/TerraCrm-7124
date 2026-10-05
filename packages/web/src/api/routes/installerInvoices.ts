@@ -3,7 +3,7 @@ import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly, installerOnly } from "../middleware/auth";
+import { staffOnly, installerOnly } from "../middleware/auth";
 import { ownTaskOrThrow } from "./field";
 import { getObject, invoicePdfKey, putObject, signGet } from "../lib/s3";
 import { renderInvoicePdf, type InvoiceLineItem } from "../lib/invoicePdf";
@@ -360,7 +360,7 @@ export const installerInvoices = {
   /* --------------------------- office/admin --------------------------- */
 
   /** Every subcontractor invoice, filterable for the accounts screen. */
-  adminList: adminOnly
+  adminList: staffOnly
     .input(
       z.object({
         installerId: z.number().optional(),
@@ -385,14 +385,14 @@ export const installerInvoices = {
     }),
 
   /** A signed link to any invoice PDF, for accounts. */
-  adminDownloadUrl: adminOnly.input(z.object({ invoiceId: z.number() })).handler(async ({ input }) => {
+  adminDownloadUrl: staffOnly.input(z.object({ invoiceId: z.number() })).handler(async ({ input }) => {
     const [row] = await db.select().from(schema.installerInvoices).where(eq(schema.installerInvoices.id, input.invoiceId));
     if (!row || !row.pdfKey) throw new ORPCError("NOT_FOUND", { message: "Invoice not found" });
     return { url: await signGet(row.pdfKey) };
   }),
 
   /** Move an invoice through Approved → Scheduled for Payment → Paid. */
-  adminSetStatus: adminOnly
+  adminSetStatus: staffOnly
     .input(
       z.object({
         invoiceId: z.number(),
@@ -416,7 +416,7 @@ export const installerInvoices = {
     }),
 
   /** Pending variation requests waiting on the office. */
-  adminListVariations: adminOnly
+  adminListVariations: staffOnly
     .input(z.object({ status: z.enum(["pending", "approved", "rejected"]).optional() }).default({}))
     .handler(async ({ input }) => {
       return db
@@ -427,7 +427,7 @@ export const installerInvoices = {
     }),
 
   /** Approve or reject an installer's requested extra. Only approved amounts ever become invoiceable. */
-  adminDecideVariation: adminOnly
+  adminDecideVariation: staffOnly
     .input(
       z.object({
         id: z.number(),

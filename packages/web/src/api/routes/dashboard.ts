@@ -1,14 +1,14 @@
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { staffOnly } from "../middleware/auth";
 import { expireStale } from "./offers";
 
 const day = (offset = 0) => new Date(Date.now() + offset * 86400_000).toISOString().slice(0, 10);
 
 /** The office's morning screen: what's on today, what's not filled, what's at risk. */
 export const dashboard = {
-  summary: adminOnly.handler(async () => {
+  summary: staffOnly.handler(async () => {
     await expireStale();
 
     const today = day(0);

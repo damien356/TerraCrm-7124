@@ -3,7 +3,7 @@ import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly, type Actor } from "../middleware/auth";
+import { staffOnly, type Actor } from "../middleware/auth";
 import { conversationReplyTo, CONVERSATION_FROM, sendEmail } from "../lib/email";
 import { normaliseMobile, sendSms, smsParts, SMS_OPT_OUT } from "../lib/sms";
 import {
@@ -321,25 +321,25 @@ export async function sendConversationMessage(input: z.infer<typeof sendInput>, 
 
 export const conversations = {
   /** The thread on a job. Opens it, or adopts the quote's thread, on first look. */
-  forJob: adminOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
+  forJob: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
     const conv = await ensureForJob(input.jobId);
     return readThread(conv.id);
   }),
 
   /** The thread on a quote, before the job exists. */
-  forQuote: adminOnly.input(z.object({ quoteId: z.number() })).handler(async ({ input }) => {
+  forQuote: staffOnly.input(z.object({ quoteId: z.number() })).handler(async ({ input }) => {
     const conv = await ensureForQuote(input.quoteId);
     return readThread(conv.id);
   }),
 
-  thread: adminOnly.input(z.object({ conversationId: z.number() })).handler(({ input }) => readThread(input.conversationId)),
+  thread: staffOnly.input(z.object({ conversationId: z.number() })).handler(({ input }) => readThread(input.conversationId)),
 
   /**
    * Who can be written to on this job, and how. The UI asks for this rather
    * than guessing, because a contact with `receivesSms` off is not a recipient
    * no matter how the office picks the channel.
    */
-  recipients: adminOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
+  recipients: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
     const contactRows = await db
       .select({ link: schema.jobContacts, contact: schema.contacts })
       .from(schema.jobContacts)
@@ -403,7 +403,7 @@ export const conversations = {
   }),
 
   /** What a text will cost and how many parts it is, asked before sending. */
-  smsCost: adminOnly.input(z.object({ body: z.string() })).handler(({ input }) => ({
+  smsCost: staffOnly.input(z.object({ body: z.string() })).handler(({ input }) => ({
     parts: smsParts(input.body + SMS_OPT_OUT),
     characters: input.body.length,
   })),
@@ -414,7 +414,7 @@ export const conversations = {
    * Audience and channel are checked against each other server-side. Asking to
    * send an internal note to a customer is rejected rather than reinterpreted.
    */
-  send: adminOnly
+  send: staffOnly
     .input(sendInput)
     .handler(({ input, context }) => sendConversationMessage(input, context.actor)),
 
@@ -423,7 +423,7 @@ export const conversations = {
    * that was confirmed, the variation that was agreed: the things that must not
    * be twenty messages back when somebody needs them.
    */
-  pin: adminOnly
+  pin: staffOnly
     .input(z.object({ messageId: z.number(), label: z.string().max(60).optional() }))
     .handler(async ({ input, context }) => {
       const [row] = await db
@@ -440,7 +440,7 @@ export const conversations = {
       return row;
     }),
 
-  unpin: adminOnly.input(z.object({ messageId: z.number() })).handler(async ({ input }) => {
+  unpin: staffOnly.input(z.object({ messageId: z.number() })).handler(async ({ input }) => {
     await db
       .update(schema.messages)
       .set({ pinnedAt: null, pinnedLabel: null, pinnedByName: null, updatedAt: new Date() })
@@ -449,7 +449,7 @@ export const conversations = {
   }),
 
   /** Mark the thread read for whoever is looking at it. Per person, not global. */
-  markRead: adminOnly.input(z.object({ conversationId: z.number() })).handler(async ({ input, context }) => {
+  markRead: staffOnly.input(z.object({ conversationId: z.number() })).handler(async ({ input, context }) => {
     const [profile] = await db
       .select({ id: schema.profiles.id, name: schema.profiles.name })
       .from(schema.profiles)
@@ -472,7 +472,7 @@ export const conversations = {
   }),
 
   /** Every conversation Terra has ever had with one contact, newest first. */
-  forContact: adminOnly.input(z.object({ contactId: z.number() })).handler(async ({ input }) => {
+  forContact: staffOnly.input(z.object({ contactId: z.number() })).handler(async ({ input }) => {
     const rows = await db
       .select({
         conversation: schema.conversations,
@@ -505,7 +505,7 @@ export const conversations = {
    *
    * Unread is personal, off your own read marker.
    */
-  inbox: adminOnly
+  inbox: staffOnly
     .input(
       z
         .object({
@@ -709,7 +709,7 @@ export const conversations = {
     }),
 
   /** The numbers on the inbox filter chips, both dimensions at once. */
-  inboxCounts: adminOnly.handler(async ({ context }) => {
+  inboxCounts: staffOnly.handler(async ({ context }) => {
     const [profile] = await db
       .select({ id: schema.profiles.id })
       .from(schema.profiles)

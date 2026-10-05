@@ -3,7 +3,7 @@ import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { staffOnly } from "../middleware/auth";
 
 /* ---------------------------------------------------------------------------
  * Office to-dos and timed reminders, mostly made by voice memos.
@@ -30,7 +30,7 @@ const row = {
 
 export const officeTasks = {
   /** Everything open: timed reminders first by time, then dated tasks, then the rest. */
-  open: adminOnly.handler(async () => {
+  open: staffOnly.handler(async () => {
     const rows = await db
       .select(row)
       .from(schema.officeTasks)
@@ -51,7 +51,7 @@ export const officeTasks = {
     }));
   }),
 
-  complete: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
+  complete: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     const [t] = await db
       .update(schema.officeTasks)
       .set({ status: "done", completedAt: new Date(), completedByName: context.actor.name, updatedAt: new Date() })
@@ -62,7 +62,7 @@ export const officeTasks = {
   }),
 
   /** Push it back. Clears remindedAt so the phone is nudged again at the new time. */
-  snooze: adminOnly
+  snooze: staffOnly
     .input(z.object({ id: z.number(), minutes: z.number().int().min(5).max(60 * 24 * 14) }))
     .handler(async ({ input }) => {
       const remindAt = new Date(Date.now() + input.minutes * 60_000);

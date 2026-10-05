@@ -29,3 +29,4 @@ Deploy order: run the migration first, then publish.
 ## Checked
 Web and API typecheck clean. Maths spot-checked (percent, dollars, rounding, keep profit vs pass on).
 NOT checked: rendering in a browser, and running against the real database.
+- Start and end dates are required on every special, and the end date cannot be in the past.

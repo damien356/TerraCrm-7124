@@ -3,7 +3,7 @@ import { and, asc, desc, eq, gte, lte, or } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { adminOnly, staffOnly } from "../middleware/auth";
 import { parseUnavailability } from "../lib/parse-unavailability";
 import { blockedInstallerIds, checkDays, nonWorkingWeekdays } from "../lib/availability";
 
@@ -15,7 +15,7 @@ import { blockedInstallerIds, checkDays, nonWorkingWeekdays } from "../lib/avail
  */
 export const availability = {
   /** Everything blocked for one installer. */
-  list: adminOnly.input(z.object({ installerId: z.number() })).handler(async ({ input }) => {
+  list: staffOnly.input(z.object({ installerId: z.number() })).handler(async ({ input }) => {
     return db
       .select()
       .from(schema.installerUnavailability)
@@ -24,7 +24,7 @@ export const availability = {
   }),
 
   /** Everything blocked across a date window — feeds the schedule board. */
-  inRange: adminOnly
+  inRange: staffOnly
     .input(z.object({ from: z.string(), to: z.string() }))
     .handler(async ({ input }) => {
       return db
@@ -42,13 +42,13 @@ export const availability = {
     }),
 
   /** Preview what a typed line means before saving it. Nothing is written. */
-  preview: adminOnly.input(z.object({ text: z.string() })).handler(({ input }) => {
+  preview: staffOnly.input(z.object({ text: z.string() })).handler(({ input }) => {
     const parsed = parseUnavailability(input.text);
     return { entries: parsed, understood: parsed.length > 0 };
   }),
 
   /** Save from plain English. Returns what it actually recorded. */
-  addFromText: adminOnly
+  addFromText: staffOnly
     .input(z.object({ installerId: z.number(), text: z.string().min(2) }))
     .handler(async ({ input }) => {
       const parsed = parseUnavailability(input.text);
@@ -76,7 +76,7 @@ export const availability = {
     }),
 
   /** Manual entry when he'd rather pick the dates himself. */
-  add: adminOnly
+  add: staffOnly
     .input(
       z.object({
         installerId: z.number(),
@@ -112,7 +112,7 @@ export const availability = {
   }),
 
   /** Who is blocked on a given day — the check the dispatch pickers run. */
-  blockedOn: adminOnly.input(z.object({ date: z.string() })).handler(async ({ input }) => {
+  blockedOn: staffOnly.input(z.object({ date: z.string() })).handler(async ({ input }) => {
     const ids = await blockedInstallerIds(input.date);
     return [...ids];
   }),
@@ -122,7 +122,7 @@ export const availability = {
    * out, or already on something. Read live by the Book Installer panel so the
    * office sees the clash before they press the button, not after.
    */
-  checkDays: adminOnly
+  checkDays: staffOnly
     .input(
       z.object({
         installerId: z.number(),
@@ -139,7 +139,7 @@ export const availability = {
     }),
 
   /** The weekdays an installer never works, so a run can step over them. */
-  nonWorkingWeekdays: adminOnly.input(z.object({ installerId: z.number() })).handler(async ({ input }) => {
+  nonWorkingWeekdays: staffOnly.input(z.object({ installerId: z.number() })).handler(async ({ input }) => {
     return nonWorkingWeekdays(input.installerId);
   }),
 };

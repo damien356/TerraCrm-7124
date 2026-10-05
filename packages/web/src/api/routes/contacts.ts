@@ -3,7 +3,7 @@ import { and, asc, desc, eq, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly, type Actor } from "../middleware/auth";
+import { staffOnly, type Actor } from "../middleware/auth";
 
 export const createContactInput = z.object({
   firstName: z.string().min(1),
@@ -52,7 +52,7 @@ export async function createContact(input: z.input<typeof createContactInput>, a
  * house, on the same record, with one history.
  */
 export const contacts = {
-  list: adminOnly
+  list: staffOnly
     .input(
       z
         .object({
@@ -123,7 +123,7 @@ export const contacts = {
       }));
     }),
 
-  get: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
     const [contact] = await db.select().from(schema.contacts).where(eq(schema.contacts.id, input.id));
     if (!contact) throw new ORPCError("NOT_FOUND", { message: "Contact not found" });
 
@@ -167,11 +167,11 @@ export const contacts = {
     return { contact, companies, sites, jobs: jobRows, quotes: quoteRows, activity };
   }),
 
-  create: adminOnly
+  create: staffOnly
     .input(createContactInput)
     .handler(({ input, context }) => createContact(input, context.actor)),
 
-  update: adminOnly
+  update: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -201,7 +201,7 @@ export const contacts = {
     }),
 
   /** Attach an existing person to a company with a role. */
-  linkCompany: adminOnly
+  linkCompany: staffOnly
     .input(
       z.object({
         contactId: z.number(),
@@ -216,7 +216,7 @@ export const contacts = {
       return row ?? { ok: true };
     }),
 
-  unlinkCompany: adminOnly.input(z.object({ linkId: z.number() })).handler(async ({ input }) => {
+  unlinkCompany: staffOnly.input(z.object({ linkId: z.number() })).handler(async ({ input }) => {
     await db.delete(schema.companyContacts).where(eq(schema.companyContacts.id, input.linkId));
     return { ok: true };
   }),

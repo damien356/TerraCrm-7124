@@ -3,7 +3,7 @@ import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { adminOnly, staffOnly } from "../middleware/auth";
 import { checkDays, nonWorkingWeekdays } from "../lib/availability";
 import { daysFromQty } from "../lib/day-estimate";
 import { matchInstaller, parseBookingLine } from "../lib/booking-command";
@@ -154,7 +154,7 @@ async function suggestDays(taskId: number) {
 
 export const tasks = {
   /** The dispatch board feed: every task in a date window, plus the unassigned queue. */
-  board: adminOnly
+  board: staffOnly
     .input(z.object({ from: z.string(), to: z.string() }))
     .handler(async ({ input }) => {
       const scheduled = await db
@@ -282,7 +282,7 @@ export const tasks = {
       };
     }),
 
-  get: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
     const [row] = await db
       .select({
         task: schema.jobTasks,
@@ -335,7 +335,7 @@ export const tasks = {
     };
   }),
 
-  create: adminOnly
+  create: staffOnly
     .input(
       z.object({
         jobId: z.number(),
@@ -386,7 +386,7 @@ export const tasks = {
       return row;
     }),
 
-  update: adminOnly
+  update: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -432,7 +432,7 @@ export const tasks = {
    * installer. A booked run moves as a whole. Drag the bar to Wednesday and
    * all four days shift with it, gaps and per-day windows intact.
    */
-  reschedule: adminOnly
+  reschedule: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -562,7 +562,7 @@ export const tasks = {
     }),
 
   /** Assign directly, no offer — the installer is simply told. */
-  assign: adminOnly
+  assign: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -634,7 +634,7 @@ export const tasks = {
    * a question, because a booking that lands on the wrong week is worse than
    * one that took an extra five seconds to confirm.
    */
-  parseCommand: adminOnly
+  parseCommand: staffOnly
     .input(
       z.object({
         text: z.string(),
@@ -779,7 +779,7 @@ export const tasks = {
    * panel calls this on every change so the office is looking at the real
    * answer while they set it up, not after they press book.
    */
-  planBooking: adminOnly
+  planBooking: staffOnly
     .input(
       z.object({
         taskId: z.number(),
@@ -831,7 +831,7 @@ export const tasks = {
    * system doesn't know about, so the warning is loud in the panel and the
    * override is recorded here rather than the booking being refused.
    */
-  book: adminOnly
+  book: staffOnly
     .input(
       z.object({
         taskId: z.number(),
@@ -969,7 +969,7 @@ export const tasks = {
    * The day goes in, the clash comes back in the response, and the board shows
    * it in red.
    */
-  extendRun: adminOnly
+  extendRun: staffOnly
     .input(
       z.object({
         taskId: z.number(),
@@ -1128,7 +1128,7 @@ export const tasks = {
       };
     }),
 
-  unassign: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
+  unassign: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     const [existing] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, input.id));
     if (!existing) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
 
@@ -1154,7 +1154,7 @@ export const tasks = {
     return row;
   }),
 
-  setStatus: adminOnly
+  setStatus: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -1195,7 +1195,7 @@ export const tasks = {
   }),
 
   /* --------------------------- checklists --------------------------- */
-  addChecklistItem: adminOnly
+  addChecklistItem: staffOnly
     .input(
       z.object({
         taskId: z.number(),

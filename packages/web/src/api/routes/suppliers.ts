@@ -3,7 +3,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { adminOnly, staffOnly } from "../middleware/auth";
 import { resolveSupplierCharges, round2 } from "../lib/pricing";
 
 /**
@@ -87,7 +87,7 @@ async function logSupplier(supplierId: number, action: string, detail: string, a
 }
 
 export const suppliers = {
-  list: adminOnly
+  list: staffOnly
     .input(z.object({ includeInactive: z.boolean().default(false) }).default({ includeInactive: false }))
     .handler(async ({ input }) => {
       const where = input.includeInactive ? undefined : eq(schema.suppliers.active, true);
@@ -106,7 +106,7 @@ export const suppliers = {
       return rows.map((r) => ({ ...r.supplier, feeCount: Number(r.feeCount ?? 0) }));
     }),
 
-  get: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
     const [supplier] = await db.select().from(schema.suppliers).where(eq(schema.suppliers.id, input.id));
     if (!supplier) throw new ORPCError("NOT_FOUND", { message: "Supplier not found" });
     const fees = await db

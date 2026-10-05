@@ -3,7 +3,7 @@ import { and, asc, desc, eq, inArray, like, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { staffOnly } from "../middleware/auth";
 
 /**
  * Companies are an OPTIONAL wrapper around contacts. A company never owns a
@@ -12,7 +12,7 @@ import { adminOnly } from "../middleware/auth";
  * decided on the job (`jobs.billToType`), never here.
  */
 export const companies = {
-  list: adminOnly
+  list: staffOnly
     .input(
       z
         .object({
@@ -21,7 +21,7 @@ export const companies = {
         })
         .default({ includeInactive: false }),
     )
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
       const where = [];
       if (!input.includeInactive) where.push(eq(schema.companies.active, true));
       if (input.search) {
@@ -48,6 +48,7 @@ export const companies = {
 
       return rows.map((r) => ({
         ...r.company,
+        creditLimit: context.actor.role === "admin" ? r.company.creditLimit : null,
         contactCount: Number(r.contactCount ?? 0),
         openJobs: Number(r.openJobs ?? 0),
         jobCount: Number(r.jobCount ?? 0),
@@ -55,9 +56,10 @@ export const companies = {
       }));
     }),
 
-  get: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
-    const [company] = await db.select().from(schema.companies).where(eq(schema.companies.id, input.id));
-    if (!company) throw new ORPCError("NOT_FOUND", { message: "Company not found" });
+  get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
+    const [company0] = await db.select().from(schema.companies).where(eq(schema.companies.id, input.id));
+    if (!company0) throw new ORPCError("NOT_FOUND", { message: "Company not found" });
+    const company = context.actor.role === "admin" ? company0 : { ...company0, creditLimit: null };
 
     const [people, sites, jobRows] = await Promise.all([
       db
@@ -84,7 +86,7 @@ export const companies = {
    * Used by the supervisor picker on a job, which only wants the people who
    * could plausibly have sent the work.
    */
-  people: adminOnly
+  people: staffOnly
     .input(z.object({ companyId: z.number(), roles: z.array(z.string()).optional() }))
     .handler(async ({ input }) => {
       const where = [eq(schema.companyContacts.companyId, input.companyId)];
@@ -108,7 +110,7 @@ export const companies = {
       }));
     }),
 
-  create: adminOnly
+  create: staffOnly
     .input(
       z.object({
         name: z.string().min(1),
@@ -123,12 +125,14 @@ export const companies = {
         notes: z.string().nullable().optional(),
       }),
     )
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
+      // Credit limits are Admin only.
+      if (context.actor.role !== "admin") input.creditLimit = null;
       const [row] = await db.insert(schema.companies).values(input).returning();
       return row;
     }),
 
-  update: adminOnly
+  update: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -145,8 +149,9 @@ export const companies = {
         active: z.boolean().optional(),
       }),
     )
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
       const { id, ...rest } = input;
+      if (context.actor.role !== "admin") delete rest.creditLimit;
       const [row] = await db
         .update(schema.companies)
         .set({ ...rest, updatedAt: new Date() })
@@ -159,7 +164,7 @@ export const companies = {
 
 /** Sites — the physical addresses work happens at. */
 export const sites = {
-  list: adminOnly
+  list: staffOnly
     .input(z.object({ search: z.string().optional(), contactId: z.number().optional() }).default({}))
     .handler(async ({ input }) => {
       const where = [];
@@ -177,7 +182,7 @@ export const sites = {
         .limit(200);
     }),
 
-  create: adminOnly
+  create: staffOnly
     .input(
       z.object({
         label: z.string().nullable().optional(),
@@ -197,7 +202,7 @@ export const sites = {
       return row;
     }),
 
-  update: adminOnly
+  update: staffOnly
     .input(
       z.object({
         id: z.number(),

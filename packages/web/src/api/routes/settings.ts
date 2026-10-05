@@ -8,6 +8,9 @@ import { adminOnly, authed } from "../middleware/auth";
  * Skills, job statuses and key/value settings are editable DATA, never hardcoded
  * enums — Damien adds/renames them in the app after testing without a rebuild.
  */
+/** Setting keys that never go to Office or Field crew. */
+const SENSITIVE_SETTING = /(key|token|secret|password|xero|clicksend|supabase|github|markup|margin|cost|credit|tier|formula)/i;
+
 export const settings = {
   /** Everything the admin UI needs to render pickers, in one round trip. */
   bootstrap: authed.handler(async ({ context }) => {
@@ -22,7 +25,12 @@ export const settings = {
       allSkills: skills,
       statuses: statuses.filter((s) => s.active),
       allStatuses: statuses,
-      settings: Object.fromEntries(kv.map((r) => [r.key, r.value])) as Record<string, string>,
+      // Integration keys, markups and other money settings are for Admin only.
+      settings: Object.fromEntries(
+        kv
+          .filter((r) => context.actor.role === "admin" || !SENSITIVE_SETTING.test(r.key))
+          .map((r) => [r.key, r.value]),
+      ) as Record<string, string>,
     };
   }),
 

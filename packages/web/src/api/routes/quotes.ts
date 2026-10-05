@@ -3,7 +3,7 @@ import { and, asc, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm"
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { adminOnly, staffOnly } from "../middleware/auth";
 import { sellExGstWithMarkup } from "../lib/pricing";
 import { liveSellFor } from "../lib/live-sell";
 import { suggestProducts } from "../agent/price";
@@ -13,8 +13,9 @@ import { normaliseMobile } from "../lib/sms";
 import { createContact } from "./contacts";
 
 /**
- * Quotes are admin-only, end to end. Installers must never reach any procedure
- * in this file — pricing, margins and unit costs live here.
+ * Quotes are for Admin and Office. Field crew must never reach any procedure
+ * in this file. Cost and margin figures are hidden from anyone whose actor has
+ * canSeeCosts false, and only an Admin can set a unit cost.
  *
  * Money rules: line total = qty × unitPrice. Subtotal is the sum of lines,
  * GST is 10% (Australia), total = subtotal + gst. Every write recalculates the
@@ -22,6 +23,27 @@ import { createContact } from "./contacts";
  */
 
 const GST_RATE = 0.1;
+
+export const DISCOUNT_LIMIT_KEY = "office_discount_limit_percent";
+
+/** Office can discount a quote up to this % without Admin approval. Default 5. */
+export async function discountLimit(): Promise<number> {
+  const [r] = await db.select().from(schema.settings).where(eq(schema.settings.key, DISCOUNT_LIMIT_KEY));
+  const n = r ? Number(r.value) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : 5;
+}
+
+/** Overall discount % on a quote: how far hand-edited lines sit below the price book price. */
+export function discountPercentOf(items: { qty: number; unitPrice: number; listUnitPrice: number | null }[]): number {
+  let list = 0;
+  let off = 0;
+  for (const i of items) {
+    const l = i.listUnitPrice ?? i.unitPrice;
+    list += l * i.qty;
+    off += Math.max(0, l - i.unitPrice) * i.qty;
+  }
+  return list > 0 ? Math.round((off / list) * 10000) / 100 : 0;
+}
 
 /** Recalculate a quote header from its own line items. Returns the new totals.
  *  Exported for the voice quote pipeline, which inserts lines directly and
@@ -61,7 +83,7 @@ async function quoteOrThrow(id: number) {
 }
 
 export const quotes = {
-  list: adminOnly
+  list: staffOnly
     .input(
       z
         .object({
@@ -121,7 +143,7 @@ export const quotes = {
       }));
     }),
 
-  get: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     const [row] = await db
       .select({
         quote: schema.quotes,
@@ -165,24 +187,33 @@ export const quotes = {
     ]);
 
     const cost = items.reduce((sum, i) => sum + (i.unitCost ?? 0) * (i.qty ?? 0), 0);
+    const showCosts = context.actor.canSeeCosts;
+    const limit = await discountLimit();
+    const discountPercent = discountPercentOf(items);
+    const needsApproval =
+      context.actor.role !== "admin" && discountPercent > limit && discountPercent > row.quote.discountApprovedPercent;
 
     return {
       ...row.quote,
+      discountPercent,
+      discountLimit: limit,
+      discountNeedsApproval: needsApproval,
+      costsHidden: !showCosts,
       contact: row.contact,
       company: row.company,
       site: row.site,
       job: row.job?.id ? row.job : null,
-      items,
+      items: showCosts ? items : items.map((i) => ({ ...i, unitCost: null })),
       activity,
       versions,
-      /** Admin-only margin figures. Never expose these through field.ts. */
-      estimatedCost: round2(cost),
-      estimatedMargin: round2(row.quote.subtotal - cost),
-      estimatedMarginPercent: row.quote.subtotal > 0 ? round2(((row.quote.subtotal - cost) / row.quote.subtotal) * 100) : 0,
+      /** Only for Admin, or Office with the cost switch on. Never expose these through field.ts. */
+      estimatedCost: showCosts ? round2(cost) : null,
+      estimatedMargin: showCosts ? round2(row.quote.subtotal - cost) : null,
+      estimatedMarginPercent: !showCosts ? null : row.quote.subtotal > 0 ? round2(((row.quote.subtotal - cost) / row.quote.subtotal) * 100) : 0,
     };
   }),
 
-  create: adminOnly
+  create: staffOnly
     .input(
       z.object({
         jobId: z.number().nullable().optional(),
@@ -253,7 +284,7 @@ export const quotes = {
             qty: item.qty,
             unit: item.unit,
             unitPrice: item.unitPrice,
-            unitCost: item.unitCost ?? null,
+            unitCost: context.actor.role === "admin" ? (item.unitCost ?? null) : null,
             total: round2(item.qty * item.unitPrice),
             sortOrder: i,
             flagged: item.flagged,
@@ -278,7 +309,7 @@ export const quotes = {
       return { ...row, ...totals };
     }),
 
-  update: adminOnly
+  update: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -315,7 +346,7 @@ export const quotes = {
 
   /* ----------------------------- line items ----------------------------- */
 
-  addItem: adminOnly
+  addItem: staffOnly
     .input(
       z.object({
         quoteId: z.number(),
@@ -330,8 +361,9 @@ export const quotes = {
         flagReason: z.string().nullable().optional(),
       }),
     )
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
       await quoteOrThrow(input.quoteId);
+      if (context.actor.role !== "admin") input.unitCost = null;
       const [maxRow] = await db
         .select({ max: sql<number>`coalesce(max(${schema.quoteItems.sortOrder}), -1)` })
         .from(schema.quoteItems)
@@ -360,7 +392,7 @@ export const quotes = {
     }),
 
   /** Add a line straight off the price list, carrying sell price and cost across. */
-  addProduct: adminOnly
+  addProduct: staffOnly
     .input(z.object({ quoteId: z.number(), productId: z.number(), qty: z.number().default(1) }))
     .handler(async ({ input }) => {
       await quoteOrThrow(input.quoteId);
@@ -414,7 +446,7 @@ export const quotes = {
    * `installerId` is a note of intent, nothing more. It does not book him, it
    * does not offer him the work, and it does not reprice the line.
    */
-  addLabour: adminOnly
+  addLabour: staffOnly
     .input(
       z.object({
         quoteId: z.number(),
@@ -514,7 +546,7 @@ export const quotes = {
       };
     }),
 
-  updateItem: adminOnly
+  updateItem: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -530,17 +562,25 @@ export const quotes = {
         productId: z.number().nullable().optional(),
       }),
     )
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
       const { id, ...rest } = input;
       const [before] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, id));
       if (!before) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
+      // Only an Admin can change what Terra pays. Office edits price and quantity only.
+      if (context.actor.role !== "admin") delete rest.unitCost;
 
       const qty = rest.qty ?? before.qty;
       const unitPrice = rest.unitPrice ?? before.unitPrice;
+      // Remember the price book price the first time a price is hand-edited.
+      // The gap between it and the new price is the discount.
+      const listUnitPrice =
+        rest.unitPrice !== undefined && rest.unitPrice !== before.unitPrice && before.listUnitPrice === null
+          ? before.unitPrice
+          : undefined;
 
       const [row] = await db
         .update(schema.quoteItems)
-        .set({ ...rest, total: round2(qty * unitPrice), updatedAt: new Date() })
+        .set({ ...rest, ...(listUnitPrice !== undefined ? { listUnitPrice } : {}), total: round2(qty * unitPrice), updatedAt: new Date() })
         .where(eq(schema.quoteItems.id, id))
         .returning();
 
@@ -576,7 +616,7 @@ export const quotes = {
    * the closest clients already in the system, so the quote page can show
    * "Customer not found" with matches and a filled-in new client form.
    */
-  customerHelp: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  customerHelp: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
     await quoteOrThrow(input.id);
     const spoken = await spokenForQuote(input.id);
     const candidates = spoken ? (await customerCandidates(spoken)).slice(0, 4) : [];
@@ -584,7 +624,7 @@ export const quotes = {
   }),
 
   /** Put a customer on a quote: someone already in the system, or a new client made here. */
-  setCustomer: adminOnly
+  setCustomer: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -640,7 +680,7 @@ export const quotes = {
       return { contactId: contact.id, name };
     }),
 
-  suggestProducts: adminOnly.input(z.object({ itemId: z.number() })).handler(async ({ input }) => {
+  suggestProducts: staffOnly.input(z.object({ itemId: z.number() })).handler(async ({ input }) => {
     const [item] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, input.itemId));
     if (!item) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
     const rows = await suggestProducts(`${item.description} ${item.voicePhrase ?? ""}`, 6);
@@ -661,7 +701,7 @@ export const quotes = {
    * the price book, the quantity stays. On a voice line the pick is learned,
    * so the same words find this product next time.
    */
-  changeProduct: adminOnly
+  changeProduct: staffOnly
     .input(z.object({ id: z.number(), productId: z.number() }))
     .handler(async ({ input }) => {
       const [before] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, input.id));
@@ -691,6 +731,7 @@ export const quotes = {
           description: productLineName(product) || product.sku || before.description,
           unit: product.unit || before.unit,
           unitPrice,
+          listUnitPrice: null,
           unitCost: product.costPrice ?? null,
           total: round2(before.qty * unitPrice),
           flagged: Boolean(flagReason),
@@ -739,7 +780,7 @@ export const quotes = {
   }),
 
   /** Drag-reorder the lines on a quote. */
-  reorderItems: adminOnly
+  reorderItems: staffOnly
     .input(z.object({ quoteId: z.number(), orderedIds: z.array(z.number()) }))
     .handler(async ({ input }) => {
       await Promise.all(
@@ -755,8 +796,31 @@ export const quotes = {
 
   /* ------------------------------ lifecycle ----------------------------- */
 
-  send: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
+  /** Admin signs off the quote's current discount so Office can send it. */
+  approveDiscount: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
+    await quoteOrThrow(input.id);
+    const items = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, input.id));
+    const pct = discountPercentOf(items);
+    const [row] = await db
+      .update(schema.quotes)
+      .set({ discountApprovedPercent: pct, discountApprovedBy: context.actor.name, discountApprovedAt: new Date(), updatedAt: new Date() })
+      .where(eq(schema.quotes.id, input.id))
+      .returning();
+    return row;
+  }),
+
+  send: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     const quote = await quoteOrThrow(input.id);
+    if (context.actor.role !== "admin") {
+      const items = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, input.id));
+      const pct = discountPercentOf(items);
+      const limit = await discountLimit();
+      if (pct > limit && pct > quote.discountApprovedPercent) {
+        throw new ORPCError("FORBIDDEN", {
+          message: `This quote is discounted ${pct}%. Office can go up to ${limit}%. An Admin needs to approve it before it can be sent.`,
+        });
+      }
+    }
     const [row] = await db
       .update(schema.quotes)
       .set({ status: "sent", sentAt: new Date(), updatedAt: new Date() })
@@ -777,7 +841,7 @@ export const quotes = {
     return row;
   }),
 
-  accept: adminOnly
+  accept: staffOnly
     .input(z.object({ id: z.number(), note: z.string().optional() }))
     .handler(async ({ input, context }) => {
       const quote = await quoteOrThrow(input.id);
@@ -822,7 +886,7 @@ export const quotes = {
       return row;
     }),
 
-  decline: adminOnly
+  decline: staffOnly
     .input(z.object({ id: z.number(), reason: z.string().min(1) }))
     .handler(async ({ input, context }) => {
       const quote = await quoteOrThrow(input.id);
@@ -847,7 +911,7 @@ export const quotes = {
     }),
 
   /** Copy a quote into a new version so the original stays as sent history. */
-  revise: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
+  revise: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     const quote = await quoteOrThrow(input.id);
     const items = await db
       .select()
@@ -916,7 +980,7 @@ export const quotes = {
    * Turn an accepted quote into a job. Labour/prep/removal lines become
    * unassigned TASKS (the dispatch unit) and supply lines become materials.
    */
-  convertToJob: adminOnly
+  convertToJob: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -1057,7 +1121,7 @@ export const quotes = {
     }),
 
   /** Dashboard/pipeline figures for the quotes screen. */
-  stats: adminOnly.handler(async () => {
+  stats: staffOnly.handler(async () => {
     const rows = await db
       .select({
         status: schema.quotes.status,

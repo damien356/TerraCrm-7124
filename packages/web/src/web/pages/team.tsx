@@ -1,12 +1,12 @@
 import * as React from "react";
-import { HardHat, KeyRound, ShieldCheck, Smartphone } from "lucide-react";
+import { HardHat, KeyRound, ShieldCheck, Smartphone, Briefcase } from "lucide-react";
 import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Select } from "../components/ui/field";
-import { useLinkLogin, useLogins, useSetLoginActive, useSetLoginRole } from "../queries/team";
-import { useInstallers } from "../queries/installers";
+import { useLogins, useSetAccess, useSetCostAccess, useSetLoginActive, useUpdatePerson } from "../queries/team";
+import { InstallerPanel } from "./installers";
 import { useRevokeVoiceKey, useVoiceKeys } from "../queries/visits";
 
 function when(iso: string | null) {
@@ -19,15 +19,31 @@ function when(iso: string | null) {
   return d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
 }
 
-export default function TeamPage() {
-  const logins = useLogins();
-  const installers = useInstallers();
-  const link = useLinkLogin();
-  const setRole = useSetLoginRole();
-  const setActive = useSetLoginActive();
-  const [error, setError] = React.useState<string | null>(null);
+type Level = "admin" | "office" | "field";
 
-  const busy = link.isPending || setRole.isPending || setActive.isPending;
+const LEVELS: { value: Level; label: string }[] = [
+  { value: "admin", label: "Admin" },
+  { value: "office", label: "Office" },
+  { value: "field", label: "Field crew" },
+];
+
+export default function TeamPage() {
+  const people = useLogins();
+  const setAccess = useSetAccess();
+  const setCosts = useSetCostAccess();
+  const setActive = useSetLoginActive();
+  const updatePerson = useUpdatePerson();
+  const [error, setError] = React.useState<string | null>(null);
+  const [openId, setOpenId] = React.useState<number | null>(null);
+  const [editing, setEditing] = React.useState<number | null>(null);
+  const [draft, setDraft] = React.useState({ name: "", phone: "", email: "" });
+
+  React.useEffect(() => {
+    const m = /[?&]open=(\d+)/.exec(window.location.search);
+    if (m) setOpenId(Number(m[1]));
+  }, []);
+
+  const busy = setAccess.isPending || setCosts.isPending || setActive.isPending || updatePerson.isPending;
 
   async function run(fn: () => Promise<unknown>) {
     setError(null);
@@ -38,30 +54,49 @@ export default function TeamPage() {
     }
   }
 
+  function changeLevel(row: NonNullable<typeof people.data>[number], level: Level) {
+    if (level === row.role) return;
+    if (row.role === "field" && level !== "field") {
+      const ok = window.confirm(
+        `Move ${row.name || row.email} to ${level === "admin" ? "Admin" : "Office"}? Their installer card leaves dispatch. Past jobs, photos, notes and sign-offs stay on those jobs, and switching back to Field crew restores everything.`,
+      );
+      if (!ok) return;
+    }
+    if (level === "admin") {
+      const ok = window.confirm(`Make ${row.name || row.email} an Admin? Admins can see and change everything, including prices and other logins.`);
+      if (!ok) return;
+    }
+    run(() => setAccess.mutateAsync({ profileId: row.id, role: level }));
+  }
+
   return (
     <Page
-      title="Logins"
-      subtitle="Every account that has signed in. A login on its own gives someone nothing — you decide here whether it's an office login or which installer card it belongs to."
+      title="People"
+      subtitle="One record per person. The access level decides what they are. Set someone to Field crew and their installer card is made for you."
     >
       <Card className="mb-4 p-4 text-sm leading-relaxed text-muted-foreground">
         <p className="mb-2 flex items-center gap-2 font-medium text-foreground">
           <KeyRound className="size-4 text-primary" />
-          How access works
+          The three access levels
         </p>
         <ul className="list-inside list-disc space-y-1">
           <li>
-            <strong className="text-foreground">Office</strong> — full access: pricing, quotes, invoices, every job and
-            every installer.
+            <strong className="text-foreground">Admin</strong> sees and changes everything: price book, costs, markups,
+            specials, logins, settings, integrations and deleting records. Only an Admin can change anyone's level.
+            There is always at least one Admin.
           </li>
           <li>
-            <strong className="text-foreground">Field crew</strong> — the installer app only, and only the tasks you
-            dispatch to them. Never a price, a quote or another installer's work.
+            <strong className="text-foreground">Office</strong> runs the day: customers, conversations, jobs, schedule,
+            dispatch and quotes at price book prices. Costs and margins are hidden unless you switch them on for that
+            person. Quote discounts above the limit need an Admin to approve.
           </li>
           <li>
-            A field crew login sees <em>nothing at all</em> until you link it to an installer card below. That's the
-            &ldquo;Field crew account&rdquo; screen they get in the office app.
+            <strong className="text-foreground">Field crew</strong> uses the installer app only and sees only their own
+            dispatched tasks. Enforced on the server.
           </li>
-          <li>The first account to ever sign in was made office automatically. Everyone after that starts as field crew.</li>
+          <li>
+            New sign-ups start as Field crew. "Switch off" only blocks login. It never deletes anything.
+          </li>
         </ul>
       </Card>
 
@@ -71,91 +106,111 @@ export default function TeamPage() {
         </div>
       ) : null}
 
-      {logins.isPending ? (
-        <Loading label="Loading logins…" />
-      ) : !logins.data || logins.data.length === 0 ? (
-        <Empty>No logins yet. The first person to create an account becomes the office admin.</Empty>
+      {people.isPending ? (
+        <Loading label="Loading people…" />
+      ) : !people.data || people.data.length === 0 ? (
+        <Empty>No one yet. The first person to create an account becomes the Admin.</Empty>
       ) : (
         <Card className="overflow-x-auto">
-          <table className="w-full min-w-[900px] text-sm">
+          <table className="w-full min-w-[960px] text-sm">
             <thead>
               <tr className="border-b border-border">
                 <th className="th px-4">Person</th>
-                <th className="th px-4">Access</th>
-                <th className="th px-4">Installer card</th>
-                <th className="th px-4">Signed up</th>
+                <th className="th px-4">Access level</th>
+                <th className="th px-4">Details</th>
                 <th className="th px-4">Last signed in</th>
                 <th className="th px-4" aria-label="Row actions" />
               </tr>
             </thead>
             <tbody>
-              {logins.data.map((row) => (
-                <tr key={row.id} className="border-b border-border/40 last:border-0">
+              {people.data.map((row) => (
+                <tr key={row.id} className="border-b border-border/40 align-top last:border-0">
                   <td className="px-4 py-3">
-                    <div className="font-medium">{row.name || row.email}</div>
-                    <div className="text-xs text-muted-foreground">{row.email}</div>
-                    {!row.active ? (
-                      <Badge className="mt-1 bg-destructive/10 text-destructive">Switched off</Badge>
-                    ) : null}
+                    {editing === row.id ? (
+                      <div className="space-y-1">
+                        <input className="w-52 rounded border border-border px-2 py-1 text-sm" placeholder="Name" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+                        <input className="w-52 rounded border border-border px-2 py-1 text-sm" placeholder="Mobile" value={draft.phone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} />
+                        <input className="w-52 rounded border border-border px-2 py-1 text-sm" placeholder="Email" value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} />
+                        <div className="flex gap-2 pt-1">
+                          <Button
+                            disabled={busy || !draft.name.trim()}
+                            onClick={() =>
+                              run(async () => {
+                                await updatePerson.mutateAsync({ profileId: row.id, name: draft.name.trim(), phone: draft.phone.trim() || null, email: draft.email.trim() });
+                                setEditing(null);
+                              })
+                            }
+                          >
+                            Save
+                          </Button>
+                          <Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="font-medium">{row.name || row.email}</div>
+                        <div className="text-xs text-muted-foreground">{row.email}</div>
+                        <div className="text-xs text-muted-foreground">{row.phone ?? "No mobile"}</div>
+                        <button
+                          type="button"
+                          className="mt-1 text-xs text-primary hover:underline"
+                          onClick={() => {
+                            setDraft({ name: row.name, phone: row.phone ?? "", email: row.email });
+                            setEditing(row.id);
+                          }}
+                        >
+                          Edit name, mobile, email
+                        </button>
+                        {!row.active ? <Badge className="ml-2 bg-destructive/10 text-destructive">Switched off</Badge> : null}
+                      </>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <Select
                       value={row.role}
                       disabled={busy}
-                      onChange={(e) =>
-                        run(() =>
-                          setRole.mutateAsync({
-                            profileId: row.id,
-                            role: e.target.value as "admin" | "installer",
-                          }),
-                        )
-                      }
+                      onChange={(e) => changeLevel(row, e.target.value as Level)}
                       className="w-[150px]"
                     >
-                      <option value="admin">Office</option>
-                      <option value="installer">Field crew</option>
+                      {LEVELS.map((l) => (
+                        <option key={l.value} value={l.value}>{l.label}</option>
+                      ))}
                     </Select>
                     <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
                       {row.role === "admin" ? (
-                        <>
-                          <ShieldCheck className="size-3" /> Sees everything
-                        </>
+                        <><ShieldCheck className="size-3" /> Sees everything</>
+                      ) : row.role === "office" ? (
+                        <><Briefcase className="size-3" /> Runs the day, no price changes</>
                       ) : (
-                        <>
-                          <HardHat className="size-3" /> Own tasks only
-                        </>
+                        <><HardHat className="size-3" /> Own tasks only</>
                       )}
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    {row.role === "admin" && row.installerId === null ? (
-                      <span className="text-xs text-muted-foreground">Not needed for office logins</span>
+                    {row.role === "office" ? (
+                      <label className="flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={row.canSeeCosts}
+                          disabled={busy}
+                          onChange={(e) => run(() => setCosts.mutateAsync({ profileId: row.id, canSeeCosts: e.target.checked }))}
+                        />
+                        Can see cost prices and margins
+                      </label>
                     ) : null}
-                    <Select
-                      value={row.installerId === null ? "" : String(row.installerId)}
-                      disabled={busy}
-                      onChange={(e) =>
-                        run(() =>
-                          link.mutateAsync({
-                            profileId: row.id,
-                            installerId: e.target.value === "" ? null : Number(e.target.value),
-                          }),
-                        )
-                      }
-                      className="w-[200px]"
-                    >
-                      <option value="">Not linked</option>
-                      {(installers.data ?? []).map((inst) => (
-                        <option key={inst.id} value={inst.id}>
-                          {inst.name}
-                        </option>
-                      ))}
-                    </Select>
-                    {row.role === "installer" && row.installerId === null ? (
-                      <div className="mt-1 text-xs text-amber-600">Can't see any work yet</div>
+                    {row.role === "field" && row.installerId ? (
+                      <div className="space-y-1">
+                        <Button variant="ghost" onClick={() => setOpenId(row.installerId)}>
+                          Skills, service area and rates
+                        </Button>
+                      </div>
+                    ) : null}
+                    {row.role !== "field" && row.installerId ? (
+                      <div className="text-xs text-muted-foreground">
+                        Installer card archived. History kept, restored if switched back to Field crew.
+                      </div>
                     ) : null}
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">{when(row.signedUpAt)}</td>
                   <td className="px-4 py-3 text-muted-foreground">{when(row.lastSeenAt)}</td>
                   <td className="px-4 py-3 text-right">
                     <Button
@@ -175,6 +230,7 @@ export default function TeamPage() {
       )}
 
       <VoiceKeys />
+      {openId !== null ? <InstallerPanel id={openId} onClose={() => setOpenId(null)} /> : null}
     </Page>
   );
 }

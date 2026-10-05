@@ -3,7 +3,7 @@ import { desc, eq, inArray } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly, type Actor } from "../middleware/auth";
+import { staffOnly, type Actor } from "../middleware/auth";
 import { getObject, signGet } from "../lib/s3";
 import { transcribeAudio } from "../agent/transcribe";
 import { findMentions, noDashes, planMemo, type MemoAction, type MemoPlan } from "../agent/memo";
@@ -651,7 +651,7 @@ export const memos = {
    * published server drops any request that is quiet for 10 seconds, and
    * Whisper plus two model calls can run past that. The client polls `get`.
    */
-  start: adminOnly.input(startInput).handler(async ({ input, context }) => {
+  start: staffOnly.input(startInput).handler(async ({ input, context }) => {
     const [row] = await db
       .insert(schema.voiceQuoteCaptures)
       .values({
@@ -669,14 +669,14 @@ export const memos = {
     return { captureId: row.id };
   }),
 
-  get: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
     const [row] = await db.select().from(schema.voiceQuoteCaptures).where(eq(schema.voiceQuoteCaptures.id, input.id));
     if (!row) throw new ORPCError("NOT_FOUND", { message: "Memo not found" });
     return { ...view(row), audioUrl: await signGet(row.audioKey) };
   }),
 
   /** Every voice recording, memo or quote, newest first. The Voice drafts page. */
-  list: adminOnly
+  list: staffOnly
     .input(z.object({ limit: z.number().int().min(1).max(200).default(60) }).default({ limit: 60 }))
     .handler(async ({ input }) => {
       const rows = await db
@@ -700,7 +700,7 @@ export const memos = {
     }),
 
   /** Edit a draft's wording before it goes. */
-  updateDraft: adminOnly
+  updateDraft: staffOnly
     .input(actionRef.extend({ subject: z.string().nullable().optional(), body: z.string().min(1) }))
     .handler(async ({ input }) => {
       const { memo } = await loadMemo(input.id);
@@ -716,7 +716,7 @@ export const memos = {
    * The one tap. Goes out through the same path as a message typed on the job
    * thread: logged in the conversation, opt-out on customer texts, two-way number.
    */
-  sendDraft: adminOnly
+  sendDraft: staffOnly
     .input(
       actionRef.extend({
         subject: z.string().nullable().optional(),
@@ -784,7 +784,7 @@ export const memos = {
     }),
 
   /** Leave it, without doing it. */
-  dismiss: adminOnly.input(actionRef).handler(async ({ input }) => {
+  dismiss: staffOnly.input(actionRef).handler(async ({ input }) => {
     const { memo } = await loadMemo(input.id);
     const a = actionOf(memo, input.actionId);
     if (a.state === "done" || a.state === "sent")
@@ -795,7 +795,7 @@ export const memos = {
   }),
 
   /** A booking made through the board's booking box, recorded back on the memo. */
-  markBooked: adminOnly
+  markBooked: staffOnly
     .input(actionRef.extend({ label: z.string(), taskId: z.number() }))
     .handler(async ({ input }) => {
       const { memo } = await loadMemo(input.id);
@@ -808,7 +808,7 @@ export const memos = {
     }),
 
   /** Confirm a job status move. */
-  confirmStatus: adminOnly.input(actionRef).handler(async ({ input, context }) => {
+  confirmStatus: staffOnly.input(actionRef).handler(async ({ input, context }) => {
     const { memo } = await loadMemo(input.id);
     const a = actionOf(memo, input.actionId);
     if (a.kind !== "job_status" || a.state !== "confirm" || !a.statusId)
@@ -839,7 +839,7 @@ export const memos = {
    * the details in the memo (editable first), or nobody. Whatever was waiting
    * on the client runs straight after.
    */
-  resolveClient: adminOnly
+  resolveClient: staffOnly
     .input(
       z.object({
         id: z.number(),
@@ -887,7 +887,7 @@ export const memos = {
     }),
 
   /** The settled client's jobs, newest first, for the Change job list on each action. */
-  jobChoices: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  jobChoices: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
     const { memo } = await loadMemo(input.id);
     // An unsure match still lists its best guess's jobs; picking the client re-fits them anyway.
     const contactId = memo.client.kind === "new" || memo.client.kind === "none" ? null : memo.client.contactId;
@@ -899,7 +899,7 @@ export const memos = {
    * Works before and after: a draft just changes where it will go, a note or
    * reminder already made is moved.
    */
-  setActionJob: adminOnly
+  setActionJob: staffOnly
     .input(actionRef.extend({ jobId: z.number().nullable() }))
     .handler(async ({ input }) => {
       const { memo } = await loadMemo(input.id);
@@ -936,7 +936,7 @@ export const memos = {
    * recording. Takes back the notes, reminders and draft quote the first go
    * made, keeps any job it made and anything already sent.
    */
-  rerun: adminOnly
+  rerun: staffOnly
     .input(z.object({ id: z.number(), transcript: z.string().trim().min(3).max(4000) }))
     .handler(async ({ input, context }) => {
       const [row] = await db.select().from(schema.voiceQuoteCaptures).where(eq(schema.voiceQuoteCaptures.id, input.id));
@@ -995,7 +995,7 @@ export const memos = {
     }),
 
   /** Customer on a job, for the card buttons to label themselves. */
-  cardLabel: adminOnly
+  cardLabel: staffOnly
     .input(z.object({ jobId: z.number().nullable(), contactId: z.number().nullable() }))
     .handler(async ({ input }) => {
       if (input.contactId) return { name: fullName(await contactById(input.contactId)) || null };

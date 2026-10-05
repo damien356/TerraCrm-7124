@@ -3,7 +3,7 @@ import { and, asc, desc, eq, inArray, lt, ne } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { staffOnly } from "../middleware/auth";
 import { pushToInstaller, pushToOffice } from "../lib/push";
 import { blockedReason } from "../lib/availability";
 import { lockTaskLabour } from "./costing";
@@ -126,7 +126,7 @@ async function expireStale() {
 
 export const offers = {
   /** Send to one installer. */
-  sendDirect: adminOnly
+  sendDirect: staffOnly
     .input(z.object({ taskId: z.number(), installerId: z.number(), payAmount: z.number().nullable().optional() }))
     .handler(async ({ input, context }) => {
       const [task] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, input.taskId));
@@ -188,7 +188,7 @@ export const offers = {
     }),
 
   /** Blast every installer ticked for the task's skill. First accept wins. */
-  broadcast: adminOnly
+  broadcast: staffOnly
     .input(z.object({ taskId: z.number(), payAmount: z.number().nullable().optional() }))
     .handler(async ({ input, context }) => {
       const [task] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, input.taskId));
@@ -265,7 +265,7 @@ export const offers = {
     }),
 
   /** Office pulls an offer back. */
-  withdraw: adminOnly.input(z.object({ taskId: z.number() })).handler(async ({ input, context }) => {
+  withdraw: staffOnly.input(z.object({ taskId: z.number() })).handler(async ({ input, context }) => {
     const [task] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, input.taskId));
     if (!task) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
 
@@ -295,7 +295,7 @@ export const offers = {
   }),
 
   /** Everything outstanding — the office's "waiting on installers" list. */
-  pending: adminOnly.handler(async () => {
+  pending: staffOnly.handler(async () => {
     await expireStale();
     const rows = await db
       .select({
@@ -334,7 +334,7 @@ export const offers = {
   }),
 
   /** Full offer history for one task, so the office can see who said no and why. */
-  forTask: adminOnly.input(z.object({ taskId: z.number() })).handler(async ({ input }) => {
+  forTask: staffOnly.input(z.object({ taskId: z.number() })).handler(async ({ input }) => {
     await expireStale();
     return db
       .select({ offer: schema.taskOffers, installer: schema.installers })
@@ -345,7 +345,7 @@ export const offers = {
   }),
 
   /** Recently declined, with reasons — Damien wanted the reason mandatory. */
-  declines: adminOnly.handler(() =>
+  declines: staffOnly.handler(() =>
     db
       .select({
         offer: schema.taskOffers,

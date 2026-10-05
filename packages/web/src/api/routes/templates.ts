@@ -3,7 +3,7 @@ import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { adminOnly, staffOnly } from "../middleware/auth";
 import {
   MERGE_FIELDS,
   mergeFieldsFor,
@@ -55,7 +55,7 @@ const upsertInput = z.object({
 
 export const templates = {
   /** Every template, newest edit first. The list page. */
-  list: adminOnly
+  list: staffOnly
     .input(
       z
         .object({ includeInactive: z.boolean().default(true) })
@@ -84,7 +84,7 @@ export const templates = {
     }),
 
   /** One template plus the merge fields the editor shows beside it. */
-  get: adminOnly.input(z.object({ id: z.number().int() })).handler(async ({ input }) => {
+  get: staffOnly.input(z.object({ id: z.number().int() })).handler(async ({ input }) => {
     const [row] = await db
       .select()
       .from(schema.emailTemplates)
@@ -108,14 +108,14 @@ export const templates = {
   }),
 
   /** The fields available, for a fresh editor with nothing loaded yet. */
-  mergeFields: adminOnly.handler(async () => MERGE_FIELDS),
+  mergeFields: staffOnly.handler(async () => MERGE_FIELDS),
 
-  create: adminOnly.input(upsertInput).handler(async ({ input }) => {
+  create: staffOnly.input(upsertInput).handler(async ({ input }) => {
     const [row] = await db.insert(schema.emailTemplates).values(input).returning();
     return row!;
   }),
 
-  update: adminOnly
+  update: staffOnly
     .input(upsertInput.partial().extend({ id: z.number().int() }))
     .handler(async ({ input }) => {
       const { id, ...patch } = input;
@@ -163,7 +163,7 @@ export const templates = {
    * real send uses. Against a real contact when one is named, otherwise against
    * the sample values, so the office can check it before anyone receives it.
    */
-  preview: adminOnly
+  preview: staffOnly
     .input(
       z.object({
         subject: z.string().default(""),
@@ -239,7 +239,7 @@ export const templates = {
    * never be pointed at a customer. It runs as a test send, which bypasses the
    * consent gate — safe only because the recipient is Terra's own staff.
    */
-  sendTest: adminOnly
+  sendTest: staffOnly
     .input(
       z.object({
         subject: z.string().default(""),

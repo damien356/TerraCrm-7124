@@ -19,9 +19,12 @@ export const profiles = sqliteTable("profiles", {
   userId: text("user_id").notNull().unique(),
   name: text("name").notNull().default(""),
   email: text("email").notNull().default(""),
-  /** "admin" = full access · "installer" = restricted to own tasks */
-  role: text("role").notNull().default("installer"),
+  /** "admin" = full access · "office" = day-to-day running · "field" (legacy value "installer") = own tasks only */
+  role: text("role").notNull().default("field"),
   installerId: integer("installer_id"),
+  phone: text("phone"),
+  /** Office only: an Admin can switch this on so the person sees cost prices and margins. */
+  canSeeCosts: integer("can_see_costs", { mode: "boolean" }).notNull().default(false),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   ...timestamps,
 });
@@ -237,6 +240,8 @@ export const installers = sqliteTable("installers", {
   colour: text("colour").notNull().default("#4A7FA5"),
   notes: text("notes"),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
+  /** Set when the person moves to Admin or Office. Card leaves dispatch, history stays. */
+  archivedAt: integer("archived_at", { mode: "timestamp" }),
   /**
    * Location sharing. ON-SHIFT ONLY: the app reports a position while a task is
    * in progress and stops the second it's marked complete. Never outside that.
@@ -1258,6 +1263,10 @@ export const quotes = sqliteTable(
     gst: real("gst").notNull().default(0),
     total: real("total").notNull().default(0),
     depositPercent: real("deposit_percent").notNull().default(0),
+    /** Highest discount % an Admin has approved for this quote to go out at. */
+    discountApprovedPercent: real("discount_approved_percent").notNull().default(0),
+    discountApprovedBy: text("discount_approved_by"),
+    discountApprovedAt: integer("discount_approved_at", { mode: "timestamp" }),
     validUntil: integer("valid_until", { mode: "timestamp" }),
     notes: text("notes"),
     terms: text("terms"),
@@ -1280,6 +1289,8 @@ export const quoteItems = sqliteTable(
     qty: real("qty").notNull().default(1),
     unit: text("unit").notNull().default("m2"),
     unitPrice: real("unit_price").notNull().default(0),
+    /** Price book price before anyone hand-edited the line. Null = never edited. The gap is the discount. */
+    listUnitPrice: real("list_unit_price"),
     unitCost: real("unit_cost"),
     total: real("total").notNull().default(0),
     sortOrder: integer("sort_order").notNull().default(0),

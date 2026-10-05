@@ -118,13 +118,48 @@ const NAV: NavEntry[] = [
     icon: SettingsIcon,
     children: [
       { to: "/settings", label: "Settings", icon: SettingsIcon },
-      { to: "/installers", label: "Installers", icon: HardHat },
       { to: "/products", label: "Price book", icon: Tags },
-      { to: "/team", label: "Logins", icon: KeyRound },
+      { to: "/team", label: "People", icon: KeyRound },
       { to: "/review", label: "Import review", icon: ListChecks },
     ],
   },
 ];
+
+/**
+ * Pages only an Admin can open. Office gets everything else except these.
+ * The server enforces this too; hiding the link is just manners.
+ */
+const ADMIN_ONLY_PATHS = [
+  "/finance/cashflow",
+  "/finance/forecasting",
+  "/finance/invoices",
+  "/finance/expenses",
+  "/finance/profitability",
+  "/marketing",
+  "/terra-ai",
+  "/settings",
+  "/products",
+  "/team",
+  "/review",
+];
+
+function officeCanOpen(path: string) {
+  return !ADMIN_ONLY_PATHS.some((p) => matches(path, p));
+}
+
+function navFor(role: string | undefined): NavEntry[] {
+  if (role === "admin") return NAV;
+  const out: NavEntry[] = [];
+  for (const entry of NAV) {
+    if (isSection(entry)) {
+      const children = entry.children.filter((c) => officeCanOpen(c.to));
+      if (children.length) out.push({ ...entry, children });
+    } else if (officeCanOpen(entry.to)) {
+      out.push(entry);
+    }
+  }
+  return out;
+}
 
 /**
  * Prefix match on a path boundary, so /quotes lights up for /quotes/12 but
@@ -228,8 +263,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   const role = bootstrap.data?.actor.role;
 
-  // Installers work out of the mobile app — the office web app is admin-only.
-  if (bootstrap.isFetched && role !== "admin") {
+  // Field crew work out of the mobile app. The office web app is for Admin and Office.
+  if (bootstrap.isFetched && role !== "admin" && role !== "office") {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background px-6">
         <div className="card-surface max-w-md px-6 py-8 text-center">
@@ -264,7 +299,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </div>
       <div className="gold-rule mb-3.5" />
       <nav className="board-scroll flex flex-1 flex-col gap-0.5 overflow-y-auto">
-        {NAV.map((entry) =>
+        {navFor(role).map((entry) =>
           isSection(entry) ? (
             <NavGroup key={entry.label} section={entry} onNavigate={() => setDrawerOpen(false)} />
           ) : (
@@ -332,7 +367,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <img src="/images/terra-mark-reverse.png" alt="Terra Flooring" className="size-7 shrink-0" />
           <p className="text-[14px] font-bold tracking-[-0.01em] text-white">Terra Ops</p>
         </div>
-        <main className="min-w-0 flex-1 pb-20">{children}</main>
+        <main className="min-w-0 flex-1 pb-20">
+          {role === "office" && !officeCanOpen(location) ? (
+            <div className="mx-auto mt-24 max-w-md px-6 text-center">
+              <h1 className="text-lg font-semibold">Admin only</h1>
+              <p className="mt-2 text-sm text-muted-foreground">
+                This page is for Admins. Ask Damien if you need something changed.
+              </p>
+            </div>
+          ) : (
+            children
+          )}
+        </main>
       </div>
       {/* Voice memo from anywhere: say who and what, it works out the rest. */}
       <GlobalMemoButton />

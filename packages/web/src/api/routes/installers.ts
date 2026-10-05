@@ -3,7 +3,7 @@ import { and, asc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly } from "../middleware/auth";
+import { adminOnly, staffOnly } from "../middleware/auth";
 import { blockedInstallerIds } from "../lib/availability";
 import { installerLogoKey, signGet, signPut } from "../lib/s3";
 
@@ -15,9 +15,10 @@ import { installerLogoKey, signGet, signPut } from "../lib/s3";
  * separate assignments.
  */
 export const installers = {
-  list: adminOnly
+  list: staffOnly
     .input(z.object({ includeInactive: z.boolean().default(false) }).default({ includeInactive: false }))
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
+      const isAdmin = context.actor.role === "admin";
       const rows = await db
         .select()
         .from(schema.installers)
@@ -47,6 +48,7 @@ export const installers = {
 
       return rows.map((installer) => ({
         ...installer,
+        ...(isAdmin ? {} : { creditLimit: 0, bankAccountName: null, bankBsb: null, bankAccountNumber: null }),
         unavailableDays: safeDays(installer.unavailableDays),
         skills: skillRows
           .filter((s) => s.link.installerId === installer.id)
@@ -55,15 +57,16 @@ export const installers = {
             skillId: s.link.skillId,
             name: s.skill.name,
             groupName: s.skill.groupName,
-            rateType: s.link.rateType,
-            rate: s.link.rate,
+            rateType: isAdmin ? s.link.rateType : null,
+            rate: isAdmin ? s.link.rate : null,
             canLead: s.link.canLead,
           })),
         openTaskCount: taskCounts.get(installer.id) ?? 0,
       }));
     }),
 
-  get: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
+    const isAdmin = context.actor.role === "admin";
     const [installer] = await db.select().from(schema.installers).where(eq(schema.installers.id, input.id));
     if (!installer) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
 
@@ -104,7 +107,11 @@ export const installers = {
     ]);
 
     return {
-      installer: { ...installer, unavailableDays: safeDays(installer.unavailableDays) },
+      installer: {
+        ...installer,
+        unavailableDays: safeDays(installer.unavailableDays),
+        ...(isAdmin ? {} : { creditLimit: 0, bankAccountName: null, bankBsb: null, bankAccountNumber: null }),
+      },
       invoicing: {
         raised: Number(invoiceStats[0]?.count ?? 0),
         lastNumber: invoiceStats[0]?.lastNumber ?? null,
@@ -116,8 +123,8 @@ export const installers = {
         skillId: s.link.skillId,
         name: s.skill.name,
         groupName: s.skill.groupName,
-        rateType: s.link.rateType,
-        rate: s.link.rate,
+        rateType: isAdmin ? s.link.rateType : null,
+        rate: isAdmin ? s.link.rate : null,
         canLead: s.link.canLead,
       })),
       recentTasks: recent,
@@ -190,6 +197,15 @@ export const installers = {
         .where(eq(schema.installers.id, id))
         .returning();
       if (!row) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
+      // One person, one record: name, phone and email live on the login too.
+      const sync = {
+        ...(rest.name !== undefined ? { name: rest.name } : {}),
+        ...(rest.mobile !== undefined ? { phone: rest.mobile } : {}),
+        ...(rest.email != null ? { email: rest.email } : {}),
+      };
+      if (Object.keys(sync).length) {
+        await db.update(schema.profiles).set({ ...sync, updatedAt: new Date() }).where(eq(schema.profiles.installerId, id));
+      }
       return row;
     }),
 
@@ -259,7 +275,7 @@ export const installers = {
     }),
 
   /** Who can legitimately be offered this skill, used by the dispatch pickers. */
-  eligible: adminOnly
+  eligible: staffOnly
     .input(z.object({ skillId: z.number(), date: z.string().optional(), crewSize: z.number().default(1) }))
     .handler(async ({ input }) => {
       const rows = await db
@@ -305,7 +321,7 @@ export const installers = {
     }),
 
   /** Compliance watchlist: insurance or licence expiring inside 60 days. */
-  expiring: adminOnly.handler(async () => {
+  expiring: staffOnly.handler(async () => {
     const soon = new Date();
     soon.setDate(soon.getDate() + 60);
     const rows = await db
@@ -316,7 +332,7 @@ export const installers = {
   }),
 
   /** Availability heat for the week: how many tasks each installer holds per day. */
-  load: adminOnly
+  load: staffOnly
     .input(z.object({ from: z.string(), to: z.string() }))
     .handler(async ({ input }) => {
       const rows = await db
