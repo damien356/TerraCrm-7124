@@ -96,6 +96,8 @@ export type SpecialRow = {
   startsOn: string;
   endsOn: string;
   cancelledAt?: Date | null;
+  /** true = the customer gets the discount. Default false: Terra keeps it. */
+  passOnToCustomer?: boolean;
   source?: string;
   notes?: string;
 };
@@ -123,6 +125,8 @@ export type PricedProduct = {
    */
   sellExGstIfPassedOn: number | null;
   onSpecial: boolean;
+  /** true while a live special is being given to the customer as a lower sell price. */
+  passedOnToCustomer: boolean;
   /** Present only while the window contains today. */
   special: (SpecialRow & { daysLeft: number; endingSoon: boolean; savingPerUnit: number; discountPct: number }) | null;
   /** The most recent special that has already lapsed, so the price change is explainable. */
@@ -165,8 +169,11 @@ export function priceProduct(
    * and the saving stays with Terra. It also means the quoted price does not
    * lurch up the day a special lapses.
    */
-  const sell = standard === null ? null : sellExGst(standard);
-  const extraMargin = live && standard !== null ? round2(standard - live.costPriceExGst) : 0;
+  const passedOn = Boolean(live?.passOnToCustomer);
+  const sell =
+    standard === null ? null : passedOn && live ? sellExGst(live.costPriceExGst) : sellExGst(standard);
+  /** Nothing extra stays with Terra when the customer is given the discount. */
+  const extraMargin = live && standard !== null && !passedOn ? round2(standard - live.costPriceExGst) : 0;
 
   const special = live
     ? {
@@ -208,6 +215,7 @@ export function priceProduct(
     sellIncGst: sell === null ? null : round2(sell * 1.1),
     extraMarginPerUnit: extraMargin,
     sellExGstIfPassedOn: live ? sellExGst(live.costPriceExGst) : null,
+    passedOnToCustomer: passedOn,
     onSpecial: Boolean(live),
     special,
     reverted,
@@ -231,6 +239,9 @@ function priceNote({
 }): string | null {
   if (product.priceOnApplication) return "Price on application — ring the supplier before quoting this.";
   if (product.costPrice === null) return "No price recorded. Confirm with the supplier before quoting.";
+  if (special && special.passOnToCustomer) {
+    return `${special.label}: the saving is passed to the customer, sell ${special.discountPct}% lower until ${special.endsOn}.`;
+  }
   if (special) {
     const when =
       special.daysLeft === 0

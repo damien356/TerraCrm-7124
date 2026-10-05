@@ -5,6 +5,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
 import { sellExGstWithMarkup } from "../lib/pricing";
+import { liveSellFor } from "../lib/live-sell";
 import { suggestProducts } from "../agent/price";
 import { customerCandidates, SAID_DETAILS_NOTE, spokenForQuote, UNMATCHED_NOTE } from "../lib/quote-customer";
 import { forgetNames } from "../lib/memo-context";
@@ -371,7 +372,7 @@ export const quotes = {
         .from(schema.quoteItems)
         .where(eq(schema.quoteItems.quoteId, input.quoteId));
 
-      const unitPrice = product.sellPrice ?? 0;
+      const unitPrice = await liveSellFor(product);
       // Reads the way Damien says it out loud: "Andes Peak in Merida", not a
       // string of dashes. This line goes out on the customer's quote.
       const named = [product.brand, product.range].filter(Boolean).join(" ");
@@ -671,7 +672,7 @@ export const quotes = {
       const [product] = await db.select().from(schema.products).where(eq(schema.products.id, input.productId));
       if (!product) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
 
-      const unitPrice = product.sellPrice ?? 0;
+      const unitPrice = await liveSellFor(product);
       // Compare with the unit he said, not a wrong pick made a moment ago.
       const said = before.flagReason?.match(/^Was ([\d.]+) (\S+), this product sells by/);
       const saidUnit = said?.[2] ?? before.unit;

@@ -20,6 +20,7 @@ export function useProducts(input: {
         range: input.range ?? "",
         search: input.search ?? "",
         onSpecialOnly: input.onSpecialOnly ?? false,
+        limit: 2000,
       },
       staleTime: 15_000,
     }),
@@ -77,4 +78,70 @@ export function useExtendRangeSpecials() {
 }
 export function useSetStandardPrice() {
   return useMutation(useProductMutation("setStandardPrice"));
+}
+
+export type BulkEditInput = {
+  ids: number[];
+  mode: "percent" | "add" | "set";
+  amount: number;
+  rounding: "none" | "5c" | "10c" | "dollar";
+  scaleOtherRates: boolean;
+};
+
+export type BulkSpecialInput = {
+  ids: number[];
+  mode: "percent_off" | "dollar_off" | "set_cost";
+  amount: number;
+  rounding: "none" | "5c" | "10c" | "dollar";
+  label: string;
+  kind: "clearance" | "run_out" | "promo" | "negotiated";
+  startsOn: string;
+  endsOn: string;
+  passOnToCustomer: boolean;
+};
+
+/** Read-only: what a bulk price change WOULD do. Writes nothing. */
+export function useBulkEditPreview(input: BulkEditInput | null) {
+  return useQuery(
+    orpc.products.bulkPriceEditPreview.queryOptions({
+      input: input ?? { ids: [0], mode: "percent", amount: 0, rounding: "none", scaleOtherRates: true },
+      enabled: input !== null,
+      staleTime: 0,
+    }),
+  );
+}
+export function useBulkEditApply() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.products.bulkPriceEditApply.mutationOptions({
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: orpc.products.key() }),
+    }),
+  );
+}
+export function useBulkSpecialPreview(input: BulkSpecialInput | null) {
+  return useQuery(
+    orpc.products.bulkSpecialPreview.queryOptions({
+      input: input ?? {
+        ids: [0],
+        mode: "percent_off",
+        amount: 0,
+        rounding: "none",
+        label: "Special",
+        kind: "promo",
+        startsOn: "2026-01-01",
+        endsOn: "2026-01-01",
+        passOnToCustomer: false,
+      },
+      enabled: input !== null,
+      staleTime: 0,
+    }),
+  );
+}
+export function useBulkSpecialApply() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.products.bulkSpecialApply.mutationOptions({
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: orpc.products.key() }),
+    }),
+  );
 }

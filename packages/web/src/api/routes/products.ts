@@ -21,6 +21,7 @@ import {
   todayISO,
   type SpecialRow,
 } from "../lib/pricing";
+import { editedCost, specialCost } from "../lib/bulk-price";
 
 /**
  * The price book: one row per buyable variant, with dated specials on top.
@@ -111,6 +112,116 @@ function decorate(p: ProductRow, specials: SpecialRow[], today: string) {
     costPerM2: p.unit === "lm" && priced.costExGst !== null ? perM2FromPerLm(priced.costExGst, p.widthM) : null,
     sellPerM2: p.unit === "lm" && priced.sellExGst !== null ? perM2FromPerLm(priced.sellExGst, p.widthM) : null,
     specialsCount: specials.length,
+  };
+}
+
+/* ------------------------------- bulk planners ------------------------------ */
+
+const rounding = z.enum(["none", "5c", "10c", "dollar"]).default("none");
+const idList = z.array(z.number().int()).min(1).max(2000);
+
+const bulkEditInput = z.object({
+  ids: idList,
+  mode: z.enum(["percent", "add", "set"]),
+  amount: z.number(),
+  rounding,
+  /** Percent only: scale the cut-roll and volume rates by the same amount. */
+  scaleOtherRates: z.boolean().default(true),
+});
+
+const bulkSpecialInput = z.object({
+  ids: idList,
+  mode: z.enum(["percent_off", "dollar_off", "set_cost"]),
+  amount: z.number().min(0),
+  rounding,
+  label: z.string().min(1).default("Special"),
+  kind: z.enum(SPECIAL_KINDS).default("promo"),
+  startsOn: isoDate,
+  endsOn: isoDate,
+  /** false = keep the saving as margin. true = customer gets the discount on new quotes. */
+  passOnToCustomer: z.boolean().default(false),
+});
+
+const nameOf = (p: ProductRow) => [p.supplier, p.range, p.colour].filter(Boolean).join(" · ");
+
+async function planPriceEdit(input: z.infer<typeof bulkEditInput>) {
+  const today = todayISO();
+  const products = await db.select().from(schema.products).where(inArray(schema.products.id, input.ids));
+  const specials = await specialsFor(products.map((p) => p.id));
+  const scale = input.mode === "percent" && input.scaleOtherRates;
+
+  const rows = products.map((p) => {
+    const base = { id: p.id, name: nameOf(p), unit: p.unit, oldCost: p.costPrice, oldSell: p.sellPrice };
+    if (p.costPrice === null || p.priceOnApplication) {
+      return { ...base, change: "skip" as const, reason: "No price to change (price on application)", newCost: null, newSell: null, warning: null };
+    }
+    const next = editedCost(p.costPrice, input.mode, input.amount, input.rounding);
+    if (next === null) {
+      return { ...base, change: "skip" as const, reason: "Would go below $0", newCost: null, newSell: null, warning: null };
+    }
+    if (next === p.costPrice) {
+      return { ...base, change: "skip" as const, reason: "Price would not change", newCost: next, newSell: p.sellPrice, warning: null };
+    }
+    const live = (specials.get(p.id) ?? []).find((s) => isSpecialLive(s, today));
+    const warning = live && live.costPriceExGst >= next ? `Live special ($${live.costPriceExGst.toFixed(2)}) is no longer below the new standard` : null;
+    const factor = p.costPrice === 0 ? 1 : next / p.costPrice;
+    return {
+      ...base,
+      change: "change" as const,
+      reason: null,
+      newCost: next,
+      newSell: sellExGst(next),
+      newCutCost: scale && p.cutCostPrice !== null ? round2(p.cutCostPrice * factor) : undefined,
+      newVolumeCost: scale && p.volumeCostPrice !== null ? round2(p.volumeCostPrice * factor) : undefined,
+      warning,
+    };
+  });
+
+  const missing = input.ids.length - products.length;
+  return {
+    rows,
+    willChange: rows.filter((r) => r.change === "change").length,
+    willSkip: rows.filter((r) => r.change === "skip").length + missing,
+    warnings: rows.filter((r) => r.warning).length,
+  };
+}
+
+async function planBulkSpecial(input: z.infer<typeof bulkSpecialInput>) {
+  if (input.endsOn < input.startsOn) {
+    throw new ORPCError("BAD_REQUEST", { message: "The special cannot end before it starts." });
+  }
+  const today = todayISO();
+  const products = await db.select().from(schema.products).where(inArray(schema.products.id, input.ids));
+  const specials = await specialsFor(products.map((p) => p.id));
+
+  const rows = products.map((p) => {
+    const base = { id: p.id, name: nameOf(p), unit: p.unit, oldCost: p.costPrice, oldSell: p.sellPrice };
+    if (p.costPrice === null || p.priceOnApplication) {
+      return { ...base, change: "skip" as const, reason: "No standard price to take a special off", specialCost: null, newSell: null, warning: null };
+    }
+    const cost = specialCost(p.costPrice, input.mode, input.amount, input.rounding);
+    if (cost < 0 || cost >= p.costPrice) {
+      return { ...base, change: "skip" as const, reason: "Special must be below the standard cost", specialCost: cost, newSell: null, warning: null };
+    }
+    const overlap = (specials.get(p.id) ?? []).some(
+      (s) => !s.cancelledAt && s.startsOn <= input.endsOn && input.startsOn <= s.endsOn && s.endsOn >= today,
+    );
+    return {
+      ...base,
+      change: "change" as const,
+      reason: null,
+      specialCost: cost,
+      extraMargin: input.passOnToCustomer ? 0 : round2(p.costPrice - cost),
+      newSell: input.passOnToCustomer ? sellExGst(cost) : p.sellPrice,
+      warning: overlap ? "Already has a special in that window. The cheaper one wins." : null,
+    };
+  });
+
+  return {
+    rows,
+    willChange: rows.filter((r) => r.change === "change").length,
+    willSkip: rows.filter((r) => r.change === "skip").length + (input.ids.length - products.length),
+    warnings: rows.filter((r) => r.warning).length,
   };
 }
 
@@ -571,6 +682,79 @@ export const products = {
       );
       return row;
     }),
+
+  /* ------------------------------ bulk tools ------------------------------
+   * Preview and apply share one planner, so what the confirm screen shows is
+   * exactly what gets written. Apply re-reads the rows and recomputes; it never
+   * trusts prices sent from the browser. */
+
+  bulkPriceEditPreview: adminOnly.input(bulkEditInput).handler(async ({ input }) => planPriceEdit(input)),
+
+  /** Change the STANDARD cost on many variants. Sell follows by the fixed markup chain. */
+  bulkPriceEditApply: adminOnly.input(bulkEditInput).handler(async ({ input, context }) => {
+    const plan = await planPriceEdit(input);
+    const todo = plan.rows.filter((r) => r.change === "change");
+    const actor = context.actor.name || "Office";
+    for (let i = 0; i < todo.length; i += 20) {
+      await Promise.all(
+        todo.slice(i, i + 20).map(async (r) => {
+          await db
+            .update(schema.products)
+            .set({
+              costPrice: r.newCost,
+              sellPrice: r.newSell,
+              ...(r.newCutCost !== undefined ? { cutCostPrice: r.newCutCost } : {}),
+              ...(r.newVolumeCost !== undefined ? { volumeCostPrice: r.newVolumeCost } : {}),
+              updatedAt: new Date(),
+            })
+            .where(eq(schema.products.id, r.id));
+          await logProduct(
+            r.id,
+            "standard_price_changed",
+            `Bulk edit: $${r.oldCost?.toFixed(2)} -> $${r.newCost?.toFixed(2)} per ${r.unit}. Sell $${r.oldSell?.toFixed(2)} -> $${r.newSell?.toFixed(2)}.`,
+            actor,
+          );
+        }),
+      );
+    }
+    return { changed: todo.length, skipped: plan.rows.length - todo.length };
+  }),
+
+  bulkSpecialPreview: adminOnly.input(bulkSpecialInput).handler(async ({ input }) => planBulkSpecial(input)),
+
+  /** Put many variants on special in one go, keeping the profit or giving the customer the discount. */
+  bulkSpecialApply: adminOnly.input(bulkSpecialInput).handler(async ({ input, context }) => {
+    const plan = await planBulkSpecial(input);
+    const todo = plan.rows.filter((r) => r.change === "change");
+    const actor = context.actor.name || "Office";
+    for (let i = 0; i < todo.length; i += 20) {
+      await Promise.all(
+        todo.slice(i, i + 20).map(async (r) => {
+          await db.insert(schema.productSpecials).values({
+            productId: r.id,
+            label: input.label,
+            kind: input.kind,
+            costPriceExGst: r.specialCost!,
+            startsOn: input.startsOn,
+            endsOn: input.endsOn,
+            passOnToCustomer: input.passOnToCustomer,
+            source: "Bulk special in the office",
+          });
+          await logProduct(
+            r.id,
+            "special_created",
+            `${input.label} (bulk) cost $${r.specialCost!.toFixed(2)}/${r.unit}, ${input.startsOn} to ${input.endsOn}. ${
+              input.passOnToCustomer
+                ? `Discount passed to customer, sell $${r.oldSell?.toFixed(2)} -> $${r.newSell?.toFixed(2)} while it runs.`
+                : "Saving kept as margin, sell unchanged."
+            }`,
+            actor,
+          );
+        }),
+      );
+    }
+    return { created: todo.length, skipped: plan.rows.length - todo.length };
+  }),
 
   /**
    * Roll vs cut for ONE variant at a real order quantity.

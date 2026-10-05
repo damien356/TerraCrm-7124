@@ -1210,6 +1210,13 @@ export const productSpecials = sqliteTable(
     endsOn: text("ends_on").notNull(),
     /** Set when the office kills a special early. Window is left intact for history. */
     cancelledAt: integer("cancelled_at", { mode: "timestamp" }),
+    /**
+     * false (default) = Terra keeps the saving as extra margin and the customer
+     * price does not move. true = the discount is handed to the customer: new
+     * quotes mark up off the special cost for as long as the window is live.
+     * Quotes already written are never touched either way.
+     */
+    passOnToCustomer: integer("pass_on_to_customer", { mode: "boolean" }).notNull().default(false),
     /** Which document the special was read off. */
     source: text("source").notNull().default(""),
     notes: text("notes").notNull().default(""),

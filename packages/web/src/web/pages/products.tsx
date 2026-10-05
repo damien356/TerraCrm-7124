@@ -4,7 +4,8 @@ import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading, Stat } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Field, Input } from "../components/ui/field";
+import { Checkbox, Field, Input } from "../components/ui/field";
+import { BulkEditPriceModal, BulkSpecialModal } from "../components/bulk-price";
 import { Modal } from "../components/ui/modal";
 import {
   useCreateSpecial,
@@ -291,15 +292,72 @@ function VariantTable({
   onSelect: (id: number) => void;
 }) {
   const products = useProducts({ supplierId, range, search, onSpecialOnly });
+  const [picked, setPicked] = React.useState<Set<number>>(new Set());
+  const [bulk, setBulk] = React.useState<null | "edit" | "special">(null);
+  // A new search is a new list. Never carry ticks over to rows you cannot see.
+  React.useEffect(() => setPicked(new Set()), [supplierId, range, search, onSpecialOnly]);
+
   if (products.isLoading) return <Loading label="Pricing…" />;
   const rows = products.data ?? [];
   if (!rows.length) return <Empty>Nothing matches that.</Empty>;
 
+  const allTicked = rows.every((r) => picked.has(r.id));
+  const ids = [...picked];
+  const toggle = (id: number) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   return (
     <div className="overflow-x-auto">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-secondary/40 px-4 py-2">
+        <label className="flex cursor-pointer items-center gap-2 text-sm">
+          <Checkbox
+            checked={allTicked}
+            onChange={() => setPicked(allTicked ? new Set() : new Set(rows.map((r) => r.id)))}
+          />
+          {picked.size ? `${picked.size} of ${rows.length} ticked` : `Select all ${rows.length}`}
+        </label>
+        {picked.size ? (
+          <>
+            <Button onClick={() => setBulk("edit")}>Edit price</Button>
+            <Button variant="outline" onClick={() => setBulk("special")}>
+              <Tag className="size-3.5" />
+              On special
+            </Button>
+            <Button variant="ghost" onClick={() => setPicked(new Set())}>
+              Clear
+            </Button>
+          </>
+        ) : (
+          <span className="text-xs text-muted-foreground">Tick products to change their price in bulk.</span>
+        )}
+      </div>
+      <BulkEditPriceModal
+        ids={ids}
+        open={bulk === "edit"}
+        onClose={() => setBulk(null)}
+        onDone={() => {
+          setBulk(null);
+          setPicked(new Set());
+        }}
+      />
+      <BulkSpecialModal
+        ids={ids}
+        open={bulk === "special"}
+        onClose={() => setBulk(null)}
+        onDone={() => {
+          setBulk(null);
+          setPicked(new Set());
+        }}
+      />
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border text-left">
+            <th className="w-10 px-4 py-2" />
             <th className="label-xs px-4 py-2">Colour</th>
             <th className="label-xs px-4 py-2">Variant</th>
             <th className="label-xs px-4 py-2 text-right">Cost today</th>
@@ -316,6 +374,9 @@ function VariantTable({
               onClick={() => onSelect(p.id)}
               className="cursor-pointer transition-colors hover:bg-secondary/50"
             >
+              <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+                <Checkbox checked={picked.has(p.id)} onChange={() => toggle(p.id)} />
+              </td>
               <td className="px-4 py-2.5">
                 <p className="font-medium">{p.colour || "—"}</p>
                 <p className="text-xs text-muted-foreground">
@@ -369,7 +430,7 @@ function VariantTable({
                   <div className="flex flex-col items-start gap-1">
                     <Badge colour={TONE.good}>
                       <TrendingDown className="size-3" />
-                      +{money(p.extraMarginPerUnit)} margin
+                      {p.passedOnToCustomer ? "discount to customer" : `+${money(p.extraMarginPerUnit)} margin`}
                     </Badge>
                     <span className="text-xs" style={{ color: countdownTone(p.special.daysLeft) }}>
                       {countdownLabel(p.special.daysLeft)} · to {prettyDate(p.special.endsOn)}
