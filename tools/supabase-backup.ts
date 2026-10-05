@@ -1,6 +1,6 @@
 /** Run from the app root: bun --env-file=.env tools/supabase-backup.ts */
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { runOffsiteBackup, ensureBucket, sbPut, sbGetJson } from "../packages/web/src/api/lib/offsite-backup";
@@ -21,7 +21,10 @@ catch {
   fs.unlinkSync(lock);
   lockFd = fs.openSync(lock, "wx"); fs.writeSync(lockFd, String(process.pid));
 }
-const stage = mkdtempSync(join(tmpdir(), "terra-offsite-stage-"));
+// Stage on disk. /tmp in this sandbox is held in RAM, and the stage is ~350 MB.
+const stageRoot = join(homedir(), ".cache");
+fs.mkdirSync(stageRoot, { recursive: true });
+const stage = mkdtempSync(join(stageRoot, "terra-offsite-stage-"));
 try {
   const info = await runOffsiteBackup({ source: "sandbox" });
   if (info.postgres !== "ok" || info.media?.failed.length || info.media?.tooBig.length) {

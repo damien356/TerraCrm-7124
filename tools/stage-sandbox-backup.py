@@ -158,12 +158,22 @@ def sanitise(data, name, depth=0):
         with tempfile.TemporaryDirectory() as td:
             a, b = Path(td) / 'raw.db', Path(td) / 'clean.db'
             c = sqlite3.connect(a)
-            try: c.executescript(data.decode('utf8'))
+            try:
+                c.executescript(data.decode('utf8'))
+                ran = True
+            except sqlite3.Error:
+                # A migration that alters tables it does not create cannot run on its own,
+                # so it is not a data dump. Text redaction below still applies. Fail closed
+                # if it writes login rows, which text redaction cannot clean.
+                if re.search(rb'INSERT\s+INTO\s+["`\[]?(account|session|verification|user)\b', data, re.I):
+                    raise ValueError('SQL writes login tables and cannot be checked, review before backup')
+                ran = False
             finally: c.close()
-            sanitise_db(a, b)
-            c = sqlite3.connect(b)
-            try: return ('\n'.join(c.iterdump()) + '\n').encode()
-            finally: c.close()
+            if ran:
+                sanitise_db(a, b)
+                c = sqlite3.connect(b)
+                try: return ('\n'.join(c.iterdump()) + '\n').encode()
+                finally: c.close()
     if data.startswith(b'PK\x03\x04'):
         out = io.BytesIO()
         with zipfile.ZipFile(io.BytesIO(data)) as z, zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as dest:

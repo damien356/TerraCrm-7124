@@ -114,7 +114,7 @@ function ExpiryBanner({ endingWithinDays }: { endingWithinDays: number }) {
     <Card className="mb-4 border-l-[3px] border-l-[#B4342A]">
       <CardHeader
         title="Specials about to run out"
-        subtitle="Your buying price goes back to standard on its own, so the extra margin stops. Extend them if the supplier has rolled the deal over."
+        subtitle="Your buying price goes back to standard on its own, so the extra margin or client discount stops. Extend them if the supplier has rolled the deal over."
         action={
           <Badge colour={TONE.danger}>
             <AlertTriangle className="size-3" />
@@ -1031,7 +1031,7 @@ export default function ProductsPage() {
           label="Buying under standard"
           value={board.data?.counts.live ?? 0}
           tone={board.data?.counts.live ? "success" : "default"}
-          hint="extra margin, sell unchanged"
+          hint="extra margin, or a discount passed on"
         />
         <Stat
           label="Ending within 14 days"

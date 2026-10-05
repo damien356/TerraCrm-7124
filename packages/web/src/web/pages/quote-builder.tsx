@@ -432,6 +432,7 @@ export default function QuoteBuilderPage() {
   const send = useSendQuote();
   const approveDiscount = useApproveDiscount();
   const actor = useBootstrap().data?.actor;
+  const cost = useCostView();
   const accept = useAcceptQuote();
   const decline = useDeclineQuote();
   const revise = useReviseQuote();
