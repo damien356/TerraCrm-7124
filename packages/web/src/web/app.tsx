@@ -21,6 +21,7 @@ import TeamPage from "./pages/team";
 import SuppliersPage from "./pages/suppliers";
 import ProductsPage from "./pages/products";
 import SettingsPage from "./pages/settings";
+import SafetyPage from "./pages/safety";
 import ReviewPage from "./pages/review";
 import ConversationsPage from "./pages/conversations";
 import SupervisorsPage from "./pages/supervisors";
@@ -85,6 +86,7 @@ function App() {
           <Route path="/suppliers" component={SuppliersPage} />
           <Route path="/products" component={ProductsPage} />
           <Route path="/settings" component={SettingsPage} />
+          <Route path="/safety" component={SafetyPage} />
           <Route component={NotFound} />
         </Switch>
       </Layout>

@@ -1,4 +1,68 @@
-# Terra Ops — Runbook
+# Terra Ops runbook
+
+## Current off-site backup, added 5 October 2026
+
+Supabase is a backup copy. The live app still uses Turso and Tigris.
+
+In your Supabase project:
+
+- **Table Editor**, choose schema **terra_backup**. It contains the latest copied business tables. Edits here do not update Terra Ops and are replaced at the next backup.
+- **Storage**, open the private bucket **terra-backup**.
+- **database/latest.sqlite.gz** is the latest restorable database. **database/latest.json** records its time, per-table counts and any errors.
+- **app-files/** contains the photos, videos, PDFs and voice recordings, using their original storage keys.
+- **sandbox/latest.json** maps each backed-up sandbox file to a checksummed, compressed object in **sandbox/objects/**. Historic manifests are retained in **sandbox/manifests/**.
+
+The first complete sandbox copy contains 1,681 files. The final refresh contains 1,684 files. All new objects were downloaded again and their SHA256 checksums verified. A downloaded database passed integrity and row-count checks. Every one of the 55 live storage objects matched its copied checksum.
+
+### What is excluded
+
+Passwords and password hashes, login sessions, verification codes, API keys, access tokens, private signing keys and credential files. Old local database files and ZIPs are sanitised before upload. Credentials in recognised fields and known literals in text are filtered. This is not an infallible detector for a password photographed in an image or spoken in audio.
+
+Dependencies, caches, platform tools, compiled app packages and raw Git history are excluded. Business code, including unfinished code, attachments, price lists, plans, chat histories and sanitised historical database copies are included. Git history stays in Damien's GitHub repository. Android release packages can be rebuilt; keep the private signing key in your own password manager or other secure owner-controlled store.
+
+### Run and verify
+
+From the app folder:
+
+```bash
+bun --env-file=.env tools/supabase-backup.ts
+bun --env-file=.env tools/verify-offsite-backup.ts
+```
+
+The uploader fails if any file cannot be safely copied. It does not mark an incomplete sandbox copy as complete. Unchanged sandbox files are not uploaded again. No automatic pruning is enabled. Retained snapshots consume storage, so monitor project usage and decide a retention period before deleting anything.
+
+The platform's six-hour schedule must be saved by Damien. The published-server backup hook is also built, but not live until Damien publishes. That hook protects the live database and media if the sandbox is lost, not the sandbox-only working files. A scheduled task cannot recover files created after the last successful backup, and no backup guarantees zero data loss.
+
+### Restore the database
+
+1. In Supabase Storage, download **database/latest.sqlite.gz** and **database/latest.json**.
+2. Decompress the `.gz` file to a new SQLite file.
+3. Check `PRAGMA integrity_check` and table counts against the JSON manifest.
+4. A developer can import it into a new Turso database, or use the SQLite file locally. Do not overwrite the live database during a drill.
+5. Recreate credentials securely. Users must reset passwords. Reconnect mail accounts and re-register devices/Siri keys as needed. Sessions and verification codes are intentionally absent.
+6. Restore media from **app-files/** to a replacement bucket with the same keys, then update storage configuration and any permanent URLs. Never put secrets into the backup.
+
+### Restore sandbox files
+
+Use a new, empty destination, never the working app:
+
+```bash
+bun --env-file=.env tools/restore-sandbox-backup.ts /absolute/path/to/empty-folder
+```
+
+To use an older copy, pass its `sandbox/manifests/...json` key as a third argument. The restore checks every checksum and refuses path traversal. Reinstall dependencies and configure fresh secrets before running the restored app.
+
+If the sandbox itself no longer exists, download the manifest in Supabase Storage. For each file entry, download its `object`, gunzip it, verify its SHA256, and save it under the entry's relative path. The manifest format is plain JSON and does not require Runable.
+
+### Plan and limits
+
+At verification, total bucket usage was about 436 MB including pre-existing backups. The new content-addressed sandbox objects used about 136 MB. Free is adequate for setup, not unlimited retained backups. Pro was recommended, not purchased. Pricing: https://supabase.com/pricing.
+
+There are four old test-photo references in live `job_media`, IDs 2 to 5, whose files do not exist in the source bucket. Their keys start `test/demo-completion-`. No real files were removed or invented to replace them. All existing source objects were copied.
+
+## Legacy runbook below
+
+Some account, phase and integration notes below predate the current build. The off-site instructions above and Damien's current rules take precedence. Never use `db:push` on Terra's live database. Inspect, back up, and apply only missing additive SQL.
 
 **Business: Terra Flooring only.** This system holds Terra Flooring data and nothing else. Floors by You and JSL Energy are separate projects with separate systems, separate databases and separate logins. Nothing here links to them, ever.
 
@@ -113,7 +177,7 @@ DATABASE_URL="file:./terra.db" bun run dev
 1. Clone your GitHub repo (step 3) onto any computer or any host — Vercel, Fly, Hetzner, a laptop.
 2. `bun install`
 3. Copy your `.env` values across (keep a printed or password-manager copy of them).
-4. `cd packages/web && bun run db:push` to build the tables in a fresh database, or restore with `restore.sql`.
+4. Restore the backed-up SQLite database or `restore.sql`. Never run `db:push` on the live database.
 5. `bun run dev` for the office app, `bun run dev:mobile` for the installer app.
 
 Nothing in the app requires Runable to be alive. The Runable-specific bits are: the managed login service (`@runablehq/managed-auth`) and the hosting. Both are replaceable — Better Auth, the library underneath, is open source and supports plain email/password plus your own Google credentials. That's a half-day job for a developer, not a rebuild.
@@ -136,7 +200,7 @@ Copy those two values into your password manager today. Everything else in this 
 | Start the office app | `bun run dev` (port 4200) |
 | Start the installer app | `bun run dev:mobile` (port 4300) |
 | Back up everything | `bun run backup` |
-| Push schema changes to the database | `cd packages/web && bun run db:push` |
+| Change the database schema | Inspect first, take a backup, then apply only missing additive SQL. Never `db:push`. |
 | Load demo data again | `cd packages/web && bun --env-file=../../.env src/api/database/seed.ts` (safe to re-run) |
 | Check the code still compiles | `bun run build` |
 

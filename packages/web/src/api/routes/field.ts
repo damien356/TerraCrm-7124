@@ -10,6 +10,7 @@ import { acceptOffer, declineOffer, expireStale, releaseTask } from "./offers";
 import { addLocalDays, todayLocal } from "../lib/local-date";
 import { taskIdsOn } from "../lib/crew-days";
 import { completionPhotosOn, minCompletionPhotos, recheckPhotoFlags } from "../lib/site-visits";
+import { assertSwmsDone, swmsNeededFor } from "../lib/swms";
 
 /**
  * THE INSTALLER API. Every single query here filters by `context.installerId`.
@@ -76,6 +77,8 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
     .from(schema.jobContacts)
     .innerJoin(schema.contacts, eq(schema.contacts.id, schema.jobContacts.contactId))
     .where(inArray(schema.jobContacts.jobId, jobIds));
+  // SWMS: required on the job, and whether I've signed today's.
+  const swms = await swmsNeededFor(installerId, jobIds);
 
   return rows.map((r) => {
     let payBreakdown: Array<{ name: string; unit: string; qty: number; rate: number | null; total: number | null }> | null =
@@ -99,6 +102,8 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
       ...rest,
       isSecond: Number(r.isSecond) === 1,
       payBreakdown,
+      swmsRequired: swms.get(r.jobId)?.required ?? false,
+      swmsSignedToday: swms.get(r.jobId)?.signedToday ?? false,
       contacts: people
         .filter((p) => p.jobId === r.jobId && (p.onSite || p.role === "job_contact" || p.role === "property_manager"))
         .map((p) => ({
@@ -413,6 +418,10 @@ export const field = {
   start: installerOnly.input(z.object({ taskId: z.number() })).handler(async ({ input, context }) => {
     const task = await ownTaskOrThrow(input.taskId, context.installerId);
 
+    // SWMS first, when the job needs one. Geofence arrival still stamps
+    // Arrived, but nobody starts work until today's SWMS is signed.
+    await assertSwmsDone(task.jobId, context.installerId, "start");
+
     // Pre-start damage walk. Either photos of what's already wrong, or an
     // explicit "nothing found". Without one of those the job can't start —
     // this is the bit that wins the argument three weeks later.
@@ -456,6 +465,7 @@ export const field = {
     .input(z.object({ taskId: z.number(), signatureName: z.string().nullable().optional(), notes: z.string().nullable().optional() }))
     .handler(async ({ input, context }) => {
       const task = await ownTaskOrThrow(input.taskId, context.installerId);
+      await assertSwmsDone(task.jobId, context.installerId, "finish");
 
       const required = await db
         .select()

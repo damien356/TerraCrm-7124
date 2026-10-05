@@ -2,6 +2,7 @@ import * as React from "react";
 import { Link, useParams } from "wouter";
 import { ArrowLeft, Pencil } from "lucide-react";
 import { Page } from "../components/layout";
+import { SwmsToggle } from "../components/swms";
 import { Card, CardHeader, Empty, Loading, Spinner, Stat } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -216,6 +217,9 @@ export default function CompanyDetailPage() {
               <Fact label="Billing address">{c.billingAddress ?? "—"}</Fact>
               <Fact label="Credit limit">{c.creditLimit ? money(c.creditLimit) : "None set"}</Fact>
               {c.notes ? <Fact label="Notes">{c.notes}</Fact> : null}
+            </div>
+            <div className="border-t border-border px-4 py-3">
+              <SwmsToggle kind="company" id={c.id} value={Boolean(c.requiresSwms)} />
             </div>
           </Card>
 

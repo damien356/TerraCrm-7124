@@ -17,6 +17,7 @@ import {
   LogOut,
   Mail,
   MapPinned,
+  ShieldCheck,
   Menu,
   Mic,
   PieChart,
@@ -81,6 +82,7 @@ const NAV: NavEntry[] = [
     children: [
       { to: "/schedule", label: "Board", icon: CalendarDays },
       { to: "/crew", label: "Crew map", icon: MapPinned },
+      { to: "/safety", label: "SWMS and SDS", icon: ShieldCheck },
     ],
   },
   {

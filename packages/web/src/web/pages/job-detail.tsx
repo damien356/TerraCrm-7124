@@ -5,6 +5,7 @@ import { Page } from "../components/layout";
 import { MemoButton } from "../components/voice-memo";
 import { JobFile } from "../components/job-file";
 import { JobVisits } from "../components/crew-updates";
+import { SwmsJobCard } from "../components/swms";
 import { JobForecastCard, MeasureUpModal } from "../components/costing";
 import { JobCashCard } from "../components/job-cash";
 import { PurchaseOrdersCard } from "../components/purchase-orders";
@@ -765,6 +766,8 @@ export default function JobDetailPage() {
               </ul>
             )}
           </Card>
+
+          <SwmsJobCard jobId={j.id} />
 
           <JobVisits jobId={j.id} />
 

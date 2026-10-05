@@ -62,6 +62,8 @@ export const companies = sqliteTable(
      */
     doNotMarket: integer("do_not_market", { mode: "boolean" }).notNull().default(false),
     doNotMarketReason: text("do_not_market_reason"),
+    /** Every job for this company needs a signed SWMS before the crew start. */
+    requiresSwms: integer("requires_swms", { mode: "boolean" }).notNull().default(false),
     /** True while a migrated record still needs a human decision. */
     needsReview: integer("needs_review", { mode: "boolean" }).notNull().default(false),
     /** The ServiceM8 company name this came in as. */
@@ -119,6 +121,8 @@ export const contacts = sqliteTable(
      * pool. Unknown plus a trade signal means held back, not mailed.
      */
     audienceKind: text("audience_kind").notNull().default("unknown"),
+    /** Every job for this client needs a signed SWMS before the crew start. */
+    requiresSwms: integer("requires_swms", { mode: "boolean" }).notNull().default(false),
     /** True while a migrated record still needs a human decision. */
     needsReview: integer("needs_review", { mode: "boolean" }).notNull().default(false),
     /** The ServiceM8 client name this came in as, for tracing and re-imports. */
@@ -542,6 +546,8 @@ export const jobs = sqliteTable(
     externalRef: text("external_ref"),
     /** ServiceM8's own job category, e.g. "broadloom carpet install". */
     category: text("category"),
+    /** SWMS override for this job. Null follows the client and company, true or false wins. */
+    requiresSwms: integer("requires_swms", { mode: "boolean" }),
     ...timestamps,
   },
   (t) => [
@@ -2733,4 +2739,68 @@ export const priceFlags = sqliteTable(
     index("price_flags_status_idx").on(t.status),
     index("price_flags_invoice_idx").on(t.invoiceId),
   ],
+);
+
+/* ---------------------------------------------------------------------------
+ * SWMS and the safety document library.
+ *
+ * A SWMS is signed per worker, per job, per work day. The first one on a job
+ * is the full review; later days start from it and are re-confirmed and signed
+ * again. The content is a frozen snapshot of what was ticked, so editing the
+ * hazard library later never rewrites a signed record.
+ * ------------------------------------------------------------------------- */
+
+export const safetyDocs = sqliteTable(
+  "safety_docs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** Which library item this is, e.g. "acouslime-3in1". See lib/swms-library.ts. */
+    code: text("code").notNull(),
+    product: text("product").notNull(),
+    supplier: text("supplier").notNull().default(""),
+    /** sds · pds (a product data sheet is kept, but never counts as the SDS) */
+    kind: text("kind").notNull().default("sds"),
+    revision: text("revision").notNull().default(""),
+    issuedOn: text("issued_on"),
+    /** AU or NZ. An NZ sheet is flagged until the Australian one is on file. */
+    region: text("region").notNull().default("AU"),
+    storageKey: text("storage_key").notNull(),
+    filename: text("filename").notNull().default(""),
+    sizeBytes: integer("size_bytes"),
+    notes: text("notes").notNull().default(""),
+    /** Replaced sheets are kept for old records, just not attached to new ones. */
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    uploadedByName: text("uploaded_by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [index("safety_docs_code_idx").on(t.code, t.active)],
+);
+
+export const swmsRecords = sqliteTable(
+  "swms_records",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    taskId: integer("task_id").references(() => jobTasks.id, { onDelete: "set null" }),
+    installerId: integer("installer_id").references(() => installers.id, { onDelete: "set null" }),
+    installerName: text("installer_name").notNull().default(""),
+    /** Gold Coast date the SWMS covers. */
+    workDate: text("work_date").notNull(),
+    /** full · reconfirm */
+    kind: text("kind").notNull().default("full"),
+    basedOnId: integer("based_on_id"),
+    siteAddress: text("site_address").notNull().default(""),
+    /** JSON snapshot: common hazards and flooring sections, each item ticked or not. */
+    content: text("content").notNull().default("{}"),
+    customHazard: text("custom_hazard").notNull().default(""),
+    signedName: text("signed_name").notNull(),
+    /** JSON strokes from the phone, drawn into the PDF by the server. */
+    signature: text("signature").notNull().default("{}"),
+    /** JSON array of safety_docs ids attached at signing. */
+    sdsDocIds: text("sds_doc_ids").notNull().default("[]"),
+    pdfKey: text("pdf_key"),
+    signedAt: integer("signed_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+    ...timestamps,
+  },
+  (t) => [index("swms_job_day_idx").on(t.jobId, t.workDate), index("swms_installer_idx").on(t.installerId, t.workDate)],
 );

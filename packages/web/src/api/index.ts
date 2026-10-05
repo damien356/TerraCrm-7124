@@ -2,6 +2,7 @@ import type { RouterClient } from "@orpc/server";
 import { createApp } from "./__core/app";
 import { auth } from "./auth";
 import { bootJourneyEngine } from "./lib/journey-boot";
+import { bootOffsiteBackup } from "./lib/offsite-backup-boot";
 import { ping, diag, diagThrow, diagActor } from "./routes/ping";
 import { settings } from "./routes/settings";
 import { contacts } from "./routes/contacts";
@@ -42,6 +43,7 @@ import { purchasing } from "./routes/purchasing";
 import { payables } from "./routes/payables";
 import { priceChecks } from "./routes/price-checks";
 import { mail } from "./routes/mail";
+import { swms } from "./routes/swms";
 import { bootMailAgent } from "./lib/mail-agent";
 import { finishConnect } from "./lib/gmail";
 import { bootReminders } from "./lib/reminders";
@@ -140,6 +142,8 @@ export const router = {
   payables,
   /** Invoice rates that differ from the price list. Damien approves each change. */
   priceChecks,
+  /** SWMS for Terra Crew: signed per worker per day before Start and Complete, plus the SDS library. */
+  swms,
   /** The email agent's three mailboxes. Read only, team@ can also send. */
   mail,
 };
@@ -198,5 +202,7 @@ bootJourneyEngine();
 bootReminders();
 // Reads supplier invoices from billing@, damien@ and team@ every 15 minutes. Same gate.
 bootMailAgent();
+// Copies the database and every stored file to Supabase every 6 hours. Same gate.
+bootOffsiteBackup();
 
 export default app;
