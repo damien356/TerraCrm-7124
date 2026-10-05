@@ -18,6 +18,7 @@ def excluded(rel):
     p = Path(rel)
     if any(part in OMIT_DIRS for part in p.parts): return 'Reinstallable tooling, caches, Git history or private credential stores'
     if p.name.startswith('.env') or p.name in OMIT_NAMES: return 'Credential/configuration file'
+    if 'cookie' in p.name.lower() and p.suffix.lower() in {'', '.txt', '.jar'}: return 'Credential/configuration file'
     if p.suffix.lower() in OMIT_EXT or p.name.endswith(('-wal', '-shm', '-journal')): return 'Credential, compiled output or database sidecar'
     return None
 
@@ -94,6 +95,7 @@ def clean_text(s):
     s = re.sub(r'\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b', '[REDACTED-JWT]', s)
     s = re.sub(r'\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sb_secret_[A-Za-z0-9_-]+|sk-(?:proj-)?[A-Za-z0-9_-]{20,})\b', '[REDACTED-KEY]', s)
     s = re.sub(r'(Bearer\s+)[A-Za-z0-9._~+/=-]+', r'\1[REDACTED]', s, flags=re.I)
+    s = re.sub(r'(session_token(?:=|\t))[A-Za-z0-9._~+/%=-]{8,}', r'\1[REDACTED]', s, flags=re.I)
     s = re.sub(r'(https?://[^\s"\'<>?]+)\?[^\s"\'<>]*X-Amz-Signature[^\s"\'<>]*', r'\1', s, flags=re.I)
     # Only literal assignments, not references to variables in application source.
     s = re.sub(r'((?:password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret)\s*[=:]\s*["\'])([^"\'\n]{8,})(["\'])', r'\1[REDACTED]\3', s, flags=re.I)
