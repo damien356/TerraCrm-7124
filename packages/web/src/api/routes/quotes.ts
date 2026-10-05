@@ -25,6 +25,9 @@ import { createContact } from "./contacts";
 
 const GST_RATE = 0.1;
 
+/** Labour, prep and removal lines are Labour. Everything else is Material. */
+export const lineTypeOf = (kind: string) => (["labour", "prep", "removal"].includes(kind) ? "labour" : "material");
+
 export const DISCOUNT_LIMIT_KEY = "office_discount_limit_percent";
 
 /** Office can discount a quote up to this % without Admin approval. Default 5. */
@@ -44,6 +47,27 @@ export function discountPercentOf(items: { qty: number; unitPrice: number; listU
     off += Math.max(0, l - i.unitPrice) * i.qty;
   }
   return list > 0 ? Math.round((off / list) * 10000) / 100 : 0;
+}
+
+/** Append one history row per product line on this quote. Called when the quote is sent. */
+async function recordPriceHistory(quote: typeof schema.quotes.$inferSelect, byName: string) {
+  const lines = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quote.id));
+  const priced = lines.filter((l) => l.productId && l.unitPrice > 0);
+  if (!priced.length) return;
+  await db.insert(schema.quotePriceHistory).values(
+    priced.map((l) => ({
+      quoteId: quote.id,
+      quoteItemId: l.id,
+      productId: l.productId,
+      contactId: quote.contactId,
+      companyId: quote.companyId,
+      supervisorContactId: quote.supervisorContactId,
+      unit: l.unit,
+      unitPrice: l.unitPrice,
+      quotedByName: byName,
+      source: "quote",
+    })),
+  );
 }
 
 /** Recalculate a quote header from its own line items. Returns the new totals.
@@ -285,6 +309,7 @@ export const quotes = {
             quoteId: row.id,
             productId: item.productId ?? null,
             kind: item.kind,
+            lineType: lineTypeOf(item.kind),
             description: item.description,
             qty: item.qty,
             unit: item.unit,
@@ -393,6 +418,7 @@ export const quotes = {
           quoteId: input.quoteId,
           productId: input.productId ?? null,
           kind: input.kind,
+          lineType: lineTypeOf(input.kind),
           description: input.description,
           qty: input.qty,
           unit: input.unit,
@@ -438,6 +464,7 @@ export const quotes = {
           quoteId: input.quoteId,
           productId: product.id,
           kind: product.category === "labour" ? "labour" : "supply",
+          lineType: product.category === "labour" ? "labour" : "material",
           description: description || product.sku || "Product",
           qty: input.qty,
           unit: product.unit,
@@ -538,6 +565,7 @@ export const quotes = {
         .values({
           quoteId: input.quoteId,
           kind: item.kind === "work" ? "labour" : item.kind === "allowance" ? "other" : "labour",
+          lineType: "labour",
           description: input.description?.trim() || item.name,
           qty: input.qty,
           unit: item.unit,
@@ -578,6 +606,7 @@ export const quotes = {
         flagged: z.boolean().optional(),
         flagReason: z.string().nullable().optional(),
         productId: z.number().nullable().optional(),
+        lineType: z.enum(["material", "labour"]).optional(),
       }),
     )
     .handler(async ({ input, context }) => {
@@ -587,6 +616,7 @@ export const quotes = {
       // Only an Admin can change what Terra pays. Office edits price and quantity only.
       if (context.actor.role !== "admin") delete rest.unitCost;
 
+      if (rest.kind !== undefined && rest.lineType === undefined) rest.lineType = lineTypeOf(rest.kind) as "material" | "labour";
       const qty = rest.qty ?? before.qty;
       const unitPrice = rest.unitPrice ?? before.unitPrice;
       // Remember the price book price the first time a price is hand-edited.
@@ -842,6 +872,7 @@ export const quotes = {
         });
       }
     }
+    await recordPriceHistory(quote, context.actor.name);
     const [row] = await db
       .update(schema.quotes)
       .set({ status: "sent", sentAt: new Date(), updatedAt: new Date() })
@@ -971,6 +1002,7 @@ export const quotes = {
           quoteId: row.id,
           productId: i.productId,
           kind: i.kind,
+          lineType: i.lineType,
           description: i.description,
           qty: i.qty,
           unit: i.unit,

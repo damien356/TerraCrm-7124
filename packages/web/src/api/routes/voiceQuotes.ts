@@ -325,6 +325,7 @@ export async function buildQuoteFromTranscript(
         quoteId: quoteRow.id,
         productId: l.productId,
         kind: l.kind,
+        lineType: ["labour", "prep", "removal"].includes(l.kind) ? "labour" : "material",
         description: l.description,
         qty: l.qty,
         unit: l.unit,

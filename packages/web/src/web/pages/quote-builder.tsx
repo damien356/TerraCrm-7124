@@ -56,6 +56,7 @@ type Item = {
   flagReason?: string | null;
   voicePhrase?: string | null;
   productId?: number | null;
+  lineType?: string;
 };
 
 /* ---------------------------- change product ---------------------------- */
@@ -226,6 +227,15 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
             </option>
           ))}
         </Select>
+        <button
+          type="button"
+          disabled={locked}
+          className="mt-1 text-[11px] text-muted-foreground underline-offset-2 hover:underline disabled:no-underline"
+          title="Tap to switch between Material and Labour"
+          onClick={() => update.mutate({ id: item.id, lineType: item.lineType === "labour" ? "material" : "labour" })}
+        >
+          {item.lineType === "labour" ? "Labour" : "Material"}
+        </button>
       </td>
       <td className="px-2 py-1.5">
         {item.flagged ? (

@@ -1294,6 +1294,8 @@ export const quoteItems = sqliteTable(
     /** Price book price before anyone hand-edited the line. Null = never edited. The gap is the discount. */
     listUnitPrice: real("list_unit_price"),
     unitCost: real("unit_cost"),
+    /** material · labour. Drives split material and labour invoices. Copied from the price book, editable per line. */
+    lineType: text("line_type").notNull().default("material"),
     total: real("total").notNull().default(0),
     sortOrder: integer("sort_order").notNull().default(0),
     /**
@@ -1312,6 +1314,36 @@ export const quoteItems = sqliteTable(
     ...timestamps,
   },
   (t) => [index("quote_items_quote_idx").on(t.quoteId)],
+);
+
+/* ---------------------------------------------------------------------------
+ * Quote price history. One row per product line the moment a quote is SENT, so
+ * "what were they last quoted" never depends on a quote that was later edited.
+ * Append only. Source 'backfill' rows come from quotes that existed before this
+ * table did.
+ * ------------------------------------------------------------------------- */
+
+export const quotePriceHistory = sqliteTable(
+  "quote_price_history",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    quoteId: integer("quote_id").references(() => quotes.id, { onDelete: "set null" }),
+    quoteItemId: integer("quote_item_id"),
+    productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    companyId: integer("company_id").references(() => companies.id, { onDelete: "set null" }),
+    supervisorContactId: integer("supervisor_contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    unit: text("unit").notNull().default("m2"),
+    unitPrice: real("unit_price").notNull(),
+    quotedByName: text("quoted_by_name").notNull().default(""),
+    /** quote · backfill */
+    source: text("source").notNull().default("quote"),
+    quotedAt: integer("quoted_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+  },
+  (t) => [
+    index("qph_company_product_idx").on(t.companyId, t.productId),
+    index("qph_contact_product_idx").on(t.contactId, t.productId),
+  ],
 );
 
 /* ---------------------------------------------------------------------------
