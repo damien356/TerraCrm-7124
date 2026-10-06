@@ -22,6 +22,7 @@ import {
   useUpdateSkill,
   useUpdateStatus,
 } from "../queries/settings";
+import { useCreateSupplier, useSuppliers } from "../queries/suppliers";
 
 const SKILL_GROUPS = Object.keys(SKILL_TINT);
 /**
@@ -853,8 +854,12 @@ function ProductLine({ product }: { product: ProductRow }) {
 
 function NewProductModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const create = useCreateProduct();
+  const suppliers = useSuppliers();
+  const createSupplier = useCreateSupplier();
+  // "" = none picked, "new" = adding one here, otherwise a supplier id.
+  const [supplierPick, setSupplierPick] = React.useState("");
+  const [newSupplierName, setNewSupplierName] = React.useState("");
   const [form, setForm] = React.useState({
-    supplier: "",
     brand: "",
     range: "",
     colour: "",
@@ -873,8 +878,17 @@ function NewProductModal({ open, onClose }: { open: boolean; onClose: () => void
   async function submit() {
     setError(null);
     try {
+      let supplierId: number | null = supplierPick && supplierPick !== "new" ? Number(supplierPick) : null;
+      if (supplierPick === "new") {
+        const name = newSupplierName.trim();
+        if (!name) throw new Error("Type the new supplier's name, or pick one from the list.");
+        const made = await createSupplier.mutateAsync({ name, code: name });
+        supplierId = made.id;
+        setSupplierPick(String(made.id));
+        setNewSupplierName("");
+      }
       await create.mutateAsync({
-        supplier: form.supplier,
+        supplierId,
         brand: form.brand,
         range: form.range,
         colour: form.colour,
@@ -902,16 +916,35 @@ function NewProductModal({ open, onClose }: { open: boolean; onClose: () => void
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={!form.brand.trim() || create.isPending}>
-            {create.isPending ? <Spinner className="border-white/40 border-t-white" /> : null}
+          <Button onClick={submit} disabled={!form.brand.trim() || create.isPending || createSupplier.isPending}>
+            {create.isPending || createSupplier.isPending ? <Spinner className="border-white/40 border-t-white" /> : null}
             Add product
           </Button>
         </>
       }
     >
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Supplier">
-          <Input value={form.supplier} onChange={(e) => set("supplier", e.target.value)} placeholder="Belgotex" />
+        <Field
+          label="Supplier"
+          hint={supplierPick === "new" ? "Saved to your supplier list. Add their email and account number on the Suppliers page." : undefined}
+        >
+          <Select value={supplierPick} onChange={(e) => setSupplierPick(e.target.value)}>
+            <option value="">Choose a supplier</option>
+            {(suppliers.data ?? []).map((sup) => (
+              <option key={sup.id} value={sup.id}>
+                {sup.name}
+              </option>
+            ))}
+            <option value="new">+ Add a new supplier</option>
+          </Select>
+          {supplierPick === "new" ? (
+            <Input
+              className="mt-2"
+              value={newSupplierName}
+              onChange={(e) => setNewSupplierName(e.target.value)}
+              placeholder="New supplier name"
+            />
+          ) : null}
         </Field>
         <Field label="Brand">
           <Input value={form.brand} onChange={(e) => set("brand", e.target.value)} />

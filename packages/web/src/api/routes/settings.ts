@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { asc, eq } from "drizzle-orm";
+import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, authed } from "../middleware/auth";
@@ -150,10 +151,23 @@ export const settings = {
         costPrice: z.number().nullable().optional(),
         sellPrice: z.number().nullable().optional(),
         sku: z.string().nullable().optional(),
+        /** Picked from the supplier list. Wins over the free text name, which is copied from it. */
+        supplierId: z.number().nullable().optional(),
       }),
     )
     .handler(async ({ input }) => {
-      const [row] = await db.insert(schema.products).values(input).returning();
+      // variant_key is UNIQUE and defaults to "", so a second hand-made product
+      // would collide with the first. Give each one its own key.
+      const values = { ...input, variantKey: `manual|${crypto.randomUUID()}` };
+      if (input.supplierId) {
+        const [sup] = await db
+          .select({ name: schema.suppliers.name })
+          .from(schema.suppliers)
+          .where(eq(schema.suppliers.id, input.supplierId));
+        if (!sup) throw new ORPCError("NOT_FOUND", { message: "Supplier not found" });
+        values.supplier = sup.name;
+      }
+      const [row] = await db.insert(schema.products).values(values).returning();
       return row;
     }),
 

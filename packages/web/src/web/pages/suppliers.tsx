@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useSearch } from "wouter";
-import { AlertTriangle, Calculator, Fuel, Plus, Trash2, Truck } from "lucide-react";
+import { AlertTriangle, Calculator, ChevronDown, ChevronUp, Fuel, Mail, Pencil, Plus, Trash2, Truck } from "lucide-react";
 import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -117,7 +117,8 @@ function listAge(value: Date | string | null | undefined) {
 
 function NewSupplierModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const create = useCreateSupplier();
-  const [form, setForm] = React.useState({ name: "", code: "", shipsFrom: "", notes: "" });
+  const blank = { name: "", code: "", shipsFrom: "", email: "", phone: "", accountNumber: "", notes: "" };
+  const [form, setForm] = React.useState(blank);
   const [error, setError] = React.useState<string | null>(null);
 
   async function submit() {
@@ -127,9 +128,12 @@ function NewSupplierModal({ open, onClose }: { open: boolean; onClose: () => voi
         name: form.name,
         code: form.code || form.name,
         shipsFrom: form.shipsFrom || undefined,
+        email: form.email.trim() || undefined,
+        phone: form.phone.trim() || undefined,
+        accountNumber: form.accountNumber.trim() || undefined,
         notes: form.notes,
       });
-      setForm({ name: "", code: "", shipsFrom: "", notes: "" });
+      setForm(blank);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save that supplier");
@@ -157,6 +161,17 @@ function NewSupplierModal({ open, onClose }: { open: boolean; onClose: () => voi
         <Field label="Supplier name">
           <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Terramater" />
         </Field>
+        <Field label="Order email" hint="Purchase orders are emailed here.">
+          <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="orders@supplier.com.au" />
+        </Field>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Phone">
+            <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+          </Field>
+          <Field label="Our account number" hint="Printed on every PO.">
+            <Input value={form.accountNumber} onChange={(e) => setForm({ ...form, accountNumber: e.target.value })} />
+          </Field>
+        </div>
         <Field label="Short code" hint="Used on price-list imports. Leave blank to use the name.">
           <Input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="terramater" />
         </Field>
@@ -407,6 +422,173 @@ function FreightCard({
   );
 }
 
+/* ------------------------------ contact card ------------------------------ */
+
+/**
+ * Who we order from and where POs go. The PO email box and the PO PDF read
+ * these: email is where a PO is sent, account number prints on every PO.
+ */
+function ContactCard({
+  supplier,
+}: {
+  supplier: {
+    id: number;
+    name: string;
+    email: string | null;
+    phone: string | null;
+    accountNumber: string | null;
+    shipsFrom: string | null;
+    active: boolean;
+  };
+}) {
+  const update = useUpdateSupplier();
+  const [saved, setSaved] = React.useState<string | null>(null);
+  type Patch = { name?: string; email?: string | null; phone?: string | null; accountNumber?: string | null; active?: boolean };
+  const save = (patch: Patch, label: string) =>
+    update.mutate(
+      { id: supplier.id, ...patch },
+      { onSuccess: () => setSaved(`${label} saved`), onError: (e) => setSaved(e instanceof Error ? e.message : "Could not save") },
+    );
+
+  return (
+    <Card>
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <Mail className="size-4 text-[var(--gold)]" />
+            {supplier.name}
+          </span>
+        }
+        subtitle={supplier.shipsFrom ? `Ships from ${supplier.shipsFrom}` : "Contact and ordering details"}
+        action={
+          supplier.email ? (
+            <Badge colour="#3F7D3A">POs go to {supplier.email}</Badge>
+          ) : (
+            <Badge colour="#D08A1E">no order email yet</Badge>
+          )
+        }
+      />
+      <div className="grid gap-3 px-4 py-3.5 md:grid-cols-2">
+        <Field label="Supplier name">
+          <Input
+            defaultValue={supplier.name}
+            onBlur={(e) => {
+              const v = e.target.value.trim();
+              if (v && v !== supplier.name) save({ name: v }, "Name");
+            }}
+          />
+        </Field>
+        <Field label="Order email" hint="Purchase orders are emailed here.">
+          <Input
+            type="email"
+            defaultValue={supplier.email ?? ""}
+            placeholder="orders@supplier.com.au"
+            onBlur={(e) => {
+              const v = e.target.value.trim() || null;
+              if (v !== (supplier.email ?? null)) save({ email: v }, "Order email");
+            }}
+          />
+        </Field>
+        <Field label="Phone">
+          <Input
+            defaultValue={supplier.phone ?? ""}
+            onBlur={(e) => {
+              const v = e.target.value.trim() || null;
+              if (v !== (supplier.phone ?? null)) save({ phone: v }, "Phone");
+            }}
+          />
+        </Field>
+        <Field label="Our account number" hint="Printed on every PO.">
+          <Input
+            defaultValue={supplier.accountNumber ?? ""}
+            onBlur={(e) => {
+              const v = e.target.value.trim() || null;
+              if (v !== (supplier.accountNumber ?? null)) save({ accountNumber: v }, "Account number");
+            }}
+          />
+        </Field>
+        <label htmlFor={`sup_active_${supplier.id}`} className="flex items-center gap-2 text-sm md:col-span-2">
+          <Checkbox
+            id={`sup_active_${supplier.id}`}
+            checked={supplier.active}
+            onChange={(e) => save({ active: e.target.checked }, e.target.checked ? "Active" : "Hidden")}
+          />
+          Still buying from them
+          <span className="text-xs text-muted-foreground">Untick to hide them from supplier pick lists.</span>
+        </label>
+        {saved ? <p className="text-xs text-muted-foreground md:col-span-2">{saved}</p> : null}
+      </div>
+    </Card>
+  );
+}
+
+/** Long text folded to two lines, with a toggle to read the rest. */
+function ClampText({ text, className = "" }: { text: string; className?: string }) {
+  const [open, setOpen] = React.useState(false);
+  const long = text.length > 160;
+  return (
+    <div className={className}>
+      <p className={`whitespace-pre-line text-muted-foreground ${open || !long ? "" : "line-clamp-2"}`}>{text}</p>
+      {long ? (
+        <button type="button" className="mt-0.5 font-medium text-[var(--gold)] hover:underline" onClick={() => setOpen((o) => !o)}>
+          {open ? "Show less" : "Show all"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/** Long price list notes, folded to two lines until opened. Editable. */
+function SupplierNotes({ supplierId, notes }: { supplierId: number; notes: string }) {
+  const update = useUpdateSupplier();
+  const [open, setOpen] = React.useState(false);
+  const [editing, setEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState(notes);
+
+  if (editing) {
+    return (
+      <div className="space-y-2 md:col-span-2">
+        <Field label="Notes">
+          <Textarea rows={8} value={draft} onChange={(e) => setDraft(e.target.value)} />
+        </Field>
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="ghost" onClick={() => { setDraft(notes); setEditing(false); }}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            disabled={update.isPending}
+            onClick={() => update.mutate({ id: supplierId, notes: draft }, { onSuccess: () => setEditing(false) })}
+          >
+            Save notes
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-md bg-secondary/50 px-3 py-2 md:col-span-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="label-xs">Notes</p>
+        <div className="flex gap-1">
+          {notes.length > 160 ? (
+            <Button size="sm" variant="ghost" onClick={() => setOpen((o) => !o)}>
+              {open ? <ChevronUp /> : <ChevronDown />} {open ? "Show less" : "Show all"}
+            </Button>
+          ) : null}
+          <Button size="sm" variant="ghost" onClick={() => { setDraft(notes); setEditing(true); }}>
+            <Pencil /> {notes ? "Edit" : "Add notes"}
+          </Button>
+        </div>
+      </div>
+      {notes ? (
+        <p className={`mt-1 whitespace-pre-line text-xs text-muted-foreground ${open ? "" : "line-clamp-2"}`}>{notes}</p>
+      ) : null}
+    </div>
+  );
+}
+
 /* ----------------------------- order cost check --------------------------- */
 
 /**
@@ -422,12 +604,16 @@ function FreightCard({
  */
 function OrderCostCard({
   supplierId,
+  supplierName,
   fees,
 }: {
   supplierId: number;
+  supplierName: string;
   fees: Array<{ id: number; name: string; autoApply: boolean; active: boolean }>;
 }) {
-  const [goods, setGoods] = React.useState("2000");
+  // Closed by default: it is a what-if calculator, not something to fill in.
+  const [open, setOpen] = React.useState(false);
+  const [goods, setGoods] = React.useState("");
   const [m2, setM2] = React.useState("0");
   const [lm, setLm] = React.useState("0");
   const [boxes, setBoxes] = React.useState("0");
@@ -461,15 +647,21 @@ function OrderCostCard({
         title={
           <span className="flex items-center gap-2">
             <Calculator className="size-4 text-[var(--gold)]" />
-            What an order really costs
+            Order cost check
           </span>
         }
-        subtitle="Base, then each of their charges on its own basis, then our transport. GST added once, for display."
+        subtitle={`A calculator only, nothing is saved. Type in an order to see what ${supplierName} really charge once their fuel, baling and freight are added on top of the product price.`}
+        action={
+          <Button size="sm" variant="outline" onClick={() => setOpen((o) => !o)}>
+            {open ? <ChevronUp /> : <ChevronDown />} {open ? "Close" : "Open"}
+          </Button>
+        }
       />
+      {open ? (
       <div className="grid gap-4 px-4 py-3.5 md:grid-cols-2">
         <div className="space-y-3">
-          <Field label="Base material (ex GST)" hint="At the rate that already applies — roll or cut.">
-            <Input type="number" value={goods} onChange={(e) => setGoods(e.target.value)} />
+          <Field label="Product total on the order (ex GST)" hint="What the flooring itself costs at their roll or cut rate, e.g. 2000.">
+            <Input type="number" value={goods} placeholder="2000" onChange={(e) => setGoods(e.target.value)} />
           </Field>
           <div>
             <p className="label-xs mb-1.5">How much is on the order</p>
@@ -559,10 +751,11 @@ function OrderCostCard({
               <p className="mt-2 text-[11px] text-muted-foreground">{cost.data.note}</p>
             </div>
           ) : (
-            <Empty>Enter a base material total.</Empty>
+            <Empty>Enter a product total.</Empty>
           )}
         </div>
       </div>
+      ) : null}
     </Card>
   );
 }
@@ -643,11 +836,12 @@ export default function SuppliersPage() {
               <Loading />
             </Card>
           ) : (
-            <>
+            <React.Fragment key={supplier.id}>
+              <ContactCard supplier={supplier} />
               <Card>
                 <CardHeader
-                  title={supplier.name}
-                  subtitle={supplier.shipsFrom ? `Ships from ${supplier.shipsFrom}` : "Origin not recorded"}
+                  title="Price list"
+                  subtitle="The dates and source of their cost list."
                   action={
                     <Badge colour={listAge(supplier.priceListEffectiveFrom).tone}>
                       Price list: {listAge(supplier.priceListEffectiveFrom).label}
@@ -696,11 +890,7 @@ export default function SuppliersPage() {
                       ) : null}
                     </span>
                   </label>
-                  {supplier.notes ? (
-                    <p className="rounded-md bg-secondary/50 px-3 py-2 text-xs text-muted-foreground md:col-span-2">
-                      {supplier.notes}
-                    </p>
-                  ) : null}
+                  <SupplierNotes supplierId={supplier.id} notes={supplier.notes} />
                 </div>
               </Card>
 
@@ -735,9 +925,7 @@ export default function SuppliersPage() {
                             {f.autoApply ? <Badge colour="#4A7FA5">every order</Badge> : <Badge>optional</Badge>}
                             {windowLapsed(f.effectiveUntil) ? <Badge colour="#B4342A">lapsed</Badge> : null}
                           </div>
-                          {f.condition ? (
-                            <p className="mt-0.5 text-xs text-muted-foreground">{f.condition}</p>
-                          ) : null}
+                          {f.condition ? <ClampText text={f.condition} className="mt-0.5 text-xs" /> : null}
                           {/* Blank end date reads as "until further notice", not as forever. */}
                           <p className="mt-0.5 text-[11px] text-muted-foreground">
                             {windowLabel(f.effectiveFrom, f.effectiveUntil)}
@@ -760,7 +948,7 @@ export default function SuppliersPage() {
                               />
                             </Field>
                           </div>
-                          {f.notes ? <p className="mt-1.5 text-[11px] text-muted-foreground">{f.notes}</p> : null}
+                          {f.notes ? <ClampText text={f.notes} className="mt-1.5 text-[11px]" /> : null}
                         </div>
                         <div className="w-[130px] shrink-0">
                           {f.basis === "percent_of_order" ? (
@@ -799,9 +987,9 @@ export default function SuppliersPage() {
                 )}
               </Card>
 
-              <OrderCostCard supplierId={supplier.id} fees={detail.data?.fees ?? []} />
+              <OrderCostCard supplierId={supplier.id} supplierName={supplier.name} fees={detail.data?.fees ?? []} />
               <NewFeeModal supplierId={supplier.id} open={newFeeOpen} onClose={() => setNewFeeOpen(false)} />
-            </>
+            </React.Fragment>
           )}
         </div>
       </div>
