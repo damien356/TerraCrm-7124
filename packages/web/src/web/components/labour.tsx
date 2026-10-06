@@ -335,7 +335,7 @@ export function LabourRatesTab() {
           Edit mode. Change the name, the note, the skill under it, or what it is priced per (m², lm, each, per job
           and so on). Text saves when you tap out of the box, the dropdowns save straight away. If you change what it
           is priced per, check the rate still makes sense, $40 a lm is not $40 a m². The skill decides which installers
-          see the item on their rate card. The bin deletes the item. Quotes already made keep their own wording and
+          see the item on their rate card, and which section it sits in. The bin deletes the item. Quotes already made keep their own wording and
           price.
         </p>
       ) : null}
@@ -359,6 +359,29 @@ export function LabourRatesTab() {
           </span>
         ) : null}
       </p>
+
+      {book.data && (book.data.drift.itemsNoSkill.length > 0 || book.data.drift.skillsNoItems.length > 0) ? (
+        <Card className="mb-4 border-[var(--gold)]/40 bg-[var(--gold)]/5 px-4 py-3 text-sm">
+          <p className="font-medium">Not lined up with the installer side</p>
+          {book.data.drift.itemsNoSkill.length > 0 ? (
+            <p className="mt-1 text-xs text-foreground/80">
+              <span className="text-foreground">No skill:</span>{" "}
+              {book.data.drift.itemsNoSkill.map((i) => i.name).join(", ")}. With no skill these show on every
+              installer's card, even ones who don't do that work. Turn on edit mode and pick the skill.
+            </p>
+          ) : null}
+          {book.data.drift.skillsNoItems.length > 0 ? (
+            <p className="mt-1 text-xs text-foreground/80">
+              <span className="text-foreground">Skill with nothing priced under it:</span>{" "}
+              {book.data.drift.skillsNoItems.map((i) => i.name).join(", ")}. An installer ticked for these has no
+              work item to be paid for. Add an item under the skill, or switch the skill off in Settings.
+            </p>
+          ) : null}
+          <p className="mt-1 text-xs text-muted-foreground">
+            Loadings, travel and day rates have no skill on purpose, so every installer gets them.
+          </p>
+        </Card>
+      ) : null}
 
       {book.isLoading ? <Loading /> : null}
 
@@ -422,7 +445,11 @@ export function LabourRatesTab() {
                         </div>
                         {row.notes ? <div className="mt-0.5 text-xs text-foreground/80">{row.notes}</div> : null}
                         <div className="mt-0.5 text-xs text-muted-foreground">
-                          {row.skillName ?? "no skill"}
+                          {row.noSkill ? (
+                            <span className="text-[var(--destructive)]">no skill, every installer sees it</span>
+                          ) : (
+                            (row.skillName ?? "no skill")
+                          )}
                           {row.effectiveFrom ? ` · rate set ${row.effectiveFrom}` : ""}
                         </div>
                       </div>
@@ -589,8 +616,14 @@ function DeleteRateItemModal({
 
 function NewRateItemModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const create = useCreateRateItem();
+  const boot = useBootstrap();
+  const skills = (boot.data?.allSkills ?? []).filter((sk) => sk.active);
   const [name, setName] = React.useState("");
+  const [skillId, setSkillId] = React.useState<number | null>(null);
   const [groupName, setGroupName] = React.useState<(typeof RATE_GROUPS)[number]>("carpet");
+  const skill = skills.find((sk) => sk.id === skillId) ?? null;
+  // An item under a skill sits in that skill's section, the server does the same.
+  const lockedGroup = skill && (RATE_GROUPS as readonly string[]).includes(skill.groupName) ? skill.groupName : null;
   const [kind, setKind] = React.useState<(typeof RATE_KINDS)[number]>("work");
   const [unit, setUnit] = React.useState<(typeof RATE_UNITS)[number]>("m2");
   const [error, setError] = React.useState<string | null>(null);
@@ -598,8 +631,15 @@ function NewRateItemModal({ open, onClose }: { open: boolean; onClose: () => voi
   async function submit() {
     setError(null);
     try {
-      await create.mutateAsync({ name: name.trim(), groupName, kind, unit, skillId: null });
+      await create.mutateAsync({
+        name: name.trim(),
+        groupName: (lockedGroup ?? groupName) as (typeof RATE_GROUPS)[number],
+        kind,
+        unit,
+        skillId,
+      });
       setName("");
+      setSkillId(null);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -628,9 +668,30 @@ function NewRateItemModal({ open, onClose }: { open: boolean; onClose: () => voi
         <Field label="What is it">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Carpet stairs, winder" />
         </Field>
+        <Field label="Skill">
+          <Select
+            value={skillId == null ? "" : String(skillId)}
+            onChange={(e) => setSkillId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">No skill (every installer sees it)</option>
+            {skills.map((sk) => (
+              <option key={sk.id} value={sk.id}>
+                {sk.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <p className="-mt-1 text-xs text-muted-foreground">
+          Installers see it on their card when they're ticked for this skill. Leave it blank only for loadings, travel
+          and day rates.
+        </p>
         <div className="grid grid-cols-3 gap-3">
           <Field label="Group">
-            <Select value={groupName} onChange={(e) => setGroupName(e.target.value as never)}>
+            <Select
+              value={lockedGroup ?? groupName}
+              disabled={!!lockedGroup}
+              onChange={(e) => setGroupName(e.target.value as never)}
+            >
               {RATE_GROUPS.map((g) => (
                 <option key={g} value={g}>
                   {g}

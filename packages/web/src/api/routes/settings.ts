@@ -4,6 +4,7 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, authed } from "../middleware/auth";
+import { groupForSkill } from "./labour";
 
 /**
  * Skills, job statuses and key/value settings are editable DATA, never hardcoded
@@ -81,6 +82,14 @@ export const settings = {
         .set({ ...rest, updatedAt: new Date() })
         .where(eq(schema.skills.id, id))
         .returning();
+      // The items under a skill follow it into its new section.
+      const g = row && rest.groupName !== undefined ? await groupForSkill(row.id) : null;
+      if (g) {
+        await db
+          .update(schema.labourRateItems)
+          .set({ groupName: g, updatedAt: new Date() })
+          .where(eq(schema.labourRateItems.skillId, row.id));
+      }
       return row;
     }),
 

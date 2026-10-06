@@ -29,6 +29,27 @@ const KINDS = ["work", "surcharge", "allowance"] as const;
 
 const today = () => new Date().toISOString().slice(0, 10);
 
+/**
+ * An item under a skill always sits in that skill's section, so the price book,
+ * the installer's tick list and his Rates tab group things the same way.
+ * Items with no skill keep the section they were given. Returns null when the
+ * skill's section is not one the rate book knows, so nothing gets forced into
+ * a group it cannot show.
+ */
+export async function groupForSkill(skillId: number | null | undefined): Promise<(typeof GROUPS)[number] | null> {
+  if (skillId == null) return null;
+  const [s] = await db.select({ g: schema.skills.groupName }).from(schema.skills).where(eq(schema.skills.id, skillId));
+  return s && (GROUPS as readonly string[]).includes(s.g) ? (s.g as (typeof GROUPS)[number]) : null;
+}
+
+/**
+ * Work that belongs to everybody on purpose: loadings, travel and day rates.
+ * These carry no skill, so every installer sees them. Anything else with no
+ * skill is a gap and the price book flags it.
+ */
+const isGeneralItem = (i: { kind: string; groupName: string }) =>
+  i.kind !== "work" || i.groupName === "surcharge" || i.groupName === "other";
+
 /** YYYY-MM-DD, one day before the given date. Used to close off the old rate. */
 function dayBefore(date: string) {
   const d = new Date(`${date}T00:00:00Z`);
@@ -162,7 +183,10 @@ export const labour = {
           .from(schema.labourRateItems)
           .orderBy(asc(schema.labourRateItems.sortOrder), asc(schema.labourRateItems.name)),
         loadRates(),
-        db.select({ id: schema.skills.id, name: schema.skills.name }).from(schema.skills),
+        db
+          .select({ id: schema.skills.id, name: schema.skills.name, active: schema.skills.active, sortOrder: schema.skills.sortOrder })
+          .from(schema.skills)
+          .orderBy(asc(schema.skills.sortOrder), asc(schema.skills.id)),
       ]);
       const skillName = new Map(skillRows.map((s) => [s.id, s.name]));
       const needle = (input.search ?? "").trim().toLowerCase();
@@ -185,10 +209,19 @@ export const labour = {
           };
         });
 
+      // Gaps between the two lists, worked out on the whole book, not the search.
+      const live = items.filter((i) => i.active);
+      const usedSkills = new Set(live.map((i) => i.skillId).filter((x): x is number => x != null));
+      const drift = {
+        itemsNoSkill: live.filter((i) => i.skillId == null && !isGeneralItem(i)).map((i) => ({ id: i.id, name: i.name })),
+        skillsNoItems: skillRows.filter((s) => s.active && !usedSkills.has(s.id)).map((s) => ({ id: s.id, name: s.name })),
+      };
+
       return {
         on,
-        rows,
+        rows: rows.map((r) => ({ ...r, noSkill: r.active && r.skillId == null && !isGeneralItem(r) })),
         priced: rows.filter((r) => r.rate != null).length,
+        drift,
         units: UNITS,
         groups: GROUPS,
       };
@@ -243,9 +276,10 @@ export const labour = {
       const [{ max }] = await db
         .select({ max: sql<number>`coalesce(max(sort_order), 0)` })
         .from(schema.labourRateItems);
+      const groupName = (await groupForSkill(input.skillId)) ?? input.groupName;
       const [row] = await db
         .insert(schema.labourRateItems)
-        .values({ ...input, sortOrder: (max ?? 0) + 1 })
+        .values({ ...input, groupName, sortOrder: (max ?? 0) + 1 })
         .returning();
       return row;
     }),
@@ -268,6 +302,16 @@ export const labour = {
     )
     .handler(async ({ input }) => {
       const { id, ...rest } = input;
+      if (rest.skillId !== undefined || rest.groupName !== undefined) {
+        // The skill wins. Picking a skill moves the item into its section, and
+        // an item under a skill cannot be moved out of it by hand.
+        const [cur] = await db
+          .select({ skillId: schema.labourRateItems.skillId })
+          .from(schema.labourRateItems)
+          .where(eq(schema.labourRateItems.id, id));
+        const g = await groupForSkill(rest.skillId !== undefined ? rest.skillId : cur?.skillId);
+        if (g) rest.groupName = g;
+      }
       const [row] = await db
         .update(schema.labourRateItems)
         .set({ ...rest, updatedAt: new Date() })
