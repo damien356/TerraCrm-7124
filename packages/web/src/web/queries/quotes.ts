@@ -11,6 +11,11 @@ export function useQuote(id: number | null) {
   );
 }
 
+/** What deposit % a new quote for this company or contact starts at. */
+export function useDepositDefault(input: { companyId: number | null; contactId: number | null }) {
+  return useQuery(orpc.quotes.depositDefault.queryOptions({ input, staleTime: 10_000 }));
+}
+
 export function useQuoteStats() {
   return useQuery(orpc.quotes.stats.queryOptions({ staleTime: 30_000 }));
 }

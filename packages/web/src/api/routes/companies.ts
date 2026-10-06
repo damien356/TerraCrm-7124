@@ -122,6 +122,8 @@ export const companies = {
         billingAddress: z.string().nullable().optional(),
         paymentTerms: z.number().int().min(0).default(14),
         creditLimit: z.number().nullable().optional(),
+        /** Deposit % new quotes start at. Null = 0 for a builder, 50 otherwise. Admin and Office. */
+        depositPercent: z.number().min(0).max(100).nullable().optional(),
         notes: z.string().nullable().optional(),
       }),
     )
@@ -145,6 +147,8 @@ export const companies = {
         billingAddress: z.string().nullable().optional(),
         paymentTerms: z.number().int().min(0).optional(),
         creditLimit: z.number().nullable().optional(),
+        /** Deposit % new quotes start at. Null = 0 for a builder, 50 otherwise. Admin and Office. */
+        depositPercent: z.number().min(0).max(100).nullable().optional(),
         notes: z.string().nullable().optional(),
         active: z.boolean().optional(),
       }),

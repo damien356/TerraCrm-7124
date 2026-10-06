@@ -5,7 +5,8 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
-import { sellExGstWithMarkup } from "../lib/pricing";
+import { markupOf, markupPctUsed, sellAtMarkup, sellExGstWithMarkup } from "../lib/pricing";
+import { depositDefaultFor, depositSplit } from "../lib/deposits";
 import { liveSellFor } from "../lib/live-sell";
 import { suggestProducts } from "../agent/price";
 import { customerCandidates, SAID_DETAILS_NOTE, spokenForQuote, UNMATCHED_NOTE } from "../lib/quote-customer";
@@ -161,8 +162,8 @@ async function assertSentEditAllowed(
 }
 
 /** Cost is never sent to someone who is not allowed to see it. */
-function hideCost<T extends { unitCost: number | null }>(row: T | undefined, actor: Actor): T | undefined {
-  return row && !actor.canSeeCosts ? { ...row, unitCost: null } : row;
+function hideCost<T extends { unitCost: number | null; markupPercent: number | null }>(row: T | undefined, actor: Actor): T | undefined {
+  return row && !actor.canSeeCosts ? { ...row, unitCost: null, markupPercent: null } : row;
 }
 
 export const quotes = {
@@ -286,7 +287,10 @@ export const quotes = {
       company: row.company,
       site: row.site,
       job: row.job?.id ? row.job : null,
-      items: showCosts ? items : items.map((i) => ({ ...i, unitCost: null })),
+      items: showCosts
+        ? items.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice) }))
+        : items.map((i) => ({ ...i, unitCost: null, markupPercent: null })),
+      ...depositSplit(row.quote.total, row.quote.depositPercent),
       activity,
       versions,
       /** Only for Admin, or Office with the cost switch on. Never expose these through field.ts. */
@@ -295,6 +299,11 @@ export const quotes = {
       estimatedMarginPercent: !showCosts ? null : row.quote.subtotal > 0 ? round2(((row.quote.subtotal - cost) / row.quote.subtotal) * 100) : 0,
     };
   }),
+
+  /** The deposit % a new quote for this company or contact starts at, and why. */
+  depositDefault: staffOnly
+    .input(z.object({ companyId: z.number().nullable().optional(), contactId: z.number().nullable().optional() }))
+    .handler(({ input }) => depositDefaultFor(input)),
 
   create: staffOnly
     .input(
@@ -305,7 +314,8 @@ export const quotes = {
         /** Required when companyId is set. */
         supervisorContactId: z.number().nullable().optional(),
         siteId: z.number().nullable().optional(),
-        depositPercent: z.number().min(0).max(100).default(0),
+        /** Left out, it comes off the company or contact card (lib/deposits.ts). */
+        depositPercent: z.number().min(0).max(100).optional(),
         validDays: z.number().int().min(1).max(365).default(30),
         notes: z.string().nullable().optional(),
         terms: z.string().nullable().optional(),
@@ -340,6 +350,8 @@ export const quotes = {
 
       const validUntil = new Date();
       validUntil.setDate(validUntil.getDate() + input.validDays);
+      const depositPercent =
+        input.depositPercent ?? (await depositDefaultFor({ companyId: input.companyId, contactId: input.contactId })).percent;
 
       const [row] = await db
         .insert(schema.quotes)
@@ -352,7 +364,7 @@ export const quotes = {
           supervisorContactId: input.companyId ? (input.supervisorContactId ?? null) : null,
           siteId: input.siteId ?? null,
           status: "draft",
-          depositPercent: input.depositPercent,
+          depositPercent,
           validUntil,
           notes: input.notes ?? null,
           terms: input.terms ?? settingRow?.value ?? null,
@@ -384,6 +396,7 @@ export const quotes = {
             unitPrice: item.unitPrice,
             listUnitPrice: listPrices[i] ?? null,
             unitCost: context.actor.role === "admin" ? (item.unitCost ?? null) : null,
+            markupPercent: context.actor.role === "admin" ? markupOf(item.unitCost, item.unitPrice) : null,
             total: round2(item.qty * item.unitPrice),
             sortOrder: i,
             flagged: item.flagged,
@@ -514,6 +527,7 @@ export const quotes = {
           unitPrice: input.unitPrice,
           listUnitPrice,
           unitCost: input.unitCost ?? null,
+          markupPercent: markupOf(input.unitCost, input.unitPrice),
           total: round2(input.qty * input.unitPrice),
           sortOrder: Number(maxRow?.max ?? -1) + 1,
           flagged: input.flagged,
@@ -560,6 +574,7 @@ export const quotes = {
           unit: product.unit,
           unitPrice,
           unitCost: product.costPrice ?? null,
+          markupPercent: markupOf(product.costPrice, unitPrice),
           total: round2(input.qty * unitPrice),
           sortOrder: Number(maxRow?.max ?? -1) + 1,
         })
@@ -663,6 +678,7 @@ export const quotes = {
           // charge is folded into the stored total instead.
           unitPrice: sell,
           unitCost: cost,
+          markupPercent: markupPctUsed(item.markupPercent),
           total: lineSell,
           sortOrder: Number(maxRow?.max ?? -1) + 1,
         })
@@ -693,6 +709,8 @@ export const quotes = {
         unit: z.string().optional(),
         unitPrice: z.number().optional(),
         unitCost: z.number().nullable().optional(),
+        /** Admin only. Sets sell from cost. Needs a cost on the line. */
+        markupPercent: z.number().min(-100).max(1000).optional(),
         sortOrder: z.number().int().optional(),
         flagged: z.boolean().optional(),
         flagReason: z.string().nullable().optional(),
@@ -705,16 +723,39 @@ export const quotes = {
       const [before] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, id));
       if (!before) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
       const quote = await editableQuoteOrThrow(before.quoteId);
-      // Only an Admin can change what Terra pays. Office edits price and quantity only.
-      if (context.actor.role !== "admin") delete rest.unitCost;
+      // Only an Admin can change what Terra pays or the markup on it. Office edits price and quantity only.
+      const { markupPercent: markupIn, ...fields } = rest;
+      if (context.actor.role !== "admin") delete fields.unitCost;
+      const setMarkup = context.actor.role === "admin" ? markupIn : undefined;
 
-      if (rest.kind !== undefined && rest.lineType === undefined) rest.lineType = lineTypeOf(rest.kind) as "material" | "labour";
-      const qty = rest.qty ?? before.qty;
-      const unitPrice = rest.unitPrice ?? before.unitPrice;
+      if (fields.kind !== undefined && fields.lineType === undefined) fields.lineType = lineTypeOf(fields.kind) as "material" | "labour";
+      const qty = fields.qty ?? before.qty;
+      const cost = fields.unitCost !== undefined ? fields.unitCost : before.unitCost;
+      const beforeMarkup = before.markupPercent ?? markupOf(before.unitCost, before.unitPrice);
+      /**
+       * Cost, markup and sell move together:
+       *  - markup typed: sell = cost + markup.
+       *  - cost changed on a line that already had a cost and no new sell:
+       *    the markup holds and sell follows it.
+       *  - otherwise sell is what was typed, and the markup is worked back.
+       */
+      let unitPrice = fields.unitPrice ?? before.unitPrice;
+      let markupPercent: number | null;
+      if (setMarkup !== undefined) {
+        if (cost == null || cost <= 0) throw new ORPCError("BAD_REQUEST", { message: "Put a cost on the line first. Markup works off the cost." });
+        unitPrice = sellAtMarkup(cost, setMarkup);
+        markupPercent = setMarkup;
+      } else if (fields.unitCost !== undefined && fields.unitPrice === undefined && before.unitCost != null && beforeMarkup != null && cost != null && cost > 0) {
+        unitPrice = sellAtMarkup(cost, beforeMarkup);
+        markupPercent = beforeMarkup;
+      } else {
+        markupPercent = markupOf(cost, unitPrice);
+      }
+      if (unitPrice !== before.unitPrice) fields.unitPrice = unitPrice;
       // Remember the price book price the first time a price is hand-edited.
       // The gap between it and the new price is the discount.
       const listUnitPrice =
-        rest.unitPrice !== undefined && rest.unitPrice !== before.unitPrice && before.listUnitPrice === null
+        fields.unitPrice !== undefined && fields.unitPrice !== before.unitPrice && before.listUnitPrice === null
           ? before.unitPrice
           : undefined;
       await assertSentEditAllowed(
@@ -725,19 +766,19 @@ export const quotes = {
 
       const [row] = await db
         .update(schema.quoteItems)
-        .set({ ...rest, ...(listUnitPrice !== undefined ? { listUnitPrice } : {}), total: round2(qty * unitPrice), updatedAt: new Date() })
+        .set({ ...fields, markupPercent, ...(listUnitPrice !== undefined ? { listUnitPrice } : {}), total: round2(qty * unitPrice), updatedAt: new Date() })
         .where(eq(schema.quoteItems.id, id))
         .returning();
 
       // A human picking (or confirming) the right product for a line that
       // carries a spoken phrase is exactly the signal worth learning from —
       // next time that phrase comes up, price.ts matches it outright.
-      if (rest.productId != null && before.voicePhrase) {
+      if (fields.productId != null && before.voicePhrase) {
         await db
           .insert(schema.voicePhraseProductMatches)
           .values({
             phrase: before.voicePhrase,
-            productId: rest.productId,
+            productId: fields.productId,
             confirmCount: 1,
             lastConfirmedAt: new Date(),
           })
@@ -878,6 +919,7 @@ export const quotes = {
           unitPrice,
           listUnitPrice: null,
           unitCost: product.costPrice ?? null,
+          markupPercent: markupOf(product.costPrice, unitPrice),
           total: round2(before.qty * unitPrice),
           flagged: Boolean(flagReason),
           flagReason,
@@ -1100,6 +1142,7 @@ export const quotes = {
           unitPrice: i.unitPrice,
           listUnitPrice: i.listUnitPrice,
           unitCost: i.unitCost,
+          markupPercent: i.markupPercent,
           total: i.total,
           sortOrder: idx,
         })),

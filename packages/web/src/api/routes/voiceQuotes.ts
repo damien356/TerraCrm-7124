@@ -9,6 +9,8 @@ import { transcribeAudio } from "../agent/transcribe";
 import { extractVoiceQuote } from "../agent/extract";
 import { priceExtraction } from "../agent/price";
 import { recalc } from "./quotes";
+import { depositDefaultFor } from "../lib/deposits";
+import { markupOf } from "../lib/pricing";
 import { customerCandidates, spokenCustomer, strongMatch } from "../lib/quote-customer";
 
 /**
@@ -312,7 +314,7 @@ export async function buildQuoteFromTranscript(
       contactId,
       companyId,
       status: anyFlagged ? "needs_review" : "draft",
-      depositPercent: 0,
+      depositPercent: (await depositDefaultFor({ companyId, contactId })).percent,
       validUntil,
       notes: notesParts.join("\n\n"),
     })
@@ -331,6 +333,7 @@ export async function buildQuoteFromTranscript(
         unit: l.unit,
         unitPrice: l.unitPrice,
         unitCost: l.unitCost,
+        markupPercent: markupOf(l.unitCost, l.unitPrice),
         total: round2(l.qty * l.unitPrice),
         sortOrder: i,
         flagged: l.flagged,

@@ -3,6 +3,7 @@ import { Link, useParams } from "wouter";
 import { ArrowLeft, Building2, Mail, MapPin, Phone, Trash2 } from "lucide-react";
 import { Page } from "../components/layout";
 import { SwmsToggle } from "../components/swms";
+import { DepositDefault } from "../components/deposit-default";
 import { MemoButton } from "../components/voice-memo";
 import { Card, CardHeader, Empty, Loading, Stat } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -181,6 +182,9 @@ export default function ContactDetailPage() {
             {c.notes ? <p className="mt-3 text-xs text-muted-foreground">{c.notes}</p> : null}
             <div className="mt-3 border-t border-border pt-3">
               <SwmsToggle kind="contact" id={c.id} value={Boolean(c.requiresSwms)} />
+              <div className="mt-3 border-t border-border pt-3">
+                <DepositDefault kind="contact" id={c.id} value={c.depositPercent ?? null} />
+              </div>
             </div>
           </Card>
 

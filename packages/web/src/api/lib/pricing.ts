@@ -58,6 +58,21 @@ export function markupPctUsed(markupPercent: number | null | undefined) {
   return markupPercent === null || markupPercent === undefined ? STANDARD_MARKUP_PCT : round2(markupPercent);
 }
 
+/**
+ * The markup a line actually sits at, worked back from its cost and sell.
+ * Null when there is no cost to work from, because a percentage of nothing
+ * means nothing.
+ */
+export function markupOf(cost: number | null | undefined, sell: number) {
+  if (cost === null || cost === undefined || cost <= 0) return null;
+  return round2((sell / cost - 1) * 100);
+}
+
+/** Cost plus an explicit markup %, for a line someone has set by hand. */
+export function sellAtMarkup(cost: number, markupPercent: number) {
+  return round2(cost * (1 + markupPercent / 100));
+}
+
 /** Today in Brisbane as YYYY-MM-DD, so a window that ends today is still live. */
 export function todayISO(now: Date = new Date()) {
   return new Intl.DateTimeFormat("en-CA", {

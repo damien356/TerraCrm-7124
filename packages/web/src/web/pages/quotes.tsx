@@ -9,7 +9,7 @@ import { Button } from "../components/ui/button";
 import { Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { Combobox } from "../components/ui/combobox";
-import { useCreateQuote, useQuoteStats, useQuotes } from "../queries/quotes";
+import { useCreateQuote, useDepositDefault, useQuoteStats, useQuotes } from "../queries/quotes";
 import { useContacts } from "../queries/contacts";
 import { useCompanies, useSites } from "../queries/companies";
 
@@ -34,6 +34,22 @@ function fmtDate(value: Date | string | null) {
   return d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "2-digit" });
 }
 
+/** Why the deposit box says what it says. */
+export function depositHint(source: string | undefined) {
+  switch (source) {
+    case "company":
+      return "From the company card";
+    case "company_type":
+      return "Company default: 0% for builders, 50% for others";
+    case "contact":
+      return "From the contact card";
+    case "standard":
+      return "Standard 50%";
+    default:
+      return undefined;
+  }
+}
+
 export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [, navigate] = useLocation();
   const contacts = useContacts();
@@ -44,12 +60,18 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
     companyId: "",
     supervisorContactId: "",
     siteId: "",
-    depositPercent: "0",
+    /** Blank until someone types one. Blank means "use the card default". */
+    depositPercent: "",
     validDays: "30",
     notes: "",
   });
   const [error, setError] = React.useState<string | null>(null);
   const sites = useSites(form.contactId ? { contactId: Number(form.contactId) } : {});
+  const depositDefault = useDepositDefault({
+    companyId: form.companyId ? Number(form.companyId) : null,
+    contactId: form.contactId ? Number(form.contactId) : null,
+  });
+  const depositTyped = form.depositPercent.trim() !== "";
 
   function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -67,7 +89,8 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
         companyId: form.companyId ? Number(form.companyId) : null,
         supervisorContactId: form.companyId && form.supervisorContactId ? Number(form.supervisorContactId) : null,
         siteId: form.siteId ? Number(form.siteId) : null,
-        depositPercent: Number(form.depositPercent) || 0,
+        // Not typed: the server takes it off the company or contact card.
+        depositPercent: depositTyped ? Math.min(100, Math.max(0, Number(form.depositPercent) || 0)) : undefined,
         validDays: Number(form.validDays) || 30,
         notes: form.notes || null,
         items: [],
@@ -145,11 +168,13 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
             ))}
           </Select>
         </Field>
-        <Field label="Deposit %">
+        <Field label="Deposit %" hint={depositTyped ? "Typed for this quote only" : depositHint(depositDefault.data?.source)}>
           <Input
             type="number"
-            value={form.depositPercent}
-            onChange={(e) => set("depositPercent", e.target.value)}
+            min={0}
+            max={100}
+            value={depositTyped ? form.depositPercent : String(depositDefault.data?.percent ?? "")}
+            onChange={(e) => set("depositPercent", e.target.value === "" ? "" : e.target.value)}
           />
         </Field>
         <Field label="Valid for (days)">

@@ -187,6 +187,8 @@ export const contacts = {
         source: z.string().optional(),
         notes: z.string().nullable().optional(),
         marketingOptIn: z.boolean().optional(),
+        /** Deposit % new quotes start at when no company is on the quote. Null = 50. */
+        depositPercent: z.number().min(0).max(100).nullable().optional(),
         active: z.boolean().optional(),
       }),
     )

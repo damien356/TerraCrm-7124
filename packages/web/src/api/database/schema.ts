@@ -57,6 +57,8 @@ export const companies = sqliteTable(
     /** Payment terms in days (0 = due on completion). */
     paymentTerms: integer("payment_terms").notNull().default(14),
     creditLimit: real("credit_limit"),
+    /** Deposit % new quotes for this company start at. Null = 0 for a builder, 50 for anyone else. Always beats the contact's. */
+    depositPercent: real("deposit_percent"),
     notes: text("notes"),
     /**
      * Blocks the company and everyone under it from any marketing, including a
@@ -92,6 +94,8 @@ export const contacts = sqliteTable(
     /** website · phone · hipages · referral · repeat · walk-in · other */
     source: text("source").notNull().default("other"),
     notes: text("notes"),
+    /** Deposit % new quotes start at when there is no company on the quote. Null = 50. */
+    depositPercent: real("deposit_percent"),
     /** Marketing consent for CRM campaigns (phase 4). */
     marketingOptIn: integer("marketing_opt_in", { mode: "boolean" }).notNull().default(false),
     /**
@@ -1310,6 +1314,8 @@ export const quoteItems = sqliteTable(
     /** Price book price before anyone hand-edited the line. Null = never edited. The gap is the discount. */
     listUnitPrice: real("list_unit_price"),
     unitCost: real("unit_cost"),
+    /** Markup % this line was priced at (cost -> sell). Null on older lines: work it out from cost and sell. */
+    markupPercent: real("markup_percent"),
     /** material · labour. Drives split material and labour invoices. Copied from the price book, editable per line. */
     lineType: text("line_type").notNull().default("material"),
     total: real("total").notNull().default(0),

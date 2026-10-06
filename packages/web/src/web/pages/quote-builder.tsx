@@ -31,6 +31,12 @@ import { QUOTE_STATUS_COLOUR } from "./quotes";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
 
+/** The price book chain, 1.3 x 1.05 x 1.4, as a markup on cost. Mirrors STANDARD_MARKUP_PCT in api/lib/pricing.ts. */
+const STANDARD_MARKUP = "91.1%";
+
+/** Spec section 6. Shown once a quote is accepted, so the customer can pay the deposit. */
+const BANK = { name: "Arclan Pty Ltd", bsb: "064 844", account: "10102345" };
+
 const KINDS = ["supply", "labour", "prep", "removal", "accessory", "other"];
 const UNITS = ["m2", "lm", "each", "hour", "job"];
 
@@ -51,6 +57,7 @@ type Item = {
   unit: string;
   unitPrice: number;
   unitCost: number | null;
+  markupPercent?: number | null;
   total: number;
   flagged?: boolean;
   flagReason?: string | null;
@@ -201,6 +208,7 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
     qty: String(item.qty),
     unitPrice: String(item.unitPrice),
     unitCost: item.unitCost == null ? "" : String(item.unitCost),
+    markup: item.markupPercent == null ? "" : String(item.markupPercent),
   });
 
   React.useEffect(() => {
@@ -209,8 +217,9 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
       qty: String(item.qty),
       unitPrice: String(item.unitPrice),
       unitCost: item.unitCost == null ? "" : String(item.unitCost),
+      markup: item.markupPercent == null ? "" : String(item.markupPercent),
     });
-  }, [item.id, item.description, item.qty, item.unitPrice, item.unitCost]);
+  }, [item.id, item.description, item.qty, item.unitPrice, item.unitCost, item.markupPercent]);
 
   return (
     <tr className={item.flagged ? "border-b border-border bg-[#D08A1E]/10 last:border-0" : "border-b border-border last:border-0"}>
@@ -237,7 +246,7 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
           {item.lineType === "labour" ? "Labour" : "Material"}
         </button>
       </td>
-      <td className="px-2 py-1.5">
+      <td className="min-w-[240px] px-2 py-1.5">
         {item.flagged ? (
           <span className="mb-1 flex items-center gap-1 text-xs text-[#D08A1E]" title={item.flagReason ?? "Needs review"}>
             <AlertTriangle className="size-3.5" /> {item.flagReason ?? "Needs review"}
@@ -312,10 +321,33 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
           value={draft.unitCost}
           disabled={locked || !cost.edit}
           onChange={(e) => setDraft((d) => ({ ...d, unitCost: e.target.value }))}
-          onBlur={() =>
-            update.mutate({ id: item.id, unitCost: draft.unitCost === "" ? null : Number(draft.unitCost) })
-          }
+          onBlur={() => {
+            const next = draft.unitCost === "" ? null : Number(draft.unitCost);
+            if (next !== item.unitCost) update.mutate({ id: item.id, unitCost: next });
+          }}
         />
+      </td>
+      ) : null}
+      {cost.show ? (
+      <td className="px-2 py-1.5">
+        <div className="flex items-center gap-1">
+          <Input
+            className="tabular h-8 w-[68px] text-right"
+            placeholder={item.unitCost ? "" : "no cost"}
+            title={cost.edit ? "Markup on cost. Changing it sets the sell price." : "Only an Admin can change markup"}
+            value={draft.markup}
+            disabled={locked || !cost.edit || !item.unitCost}
+            onChange={(e) => setDraft((d) => ({ ...d, markup: e.target.value }))}
+            onBlur={() => {
+              if (draft.markup === "" || !Number.isFinite(Number(draft.markup))) {
+                setDraft((d) => ({ ...d, markup: item.markupPercent == null ? "" : String(item.markupPercent) }));
+                return;
+              }
+              if (Number(draft.markup) !== item.markupPercent) update.mutate({ id: item.id, markupPercent: Number(draft.markup) });
+            }}
+          />
+          <span className="text-xs text-muted-foreground">%</span>
+        </div>
       </td>
       ) : null}
       <td className="tabular px-3 py-1.5 text-right font-medium">{money(item.total)}</td>
@@ -332,6 +364,65 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
         )}
       </td>
     </tr>
+  );
+}
+
+/* -------------------------------- deposit -------------------------------- */
+
+/** Deposit % for this quote. Saves when you leave the box, not on every key. */
+function DepositRows({
+  quoteId,
+  percent,
+  deposit,
+  balance,
+  locked,
+  onError,
+}: {
+  quoteId: number;
+  percent: number;
+  deposit: number;
+  balance: number;
+  locked: boolean;
+  onError: (msg: string | null) => void;
+}) {
+  const update = useUpdateQuote();
+  const [draft, setDraft] = React.useState(String(percent));
+  React.useEffect(() => setDraft(String(percent)), [percent]);
+
+  function save() {
+    const n = Number(draft);
+    if (draft.trim() === "" || !Number.isFinite(n) || n < 0 || n > 100) {
+      setDraft(String(percent));
+      onError("Deposit has to be between 0 and 100%.");
+      return;
+    }
+    if (n === percent) return;
+    onError(null);
+    update.mutate({ id: quoteId, depositPercent: n }, { onError: (e) => onError(e.message) });
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2 border-t border-border pt-2">
+        <span className="text-muted-foreground">Deposit</span>
+        <span className="flex items-center gap-2">
+          <Input
+            className="tabular h-8 w-[70px] text-right"
+            inputMode="decimal"
+            value={draft}
+            disabled={locked}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={save}
+            onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+          />
+          <span className="tabular text-muted-foreground">% = {money(deposit)}</span>
+        </span>
+      </div>
+      <div className="flex justify-between">
+        <span className="text-muted-foreground">Balance</span>
+        <span className="tabular">{money(balance)}</span>
+      </div>
+    </>
   );
 }
 
@@ -464,7 +555,6 @@ export default function QuoteBuilderPage() {
   const q = quote.data;
   const locked = q.status === "accepted" || q.status === "declined" || q.status === "expired";
   const customer = q.contact ? `${q.contact.firstName} ${q.contact.lastName}` : q.company ? "" : "No customer yet";
-  const deposit = q.total * (q.depositPercent / 100);
 
   async function run(fn: () => Promise<unknown>) {
     setError(null);
@@ -598,7 +688,7 @@ export default function QuoteBuilderPage() {
             <Empty>No lines yet. Add the supply and the labour. Labour lines become the dispatches on the job.</Empty>
           ) : (
             <div className="board-scroll overflow-x-auto">
-              <table className="w-full min-w-[860px] text-sm">
+              <table className="w-full min-w-[1000px] text-sm">
                 <thead>
                   <tr className="border-b border-border">
                     <th className="th px-2">Kind</th>
@@ -607,6 +697,7 @@ export default function QuoteBuilderPage() {
                     <th className="th px-2">Unit</th>
                     <th className="th px-2 text-right">Sell</th>
                     {cost.show ? <th className="th px-2 text-right">Cost</th> : null}
+                    {cost.show ? <th className="th px-2 text-right" title={`Standard price book markup is ${STANDARD_MARKUP} on cost`}>Markup</th> : null}
                     <th className="th text-right">Line total</th>
                     <th aria-label="Row actions" />
                   </tr>
@@ -644,26 +735,43 @@ export default function QuoteBuilderPage() {
                 <span>Total</span>
                 <span className="tabular">{money(q.total)}</span>
               </div>
-              <div className="flex items-center justify-between gap-2 border-t border-border pt-2">
-                <span className="text-muted-foreground">Deposit</span>
-                <span className="flex items-center gap-2">
-                  <Input
-                    className="tabular h-8 w-[70px] text-right"
-                    value={String(q.depositPercent)}
-                    disabled={locked}
-                    onChange={(e) =>
-                      update.mutate({ id: q.id, depositPercent: Number(e.target.value) || 0 })
-                    }
-                  />
-                  <span className="tabular text-muted-foreground">% = {money(deposit)}</span>
-                </span>
-              </div>
+              <DepositRows
+                quoteId={q.id}
+                percent={q.depositPercent}
+                deposit={q.deposit}
+                balance={q.balance}
+                locked={locked}
+                onError={setError}
+              />
             </div>
           </Card>
 
+          {q.status === "accepted" && q.deposit > 0 ? (
+            <Card>
+              <CardHeader title="Deposit due" subtitle="What the customer pays before we order and book in" />
+              <div className="flex flex-col gap-1.5 px-4 py-3 text-sm">
+                <div className="flex justify-between text-base font-semibold">
+                  <span>{q.depositPercent}% deposit</span>
+                  <span className="tabular">{money(q.deposit)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Balance on completion</span>
+                  <span className="tabular">{money(q.balance)}</span>
+                </div>
+                <div className="mt-2 rounded-md bg-secondary/60 px-3 py-2 text-[13px]">
+                  <p className="font-medium">Bank transfer</p>
+                  <p>Account name: {BANK.name}</p>
+                  <p className="tabular">BSB: {BANK.bsb}</p>
+                  <p className="tabular">Account: {BANK.account}</p>
+                  <p className="tabular">Reference: Quote {q.number}</p>
+                </div>
+              </div>
+            </Card>
+          ) : null}
+
           {cost.show && q.estimatedCost != null ? (
           <Card>
-            <CardHeader title="Your margin" subtitle="Admin only. Installers and customers never see this." />
+            <CardHeader title="Your margin" subtitle="Staff with cost access only. Installers and customers never see this." />
             <div className="flex flex-col gap-2 px-4 py-3 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Estimated cost</span>
