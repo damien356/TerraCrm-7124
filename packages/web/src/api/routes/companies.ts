@@ -1,9 +1,11 @@
 import { z } from "zod";
-import { and, asc, desc, eq, inArray, like, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, like, ne, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { staffOnly } from "../middleware/auth";
+import { depositDefaultOf } from "../lib/deposits";
+import { rebuildForecast } from "../lib/cashflow";
 
 /**
  * Companies are an OPTIONAL wrapper around contacts. A company never owns a
@@ -156,12 +158,28 @@ export const companies = {
     .handler(async ({ input, context }) => {
       const { id, ...rest } = input;
       if (context.actor.role !== "admin") delete rest.creditLimit;
+      const [before] = await db
+        .select({ type: schema.companies.type, depositPercent: schema.companies.depositPercent })
+        .from(schema.companies)
+        .where(eq(schema.companies.id, id));
       const [row] = await db
         .update(schema.companies)
         .set({ ...rest, updatedAt: new Date() })
         .where(eq(schema.companies.id, id))
         .returning();
       if (!row) throw new ORPCError("NOT_FOUND", { message: "Company not found" });
+      // The company form sends every field on save, so compare with before:
+      // only a real change to the deposit or the type touches terms.
+      if (before && (before.depositPercent !== row.depositPercent || before.type !== row.type)) {
+        // One deposit setting: keep the company's payment terms row in step
+        // (progress claims carry their own stages) and redo the forecast.
+        const pct = depositDefaultOf(row, null).percent;
+        await db
+          .update(schema.paymentTerms)
+          .set({ depositPercent: pct, structure: pct > 0 ? "deposit_balance" : "on_completion", updatedAt: new Date() })
+          .where(and(eq(schema.paymentTerms.companyId, id), ne(schema.paymentTerms.structure, "progress_claims")));
+        await rebuildForecast().catch((e) => console.error("[cashflow] rebuild after deposit change failed:", e));
+      }
       return row;
     }),
 };

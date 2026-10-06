@@ -65,6 +65,8 @@ function useFinanceMutation(name: "openingBalanceSet" | "termsSet" | "termsClear
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: orpc.finance.key() });
       queryClient.invalidateQueries({ queryKey: orpc.dashboard.key() });
+      // Terms carry the company's deposit %, the same setting as the card.
+      if (name === "termsSet") queryClient.invalidateQueries({ queryKey: orpc.companies.key() });
     },
   });
 }

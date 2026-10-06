@@ -1224,6 +1224,8 @@ export const quotes = {
           furnitureOnSite: input.furnitureOnSite,
           accessNotes: site?.accessNotes ?? null,
           value: quote.total,
+          // The deposit the customer accepted. Drives the forecast and, later, the invoices.
+          depositAmount: depositSplit(quote.total ?? 0, quote.depositPercent ?? 0).deposit,
         })
         .returning();
 

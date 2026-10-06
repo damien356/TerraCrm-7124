@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { depositDefaultOf } from "./deposits";
 
 /**
  * THE CASHFLOW ENGINE.
@@ -141,18 +142,84 @@ const shape = (row: TermsRow, level: "job" | "company"): ResolvedTerms => ({
 export const defaultTermsFor = (companyId: number | null | undefined): ResolvedTerms =>
   companyId ? COMMERCIAL_DEFAULT : RESIDENTIAL_DEFAULT;
 
-/** Job row wins over company row, company row wins over the default. */
+/**
+ * The deposit % on the company card (or the contact card when there is no
+ * company) is the ONE deposit setting, Damien 2026-10-06. It prefills new
+ * quotes and it drives the forecast. Loaded once per rebuild.
+ */
+export interface DepositMaps {
+  companies: Map<number, { type: string; depositPercent: number | null }>;
+  contacts: Map<number, number>;
+}
+
+export async function loadDepositMaps(): Promise<DepositMaps> {
+  const [cos, cts] = await Promise.all([
+    db
+      .select({ id: schema.companies.id, type: schema.companies.type, depositPercent: schema.companies.depositPercent })
+      .from(schema.companies),
+    db
+      .select({ id: schema.contacts.id, depositPercent: schema.contacts.depositPercent })
+      .from(schema.contacts)
+      .where(sql`${schema.contacts.depositPercent} is not null`),
+  ]);
+  return {
+    companies: new Map(cos.map((c) => [c.id, { type: c.type, depositPercent: c.depositPercent }])),
+    contacts: new Map(cts.map((c) => [c.id, c.depositPercent ?? 0])),
+  };
+}
+
+/** The card deposit % for whoever is paying. */
+export function cardDeposit(
+  deposits: DepositMaps,
+  companyId: number | null | undefined,
+  contactId: number | null | undefined,
+): number {
+  const company = companyId ? deposits.companies.get(companyId) : undefined;
+  const contactPct = contactId ? deposits.contacts.get(contactId) : undefined;
+  return depositDefaultOf(company ?? null, contactPct == null ? null : { depositPercent: contactPct }).percent;
+}
+
+/**
+ * Job row wins over company row, company row wins over the default.
+ *
+ * With `deposits` passed, the company and default levels take their deposit
+ * from the card, and a deposit above 0 means "deposit, then the balance"
+ * while 0 means "one invoice on completion". Progress claims are left alone,
+ * their stages say what is taken when. A job's own terms row is a deliberate
+ * override for that one job and keeps its own figure.
+ */
 export function resolveTerms(
   companyId: number | null | undefined,
   jobId: number | null | undefined,
   byJob: Map<number, TermsRow>,
   byCompany: Map<number, TermsRow>,
+  card?: { deposits: DepositMaps; contactId?: number | null },
 ): ResolvedTerms {
   const j = jobId ? byJob.get(jobId) : undefined;
   if (j) return shape(j, "job");
   const c = companyId ? byCompany.get(companyId) : undefined;
-  if (c) return shape(c, "company");
-  return defaultTermsFor(companyId);
+  const base = c ? shape(c, "company") : defaultTermsFor(companyId);
+  if (!card || base.structure === "progress_claims") return base;
+  const pct = cardDeposit(card.deposits, companyId, card.contactId);
+  return { ...base, depositPercent: pct, structure: pct > 0 ? "deposit_balance" : "on_completion" };
+}
+
+/**
+ * What the customer pays up front on a job. The accepted quote's deposit,
+ * copied onto the job when it was made, wins. Otherwise the terms' %.
+ */
+export function jobDeposit(
+  job: { depositAmount: number; depositPaid: boolean },
+  terms: ResolvedTerms,
+  contract: number,
+): { amount: number; basis: string } {
+  if (job.depositPaid || terms.structure === "progress_claims") return { amount: 0, basis: "" };
+  if (job.depositAmount > 0) return { amount: job.depositAmount, basis: "deposit on the accepted quote, taken before material is ordered" };
+  if (terms.structure !== "deposit_balance") return { amount: 0, basis: "" };
+  return {
+    amount: (contract * (terms.depositPercent ?? 0)) / 100,
+    basis: `${terms.depositPercent}% deposit, taken before material is ordered`,
+  };
 }
 
 export async function loadTermsMaps() {
@@ -250,6 +317,7 @@ export interface RebuildResult {
 export async function rebuildForecast(): Promise<RebuildResult> {
   const now = today();
   const { byJob, byCompany, milestones } = await loadTermsMaps();
+  const deposits = await loadDepositMaps();
 
   const jobRows = await db
     .select({
@@ -327,7 +395,7 @@ export async function rebuildForecast(): Promise<RebuildResult> {
   for (const row of live) {
     const job = row.job;
     const conf = confidenceForStage(row.stage ?? "open", row.statusName ?? "")!;
-    const terms = resolveTerms(job.companyId, job.id, byJob, byCompany);
+    const terms = resolveTerms(job.companyId, job.id, byJob, byCompany, { deposits, contactId: job.contactId });
 
     const start = job.scheduledStart ? iso(job.scheduledStart) : null;
     const completion = job.completedAt
@@ -372,12 +440,7 @@ export async function rebuildForecast(): Promise<RebuildResult> {
     const contract = Math.max(0, (job.value ?? 0) - invoicedTotal);
     if (contract > 0) {
       const retention = (contract * (terms.retentionPercent ?? 0)) / 100;
-      const deposit =
-        terms.structure === "deposit_balance" && !job.depositPaid
-          ? job.depositAmount > 0
-            ? job.depositAmount
-            : (contract * (terms.depositPercent ?? 0)) / 100
-          : 0;
+      const { amount: deposit, basis: depositBasis } = jobDeposit(job, terms, contract);
 
       if (deposit > 0) {
         const when = start ? maxDate(now, addDays(start, -7)) : addDays(now, 7);
@@ -391,7 +454,7 @@ export async function rebuildForecast(): Promise<RebuildResult> {
           label: `Deposit — job ${job.number}`,
           amount: deposit,
           dueDate: when,
-          basis: `${terms.depositPercent}% deposit, taken before material is ordered`,
+          basis: depositBasis,
         });
       }
 
@@ -497,7 +560,7 @@ export async function rebuildForecast(): Promise<RebuildResult> {
   for (const { quote } of quoteRows) {
     if (quote.jobId) continue; // already counted through the job
     if ((quote.total ?? 0) <= 0) continue;
-    const terms = resolveTerms(quote.companyId, null, byJob, byCompany);
+    const terms = resolveTerms(quote.companyId, null, byJob, byCompany, { deposits, contactId: quote.contactId });
     const assumedStart = addDays(now, 21);
     events.push({
       direction: "in",

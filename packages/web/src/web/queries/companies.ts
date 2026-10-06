@@ -28,7 +28,14 @@ export function useCompanyPeople(companyId: number | null, roles?: string[]) {
 function useCompanyMutation(name: "create" | "update") {
   const queryClient = useQueryClient();
   return orpc.companies[name].mutationOptions({
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: orpc.companies.key() }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: orpc.companies.key() });
+      // The card deposit % feeds payment terms and the forecast.
+      if (name === "update") {
+        queryClient.invalidateQueries({ queryKey: orpc.finance.key() });
+        queryClient.invalidateQueries({ queryKey: orpc.dashboard.key() });
+      }
+    },
   });
 }
 

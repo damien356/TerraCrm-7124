@@ -8,9 +8,10 @@ import {
   addDays,
   addMonths,
   costDueDate,
-  defaultTermsFor,
   endOfMonth,
   iso,
+  jobDeposit,
+  loadDepositMaps,
   loadTermsMaps,
   parseIso,
   rebuildForecast,
@@ -347,22 +348,26 @@ export const finance = {
   termsGet: adminOnly
     .input(z.object({ companyId: z.number().optional(), jobId: z.number().optional() }))
     .handler(async ({ input }) => {
-      const { byJob, byCompany, milestones } = await loadTermsMaps();
+      const [{ byJob, byCompany, milestones }, deposits] = await Promise.all([loadTermsMaps(), loadDepositMaps()]);
       let companyId = input.companyId ?? null;
-      if (input.jobId && !companyId) {
+      let contactId: number | null = null;
+      if (input.jobId) {
         const [job] = await db
-          .select({ companyId: schema.jobs.companyId })
+          .select({ companyId: schema.jobs.companyId, contactId: schema.jobs.contactId })
           .from(schema.jobs)
           .where(eq(schema.jobs.id, input.jobId));
-        companyId = job?.companyId ?? null;
+        companyId = companyId ?? job?.companyId ?? null;
+        contactId = job?.contactId ?? null;
       }
-      const resolved = resolveTerms(companyId, input.jobId ?? null, byJob, byCompany);
+      const card = { deposits, contactId };
+      const resolved = resolveTerms(companyId, input.jobId ?? null, byJob, byCompany, card);
       return {
         resolved,
         companyRow: companyId ? (byCompany.get(companyId) ?? null) : null,
         jobRow: input.jobId ? (byJob.get(input.jobId) ?? null) : null,
         milestones: resolved.id ? (milestones.get(resolved.id) ?? []) : [],
-        defaults: defaultTermsFor(companyId),
+        // Terra's standard for this payer, with the deposit off the card.
+        defaults: resolveTerms(companyId, null, new Map(), new Map(), card),
         label: termsLabel(resolved.termsDays, resolved.endOfMonth),
       };
     }),
@@ -409,6 +414,15 @@ export const finance = {
           .insert(schema.paymentTerms)
           .values({ companyId, jobId, ...rest })
           .returning();
+      }
+      // A company's deposit is ONE setting: the % on the company card, which
+      // also prefills new quotes. Saving the terms writes it there. Progress
+      // claims carry their own stages and leave the card alone.
+      if (companyId && input.structure !== "progress_claims") {
+        await db
+          .update(schema.companies)
+          .set({ depositPercent: input.structure === "deposit_balance" ? input.depositPercent : 0, updatedAt: new Date() })
+          .where(eq(schema.companies.id, companyId));
       }
       await rebuildForecast();
       return row;
@@ -490,7 +504,7 @@ export const finance = {
     const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, input.jobId));
     if (!job) throw new ORPCError("NOT_FOUND", { message: "Job not found" });
 
-    const [costs, suppliers, installers, { byJob, byCompany, milestones }] = await Promise.all([
+    const [costs, suppliers, installers, { byJob, byCompany, milestones }, deposits] = await Promise.all([
       db
         .select({
           cost: schema.jobCosts,
@@ -505,9 +519,10 @@ export const finance = {
       db.select({ id: schema.suppliers.id, name: schema.suppliers.name }).from(schema.suppliers),
       db.select({ id: schema.installers.id, name: schema.installers.name }).from(schema.installers),
       loadTermsMaps(),
+      loadDepositMaps(),
     ]);
 
-    const terms = resolveTerms(job.companyId, job.id, byJob, byCompany);
+    const terms = resolveTerms(job.companyId, job.id, byJob, byCompany, { deposits, contactId: job.contactId });
     const start = job.scheduledStart ? iso(job.scheduledStart) : null;
     const completion = job.completedAt ? iso(job.completedAt) : start ? addDays(start, 2) : null;
 
@@ -527,12 +542,7 @@ export const finance = {
       terms.endOfMonth,
       terms.observedDaysLate,
     );
-    const deposit =
-      terms.structure === "deposit_balance" && !job.depositPaid
-        ? job.depositAmount > 0
-          ? job.depositAmount
-          : money(((job.value ?? 0) * terms.depositPercent) / 100)
-        : 0;
+    const deposit = money(jobDeposit(job, terms, job.value ?? 0).amount);
     const outBeforeReceipt = money(
       costs
         .filter((c) => {

@@ -5,6 +5,7 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { staffOnly, type Actor } from "../middleware/auth";
+import { rebuildForecast } from "../lib/cashflow";
 
 export const createContactInput = z.object({
   firstName: z.string().min(1),
@@ -201,6 +202,9 @@ export const contacts = {
         .where(eq(schema.contacts.id, id))
         .returning();
       if (!row) throw new ORPCError("NOT_FOUND", { message: "Contact not found" });
+      if (before && before.depositPercent !== row.depositPercent) {
+        await rebuildForecast().catch((e) => console.error("[cashflow] rebuild after deposit change failed:", e));
+      }
       const emailChanged =
         rest.email !== undefined && before && (before.email ?? "").trim().toLowerCase() !== (rest.email ?? "").trim().toLowerCase();
       if (emailChanged && before?.email && (await isSupervisor(id))) {

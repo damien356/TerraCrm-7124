@@ -19,6 +19,7 @@ function useContactMutation(name: "create" | "update" | "linkCompany" | "unlinkC
       queryClient.invalidateQueries({ queryKey: orpc.contacts.key() });
       queryClient.invalidateQueries({ queryKey: orpc.companies.key() });
       queryClient.invalidateQueries({ queryKey: orpc.intel.key() });
+      queryClient.invalidateQueries({ queryKey: orpc.finance.key() });
     },
   });
 }

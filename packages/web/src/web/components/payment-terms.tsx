@@ -387,7 +387,7 @@ function TermsModal({
         </Field>
 
         {form.structure === "deposit_balance" ? (
-          <Field label="Deposit %" hint="Taken on acceptance, before material is ordered.">
+          <Field label="Deposit %" hint="Same setting as Deposit on new quotes on the company card. Taken on acceptance, before material is ordered.">
             <Input
               type="number"
               min={0}
