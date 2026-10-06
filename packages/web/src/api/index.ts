@@ -13,6 +13,7 @@ import { jobs } from "./routes/jobs";
 import { tasks } from "./routes/tasks";
 import { offers } from "./routes/offers";
 import { quotes } from "./routes/quotes";
+import { quoteBundles } from "./routes/quoteBundles";
 import { field } from "./routes/field";
 import { installerInvoices } from "./routes/installerInvoices";
 import { upload } from "./routes/upload";
@@ -69,6 +70,7 @@ export const router = {
   tasks,
   offers,
   quotes,
+  quoteBundles,
   /** Damien dictates a job note on site, this turns the recording into a draft quote. */
   voiceQuotes,
   /** Voice memos: from a job card, a client record, or the global mic. One router, any action. */

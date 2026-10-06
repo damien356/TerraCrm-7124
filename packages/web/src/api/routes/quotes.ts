@@ -13,6 +13,7 @@ import { customerCandidates, SAID_DETAILS_NOTE, spokenForQuote, UNMATCHED_NOTE }
 import { forgetNames } from "../lib/memo-context";
 import { normaliseMobile } from "../lib/sms";
 import { createContact } from "./contacts";
+import { bundlesFor, copyBundles } from "./quoteBundles";
 
 /**
  * Quotes are for Admin and Office. Field crew must never reach any procedure
@@ -245,7 +246,7 @@ export const quotes = {
 
     if (!row) throw new ORPCError("NOT_FOUND", { message: "Quote not found" });
 
-    const [items, activity, versions] = await Promise.all([
+    const [items, activity, versions, bundleView] = await Promise.all([
       db
         .select()
         .from(schema.quoteItems)
@@ -268,6 +269,7 @@ export const quotes = {
         .from(schema.quotes)
         .where(eq(schema.quotes.number, row.quote.number))
         .orderBy(desc(schema.quotes.version)),
+      bundlesFor(row.quote),
     ]);
 
     const cost = items.reduce((sum, i) => sum + (i.unitCost ?? 0) * (i.qty ?? 0), 0);
@@ -293,6 +295,8 @@ export const quotes = {
       ...depositSplit(row.quote.total, row.quote.depositPercent),
       activity,
       versions,
+      /** What the client sees: titles, wording and totals only. */
+      bundles: bundleView.bundles,
       /** Only for Admin, or Office with the cost switch on. Never expose these through field.ts. */
       estimatedCost: showCosts ? round2(cost) : null,
       estimatedMargin: showCosts ? round2(row.quote.subtotal - cost) : null,
@@ -1124,6 +1128,7 @@ export const quotes = {
         validUntil: quote.validUntil,
         notes: quote.notes,
         terms: quote.terms,
+        bundleMode: quote.bundleMode,
       })
       .returning();
 
@@ -1144,11 +1149,13 @@ export const quotes = {
           unitCost: i.unitCost,
           markupPercent: i.markupPercent,
           total: i.total,
+          floorCategory: i.floorCategory,
           sortOrder: idx,
         })),
       );
     }
 
+    await copyBundles(quote.id, row.id);
     const totals = await recalc(row.id);
 
     await db.insert(schema.activityLog).values({

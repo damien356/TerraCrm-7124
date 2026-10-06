@@ -11,6 +11,7 @@ import { Modal } from "../components/ui/modal";
 import { LabourPicker, ProductPicker } from "../components/quote-pickers";
 import { SupervisorPicker } from "../components/supervisor-picker";
 import { QuoteCustomerPanel } from "../components/quote-customer";
+import { QuoteBundlesCard } from "../components/quote-bundles";
 import {
   useAcceptQuote,
   useAddQuoteItem,
@@ -679,6 +680,7 @@ export default function QuoteBuilderPage() {
       ) : null}
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="flex min-w-0 flex-col gap-4">
         <Card>
           <CardHeader
             title="Lines"
@@ -718,6 +720,9 @@ export default function QuoteBuilderPage() {
             </>
           )}
         </Card>
+
+        <QuoteBundlesCard quote={q} locked={locked} />
+        </div>
 
         <div className="flex flex-col gap-4">
           <Card>
