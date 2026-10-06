@@ -1294,6 +1294,8 @@ export const quotes = sqliteTable(
     terms: text("terms"),
     sentAt: integer("sent_at", { mode: "timestamp" }),
     acceptedAt: integer("accepted_at", { mode: "timestamp" }),
+    /** combined = one client bundle for the whole quote. split = one per floor type, plus one for other work. */
+    bundleMode: text("bundle_mode").notNull().default("combined"),
     ...timestamps,
   },
   (t) => [index("quotes_contact_idx").on(t.contactId), unique("quotes_number_version_unique").on(t.number, t.version)],
@@ -1333,9 +1335,53 @@ export const quoteItems = sqliteTable(
      * product) can be learned against the exact words that produced it.
      */
     voicePhrase: text("voice_phrase"),
+    /** Which client bundle this line sits in when the quote is split. Null = worked out from product category and kind. */
+    floorCategory: text("floor_category"),
     ...timestamps,
   },
   (t) => [index("quote_items_quote_idx").on(t.quoteId)],
+);
+
+/* ---------------------------------------------------------------------------
+ * Client bundles. The client only ever sees a bundle's title, wording and
+ * total. Never qty, m2, rates or line prices.
+ * ------------------------------------------------------------------------- */
+export const quoteBundles = sqliteTable(
+  "quote_bundles",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    quoteId: integer("quote_id").notNull().references(() => quotes.id, { onDelete: "cascade" }),
+    /** 'all' in combined mode, else a floor category or 'extras'. */
+    bundleKey: text("bundle_key").notNull(),
+    title: text("title").notNull().default(""),
+    wording: text("wording").notNull().default(""),
+    /** ai · manual · '' (never written) */
+    wordingSource: text("wording_source").notNull().default(""),
+    /** Signature of the lines the wording was written for. Different from now = stale. */
+    lineSignature: text("line_signature").notNull().default(""),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [unique("quote_bundles_quote_key_uq").on(t.quoteId, t.bundleKey)],
+);
+
+/** Quote agent chat, saved per quote. */
+export const quoteAgentMessages = sqliteTable(
+  "quote_agent_messages",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    quoteId: integer("quote_id").notNull().references(() => quotes.id, { onDelete: "cascade" }),
+    userId: text("user_id"),
+    userName: text("user_name").notNull().default(""),
+    /** user · assistant */
+    role: text("role").notNull(),
+    content: text("content").notNull().default(""),
+    /** JSON list of proposed changes the user can Apply. Null = plain answer. */
+    proposal: text("proposal"),
+    appliedAt: integer("applied_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+  },
+  (t) => [index("quote_agent_messages_quote_idx").on(t.quoteId, t.id)],
 );
 
 /* ---------------------------------------------------------------------------
