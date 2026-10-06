@@ -12,6 +12,7 @@ import { LabourPicker, ProductPicker } from "../components/quote-pickers";
 import { SupervisorPicker } from "../components/supervisor-picker";
 import { QuoteCustomerPanel } from "../components/quote-customer";
 import { QuoteBundlesCard } from "../components/quote-bundles";
+import { QuoteAgentCard } from "../components/quote-agent";
 import {
   useAcceptQuote,
   useAddQuoteItem,
@@ -720,6 +721,8 @@ export default function QuoteBuilderPage() {
             </>
           )}
         </Card>
+
+        <QuoteAgentCard quoteId={q.id} locked={locked} />
 
         <QuoteBundlesCard quote={q} locked={locked} />
         </div>

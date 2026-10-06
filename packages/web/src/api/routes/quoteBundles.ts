@@ -63,7 +63,7 @@ export async function bundlesFor(quote: { id: number; bundleMode: string }) {
   return { lines, bundles: buildBundles(quote.bundleMode, lines, saved) };
 }
 
-async function saveBundle(
+export async function saveBundle(
   quoteId: number,
   key: string,
   patch: { title?: string; wording?: string; wordingSource?: string; lineSignature?: string },

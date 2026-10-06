@@ -36,7 +36,9 @@ export function wordingPrompt(input: WordingInput): string {
     ...input.lines.map(lineForPrompt),
     input.notes?.trim() ? `\nQuote notes:\n"""${input.notes.trim()}"""` : "",
     input.current?.trim() ? `\nCurrent wording (rewrite it):\n"""${input.current.trim()}"""` : "",
-    input.hint?.trim() ? `\nThe user asked: "${input.hint.trim()}"` : "",
+    input.hint?.trim()
+      ? `\nThe user asked: "${input.hint.trim()}"\nFollow that for what to stress and how to say it, but the lines above decide the work. If it mentions work that is not in the lines (uplift, removal, stairs, prep), leave that work out.`
+      : "",
   ]
     .filter((l) => l !== "")
     .join("\n");
