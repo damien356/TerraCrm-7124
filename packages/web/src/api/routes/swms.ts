@@ -3,7 +3,7 @@ import { and, asc, desc, eq, inArray, lt, ne } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly, installerOnly } from "../middleware/auth";
+import { installerOnly, staffOnly } from "../middleware/auth";
 import { putObject, signGet, signPut } from "../lib/s3";
 import { addLocalDays, todayLocal } from "../lib/local-date";
 import {
@@ -25,7 +25,7 @@ import { ownTaskOrThrow } from "./field";
  * SWMS for Terra Crew, plus the SDS library it attaches.
  *
  * Crew side (installerOnly): load the form for one of MY tasks, sign it.
- * Office side (adminOnly): turn it on per client, company or job, see who has
+ * Office side (staffOnly, Admin or Office): turn it on per client, company or job, see who has
  * signed, and keep the safety data sheets current.
  */
 
@@ -282,7 +282,7 @@ export const swms = {
   /* ----------------------------- office side ---------------------------- */
 
   /** The SWMS panel on a job: is it on, why, and every signed record. */
-  job: adminOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
+  job: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
     const req = (await swmsRequirement([input.jobId])).get(input.jobId);
     if (!req) throw new ORPCError("NOT_FOUND", { message: "Job not found" });
     const records = await db
@@ -305,7 +305,7 @@ export const swms = {
   }),
 
   /** Null follows the client and company, true or false overrides. */
-  setJob: adminOnly
+  setJob: staffOnly
     .input(z.object({ jobId: z.number(), requiresSwms: z.boolean().nullable() }))
     .handler(async ({ input, context }) => {
       await db
@@ -329,7 +329,7 @@ export const swms = {
       return (await swmsRequirement([input.jobId])).get(input.jobId)!;
     }),
 
-  setContact: adminOnly
+  setContact: staffOnly
     .input(z.object({ contactId: z.number(), requiresSwms: z.boolean() }))
     .handler(async ({ input }) => {
       await db
@@ -339,7 +339,7 @@ export const swms = {
       return { ok: true };
     }),
 
-  setCompany: adminOnly
+  setCompany: staffOnly
     .input(z.object({ companyId: z.number(), requiresSwms: z.boolean() }))
     .handler(async ({ input }) => {
       await db
@@ -350,7 +350,7 @@ export const swms = {
     }),
 
   /** Who is booked on a SWMS job each day, and whether they've signed. */
-  board: adminOnly
+  board: staffOnly
     .input(z.object({ from: z.string().optional(), to: z.string().optional() }).default({}))
     .handler(async ({ input }) => {
       const today = todayLocal();
@@ -361,7 +361,7 @@ export const swms = {
     }),
 
   /** One signed record with its PDF link, for the board. */
-  record: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  record: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
     const [r] = await db.select().from(schema.swmsRecords).where(eq(schema.swmsRecords.id, input.id));
     if (!r) throw new ORPCError("NOT_FOUND", { message: "Not found" });
     return recordWithLinks(r);
@@ -369,7 +369,7 @@ export const swms = {
 
   /* ------------------------------ SDS library --------------------------- */
 
-  docs: adminOnly.handler(async () => {
+  docs: staffOnly.handler(async () => {
     const rows = await db
       .select()
       .from(schema.safetyDocs)
@@ -384,7 +384,7 @@ export const swms = {
     };
   }),
 
-  docUploadUrl: adminOnly
+  docUploadUrl: staffOnly
     .input(z.object({ filename: z.string().min(1), contentType: z.string().default("application/pdf") }))
     .handler(async ({ input }) => {
       const safe = input.filename.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-60);
@@ -393,7 +393,7 @@ export const swms = {
     }),
 
   /** Save an uploaded sheet. A new SDS for a code retires the old one for new SWMS. */
-  docSave: adminOnly
+  docSave: staffOnly
     .input(
       z.object({
         code: z.string().refine((c) => SDS_CATALOGUE.some((x) => x.code === c), "Unknown product"),
@@ -430,7 +430,7 @@ export const swms = {
       return row!;
     }),
 
-  docArchive: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  docArchive: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
     await db.update(schema.safetyDocs).set({ active: false, updatedAt: new Date() }).where(eq(schema.safetyDocs.id, input.id));
     return { ok: true };
   }),

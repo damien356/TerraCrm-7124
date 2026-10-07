@@ -132,20 +132,37 @@ export default function TaskScreen() {
     void Linking.openURL(url);
   }
 
+  const swmsDue = t.swmsRequired && !t.swmsSignedToday;
+
+  /** Today's SWMS first on a SWMS job. Signing from Start goes straight on to start it. */
+  function openSwms(then?: "start") {
+    router.push(then ? `/task/swms/${t!.id}?then=${then}` : `/task/swms/${t!.id}`);
+  }
+
+  /** The server has the final say: if it still wants a SWMS, take them to it. */
+  function swmsNeeded(e: unknown) {
+    const data = (e as { data?: { swmsNeeded?: boolean } } | null)?.data;
+    return Boolean(data?.swmsNeeded) || (e instanceof Error && e.message.startsWith("SWMS needed"));
+  }
+
   async function onStart() {
     setError(null);
+    if (swmsDue) return openSwms("start");
     try {
       await start.mutateAsync({ taskId: t!.id });
     } catch (e) {
+      if (swmsNeeded(e)) return openSwms("start");
       setError(e instanceof Error ? e.message : "Couldn't start that.");
     }
   }
 
   async function onFinish() {
     setError(null);
+    if (swmsDue) return openSwms();
     try {
       await finish.mutateAsync({ taskId: t!.id });
     } catch (e) {
+      if (swmsNeeded(e)) return openSwms();
       setError(e instanceof Error ? e.message : "Couldn't finish that.");
     }
   }
@@ -305,6 +322,37 @@ export default function TaskScreen() {
               Note sent to the office.
             </Text>
           </View>
+        ) : null}
+
+        {t.swmsRequired && !done ? (
+          <Pressable
+            onPress={() => openSwms()}
+            style={({ pressed }) => ({
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 11,
+              backgroundColor: swmsDue ? "#FBEDD8" : "#E4F0E2",
+              borderRadius: 12,
+              padding: 13,
+              marginTop: 14,
+              opacity: pressed ? 0.75 : 1,
+            })}
+          >
+            <Ionicons
+              name={swmsDue ? "shield-outline" : "shield-checkmark"}
+              size={22}
+              color={swmsDue ? "#8A5A11" : "#2F5F2B"}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontFamily: Fonts.bold, fontSize: 14.5, color: swmsDue ? "#8A5A11" : "#2F5F2B" }}>
+                {swmsDue ? "SWMS needed today" : "SWMS signed for today"}
+              </Text>
+              <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: swmsDue ? "#8A5A11" : "#2F5F2B", marginTop: 1 }}>
+                {swmsDue ? "Sign it before you start. About a minute." : "Tap to see it or open the PDF."}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={swmsDue ? "#8A5A11" : "#2F5F2B"} />
+          </Pressable>
         ) : null}
 
         <SiteVisitCard taskId={t.id} live={t.status === "assigned" || t.status === "in_progress"} />
@@ -664,7 +712,7 @@ export default function TaskScreen() {
               <ActivityIndicator color="#FFFFFF" />
             ) : (
               <Text style={{ fontFamily: Fonts.bold, fontSize: 16.5, color: "#FFFFFF" }}>
-                {running ? "Finish this job" : "Start this job"}
+                {running ? "Finish this job" : swmsDue ? "Sign SWMS and start" : "Start this job"}
               </Text>
             )}
           </Pressable>

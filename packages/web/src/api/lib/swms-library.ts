@@ -26,8 +26,10 @@ export type SwmsSection = {
 };
 
 export const SECTION_KEYS = [
+  "removal",
   "timber",
   "moisture_seal",
+  "sanding_coating",
   "carpet_broadloom",
   "carpet_tiles",
   "hybrid",
@@ -80,6 +82,45 @@ export const COMMON_HAZARDS: SwmsItem[] = [
 ];
 
 export const SECTIONS: Record<SectionKey, SwmsSection> = {
+  removal: {
+    key: "removal",
+    title: "Removal of old flooring and glue",
+    task: "Lift old carpet, vinyl, tiles or timber, scrape or grind off glue, bag and remove waste.",
+    items: [
+      {
+        id: "removal_asbestos",
+        label:
+          "Asbestos. Old vinyl, vinyl tiles, lino backing, glue and some underlays can contain asbestos (common before 1990, banned in 2003).",
+        controls:
+          "Check the asbestos register or the build date before lifting. If you are unsure, do not lift, cut, sand or grind it. Stop work and call the office.",
+      },
+      {
+        id: "removal_lifting",
+        label: "Lifting tiles and boards (flying chips, hand strikes, sharp edges)",
+        controls: "Eye protection, cut-resistant gloves, long sleeves, keep others out of the area.",
+      },
+      {
+        id: "removal_machine",
+        label: "Floor stripper or scraper machine (kickback, vibration, noise)",
+        controls: "Trained operator only, both hands on the machine, hearing protection, take breaks.",
+      },
+      {
+        id: "removal_glue",
+        label: "Glue removal by grinding or solvent (silica dust, fumes)",
+        controls: "Grinder with dust extraction and a P2 mask. For solvent removers, ventilate and no naked flames.",
+      },
+      {
+        id: "removal_sharps",
+        label: "Nails, staples and gripper left in the floor",
+        controls: "Gloves, pull or punch them as you go, sweep before the next trade walks in.",
+      },
+      {
+        id: "removal_waste",
+        label: "Heavy waste bags and rolls (manual handling)",
+        controls: "Cut rolls into short lengths, do not overfill bags, two-person lift, trolley to the skip.",
+      },
+    ],
+  },
   timber: {
     key: "timber",
     title: "Timber, adhesive Acouslime 3-in-1",
@@ -108,6 +149,70 @@ export const SECTIONS: Record<SectionKey, SwmsSection> = {
         label: "Acouslime Moisture Seal contains isocyanates (MDI). Skin, eye and respiratory sensitiser.",
         controls: "Gloves, eye protection, good ventilation, avoid breathing vapour.",
         sds: "acouslime-moisture-seal",
+      },
+    ],
+  },
+  sanding_coating: {
+    key: "sanding_coating",
+    title: "Floor sanding and coating",
+    task: "Punch nails, fill, drum or belt sand, edge, buff, vacuum, stain and coat (water-based, solvent or 2-pack).",
+    items: [
+      {
+        id: "sand_moving",
+        label: "Moving sanders (drum sanders often 80 kg or more)",
+        controls: "Two-person lift, break the machine down, trolley, ramps on steps.",
+      },
+      {
+        id: "sand_punching",
+        label: "Punching nails (hand strikes, flying metal)",
+        controls: "Correct punch and hammer, eye protection.",
+      },
+      {
+        id: "sand_drum",
+        label: "Drum or belt sanding (kickback, entanglement, machine running away)",
+        controls: "Trained operator, lift the drum before stopping, no loose clothing, unplug to change paper.",
+      },
+      {
+        id: "sand_edging",
+        label: "Edging and buffing (hand and back strain, kickback)",
+        controls: "Grip correctly, rotate tasks, regular breaks.",
+      },
+      {
+        id: "sand_dust",
+        label: "Sanding dust (hardwood dust is a carcinogen) and noise over 85 dB",
+        controls: "Machines with dust bags or extraction, P2 mask, hearing protection.",
+      },
+      {
+        id: "sand_lead",
+        label: "Old coatings in older homes may contain lead",
+        controls: "Test if unsure. If lead is found, stop and call the office.",
+      },
+      {
+        id: "sand_combustion",
+        label: "Dust bags and rags (spontaneous combustion, fire)",
+        controls:
+          "Empty dust bags outside into a metal bin often, rags into a sealed tin of water, never leave full bags on site.",
+      },
+      {
+        id: "sand_solvent",
+        label: "Solvent coatings (fumes, fire, explosion)",
+        controls:
+          "Ventilate, no ignition sources, turn off pilot lights and gas appliances, extinguisher within reach. Organic vapour respirator.",
+      },
+      {
+        id: "sand_2pack",
+        label: "2-pack (isocyanate) coatings (respiratory sensitiser, asthma)",
+        controls: "Follow the SDS, respirator suited to isocyanates, ventilate, keep others out until cured.",
+      },
+      {
+        id: "sand_power",
+        label: "Power supply (electric shock, overloaded circuits)",
+        controls: "Tagged leads and RCD, correct-rated outlet for the drum sander, run leads behind the operator.",
+      },
+      {
+        id: "sand_occupants",
+        label: "Occupants and other trades (fumes, slipping on wet coating)",
+        controls: "Keep the area closed and signed until dry, tell the client the re-entry time.",
       },
     ],
   },
@@ -255,6 +360,8 @@ export const SDS_CATALOGUE: Array<{ code: string; product: string; supplier: str
  * than its id, so the Play demo crew and any renamed skill still map.
  */
 const SKILL_RULES: Array<{ test: RegExp; sections: SectionKey[] }> = [
+  { test: /removal|uplift|strip out/i, sections: ["removal"] },
+  { test: /sanding|staining|coating/i, sections: ["sanding_coating"] },
   { test: /timber install|timber flooring/i, sections: ["timber"] },
   { test: /moisture barrier/i, sections: ["moisture_seal"] },
   { test: /broadloom|direct stick|carpet stairs|carpet repairs/i, sections: ["carpet_broadloom"] },

@@ -132,6 +132,7 @@ function Navigation() {
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="task/[id]" options={{ presentation: "card" }} />
       <Stack.Screen name="task/invoice/[id]" options={{ presentation: "card" }} />
+      <Stack.Screen name="task/swms/[id]" options={{ presentation: "card" }} />
       <Stack.Screen name="rate-card" options={{ presentation: "card" }} />
       <Stack.Screen name="voice-quote" options={{ presentation: "card", gestureEnabled: false }} />
       <Stack.Screen name="site-arrival" options={{ presentation: "card" }} />
