@@ -10,7 +10,7 @@ import { signMany } from "../lib/s3";
  * bucket — no endless diary feed. Nothing is ever deleted: the crew can't, and
  * the office archives instead, so the record survives an argument.
  */
-export const BUCKETS = ["plan", "access", "area", "damage", "found", "completion", "defect"] as const;
+export const BUCKETS = ["plan", "access", "area", "damage", "found", "completion", "defect", "client_reported"] as const;
 export type Bucket = (typeof BUCKETS)[number];
 
 export const BUCKET_LABELS: Record<Bucket, string> = {
@@ -21,6 +21,8 @@ export const BUCKET_LABELS: Record<Bucket, string> = {
   found: "What we found",
   completion: "Completion",
   defect: "Defects & callbacks",
+  /** What the client sent in about a callback: emailed or texted photos, filed by the office. */
+  client_reported: "Client photos",
 };
 
 const bucketEnum = z.enum(BUCKETS);

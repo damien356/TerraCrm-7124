@@ -1,9 +1,10 @@
-import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import type { Actor } from "../middleware/auth";
+import { signMany } from "./s3";
 
 /**
  * CALLBACKS. A client rings back after a job is done: a fix, a repair, a
@@ -44,10 +45,7 @@ export const CALLBACK_COST_LABELS: Record<(typeof CALLBACK_COST_KINDS)[number], 
   other: "Other",
 };
 
-/** "3981-C1" for a callback, "3981" for anything else. */
-export function jobRef(j: { number: number; displayNumber?: string | null }) {
-  return j.displayNumber || String(j.number);
-}
+export { jobRef } from "./job-ref";
 
 /** "3981-C2", "3981c2", "#3981 C2" all read as parent 3981, callback 2. */
 export function parseCallbackRef(text: string): { parent: number; seq: number } | null {
@@ -159,7 +157,8 @@ export async function createCallback(input: z.input<typeof createCallbackInput>,
       source: "callback",
       category: original.category,
       requiresSwms: original.requiresSwms,
-      // Not chargeable: no value, so the forecast never expects money from it.
+      // Starts at nothing either way. A chargeable callback gets its value from
+      // its accepted quote like any job; a free one can never get a quote.
       value: 0,
     })
     .returning();
@@ -267,7 +266,7 @@ export async function callbackChain(jobId: number) {
 
 /** What the callback page shows from the original job: products, notes and photos, read only. */
 export async function originalJobFile(parentJobId: number) {
-  const [materials, notes, photos] = await Promise.all([
+  const [materials, notes, media] = await Promise.all([
     db.select().from(schema.jobMaterials).where(eq(schema.jobMaterials.jobId, parentJobId)),
     db
       .select()
@@ -275,7 +274,268 @@ export async function originalJobFile(parentJobId: number) {
       .where(and(eq(schema.activityLog.jobId, parentJobId), inArray(schema.activityLog.action, ["note"])))
       .orderBy(desc(schema.activityLog.createdAt))
       .limit(30),
-    db.select().from(schema.taskPhotos).where(eq(schema.taskPhotos.jobId, parentJobId)).orderBy(desc(schema.taskPhotos.createdAt)),
+    db
+      .select()
+      .from(schema.jobMedia)
+      .where(and(eq(schema.jobMedia.jobId, parentJobId), isNull(schema.jobMedia.archivedAt)))
+      .orderBy(asc(schema.jobMedia.capturedAt)),
   ]);
-  return { materials, notes, photos };
+  return { materials, notes, media: await signMany(media) };
+}
+
+/* ------------------------------ office edits ------------------------------ */
+
+async function callbackOrThrow(jobId: number) {
+  const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, jobId));
+  if (!job) throw new ORPCError("NOT_FOUND", { message: "Job not found" });
+  if (!job.parentJobId) throw new ORPCError("BAD_REQUEST", { message: "This job isn't a callback." });
+  return job;
+}
+
+/**
+ * The fix task's pay follows the "pay the installer" answer. Only work not yet
+ * done moves, and only pay the office hasn't set by hand: a $0 from "don't pay"
+ * goes back to unpriced, so the rate book prices it again.
+ */
+async function applyPayRule(jobId: number, pay: boolean | null) {
+  const open = await db
+    .select({ id: schema.jobTasks.id, payAmount: schema.jobTasks.payAmount, labourCost: schema.jobTasks.labourCost })
+    .from(schema.jobTasks)
+    .where(and(eq(schema.jobTasks.jobId, jobId), ne(schema.jobTasks.status, "complete")));
+  let changed = 0;
+  for (const t of open) {
+    if (pay === false && (t.payAmount !== 0 || t.labourCost !== 0)) {
+      await db
+        .update(schema.jobTasks)
+        .set({ payAmount: 0, labourCost: 0, labourBreakdown: "[]", labourPricedOn: new Date().toISOString().slice(0, 10), updatedAt: new Date() })
+        .where(eq(schema.jobTasks.id, t.id));
+      changed++;
+    } else if (pay !== false && t.payAmount === 0 && t.labourCost === 0) {
+      await db
+        .update(schema.jobTasks)
+        .set({ payAmount: null, labourCost: null, labourBreakdown: null, labourPricedOn: null, updatedAt: new Date() })
+        .where(eq(schema.jobTasks.id, t.id));
+      changed++;
+    }
+  }
+  return changed;
+}
+
+export const setCauseInput = z
+  .object({
+    jobId: z.number(),
+    cause: z.enum(CALLBACK_CAUSES),
+    payInstaller: z.boolean().nullable().optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.cause === "installer_error" && (v.payInstaller === null || v.payInstaller === undefined)) {
+      ctx.addIssue({ code: "custom", path: ["payInstaller"], message: "Say whether the installer is paid for this visit" });
+    }
+  });
+
+export async function setCause(input: z.input<typeof setCauseInput>, actor: Pick<Actor, "name" | "role">) {
+  const v = setCauseInput.parse(input);
+  const job = await callbackOrThrow(v.jobId);
+  const pay = v.cause === "installer_error" ? (v.payInstaller ?? null) : null;
+  if (job.callbackCause === v.cause && (job.callbackPayInstaller ?? null) === pay) return job;
+  const [row] = await db
+    .update(schema.jobs)
+    .set({ callbackCause: v.cause, callbackPayInstaller: pay, updatedAt: new Date() })
+    .where(eq(schema.jobs.id, job.id))
+    .returning();
+  const moved = await applyPayRule(job.id, pay);
+  const was = job.callbackCause ? (CALLBACK_CAUSE_LABELS[job.callbackCause as CallbackCause] ?? job.callbackCause) : "none";
+  await db.insert(schema.activityLog).values({
+    jobId: job.id,
+    entityType: "job",
+    entityId: job.id,
+    action: "callback_cause",
+    detail: `Cause changed from ${was} to ${CALLBACK_CAUSE_LABELS[v.cause]}${pay === null ? "" : `, installer ${pay ? "paid" : "not paid"} for the visit`}.${moved ? ` Pay reset on ${moved} open task${moved === 1 ? "" : "s"}.` : ""}`,
+    actorName: actor.name,
+    actorRole: actor.role,
+  });
+  return row!;
+}
+
+export async function setChargeable(jobId: number, chargeable: boolean, actor: Pick<Actor, "name" | "role">) {
+  const job = await callbackOrThrow(jobId);
+  if (job.callbackChargeable === chargeable) return job;
+  if (!chargeable) {
+    const live = await db
+      .select({ number: schema.quotes.number, status: schema.quotes.status })
+      .from(schema.quotes)
+      .where(and(eq(schema.quotes.jobId, jobId), inArray(schema.quotes.status, ["sent", "accepted"])));
+    if (live.length) {
+      const q = live[0]!;
+      throw new ORPCError("BAD_REQUEST", {
+        message: `Quote #${q.number} on this callback is ${q.status}. Decline it before marking the callback not chargeable.`,
+      });
+    }
+  }
+  const [row] = await db
+    .update(schema.jobs)
+    .set({ callbackChargeable: chargeable, ...(chargeable ? {} : { value: 0 }), updatedAt: new Date() })
+    .where(eq(schema.jobs.id, jobId))
+    .returning();
+  await db.insert(schema.activityLog).values({
+    jobId,
+    entityType: "job",
+    entityId: jobId,
+    action: "callback_chargeable",
+    detail: chargeable ? "Marked chargeable. Quotes can go out on it." : "Marked not chargeable. Nothing is billed on it.",
+    actorName: actor.name,
+    actorRole: actor.role,
+  });
+  return row!;
+}
+
+/* ------------------------------ rework cost ------------------------------- */
+
+export const addCostInput = z.object({
+  jobId: z.number(),
+  kind: z.enum(CALLBACK_COST_KINDS),
+  description: z.string().trim().max(500).default(""),
+  amount: z.number().min(0).max(1_000_000),
+  /** Left out, it goes against the original installer. */
+  installerId: z.number().nullable().optional(),
+});
+
+export async function listCosts(jobId: number) {
+  const job = await callbackOrThrow(jobId);
+  const rows = await db
+    .select({ cost: schema.callbackCosts, installerName: schema.installers.name })
+    .from(schema.callbackCosts)
+    .leftJoin(schema.installers, eq(schema.installers.id, schema.callbackCosts.installerId))
+    .where(eq(schema.callbackCosts.jobId, jobId))
+    .orderBy(asc(schema.callbackCosts.id));
+  const originalId = await originalInstallerId(job.parentJobId!);
+  const [orig] = originalId
+    ? await db.select({ id: schema.installers.id, name: schema.installers.name }).from(schema.installers).where(eq(schema.installers.id, originalId))
+    : [];
+  return {
+    original: orig ?? null,
+    items: rows.map((r) => ({ ...r.cost, installerName: r.installerName ?? null })),
+    total: Math.round(rows.reduce((a, r) => a + (r.cost.amount ?? 0), 0) * 100) / 100,
+  };
+}
+
+export async function addCost(input: z.input<typeof addCostInput>, actor: Pick<Actor, "name" | "role">) {
+  const v = addCostInput.parse(input);
+  const job = await callbackOrThrow(v.jobId);
+  const installerId = v.installerId === undefined ? await originalInstallerId(job.parentJobId!) : v.installerId;
+  const [row] = await db
+    .insert(schema.callbackCosts)
+    .values({ jobId: v.jobId, installerId, kind: v.kind, description: v.description, amount: Math.round(v.amount * 100) / 100 })
+    .returning();
+  // No job history line. Office reads the history, and rework cost is Admin only.
+  void actor;
+  return row!;
+}
+
+export async function removeCost(id: number, actor: Pick<Actor, "name" | "role">) {
+  const [row] = await db.delete(schema.callbackCosts).where(eq(schema.callbackCosts.id, id)).returning();
+  if (!row) throw new ORPCError("NOT_FOUND", { message: "That cost line is gone already." });
+  void actor;
+  return { ok: true };
+}
+
+/* --------------------------------- report --------------------------------- */
+
+/** Brisbane day bounds, as Dates. */
+const dayStart = (d: string) => new Date(`${d}T00:00:00+10:00`);
+const dayEnd = (d: string) => new Date(`${d}T23:59:59.999+10:00`);
+
+/**
+ * Every callback opened in the range, with who did the original work and what
+ * fixing it cost. Rolled up per installer and per cause. Report only: nothing
+ * here is charged to anyone.
+ */
+export async function callbackReport(range: { from?: string | null; to?: string | null }) {
+  const where = [isNotNull(schema.jobs.parentJobId)];
+  if (range.from) where.push(gte(schema.jobs.createdAt, dayStart(range.from)));
+  if (range.to) where.push(lte(schema.jobs.createdAt, dayEnd(range.to)));
+  const rows = await db
+    .select({
+      id: schema.jobs.id,
+      number: schema.jobs.number,
+      displayNumber: schema.jobs.displayNumber,
+      parentJobId: schema.jobs.parentJobId,
+      title: schema.jobs.title,
+      cause: schema.jobs.callbackCause,
+      chargeable: schema.jobs.callbackChargeable,
+      payInstaller: schema.jobs.callbackPayInstaller,
+      createdAt: schema.jobs.createdAt,
+      completedAt: schema.jobs.completedAt,
+      status: schema.jobStatuses.name,
+    })
+    .from(schema.jobs)
+    .leftJoin(schema.jobStatuses, eq(schema.jobStatuses.id, schema.jobs.statusId))
+    .where(and(...where))
+    .orderBy(desc(schema.jobs.createdAt));
+
+  const ids = rows.map((r) => r.id);
+  const parentIds = [...new Set(rows.map((r) => r.parentJobId!))];
+  const [costs, parentTasks, installers] = await Promise.all([
+    ids.length ? db.select().from(schema.callbackCosts).where(inArray(schema.callbackCosts.jobId, ids)) : [],
+    parentIds.length
+      ? db
+          .select({ jobId: schema.jobTasks.jobId, id: schema.jobTasks.assignedInstallerId, status: schema.jobTasks.status })
+          .from(schema.jobTasks)
+          .where(and(inArray(schema.jobTasks.jobId, parentIds), isNotNull(schema.jobTasks.assignedInstallerId)))
+          .orderBy(desc(schema.jobTasks.completedAt), desc(schema.jobTasks.seq))
+      : [],
+    db.select({ id: schema.installers.id, name: schema.installers.name }).from(schema.installers),
+  ]);
+  const nameOf = new Map(installers.map((i) => [i.id, i.name]));
+  // Same rule as originalInstallerId: the last finished task, else the last one put on.
+  const originalOf = new Map<number, number | null>();
+  for (const pid of parentIds) {
+    const t = parentTasks.filter((x) => x.jobId === pid);
+    originalOf.set(pid, (t.find((x) => x.status === "complete") ?? t[0])?.id ?? null);
+  }
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+
+  const list = rows.map((r) => {
+    const mine = costs.filter((c) => c.jobId === r.id);
+    const originalInstaller = originalOf.get(r.parentJobId!) ?? null;
+    return {
+      ...r,
+      ref: r.displayNumber || String(r.number),
+      causeLabel: r.cause ? (CALLBACK_CAUSE_LABELS[r.cause as CallbackCause] ?? r.cause) : "No cause set",
+      originalInstallerId: originalInstaller,
+      originalInstallerName: originalInstaller ? (nameOf.get(originalInstaller) ?? "Installer") : null,
+      cost: r2(mine.reduce((a, c) => a + (c.amount ?? 0), 0)),
+    };
+  });
+
+  const perInstaller = new Map<string, { installerId: number | null; name: string; callbacks: number; installerError: number; cost: number }>();
+  for (const r of list) {
+    const key = String(r.originalInstallerId ?? "none");
+    const a = perInstaller.get(key) ?? {
+      installerId: r.originalInstallerId,
+      name: r.originalInstallerName ?? "No installer on the original",
+      callbacks: 0,
+      installerError: 0,
+      cost: 0,
+    };
+    a.callbacks++;
+    if (r.cause === "installer_error") a.installerError++;
+    a.cost = r2(a.cost + r.cost);
+    perInstaller.set(key, a);
+  }
+  const perCause = CALLBACK_CAUSES.map((cause) => {
+    const mine = list.filter((r) => r.cause === cause);
+    return { cause, label: CALLBACK_CAUSE_LABELS[cause], callbacks: mine.length, cost: r2(mine.reduce((a, r) => a + r.cost, 0)) };
+  }).filter((c) => c.callbacks > 0);
+
+  return {
+    callbacks: list,
+    perInstaller: [...perInstaller.values()].sort((a, b) => b.cost - a.cost || b.callbacks - a.callbacks),
+    perCause,
+    totals: {
+      callbacks: list.length,
+      notChargeable: list.filter((r) => r.chargeable === false).length,
+      cost: r2(list.reduce((a, r) => a + r.cost, 0)),
+    },
+  };
 }

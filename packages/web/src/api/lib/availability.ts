@@ -1,3 +1,4 @@
+import { jobNumberSql } from "./job-ref";
 import { and, eq, gte, inArray, isNull, lte, ne, or } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -70,7 +71,7 @@ export type DayCheck = {
   /** Why the day is flagged, in the words the office wrote. */
   reason: string | null;
   /** Other work already on this installer that day. Never blocks, always shown. */
-  clashes: { taskId: number; jobId: number; jobNumber: number; title: string; suburb: string }[];
+  clashes: { taskId: number; jobId: number; jobNumber: number | string; title: string; suburb: string }[];
 };
 
 /**
@@ -128,7 +129,7 @@ export async function bookedDays(args: {
   installerId: number;
   dates: string[];
   exceptTaskId?: number | null;
-}): Promise<{ date: string; taskId: number; jobId: number; jobNumber: number; title: string; suburb: string }[]> {
+}): Promise<{ date: string; taskId: number; jobId: number; jobNumber: number | string; title: string; suburb: string }[]> {
   const { installerId, dates } = args;
   if (dates.length === 0) return [];
   const live = ["assigned", "in_progress"] as const;
@@ -141,7 +142,7 @@ export async function bookedDays(args: {
         date: schema.taskDays.date,
         taskId: schema.jobTasks.id,
         jobId: schema.jobs.id,
-        jobNumber: schema.jobs.number,
+        jobNumber: jobNumberSql,
         title: schema.jobTasks.title,
         suburb: schema.sites.suburb,
       })
@@ -166,7 +167,7 @@ export async function bookedDays(args: {
         date: schema.jobTasks.scheduledDate,
         taskId: schema.jobTasks.id,
         jobId: schema.jobs.id,
-        jobNumber: schema.jobs.number,
+        jobNumber: jobNumberSql,
         title: schema.jobTasks.title,
         suburb: schema.sites.suburb,
       })
@@ -186,7 +187,7 @@ export async function bookedDays(args: {
   ]);
 
   const seen = new Set<string>();
-  const out: { date: string; taskId: number; jobId: number; jobNumber: number; title: string; suburb: string }[] = [];
+  const out: { date: string; taskId: number; jobId: number; jobNumber: number | string; title: string; suburb: string }[] = [];
   for (const r of [...dayRows, ...taskRows]) {
     if (!r.date) continue;
     if (args.exceptTaskId && r.taskId === args.exceptTaskId) continue;

@@ -1,3 +1,4 @@
+import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { db } from "../database";
@@ -52,7 +53,7 @@ export const crew = {
           taskTitle: schema.jobTasks.title,
           taskStatus: schema.jobTasks.status,
           startedAt: schema.jobTasks.startedAt,
-          jobNumber: schema.jobs.number,
+          jobNumber: jobNumberSql,
           jobTitle: schema.jobs.title,
           siteAddress: schema.sites.address,
           siteSuburb: schema.sites.suburb,
@@ -94,7 +95,7 @@ export const crew = {
         installerName: schema.installers.name,
         installerColour: schema.installers.colour,
         sharing: schema.installers.locationConsentAt,
-        jobNumber: schema.jobs.number,
+        jobNumber: jobNumberSql,
         siteSuburb: schema.sites.suburb,
       })
       .from(schema.jobTasks)

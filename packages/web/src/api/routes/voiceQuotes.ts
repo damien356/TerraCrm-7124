@@ -1,3 +1,4 @@
+import { assertBillable } from "../lib/callbacks";
 import { z } from "zod";
 import { desc, eq, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
@@ -244,6 +245,7 @@ export async function buildQuoteFromTranscript(
   // Voice memos settle the client themselves, so they skip the name match.
   opts: { findCustomer: boolean } = { findCustomer: true },
 ) {
+  await assertBillable(link.jobId);
   const labourItems = await db
     .select({
       id: schema.labourRateItems.id,

@@ -1,3 +1,4 @@
+import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
 import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
@@ -98,7 +99,7 @@ async function loadPo(id: number) {
 
 async function pdfFor(poId: number) {
   const po = await loadPo(poId);
-  const [job] = await db.select({ number: schema.jobs.number, title: schema.jobs.title }).from(schema.jobs).where(eq(schema.jobs.id, po.jobId));
+  const [job] = await db.select({ number: jobNumberSql, title: schema.jobs.title }).from(schema.jobs).where(eq(schema.jobs.id, po.jobId));
   const [sup] = await db.select().from(schema.suppliers).where(eq(schema.suppliers.id, po.supplierId));
   const lines = await db.select().from(schema.purchaseOrderLines).where(eq(schema.purchaseOrderLines.poId, poId)).orderBy(asc(schema.purchaseOrderLines.sortOrder));
   const date = po.sentAt ? po.sentAt.toISOString().slice(0, 10) : todayISO();
@@ -127,7 +128,7 @@ async function pdfFor(poId: number) {
   return { po, sup, pdf, filename: `Terra PO ${po.number}.pdf` };
 }
 
-export function poEmailText(supplierName: string, number: string, jobNumber: number, deliverTo: string, address: string) {
+export function poEmailText(supplierName: string, number: string, jobNumber: number | string, deliverTo: string, address: string) {
   return {
     subject: `Purchase order ${number}, Terra Flooring`,
     text: [
@@ -341,7 +342,7 @@ export const purchasing = {
         await db.update(schema.suppliers).set({ email: to, updatedAt: new Date() }).where(eq(schema.suppliers.id, sup.id));
       }
 
-      const [job] = await db.select({ number: schema.jobs.number }).from(schema.jobs).where(eq(schema.jobs.id, po.jobId));
+      const [job] = await db.select({ number: jobNumberSql }).from(schema.jobs).where(eq(schema.jobs.id, po.jobId));
       const { pdf, filename } = await pdfFor(po.id);
       const mail = poEmailText(sup?.name ?? "there", po.number, job?.number ?? 0, po.deliverTo, po.deliveryAddress);
       try {
@@ -380,7 +381,7 @@ export const purchasing = {
         status: schema.purchaseOrders.status,
         totalExGst: schema.purchaseOrders.totalExGst,
         sentAt: schema.purchaseOrders.sentAt,
-        jobNumber: schema.jobs.number,
+        jobNumber: jobNumberSql,
         jobTitle: schema.jobs.title,
       })
       .from(schema.purchaseOrders)

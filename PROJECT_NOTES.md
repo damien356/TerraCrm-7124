@@ -1,6 +1,6 @@
 # Terra Ops: project notes
 
-Last updated: 7 Oct 2026, 11:10 pm Brisbane. Checked against the code, GitHub `main` (SWMS Stage 1 commit on top of `62a646c`), and the live database.
+Last updated: 7 Oct 2026, 11:40 pm Brisbane. Checked against the code, GitHub `main` (SWMS Stage 1 commit on top of `62a646c`), and the live database.
 This file replaces `STATE.md` as the source of truth. `STATE.md` (29 Sep) is out of date.
 
 Status words used below:
@@ -89,7 +89,7 @@ Current rule (Damien, 6 Oct):
 - Sales figures only. Office can see it.
 - Shipped with job contacts (section 6), commit `62a646c`.
 
-## 8. SWMS (Stage 1 pushed, not published)
+## 8. SWMS (Stage 1 live, published 7 Oct)
 
 Plans: `/home/user/plans/swms/editor-brief.md` and `/home/user/plans/swms/library.md` (Damien's 7 Oct attachments).
 
@@ -114,10 +114,11 @@ Plans: `/home/user/plans/swms/editor-brief.md` and `/home/user/plans/swms/librar
 - Flow: everything pre-ticked from the labour, "Same work as last time?", "Wrong work type? Change it", optional site note, "I have read" tick, name, signature, sign and start.
 - Server: two new sections, `removal` (with the asbestos stop-work line) and `sanding_coating` (from library SWMS 09), plus their skill rules. All SWMS office procedures moved from Admin only to Admin or Office.
 - Tested on a scratch copy only: gate, sign, PDF, start, Office access, Field blocked, every live skill mapped.
-- **To go live:** Damien publishes the website (server changes) and the OTA from the mobile dashboard. OTA goes to build 7 (1.0.2). No new store build.
-- Then turn SWMS on for one test job and try it on a phone.
+- **Published 7 Oct** by Damien: website (`c99a690`) and the OTA to build 7 (1.0.2). Not yet tried on a phone.
+- **Phone test:** use job #4446 "DEMO job for installer app" (its only task is already complete, so it needs a new task for today). The stored demo.installer@ password no longer signs in on live.
+- Stages 2 and 3 come after callbacks (Damien, 7 Oct). Stage 4 waits for the next store build.
 
-## 9. Callbacks (Started, database ready)
+## 9. Callbacks (Built 7 Oct, not yet published)
 
 Plan: `/home/user/plans/callbacks-plan.md`. Damien's decisions, 7 Oct:
 - A callback is a normal job row linked to the original. It takes the next job number underneath but shows as `#3981-C1` everywhere. Search finds either.
@@ -127,10 +128,23 @@ Plan: `/home/user/plans/callbacks-plan.md`. Damien's decisions, 7 Oct:
 - Installer error: "pay the installer for this visit" is decided on each callback. No default.
 - People copy from the original job with all their tags and ticks, Show to Crew included, so the supervisor carries over.
 - Crew see it as a normal job. Never the cause, chargeable flag or rework cost.
-- Photos: original install photos (read only), client photos filed from the inbox, after-fix photos from Crew.
+- Photos: original install photos (read only), client photos in their own bucket, after-fix photos from Crew in Completion.
 - **Texted no-login photo link: deferred. Remind Damien at every check-in.**
 
-Written so far: new `jobs` columns and `callback_costs` table in `schema.ts`, `sql/2026-10-07-callbacks.sql` (applied on live 7 Oct), `lib/callbacks.ts`. Not wired into any route or screen yet.
+Database: `jobs` callback columns and `callback_costs`, `sql/2026-10-07-callbacks.sql`, applied on live 7 Oct. No more SQL needed.
+
+What is built:
+- `lib/job-ref.ts`: `jobNumberSql` and `jobRef` give `4199-C1` for a callback and the plain number otherwise. Used in lists, PDFs, crew brief, field, purchasing, payables and installer invoices.
+- `lib/callbacks.ts` and `routes/callbacks.ts`. Staff: options, create, chain, original, set cause, set chargeable. Admin only: costs, add cost, remove cost, report.
+- A callback made from a callback still hangs off the original (C2, C3).
+- Pay rule: installer error with "No, fix it at their cost" sets the visit pay to $0. Changing the cause asks again.
+- `assertBillable` blocks quote create, update, send, accept and revise, and voice quotes, on a not chargeable callback. Marking a callback not chargeable is refused while a quote is sent or accepted.
+- Supervisor counts leave out free callbacks. Referrer counts leave out all callbacks.
+- Rework cost writes nothing to job history, because Office reads the history.
+- Web: "Create callback" on the job page (pay choice required for installer error), banner with cause and chargeable, callbacks list on the original, original job card (products, notes, photos), rework cost card for Admin, Client photos bucket in the job file. Report at `/finance/callbacks`, Admin only.
+- App (screen only, OTA-able): job shows `#4199-C1`, materials marked "Laid on the original job", Client photos and Original job chips, both read only. Crew sees no cause, chargeable flag or cost.
+- Inbox finding: "file to callback" from the inbox cannot work. `message_attachments` is never written, so inbound attachments are not stored. Office uploads client photos into Client photos on the callback instead.
+- Scratch tests: `/home/user/terra-scratch-tests/callbacks/`.
 
 ## 10. Payments
 
@@ -146,7 +160,7 @@ Written so far: new `jobs` columns and `callback_costs` table in `schema.ts`, `s
 - **Direction: two-way.** Damien, 6 Oct form: "Yes, read payment status and bank balance". Ops pushes invoices (staged and part-paid included) and reads back payment status and the reconciled bank balance. This replaces the earlier one-way (push only) rule.
 - **Which Xero app:** Damien, 6 Oct: "i think we will make this inside the crm". The earlier plan was to reuse Terra Stock's Xero app. Not yet clear whether Ops gets its own Xero app or reuses Terra Stock's from inside Ops. Asked 7 Oct, waiting for his answer.
 - Sales account 204 (same as Terra Stock). Planned callback: `https://ops.terraflooring.com.au/api/xero/oauth/callback`.
-- **Build timing:** after client invoices (order item 6).
+- **Build timing:** after client invoices.
 
 ## 11. Email agent (Live, read only)
 
@@ -173,7 +187,7 @@ Nothing for these exists in the code. Damien to paste or re-state the spec.
    - Supplier detail sends Office no supplier charges, and the page hides that card.
    - Still open: `trustedOrigins` in `api/auth.ts` accepts any origin.
 2. **Publish order.** Resolved 7 Oct: the job contacts and callbacks SQL is on live, so publishing current code is safe. Rule stays: SQL first, then publish.
-3. **Callbacks will inflate supervisor and referrer job counts** unless they exclude callback rows.
+3. **Callbacks and supervisor and referrer counts.** Fixed 7 Oct. Supervisors leave out free callbacks, referrers leave out all callbacks.
 4. **Two supervisor sources.** Quotes keep `supervisor_contact_id`; jobs keep a Supervisor tag. The job contacts code syncs them on convert. Keep it that way.
 5. **Company card roles and job tags differ.** Company cards use owner, manager, supervisor, accounts, property manager, purchasing, other. Job tags use the list in section 6. Fine, but do not mix them.
 
@@ -193,7 +207,19 @@ Nothing for these exists in the code. Damien to paste or re-state the spec.
 - **David's card:** login David Walker is linked to installer card 9 "Dave Kohn" (test name, mobile 0412 000 333). Needs his real name and number. Damien skipped this on 7 Oct.
 - **Test logins on live:** demo.installer@ (profile 15, card 1), qa.board@terra.local (Office), admin.test@terraflooring.local (Office). google-review@ is the Play Store reviewer login, keep until approval.
 
-## 15. Rules for working on Terra Ops
+## 15. Work order (Damien, 7 Oct)
+
+1. Finish callbacks.
+2. SWMS Stages 2 and 3.
+3. Client invoices, then Stripe and Xero.
+4. Product arrived and delivery (spec needed).
+5. Stock WIP.
+6. Signatures, after the T&Cs.
+7. Cleanup.
+
+SWMS Stage 4 (offline signing) and the camera scanner go in the next store build.
+
+## 16. Rules for working on Terra Ops
 
 - Never run `db:push` or `db:migrate`. Database changes are SQL files applied by script: full backup, dry run on a copy, Damien's OK, then apply.
 - Never push to GitHub without Damien's OK.

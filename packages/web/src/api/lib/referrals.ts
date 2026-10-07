@@ -41,7 +41,7 @@ export async function referrers(args: { from?: string | null; to?: string | null
     from quote_contacts qc where ${hasRef("qc")}`));
   const jobLinks = await db.all<{ job_id: number; contact_id: number; company_id: number | null; tags: string; job_created: number }>(sql.raw(`
     select jc.job_id, jc.contact_id, jc.acted_for_company_id as company_id, jc.tags, j.created_at as job_created
-    from job_contacts jc join jobs j on j.id = jc.job_id where ${hasRef("jc")}`));
+    from job_contacts jc join jobs j on j.id = jc.job_id where j.parent_job_id is null and ${hasRef("jc")}`));
   const jobCreated = new Map(jobLinks.map((l) => [l.job_id, Number(l.job_created ?? 0)]));
 
   const invoices = await db.all<{ job_id: number; subtotal: number; created_at: number }>(sql`

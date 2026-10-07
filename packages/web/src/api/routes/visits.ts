@@ -1,3 +1,4 @@
+import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../database";
@@ -188,7 +189,7 @@ export const visits = {
       const visitCols = {
         visit: schema.siteVisits,
         installerName: schema.installers.name,
-        jobNumber: schema.jobs.number,
+        jobNumber: jobNumberSql,
         jobTitle: schema.jobs.title,
         taskTitle: schema.jobTasks.title,
         suburb: schema.sites.suburb,
@@ -240,7 +241,7 @@ export const visits = {
           actorName: schema.activityLog.actorName,
           actorRole: schema.activityLog.actorRole,
           createdAt: schema.activityLog.createdAt,
-          jobNumber: schema.jobs.number,
+          jobNumber: jobNumberSql,
           jobTitle: schema.jobs.title,
         })
         .from(schema.activityLog)

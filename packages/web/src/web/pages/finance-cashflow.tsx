@@ -326,7 +326,7 @@ interface EventRow {
   dueDate: string;
   basis: string;
   jobId: number | null;
-  jobNumber: number | null;
+  jobNumber: number | string | null;
   who: string;
   overdue: boolean;
 }

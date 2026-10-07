@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useParams, useSearch } from "wouter";
-import { ArrowLeft, MessagesSquare, Plus, Sofa, Trash2, Users } from "lucide-react";
+import { ArrowLeft, LifeBuoy, MessagesSquare, Plus, Sofa, Trash2, Users } from "lucide-react";
 import { Page } from "../components/layout";
 import { MemoButton } from "../components/voice-memo";
 import { JobFile } from "../components/job-file";
@@ -30,6 +30,14 @@ import { SupervisorPicker } from "../components/supervisor-picker";
 import { useCreateTask, useRemoveTask } from "../queries/tasks";
 import { useBootstrap } from "../queries/settings";
 import { JobPeopleCard } from "../components/job-people";
+import {
+  CallbackBanner,
+  CallbacksListCard,
+  CreateCallbackModal,
+  OriginalJobCard,
+  ReworkCostCard,
+  jobLabel,
+} from "../components/callbacks";
 
 const money = (n: number) =>
   n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
@@ -292,6 +300,7 @@ export default function JobDetailPage() {
   const wantsThread = new URLSearchParams(searchString).get("tab") === "conversation";
   const [tab, setTab] = React.useState<"job" | "conversation">(wantsThread ? "conversation" : "job");
   const [taskModal, setTaskModal] = React.useState(false);
+  const [callbackModal, setCallbackModal] = React.useState(false);
   const [measuring, setMeasuring] = React.useState<{ id: number; title: string } | null>(null);
   const [booking, setBooking] = React.useState<number | null>(null);
   const [note, setNote] = React.useState("");
@@ -314,11 +323,13 @@ export default function JobDetailPage() {
   }
 
   const j = job.data;
+  const isCallback = j.parentJobId != null;
+  const isAdmin = bootstrap.data?.actor.role === "admin";
   const customer = j.company?.name ?? [j.contact?.firstName, j.contact?.lastName].filter(Boolean).join(" ") ?? "—";
 
   return (
     <Page
-      title={`Job #${j.number}`}
+      title={`${isCallback ? "Callback" : "Job"} ${jobLabel(j)}`}
       subtitle={
         <span className="flex flex-wrap items-center gap-2">
           <Link to="/jobs" className="inline-flex items-center gap-1 text-primary hover:underline">
@@ -343,6 +354,10 @@ export default function JobDetailPage() {
             ))}
           </Select>
           <MemoButton jobId={j.id} />
+          <Button variant="outline" onClick={() => setCallbackModal(true)}>
+            <LifeBuoy className="size-4" />
+            Create callback
+          </Button>
           <Button onClick={() => setTaskModal(true)}>
             <Plus className="size-4" />
             Add dispatch
@@ -369,6 +384,8 @@ export default function JobDetailPage() {
 
       <div className={tab === "job" ? "grid gap-4 lg:grid-cols-[1fr_340px]" : "hidden"}>
         <div className="grid gap-4">
+          {isCallback ? <CallbackBanner job={j} /> : null}
+
           {/* header facts */}
           <Card className="px-4 py-3">
             <div className="grid gap-3 sm:grid-cols-4">
@@ -387,6 +404,9 @@ export default function JobDetailPage() {
               <div>
                 <p className="label-xs">Value ex GST</p>
                 <p className="tabular mt-0.5 text-sm font-medium">{money(j.value)}</p>
+                {isCallback && j.callbackChargeable === false ? (
+                  <p className="text-xs text-muted-foreground">Not chargeable. Nothing is billed.</p>
+                ) : null}
               </div>
               <div>
                 <p className="label-xs">Furniture on site</p>
@@ -589,6 +609,9 @@ export default function JobDetailPage() {
 
         {/* right rail */}
         <div className="grid gap-4">
+          {isCallback ? null : <CallbacksListCard jobId={j.id} />}
+          {isCallback && isAdmin ? <ReworkCostCard jobId={j.id} /> : null}
+
           <Card>
             <CardHeader title="Quotes" />
             {j.quotes.length === 0 ? (
@@ -658,7 +681,9 @@ export default function JobDetailPage() {
             )}
           </Card>
 
-          <JobFile jobId={j.id} />
+          <JobFile jobId={j.id} isCallback={isCallback} />
+
+          {isCallback ? <OriginalJobCard jobId={j.id} /> : null}
         </div>
       </div>
 
@@ -669,6 +694,7 @@ export default function JobDetailPage() {
         </p>
       ) : null}
 
+      <CreateCallbackModal job={j} open={callbackModal} onClose={() => setCallbackModal(false)} />
       <NewTaskModal jobId={j.id} open={taskModal} onClose={() => setTaskModal(false)} furniture={j.furnitureOnSite} />
       <MeasureUpModal
         taskId={measuring?.id ?? null}

@@ -403,8 +403,9 @@ export const intel = {
       cost: number;
       has_costs: number;
       sender_name: string | null;
+      display_number: string | null;
     }>(sql`
-      select j.id, j.number, j.title, s.name as status, s.stage, j.value,
+      select j.id, j.number, j.display_number, j.title, s.name as status, s.stage, j.value,
         ${JOB_DATE} as job_date, ${JOB_COSTS} as cost,
         case when ${HAS_COSTS} then 1 else 0 end as has_costs,
         (select p.first_name || ' ' || p.last_name from contacts p where p.id = ${SENDER}) as sender_name
@@ -437,6 +438,7 @@ export const intel = {
         hasCosts: !!j.has_costs,
         grossProfit: j.has_costs ? Math.round((j.value - j.cost) * 100) / 100 : null,
         senderName: j.sender_name,
+        displayNumber: j.display_number,
       })),
     };
   }),

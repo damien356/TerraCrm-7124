@@ -1,3 +1,4 @@
+import { jobNumberSql } from "./job-ref";
 import { and, asc, eq, inArray, ne } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -263,7 +264,7 @@ const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 /** Next free letter on the job: 4113-A, then 4113-B. A letter is never reused, a removed draft is kept as cancelled. */
 export async function nextPoNumber(jobId: number) {
-  const [job] = await db.select({ number: schema.jobs.number }).from(schema.jobs).where(eq(schema.jobs.id, jobId));
+  const [job] = await db.select({ number: jobNumberSql }).from(schema.jobs).where(eq(schema.jobs.id, jobId));
   if (!job) throw new Error("Job not found");
   const taken = await db.select({ number: schema.purchaseOrders.number }).from(schema.purchaseOrders).where(eq(schema.purchaseOrders.jobId, jobId));
   const used = taken.map((t) => LETTERS.indexOf(t.number.split("-").pop() ?? "")).filter((i) => i >= 0);

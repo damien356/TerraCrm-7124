@@ -9,7 +9,7 @@ import { drawSignature, type Signature } from "./signature";
  */
 
 export type SwmsPdfInput = {
-  jobNumber: number;
+  jobNumber: number | string;
   jobTitle: string;
   siteAddress: string;
   workDate: string;

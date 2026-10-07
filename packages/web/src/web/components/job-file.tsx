@@ -25,6 +25,11 @@ const BUCKETS = [
   { key: "found", label: "What we found", blurb: "Subfloor, moisture, nasties. Flags a variation to you." },
   { key: "completion", label: "Completion", blurb: "Required before the crew can mark the job done." },
   { key: "defect", label: "Defects & callbacks", blurb: "Kept apart so it never pollutes the finished set." },
+  {
+    key: "client_reported",
+    label: "Client photos",
+    blurb: "What the client sent in about the problem. Save emailed or texted photos here. The crew sees them read only.",
+  },
 ] as const;
 
 type BucketKey = (typeof BUCKETS)[number]["key"];
@@ -107,7 +112,7 @@ function AreaManager({ jobId }: { jobId: number }) {
   );
 }
 
-export function JobFile({ jobId }: { jobId: number }) {
+export function JobFile({ jobId, isCallback = false }: { jobId: number; isCallback?: boolean }) {
   const [bucket, setBucket] = useState<BucketKey>("plan");
   const [showArchived, setShowArchived] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -163,6 +168,8 @@ export function JobFile({ jobId }: { jobId: number }) {
       <div className="flex flex-wrap gap-1 border-b border-border px-3 py-2.5">
         {BUCKETS.map((b) => {
           const count = groups.find((g) => g.bucket === b.key)?.items.length ?? 0;
+          // Client photos only matter on a callback. Still shown anywhere something was filed there.
+          if (b.key === "client_reported" && !isCallback && count === 0) return null;
           const on = b.key === bucket;
           return (
             <button

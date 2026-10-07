@@ -1,3 +1,4 @@
+import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
 import { and, asc, desc, eq, inArray, lt, ne } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
@@ -58,7 +59,7 @@ async function jobContext(jobId: number) {
   const [job] = await db
     .select({
       id: schema.jobs.id,
-      number: schema.jobs.number,
+      number: jobNumberSql,
       title: schema.jobs.title,
       category: schema.jobs.category,
       address: schema.sites.address,

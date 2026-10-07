@@ -20,10 +20,17 @@ const BUCKETS = [
   { key: "found", label: "What we found", icon: "search-outline", blurb: "Subfloor, moisture, nasties. Office gets told." },
   { key: "completion", label: "Completion", icon: "checkmark-done-outline", blurb: "Finished work. Needed to close the job." },
   { key: "defect", label: "Defects", icon: "build-outline", blurb: "Callbacks and fixes." },
+  /* Callback visits only. Both are read only on the phone. */
+  { key: "client_reported", label: "Client photos", icon: "chatbubble-ellipses-outline", blurb: "What the client sent in about the problem." },
+  { key: "original", label: "Original job", icon: "time-outline", blurb: "Photos from the first visit. Read only." },
 ] as const;
 
 type BucketKey = (typeof BUCKETS)[number]["key"];
-type CrewBucket = Exclude<BucketKey, "plan">;
+/** The office owns these. The crew looks, never adds. */
+const READ_ONLY = ["plan", "client_reported", "original"] as const;
+type CrewBucket = Exclude<BucketKey, (typeof READ_ONLY)[number]>;
+const isReadOnly = (b: BucketKey) => (READ_ONLY as readonly string[]).includes(b);
+const CALLBACK_ONLY = ["client_reported", "original"] as const;
 
 export function JobFileSection({
   taskId,
@@ -48,7 +55,7 @@ export function JobFileSection({
   const gates = file.data?.gates;
 
   async function capture(source: "camera" | "library", video: boolean) {
-    if (bucket === "plan") return;
+    if (isReadOnly(bucket)) return;
     setError(null);
     try {
       const opts: ImagePicker.ImagePickerOptions = {
@@ -138,6 +145,7 @@ export function JobFileSection({
           {BUCKETS.map((b) => {
             const on = b.key === bucket;
             const count = media.filter((m) => m.bucket === b.key).length;
+            if ((CALLBACK_ONLY as readonly string[]).includes(b.key) && !file.data?.isCallback && count === 0) return null;
             return (
               <Pressable
                 key={b.key}
@@ -174,7 +182,7 @@ export function JobFileSection({
           : ""}
       </Text>
 
-      {bucket !== "plan" ? (
+      {!isReadOnly(bucket) ? (
         <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
           <Pressable
             disabled={busy}

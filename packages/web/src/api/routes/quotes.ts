@@ -1,3 +1,5 @@
+import { assertBillable } from "../lib/callbacks";
+import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
 import { assertSupervisor } from "../lib/supervisors";
 import { and, asc, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
@@ -205,7 +207,7 @@ export const quotes = {
           contact: schema.contacts,
           company: schema.companies,
           site: schema.sites,
-          job: { id: schema.jobs.id, number: schema.jobs.number },
+          job: { id: schema.jobs.id, number: jobNumberSql },
           itemCount: sql<number>`(select count(*) from quote_items qi where qi.quote_id = quotes.id)`,
         })
         .from(schema.quotes)
@@ -234,7 +236,7 @@ export const quotes = {
         contact: schema.contacts,
         company: schema.companies,
         site: schema.sites,
-        job: { id: schema.jobs.id, number: schema.jobs.number, title: schema.jobs.title },
+        job: { id: schema.jobs.id, number: jobNumberSql, title: schema.jobs.title },
       })
       .from(schema.quotes)
       .leftJoin(schema.contacts, eq(schema.contacts.id, schema.quotes.contactId))
@@ -342,6 +344,7 @@ export const quotes = {
       }),
     )
     .handler(async ({ input, context }) => {
+      await assertBillable(input.jobId);
       await assertSupervisor(input.companyId, input.supervisorContactId);
       const [maxRow] = await db
         .select({ max: sql<number>`coalesce(max(${schema.quotes.number}), 1000)` })
@@ -448,6 +451,7 @@ export const quotes = {
       }),
     )
     .handler(async ({ input }) => {
+      if (input.jobId) await assertBillable(input.jobId);
       const { id, ...rest } = input;
       const current = await quoteOrThrow(id);
       if (rest.status === "sent" || rest.status === "accepted") {
@@ -1010,6 +1014,7 @@ export const quotes = {
 
   send: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     const quote = await editableQuoteOrThrow(input.id);
+    await assertBillable(quote.jobId);
     await assertReadyToGoOut(quote, context.actor);
     await recordPriceHistory(quote, context.actor.name);
     const [row] = await db
@@ -1039,6 +1044,7 @@ export const quotes = {
       const quote = await quoteOrThrow(input.id);
       if (quote.status === "accepted") throw new ORPCError("BAD_REQUEST", { message: "This quote is already accepted." });
       if (quote.status === "expired") throw new ORPCError("BAD_REQUEST", { message: "This version has expired. Accept the current version." });
+      await assertBillable(quote.jobId);
       await assertReadyToGoOut(quote, context.actor);
 
       const [row] = await db
@@ -1111,6 +1117,7 @@ export const quotes = {
   /** Copy a quote into a new version so the original stays as sent history. */
   revise: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     const quote = await quoteOrThrow(input.id);
+    await assertBillable(quote.jobId);
     const items = await db
       .select()
       .from(schema.quoteItems)

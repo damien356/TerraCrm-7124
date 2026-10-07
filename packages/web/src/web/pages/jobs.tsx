@@ -267,7 +267,7 @@ export default function JobsPage() {
                     <td className="px-4 py-2.5">
                       <span className="flex items-center gap-1">
                         <Link to={`/jobs/${j.id}`} className="font-medium text-primary hover:underline">
-                          #{j.number}
+                          #{j.displayNumber ?? j.number}
                         </Link>
                         <MemoButton jobId={j.id} compact />
                       </span>

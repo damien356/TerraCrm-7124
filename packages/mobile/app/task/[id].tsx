@@ -508,9 +508,14 @@ export default function TaskScreen() {
                     paddingBottom: i === 0 ? 9 : 9,
                   }}
                 >
-                  <Text style={{ fontFamily: Fonts.sans, fontSize: 14, color: c.foreground, flex: 1 }}>
-                    {m.description}
-                  </Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontFamily: Fonts.sans, fontSize: 14, color: c.foreground }}>{m.description}</Text>
+                    {m.original ? (
+                      <Text style={{ fontFamily: Fonts.medium, fontSize: 11.5, color: c.mutedForeground, marginTop: 2 }}>
+                        Laid on the original job
+                      </Text>
+                    ) : null}
+                  </View>
                   <Text style={{ fontFamily: Fonts.medium, fontSize: 13.5, color: c.mutedForeground }}>
                     {m.qty} {m.unit}
                   </Text>

@@ -459,7 +459,7 @@ function DispatchPanel({
           <p className="truncate text-sm font-semibold">{t?.title ?? "Task"}</p>
           {t ? (
             <Link to={`/jobs/${t.jobId}`} className="text-xs text-primary hover:underline">
-              Job #{t.job.number} · open job
+              Job #{t.job.displayNumber ?? t.job.number} · open job
             </Link>
           ) : null}
         </div>

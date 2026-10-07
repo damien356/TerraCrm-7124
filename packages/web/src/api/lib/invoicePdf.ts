@@ -41,7 +41,7 @@ export interface InvoicePdfInput {
   bankAccountName: string | null;
   bankBsb: string | null;
   bankAccountNumber: string | null;
-  jobNumber: number;
+  jobNumber: number | string;
   siteAddress: string | null;
   taskTitle: string;
   lineItems: InvoiceLineItem[];

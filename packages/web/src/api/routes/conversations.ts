@@ -1,3 +1,4 @@
+import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
 import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
@@ -482,7 +483,7 @@ export const conversations = {
     const rows = await db
       .select({
         conversation: schema.conversations,
-        jobNumber: schema.jobs.number,
+        jobNumber: jobNumberSql,
         jobTitle: schema.jobs.title,
       })
       .from(schema.conversations)
@@ -632,7 +633,7 @@ export const conversations = {
       const rows = await db
         .select({
           conversation: schema.conversations,
-          jobNumber: schema.jobs.number,
+          jobNumber: jobNumberSql,
           jobTitle: schema.jobs.title,
           jobStatus: schema.jobStatuses.name,
           siteAddress: schema.sites.address,

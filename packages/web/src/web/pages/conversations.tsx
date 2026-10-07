@@ -96,7 +96,7 @@ type Row = {
   state: string;
   lastMessageAt: string | Date | null;
   lastMessagePreview: string | null;
-  jobNumber: number | null;
+  jobNumber: number | string | null;
   jobStatus: string;
   siteAddress: string;
   siteSuburb: string;

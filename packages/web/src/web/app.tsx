@@ -32,6 +32,7 @@ import SubcontractorInvoicesPage from "./pages/subcontractor-invoices";
 import ExpensesPage from "./pages/finance-expenses";
 import SuppliersOwedPage from "./pages/suppliers-owed";
 import ProfitabilityPage from "./pages/finance-profitability";
+import CallbacksReportPage from "./pages/callbacks-report";
 import TemplatesPage from "./pages/templates";
 import SegmentsPage from "./pages/segments";
 import TerraAiPage from "./pages/terra-ai";
@@ -81,6 +82,7 @@ function App() {
           <Route path="/finance/expenses" component={ExpensesPage} />
           <Route path="/finance/suppliers-owed" component={SuppliersOwedPage} />
           <Route path="/finance/profitability" component={ProfitabilityPage} />
+          <Route path="/finance/callbacks" component={CallbacksReportPage} />
           <Route path="/marketing/templates" component={TemplatesPage} />
           <Route path="/marketing/segments" component={SegmentsPage} />
           <Route path="/terra-ai" component={TerraAiPage} />

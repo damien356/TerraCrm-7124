@@ -1,3 +1,4 @@
+import { jobNumberSql } from "./job-ref";
 import { and, eq, gte, inArray, lte, ne, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
@@ -90,7 +91,7 @@ export async function assertSwmsDone(jobId: number, installerId: number, action:
 
 export type BoardRow = {
   jobId: number;
-  jobNumber: number;
+  jobNumber: number | string;
   jobTitle: string;
   siteAddress: string;
   date: string;
@@ -113,7 +114,7 @@ export async function swmsBoard(from: string, to: string): Promise<BoardRow[]> {
       scheduledDate: schema.jobTasks.scheduledDate,
       a: schema.jobTasks.assignedInstallerId,
       b: schema.jobTasks.secondInstallerId,
-      jobNumber: schema.jobs.number,
+      jobNumber: jobNumberSql,
       jobTitle: schema.jobs.title,
       address: schema.sites.address,
       suburb: schema.sites.suburb,
@@ -223,5 +224,5 @@ export async function swmsBoard(from: string, to: string): Promise<BoardRow[]> {
     const rec = signed.get(`${r.jobId}|${r.date}|${r.installerId}`);
     r.record = rec ? { id: rec.id, signedAt: rec.signedAt, signedName: rec.signedName, kind: rec.kind } : null;
   }
-  return list.sort((a, b) => a.date.localeCompare(b.date) || a.jobNumber - b.jobNumber || a.installerName.localeCompare(b.installerName));
+  return list.sort((a, b) => a.date.localeCompare(b.date) || String(a.jobNumber).localeCompare(String(b.jobNumber), undefined, { numeric: true }) || a.installerName.localeCompare(b.installerName));
 }

@@ -249,7 +249,7 @@ export default function ContactDetailPage() {
                     <tr key={job.id} className="border-b border-border last:border-0 hover:bg-secondary/50">
                       <td className="px-4 py-2.5">
                         <Link to={`/jobs/${job.id}`} className="font-medium text-primary hover:underline">
-                          #{job.number}
+                          #{job.displayNumber ?? job.number}
                         </Link>
                         <p className="text-xs text-muted-foreground">{job.title || "Untitled"}</p>
                       </td>

@@ -47,6 +47,7 @@ import { priceChecks } from "./routes/price-checks";
 import { mail } from "./routes/mail";
 import { swms } from "./routes/swms";
 import { people } from "./routes/people";
+import { callbacks } from "./routes/callbacks";
 import { bootMailAgent } from "./lib/mail-agent";
 import { finishConnect } from "./lib/gmail";
 import { bootReminders } from "./lib/reminders";
@@ -154,6 +155,8 @@ export const router = {
   mail,
   /** Job and quote people, duplicate cards, company retype, and referral value. */
   people,
+  /** Return visits linked to the original job, shown as 3981-C1. Rework cost is Admin only. */
+  callbacks,
 };
 
 export type AppRouter = typeof router;

@@ -1,3 +1,4 @@
+import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
 import { and, asc, desc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
@@ -45,7 +46,7 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
       isSecond: sql<number>`case when ${schema.jobTasks.secondInstallerId} = ${installerId} then 1 else 0 end`,
       skillName: schema.skills.name,
       skillGroup: schema.skills.groupName,
-      jobNumber: schema.jobs.number,
+      jobNumber: jobNumberSql,
       jobTitle: schema.jobs.title,
       furnitureOnSite: schema.jobs.furnitureOnSite,
       jobAccessNotes: schema.jobs.accessNotes,
@@ -98,6 +99,12 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
       contacts: people.get(r.jobId) ?? [],
     };
   });
+}
+
+/** The original job a callback hangs off, or null for an ordinary job. */
+async function parentJobOf(jobId: number) {
+  const [j] = await db.select({ parentJobId: schema.jobs.parentJobId }).from(schema.jobs).where(eq(schema.jobs.id, jobId));
+  return j?.parentJobId ?? null;
 }
 
 /** Guarantees the task belongs to this installer before any write. */
@@ -219,7 +226,7 @@ export const field = {
         scheduledDate: schema.jobTasks.scheduledDate,
         completedAt: schema.jobTasks.completedAt,
         payAmount: schema.jobTasks.payAmount,
-        jobNumber: schema.jobs.number,
+        jobNumber: jobNumberSql,
         siteSuburb: schema.sites.suburb,
         labourBreakdown: schema.jobTasks.labourBreakdown,
       })
@@ -312,10 +319,27 @@ export const field = {
       }
     }
 
+    // A callback shows the original job's products too, read only, so the
+    // crew knows exactly what went down. Never the cause or who pays.
+    const parentId = await parentJobOf(card.jobId);
+    const originalMaterials = parentId
+      ? await db
+          .select({
+            id: schema.jobMaterials.id,
+            description: schema.jobMaterials.description,
+            qty: schema.jobMaterials.qty,
+            unit: schema.jobMaterials.unit,
+            status: schema.jobMaterials.status,
+          })
+          .from(schema.jobMaterials)
+          .where(eq(schema.jobMaterials.jobId, parentId))
+      : [];
+
     return {
       ...card,
+      isCallback: Boolean(parentId),
       checklist,
-      materials,
+      materials: [...materials.map((m) => ({ ...m, original: false })), ...originalMaterials.map((m) => ({ ...m, original: true }))],
       photos,
       crewMate: mate[0] ?? null,
       payBreakdown,
@@ -358,7 +382,7 @@ export const field = {
         payType: schema.jobTasks.payType,
         skillName: schema.skills.name,
         skillGroup: schema.skills.groupName,
-        jobNumber: schema.jobs.number,
+        jobNumber: jobNumberSql,
         furnitureOnSite: schema.jobs.furnitureOnSite,
         // Suburb and property type only. The street address stays out of the
         // payload, not just out of the UI.
@@ -597,12 +621,23 @@ export const field = {
         .orderBy(asc(schema.jobMedia.capturedAt)),
     ]);
 
+    // On a callback, the original job's photos come along read only, as "original".
+    const parentId = await parentJobOf(task.jobId);
+    const originalRows = parentId
+      ? await db
+          .select()
+          .from(schema.jobMedia)
+          .where(and(eq(schema.jobMedia.jobId, parentId), sql`${schema.jobMedia.archivedAt} is null`))
+          .orderBy(asc(schema.jobMedia.capturedAt))
+      : [];
     const signed = await signMany(mediaRows);
+    const signedOriginal = (await signMany(originalRows)).map((m) => ({ ...m, bucket: "original", taskId: null as number | null, areaId: null as number | null, uploadedByInstallerId: null as number | null }));
     const need = await minCompletionPhotos(task.skillId);
 
     return {
       areas,
-      media: signed.map((m) => ({
+      isCallback: Boolean(parentId),
+      media: [...signed, ...signedOriginal].map((m) => ({
         id: m.id,
         bucket: m.bucket,
         kind: m.kind,

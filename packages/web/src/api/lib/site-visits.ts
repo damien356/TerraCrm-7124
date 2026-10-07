@@ -1,3 +1,4 @@
+import { jobNumberSql } from "./job-ref";
 import { and, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import { db, inDemo } from "../database";
 import * as schema from "../database/schema";
@@ -88,7 +89,7 @@ async function taskSummary(taskId: number) {
       status: schema.jobTasks.status,
       damageCheckedAt: schema.jobTasks.damageCheckedAt,
       damageNone: schema.jobTasks.damageNone,
-      jobNumber: schema.jobs.number,
+      jobNumber: jobNumberSql,
       jobTitle: schema.jobs.title,
       suburb: schema.sites.suburb,
     })
@@ -100,7 +101,7 @@ async function taskSummary(taskId: number) {
 }
 
 /** Job titles are mostly imported junk ("pick up from:"), so name the place by suburb. */
-const placeOf = (t: { suburb: string | null; jobNumber: number }) =>
+const placeOf = (t: { suburb: string | null; jobNumber: number | string }) =>
   t.suburb?.trim() ? `the ${t.suburb.trim()} site` : `job #${t.jobNumber}`;
 
 async function openVisit(taskId: number, installerId: number) {

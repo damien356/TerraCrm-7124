@@ -305,7 +305,7 @@ export default function CompanyDetailPage() {
                   <tr key={j.id} className="border-b border-border last:border-0 hover:bg-secondary/50">
                     <td className="px-4 py-2.5">
                       <Link to={`/jobs/${j.id}`} className="font-medium text-primary hover:underline">
-                        #{j.number}
+                        #{j.displayNumber ?? j.number}
                       </Link>
                       <p className="max-w-[260px] truncate text-xs text-muted-foreground">{j.title}</p>
                     </td>

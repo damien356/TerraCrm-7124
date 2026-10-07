@@ -9,6 +9,7 @@ import {
   ClipboardList,
   FileText,
   HandCoins,
+  LifeBuoy,
   Handshake,
   CopyCheck,
   HardHat,
@@ -109,6 +110,7 @@ const NAV: NavEntry[] = [
       { to: "/finance/suppliers-owed", label: "Suppliers owed", icon: HandCoins },
       { to: "/suppliers", label: "Suppliers", icon: Truck },
       { to: "/finance/profitability", label: "Profitability", icon: PieChart },
+      { to: "/finance/callbacks", label: "Callbacks", icon: LifeBuoy },
     ],
   },
   {
@@ -143,6 +145,7 @@ const ADMIN_ONLY_PATHS = [
   "/finance/invoices",
   "/finance/expenses",
   "/finance/profitability",
+  "/finance/callbacks",
   "/marketing",
   "/terra-ai",
   "/settings",

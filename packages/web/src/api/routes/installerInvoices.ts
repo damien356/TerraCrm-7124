@@ -1,3 +1,4 @@
+import { jobRef } from "../lib/job-ref";
 import { z } from "zod";
 import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
@@ -104,7 +105,7 @@ export const installerInvoices = {
             : !installer.bankBsb || !installer.bankAccountNumber || !installer.bankAccountName
               ? "Add your bank details before submitting an invoice."
               : null,
-      job: { number: job.number, siteAddress: site?.address ?? null, taskTitle: task.title },
+      job: { number: jobRef(job), siteAddress: site?.address ?? null, taskTitle: task.title },
       profile: {
         tradingName: installer.tradingName,
         installerName: installer.name,
@@ -182,7 +183,7 @@ export const installerInvoices = {
       bankAccountName: installer.bankAccountName,
       bankBsb: installer.bankBsb,
       bankAccountNumber: installer.bankAccountNumber,
-      jobNumber: job.number,
+      jobNumber: jobRef(job),
       siteAddress: site?.address ?? null,
       taskTitle: task.title,
       lineItems,
@@ -241,9 +242,9 @@ export const installerInvoices = {
     }
 
     const attachments = [{ filename: `invoice-${invoiceNumber}.pdf`, content: pdfBuffer.toString("base64") }];
-    const subject = `Invoice #${invoiceNumber} from ${installer.tradingName || installer.name}, Job #${job.number}`;
-    const bodyHtml = `<p>Invoice #${invoiceNumber} for job #${job.number}, task "${task.title}".</p><p>Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.</p>`;
-    const bodyText = `Invoice #${invoiceNumber} for job #${job.number}, task "${task.title}". Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.`;
+    const subject = `Invoice #${invoiceNumber} from ${installer.tradingName || installer.name}, Job #${jobRef(job)}`;
+    const bodyHtml = `<p>Invoice #${invoiceNumber} for job #${jobRef(job)}, task "${task.title}".</p><p>Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.</p>`;
+    const bodyText = `Invoice #${invoiceNumber} for job #${jobRef(job)}, task "${task.title}". Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.`;
 
     /*
      * Submitting and DELIVERING are two different things. The row and the PDF
@@ -304,10 +305,12 @@ export const installerInvoices = {
     if (!row || !row.pdfKey) throw new ORPCError("NOT_FOUND", { message: "Invoice not found" });
 
     const pdfBuffer = await getObject(row.pdfKey);
+    const [jobRow] = row.jobId ? await db.select({ number: schema.jobs.number, displayNumber: schema.jobs.displayNumber }).from(schema.jobs).where(eq(schema.jobs.id, row.jobId)) : [];
+    const jobNo = jobRow ? jobRef(jobRow) : String(row.jobNumber);
     const attachments = [{ filename: `invoice-${row.invoiceNumber}.pdf`, content: pdfBuffer.toString("base64") }];
-    const subject = `Invoice #${row.invoiceNumber} from ${row.tradingName || row.installerName}, Job #${row.jobNumber}`;
-    const bodyHtml = `<p>Invoice #${row.invoiceNumber} for job #${row.jobNumber}, task "${row.taskTitle}".</p><p>Total: ${row.total.toFixed(2)}${row.gstRegistered ? " inc GST" : ""}.</p>`;
-    const bodyText = `Invoice #${row.invoiceNumber} for job #${row.jobNumber}, task "${row.taskTitle}". Total: ${row.total.toFixed(2)}${row.gstRegistered ? " inc GST" : ""}.`;
+    const subject = `Invoice #${row.invoiceNumber} from ${row.tradingName || row.installerName}, Job #${jobNo}`;
+    const bodyHtml = `<p>Invoice #${row.invoiceNumber} for job #${jobNo}, task "${row.taskTitle}".</p><p>Total: ${row.total.toFixed(2)}${row.gstRegistered ? " inc GST" : ""}.</p>`;
+    const bodyText = `Invoice #${row.invoiceNumber} for job #${jobNo}, task "${row.taskTitle}". Total: ${row.total.toFixed(2)}${row.gstRegistered ? " inc GST" : ""}.`;
 
     const now = new Date();
     const toTerra = await sendEmail({ to: BILLING_EMAIL, subject, html: bodyHtml, text: bodyText, attachments });

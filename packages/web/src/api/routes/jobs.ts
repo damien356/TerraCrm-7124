@@ -1,3 +1,4 @@
+import { parseCallbackRef } from "../lib/callbacks";
 import { z } from "zod";
 import { assertSupervisor } from "../lib/supervisors";
 import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
@@ -140,6 +141,7 @@ export const jobs = {
       if (input.search) {
         const q = `%${input.search.toLowerCase()}%`;
         const asNumber = Number(input.search.replace(/\D/g, ""));
+        const cbRef = parseCallbackRef(input.search);
         where.push(
           or(
             like(sql`lower(${schema.jobs.title})`, q),
@@ -149,7 +151,10 @@ export const jobs = {
             // Old ServiceM8 numbers carry letters, e.g. 611577TF, so they are
             // matched as text rather than parsed.
             like(sql`lower(coalesce(${schema.jobs.externalRef}, ''))`, q),
-            Number.isFinite(asNumber) && asNumber > 0 ? eq(schema.jobs.number, asNumber) : sql`0`,
+            // Callbacks: "3981" also lists 3981-C1, and "3981-C1" or "3981c1" finds it exactly.
+            like(sql`lower(coalesce(${schema.jobs.displayNumber}, ''))`, q),
+            cbRef ? eq(schema.jobs.displayNumber, `${cbRef.parent}-C${cbRef.seq}`) : sql`0`,
+            !cbRef && Number.isFinite(asNumber) && asNumber > 0 ? eq(schema.jobs.number, asNumber) : sql`0`,
           ),
         );
       }

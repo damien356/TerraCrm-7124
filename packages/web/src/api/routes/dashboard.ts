@@ -1,3 +1,4 @@
+import { jobNumberSql } from "../lib/job-ref";
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -25,7 +26,7 @@ export const dashboard = {
           installerName: schema.installers.name,
           installerColour: schema.installers.colour,
           skillName: schema.skills.name,
-          jobNumber: schema.jobs.number,
+          jobNumber: jobNumberSql,
           siteAddress: schema.sites.address,
           siteSuburb: schema.sites.suburb,
         })
@@ -45,7 +46,7 @@ export const dashboard = {
           scheduledDate: schema.jobTasks.scheduledDate,
           crewSize: schema.jobTasks.crewSize,
           skillName: schema.skills.name,
-          jobNumber: schema.jobs.number,
+          jobNumber: jobNumberSql,
           siteSuburb: schema.sites.suburb,
           furnitureOnSite: schema.jobs.furnitureOnSite,
         })
@@ -74,7 +75,7 @@ export const dashboard = {
           payAmount: schema.taskOffers.payAmount,
           installerName: schema.installers.name,
           taskTitle: schema.jobTasks.title,
-          jobNumber: schema.jobs.number,
+          jobNumber: jobNumberSql,
         })
         .from(schema.taskOffers)
         .innerJoin(schema.installers, eq(schema.installers.id, schema.taskOffers.installerId))
@@ -92,7 +93,7 @@ export const dashboard = {
           scheduledDate: schema.jobTasks.scheduledDate,
           status: schema.jobTasks.status,
           installerName: schema.installers.name,
-          jobNumber: schema.jobs.number,
+          jobNumber: jobNumberSql,
           siteSuburb: schema.sites.suburb,
         })
         .from(schema.jobTasks)

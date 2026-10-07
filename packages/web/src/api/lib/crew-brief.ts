@@ -1,3 +1,4 @@
+import { jobNumberSql } from "./job-ref";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -66,7 +67,7 @@ export interface SiteContact {
 export interface Brief {
   taskId: number;
   jobId: number;
-  jobNumber: number;
+  jobNumber: number | string;
   title: string;
   description: string | null;
   status: string;
@@ -95,7 +96,7 @@ export async function briefFor(taskId: number): Promise<Brief | null> {
       areaM2: schema.jobTasks.areaM2,
       startTime: schema.jobTasks.startTime,
       skillName: schema.skills.name,
-      jobNumber: schema.jobs.number,
+      jobNumber: jobNumberSql,
       jobContactId: schema.jobs.contactId,
       furnitureOnSite: schema.jobs.furnitureOnSite,
       jobAccess: schema.jobs.accessNotes,

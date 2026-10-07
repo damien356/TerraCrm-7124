@@ -1,3 +1,4 @@
+import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
 import { and, desc, eq, gte, inArray, isNull, ne, or } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
@@ -69,7 +70,7 @@ export const payables = {
         totalExGst: schema.purchaseOrders.totalExGst,
         sentAt: schema.purchaseOrders.sentAt,
         jobId: schema.purchaseOrders.jobId,
-        jobNumber: schema.jobs.number,
+        jobNumber: jobNumberSql,
       })
       .from(schema.purchaseOrders)
       .innerJoin(schema.jobs, eq(schema.jobs.id, schema.purchaseOrders.jobId))
@@ -231,7 +232,7 @@ export const payables = {
 
     const pos = sid
       ? await db
-          .select({ po: schema.purchaseOrders, jobNumber: schema.jobs.number, jobTitle: schema.jobs.title })
+          .select({ po: schema.purchaseOrders, jobNumber: jobNumberSql, jobTitle: schema.jobs.title })
           .from(schema.purchaseOrders)
           .innerJoin(schema.jobs, eq(schema.jobs.id, schema.purchaseOrders.jobId))
           .where(and(eq(schema.purchaseOrders.supplierId, sid), inArray(schema.purchaseOrders.status, ["sent", "invoiced"]), gte(schema.purchaseOrders.createdAt, since)))
@@ -242,7 +243,7 @@ export const payables = {
     if (missingPoIds.length) {
       pos.push(
         ...(await db
-          .select({ po: schema.purchaseOrders, jobNumber: schema.jobs.number, jobTitle: schema.jobs.title })
+          .select({ po: schema.purchaseOrders, jobNumber: jobNumberSql, jobTitle: schema.jobs.title })
           .from(schema.purchaseOrders)
           .innerJoin(schema.jobs, eq(schema.jobs.id, schema.purchaseOrders.jobId))
           .where(inArray(schema.purchaseOrders.id, missingPoIds))),

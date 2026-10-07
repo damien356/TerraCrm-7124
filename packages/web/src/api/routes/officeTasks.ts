@@ -1,3 +1,4 @@
+import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
@@ -24,7 +25,7 @@ const row = {
   createdByName: schema.officeTasks.createdByName,
   createdAt: schema.officeTasks.createdAt,
   jobId: schema.officeTasks.jobId,
-  jobNumber: schema.jobs.number,
+  jobNumber: jobNumberSql,
   jobTitle: schema.jobs.title,
 };
 

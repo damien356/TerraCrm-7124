@@ -15,7 +15,7 @@ export type PoPdfInput = {
   date: string;
   supplierName: string;
   supplierAccount: string | null;
-  jobNumber: number;
+  jobNumber: number | string;
   jobTitle: string;
   deliverTo: "warehouse" | "site";
   deliveryAddress: string;

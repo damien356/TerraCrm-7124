@@ -45,6 +45,8 @@ export interface SupJob {
   sup: number;
   id: number;
   number: number;
+  /** "3981-C1" on a callback, else null. */
+  displayNumber: string | null;
   title: string;
   status: string;
   value: number;
@@ -80,7 +82,7 @@ export interface SupQuote {
 /** Every job with an explicit supervisor link. One row per supervisor per job. */
 export async function loadJobs(): Promise<SupJob[]> {
   const rows = await db.all<any>(sql`
-    select jcs.contact_id as sup, j.id, j.number, j.title, s.name as status, j.value,
+    select jcs.contact_id as sup, j.id, j.number, j.display_number, j.title, s.name as status, j.value,
       j.company_id, co.name as company_name, j.created_at, ${JOB_DATE} as job_date,
       case when ${DELIVERED} then 1 else 0 end as delivered,
       case when ${CANCELLED} then 1 else 0 end as cancelled,
@@ -95,6 +97,8 @@ export async function loadJobs(): Promise<SupJob[]> {
     left join job_statuses s on s.id = j.status_id
     left join companies co on co.id = j.company_id
     where exists (select 1 from json_each(jcs.tags) where json_each.value = 'supervisor')
+      -- A free callback is a fix on an old job, not new work from the supervisor.
+      and not (j.parent_job_id is not null and coalesce(j.callback_chargeable, 0) = 0)
   `);
   return rows.map((r) => {
     const complete = Number(r.inst_n) > 0 && Number(r.mat_n) > 0;
@@ -102,6 +106,7 @@ export async function loadJobs(): Promise<SupJob[]> {
       sup: r.sup,
       id: r.id,
       number: r.number,
+      displayNumber: r.display_number ?? null,
       title: r.title,
       status: r.status ?? "",
       value: r.value ?? 0,
@@ -451,6 +456,7 @@ export async function supervisorDetail(id: number, canSeeCosts: boolean) {
     jobs: jobs.map((j) => ({
       id: j.id,
       number: j.number,
+      displayNumber: j.displayNumber,
       title: j.title,
       status: j.status,
       value: j.value,
