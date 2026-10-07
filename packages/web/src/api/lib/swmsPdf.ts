@@ -1,5 +1,5 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
-import type { SwmsSnapshot } from "./swms-library";
+import type { SwmsSnapshot } from "./swms-content";
 import { drawSignature, type Signature } from "./signature";
 
 /**
@@ -137,7 +137,8 @@ export async function renderSwmsPdf(input: SwmsPdfInput): Promise<Buffer> {
   const ctlW = W - M - colCtl;
   const items = (list: SwmsSnapshot["common"]) => {
     for (const it of list) {
-      const hl = wrap(it.label, reg, 8.8, hazW);
+      const risk = it.riskBefore ? `Risk ${it.riskBefore}${it.riskAfter ? `, after controls ${it.riskAfter}` : ""}` : "";
+      const hl = [...wrap(it.label, reg, 8.8, hazW), ...(risk ? [risk] : [])];
       const cl = wrap(it.controls, reg, 8.8, ctlW);
       const h = Math.max(hl.length, cl.length) * 11 + 6;
       need(h);
@@ -151,13 +152,19 @@ export async function renderSwmsPdf(input: SwmsPdfInput): Promise<Buffer> {
       page.drawLine({ start: { x: M, y: y + 2 }, end: { x: W - M, y: y + 2 }, thickness: 0.4, color: RULE });
     }
   };
-  const heading = (title: string, sub?: string) => {
+  const heading = (title: string, sub?: string, ppe?: string[]) => {
     need(40);
     y -= 6;
     t(title.toUpperCase(), M, 9, bold);
     y -= 13;
     if (sub) {
       for (const l of wrap(`Task: ${sub}`, reg, 8.5, W - M * 2)) {
+        t(l, M, 8.5, reg, MUTED);
+        y -= 11;
+      }
+    }
+    if (ppe?.length) {
+      for (const l of wrap(`PPE: ${ppe.join(", ")}`, reg, 8.5, W - M * 2)) {
         t(l, M, 8.5, reg, MUTED);
         y -= 11;
       }
@@ -172,7 +179,7 @@ export async function renderSwmsPdf(input: SwmsPdfInput): Promise<Buffer> {
   items(input.snapshot.common);
   for (const s of input.snapshot.sections) {
     y -= 6;
-    heading(s.title, s.task);
+    heading(s.title, s.task, s.ppe);
     items(s.items);
   }
 

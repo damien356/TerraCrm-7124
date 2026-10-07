@@ -1,8 +1,9 @@
-import { FileText, ShieldAlert, ShieldCheck } from "lucide-react";
+import { FileText, ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { Card, CardHeader, Empty, Loading } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Checkbox, Select } from "./ui/field";
 import { useSetCompanySwms, useSetContactSwms, useSetJobSwms, useSwmsJob } from "../queries/swms";
+import { usePinJobTemplate, useSwmsJobTemplates } from "../queries/swms-lib";
 
 const GREEN = "#3F7D3A";
 const RUST = "#C0603F";
@@ -80,6 +81,7 @@ export function SwmsJobCard({ jobId }: { jobId: number }) {
               </span>
             </div>
           ) : null}
+          {d.required ? <JobTemplates jobId={jobId} /> : null}
           {d.records.length === 0 ? (
             <Empty>{d.required ? "Nobody has signed one yet." : "No SWMS signed on this job."}</Empty>
           ) : (
@@ -125,6 +127,69 @@ export function SwmsJobCard({ jobId }: { jobId: number }) {
         </div>
       )}
     </Card>
+  );
+}
+
+/**
+ * Which SWMS templates the crew gets on this job: the ones picked from the
+ * labour, plus any Office added by hand. Takes effect on the next signature.
+ */
+function JobTemplates({ jobId }: { jobId: number }) {
+  const q = useSwmsJobTemplates(jobId);
+  const pin = usePinJobTemplate();
+  const d = q.data;
+  if (!d || !d.ready) return null;
+  const title = (k: string) => d.options.find((o) => o.key === k)?.title ?? k;
+  const extra = d.all.filter((k) => !d.fromLabour.includes(k) && !d.pinned.includes(k));
+  const addable = d.options.filter((o) => !d.all.includes(o.key));
+  return (
+    <div className="border-b border-border px-4 py-2.5 text-xs">
+      <p className="mb-1.5 text-muted-foreground">Crew signs these sections. Changes apply from the next signature.</p>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {d.fromLabour.map((k) => (
+          <span key={k} title="Picked from the labour on this job">
+            <Badge>{title(k)}</Badge>
+          </span>
+        ))}
+        {d.pinned
+          .filter((k) => !d.fromLabour.includes(k))
+          .map((k) => (
+            <span key={k} className="inline-flex items-center gap-1 rounded-full border border-primary px-2 py-0.5 text-[11px] text-primary">
+              {title(k)}, added
+              <button
+                type="button"
+                aria-label={`Take ${title(k)} off this job`}
+                disabled={pin.isPending}
+                onClick={() => pin.mutate({ jobId, templateKey: k, pinned: false })}
+              >
+                <X className="size-3" />
+              </button>
+            </span>
+          ))}
+        {extra.map((k) => (
+          <span key={k} title="Brought in by another section">
+            <Badge>{title(k)}</Badge>
+          </span>
+        ))}
+        {d.all.length === 0 ? <span className="text-muted-foreground">Nothing picked from the labour yet.</span> : null}
+        {addable.length ? (
+          <Select
+            aria-label="Add a SWMS section"
+            className="h-7 w-auto text-xs"
+            value=""
+            disabled={pin.isPending}
+            onChange={(e) => e.target.value && pin.mutate({ jobId, templateKey: e.target.value, pinned: true })}
+          >
+            <option value="">Add a section</option>
+            {addable.map((o) => (
+              <option key={o.key} value={o.key}>
+                {o.title}
+              </option>
+            ))}
+          </Select>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

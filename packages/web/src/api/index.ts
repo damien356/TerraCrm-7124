@@ -46,6 +46,7 @@ import { payables } from "./routes/payables";
 import { priceChecks } from "./routes/price-checks";
 import { mail } from "./routes/mail";
 import { swms } from "./routes/swms";
+import { swmsLib } from "./routes/swms-lib";
 import { people } from "./routes/people";
 import { callbacks } from "./routes/callbacks";
 import { bootMailAgent } from "./lib/mail-agent";
@@ -151,6 +152,7 @@ export const router = {
   priceChecks,
   /** SWMS for Terra Crew: signed per worker per day before Start and Complete, plus the SDS library. */
   swms,
+  swmsLib,
   /** The email agent's three mailboxes. Read only, team@ can also send. */
   mail,
   /** Job and quote people, duplicate cards, company retype, and referral value. */

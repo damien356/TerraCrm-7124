@@ -2957,6 +2957,8 @@ export const safetyDocs = sqliteTable(
     /** Replaced sheets are kept for old records, just not attached to new ones. */
     active: integer("active", { mode: "boolean" }).notNull().default(true),
     uploadedByName: text("uploaded_by_name").notNull().default(""),
+    /** YYYY-MM-DD. When the sheet is due for review. Blank means 5 years after issue. */
+    reviewOn: text("review_on"),
     ...timestamps,
   },
   (t) => [index("safety_docs_code_idx").on(t.code, t.active)],
@@ -2989,4 +2991,134 @@ export const swmsRecords = sqliteTable(
     ...timestamps,
   },
   (t) => [index("swms_job_day_idx").on(t.jobId, t.workDate), index("swms_installer_idx").on(t.installerId, t.workDate)],
+);
+
+/* ---------------------------------------------------------------------------
+ * SWMS content, edited in Ops (Stage 2).
+ *
+ * Task blocks are written once and shared by templates. A template is an
+ * ordered list of blocks. Edits are a draft until someone publishes, which
+ * freezes the whole template, blocks included, into swms_template_versions.
+ * Crew only ever sees the latest published version. Signed records keep their
+ * own copy, so nothing here ever rewrites a signed SWMS.
+ * ------------------------------------------------------------------------- */
+
+export const sdsProducts = sqliteTable("sds_products", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  /** Matches safety_docs.code and the sds field on block items. */
+  code: text("code").notNull().unique(),
+  product: text("product").notNull(),
+  supplier: text("supplier").notNull().default(""),
+  archived: integer("archived", { mode: "boolean" }).notNull().default(false),
+  ...timestamps,
+});
+
+export const swmsBlocks = sqliteTable("swms_blocks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  key: text("key").notNull().unique(),
+  title: text("title").notNull(),
+  /** What the task is, one line. */
+  task: text("task").notNull().default(""),
+  /** JSON array of PPE names. */
+  ppe: text("ppe").notNull().default("[]"),
+  /** JSON array of { id, label, controls, riskBefore, riskAfter, sds }. Item ids never change. */
+  items: text("items").notNull().default("[]"),
+  archivedAt: integer("archived_at", { mode: "timestamp" }),
+  updatedByName: text("updated_by_name").notNull().default(""),
+  ...timestamps,
+});
+
+export const swmsTemplates = sqliteTable("swms_templates", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  /** Stable key. Signed records and the phone refer to the template by it. */
+  key: text("key").notNull().unique(),
+  name: text("name").notNull(),
+  workType: text("work_type").notNull().default(""),
+  activity: text("activity").notNull().default(""),
+  /** JSON array of PPE names, on top of the blocks' own. */
+  ppe: text("ppe").notNull().default("[]"),
+  /** JSON array of swms_blocks ids, in order. */
+  blockIds: text("block_ids").notNull().default("[]"),
+  /** The 8 every-job hazards. Shown on every SWMS, never picked. */
+  everyJob: integer("every_job", { mode: "boolean" }).notNull().default(false),
+  /** JSON array of words matched against the labour names on the job. Applies straight away. */
+  matchTerms: text("match_terms").notNull().default("[]"),
+  /** JSON array matched against the job category, only when no labour matched anything. */
+  categoryTerms: text("category_terms").notNull().default("[]"),
+  /** JSON array of other template keys this one always brings in. */
+  alsoAdds: text("also_adds").notNull().default("[]"),
+  /** On first publish, this template takes the matching words of that one, and archives it once it has none left. */
+  replacesKey: text("replaces_key"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  archivedAt: integer("archived_at", { mode: "timestamp" }),
+  updatedByName: text("updated_by_name").notNull().default(""),
+  ...timestamps,
+});
+
+export const swmsTemplateVersions = sqliteTable(
+  "swms_template_versions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    templateId: integer("template_id")
+      .notNull()
+      .references(() => swmsTemplates.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    /** JSON. The template with its blocks, frozen at publish. */
+    content: text("content").notNull(),
+    whatChanged: text("what_changed").notNull().default(""),
+    publishedByName: text("published_by_name").notNull().default(""),
+    publishedAt: integer("published_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+    reviewedByName: text("reviewed_by_name").notNull().default(""),
+    reviewedByQualification: text("reviewed_by_qualification").notNull().default(""),
+    reviewedOn: text("reviewed_on"),
+  },
+  (t) => [unique("swms_template_versions_uq").on(t.templateId, t.version)],
+);
+
+export const swmsSiteChecks = sqliteTable("swms_site_checks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  question: text("question").notNull(),
+  /** JSON array from yes, no, unsure, na. */
+  answers: text("answers").notNull().default('["yes","no"]'),
+  /** JSON array of answers that flag the job. */
+  flagOn: text("flag_on").notNull().default('["no","unsure"]'),
+  /** A flagged answer stops the job starting, not just flags it. */
+  blocks: integer("blocks", { mode: "boolean" }).notNull().default(false),
+  /** Shown on every SWMS. Otherwise only on the templates in templateKeys. */
+  appliesAll: integer("applies_all", { mode: "boolean" }).notNull().default(true),
+  templateKeys: text("template_keys").notNull().default("[]"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  archivedAt: integer("archived_at", { mode: "timestamp" }),
+  ...timestamps,
+});
+
+export const swmsChanges = sqliteTable(
+  "swms_changes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** template · block · site_check · sds */
+    entityType: text("entity_type").notNull(),
+    entityId: integer("entity_id"),
+    action: text("action").notNull(),
+    summary: text("summary").notNull().default(""),
+    actorName: text("actor_name").notNull().default("System"),
+    actorRole: text("actor_role").notNull().default("system"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+  },
+  (t) => [index("swms_changes_entity_idx").on(t.entityType, t.entityId)],
+);
+
+/** Extra templates Office pins on one job, on top of the ones the labour brings in. */
+export const jobSwmsTemplates = sqliteTable(
+  "job_swms_templates",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    templateKey: text("template_key").notNull(),
+    addedByName: text("added_by_name").notNull().default(""),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+  },
+  (t) => [unique("job_swms_templates_uq").on(t.jobId, t.templateKey)],
 );

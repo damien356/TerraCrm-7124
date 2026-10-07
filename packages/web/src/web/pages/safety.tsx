@@ -140,7 +140,7 @@ function Library() {
         subtitle="The current SDS for each product is attached to every SWMS that ticks it. Upload a newer one and the old one is kept for past records."
       />
       <ul className="divide-y divide-border">
-        {q.data.catalogue.map((c) => {
+        {q.data.catalogue.filter((c) => !c.archived || c.current).map((c) => {
           const cur = c.current;
           const pds = c.others.filter((o) => o.kind === "pds");
           return (
@@ -154,6 +154,13 @@ function Library() {
                     </a>
                     {cur.revision ? <span>{cur.revision}</span> : null}
                     {cur.issuedOn ? <span>issued {cur.issuedOn}</span> : null}
+                    {cur.reviewDue ? (
+                      c.expired ? (
+                        <Badge colour={RUST}>Review was due {cur.reviewDue}, get the new sheet</Badge>
+                      ) : (
+                        <span>review by {cur.reviewDue}</span>
+                      )
+                    ) : null}
                     {cur.region !== "AU" ? <Badge colour={AMBER}>{cur.region} sheet, need the AU one</Badge> : null}
                     {cur.notes ? <span>{cur.notes}</span> : null}
                   </p>
@@ -209,6 +216,9 @@ function UploadModal({ code, product, onClose }: { code: string; product: string
   const [file, setFile] = React.useState<File | null>(null);
   const [revision, setRevision] = React.useState("");
   const [issuedOn, setIssuedOn] = React.useState("");
+  const [reviewOn, setReviewOn] = React.useState("");
+  const [reviewTouched, setReviewTouched] = React.useState(false);
+  const fiveYears = (d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? `${Number(d.slice(0, 4)) + 5}${d.slice(4)}` : "");
   const [region, setRegion] = React.useState<"AU" | "NZ">("AU");
   const [kind, setKind] = React.useState<"sds" | "pds">("sds");
   const [busy, setBusy] = React.useState(false);
@@ -227,6 +237,7 @@ function UploadModal({ code, product, onClose }: { code: string; product: string
         kind,
         revision,
         issuedOn: issuedOn || null,
+        reviewOn: reviewOn || null,
         region,
         storageKey: key,
         filename: file.name,
@@ -264,7 +275,24 @@ function UploadModal({ code, product, onClose }: { code: string; product: string
             <Input value={revision} onChange={(e) => setRevision(e.target.value)} placeholder="Revision 8" />
           </Field>
           <Field label="Issued">
-            <Input type="date" value={issuedOn} onChange={(e) => setIssuedOn(e.target.value)} />
+            <Input
+              type="date"
+              value={issuedOn}
+              onChange={(e) => {
+                setIssuedOn(e.target.value);
+                if (!reviewTouched) setReviewOn(fiveYears(e.target.value));
+              }}
+            />
+          </Field>
+          <Field label="Review by" hint="Five years after issue unless the sheet says sooner.">
+            <Input
+              type="date"
+              value={reviewOn}
+              onChange={(e) => {
+                setReviewTouched(true);
+                setReviewOn(e.target.value);
+              }}
+            />
           </Field>
         </div>
         {error ? <p className="text-xs text-destructive">{error}</p> : null}

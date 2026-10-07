@@ -1,6 +1,6 @@
 # Terra Ops: project notes
 
-Last updated: 7 Oct 2026, 11:40 pm Brisbane. Checked against the code, GitHub `main` (SWMS Stage 1 commit on top of `62a646c`), and the live database.
+Last updated: 8 Oct 2026 Brisbane (archive locations added in section 17). Checked against the code, GitHub `main` (SWMS Stage 1 commit on top of `62a646c`), and the live database.
 This file replaces `STATE.md` as the source of truth. `STATE.md` (29 Sep) is out of date.
 
 Status words used below:
@@ -89,7 +89,7 @@ Current rule (Damien, 6 Oct):
 - Sales figures only. Office can see it.
 - Shipped with job contacts (section 6), commit `62a646c`.
 
-## 8. SWMS (Stage 1 live, published 7 Oct)
+## 8. SWMS (Stage 1 live, published 7 Oct. Stage 2 database applied 8 Oct, code not pushed)
 
 Plans: `/home/user/plans/swms/editor-brief.md` and `/home/user/plans/swms/library.md` (Damien's 7 Oct attachments).
 
@@ -118,6 +118,22 @@ Plans: `/home/user/plans/swms/editor-brief.md` and `/home/user/plans/swms/librar
 - **Phone test:** use job #4446 "DEMO job for installer app" (its only task is already complete, so it needs a new task for today). The stored demo.installer@ password no longer signs in on live.
 - Stages 2 and 3 come after callbacks (Damien, 7 Oct). Stage 4 waits for the next store build.
 
+### SWMS Stage 2 (Database applied 8 Oct, code not pushed)
+
+Plan: `/home/user/plans/swms/stage2-plan.md` (approved). Code is on GitHub branch `archive/swms-stage2-wip`, not on `main`.
+
+- **Database:** SQL file `packages/web/src/api/database/sql/2026-10-07-swms-stage2.sql`. Additive only: `safety_docs.review_on` plus 7 new tables (`sds_products`, `swms_blocks`, `swms_templates`, `swms_template_versions`, `swms_site_checks`, `swms_changes`, `job_swms_templates`). Applied to live 8 Oct with Damien's OK. Live now has 96 tables. No existing row changed. Seed result on live: 10 published, 9 drafts, 19 blocks, 7 site checks, 8 SDS products.
+- **Seed** (`lib/swms-seed.ts`): today's built-in content becomes 10 published templates at version 1, so crew sees no change. The 9 library templates load as drafts. 19 blocks, 7 site checks, 8 SDS products. Runs once.
+- **Crew side:** `forTask` and `sign` now read the published library (falls back to the built-in content while the tables are missing). Same response shape, no app change. Signed SWMS keep the version they were signed on.
+- **Replace rule (default given to Damien):** publishing a library template takes the matching words from the built-in one it covers. The old one is archived, never deleted, once it has no words left. Laminate and Hybrid both replace built-in `hybrid`.
+- **Web page `/swms-library`** (Office and Admin, under Schedule): Templates (warnings, live, drafts, archived, editor with drag order, publish with what changed and reviewed by, crew preview and sample PDF, version history), Task blocks (hazards, risk before and after, SDS), Site checks, SDS products, Change log.
+- **`/safety` SDS library:** "Review by" date on upload (defaults to issue plus 5 years). Expired sheets show red.
+- **Job card:** SWMS card lists the sections crew signs, and Office can add or remove one per job.
+- **PDF:** risk line under each hazard, PPE line under each section.
+- **Checked 8 Oct:** lint, build, api tsc 0, app tsc 172 (baseline), mobile tsc 0. Scratch test 72 checks passed. Screens checked on a scratch copy as Office. Dry run on a copy of the live backup `terra-live-pre-swms-stage2-2026-10-08.db`: no existing row changed, library equals the built-in content.
+- **Applied 8 Oct:** fresh backup first, `terra-live-pre-swms-stage2-apply-2026-10-08.db` (89 tables, 14,209 rows, integrity ok). Then the script `terra-scratch-tests/swms/s2-apply.tmp.ts`. The live site runs the older code, which does not read the new tables, so nothing changes for users until the code is pushed and published.
+- **Next:** commit and push to `main` (Damien's OK), publish, then Stage 3.
+
 ## 9. Callbacks (Built 7 Oct, not yet published)
 
 Plan: `/home/user/plans/callbacks-plan.md`. Damien's decisions, 7 Oct:
@@ -129,7 +145,7 @@ Plan: `/home/user/plans/callbacks-plan.md`. Damien's decisions, 7 Oct:
 - People copy from the original job with all their tags and ticks, Show to Crew included, so the supervisor carries over.
 - Crew see it as a normal job. Never the cause, chargeable flag or rework cost.
 - Photos: original install photos (read only), client photos in their own bucket, after-fix photos from Crew in Completion.
-- **Texted no-login photo link: deferred. Remind Damien at every check-in.**
+- **Texted no-login photo link: built with the email photo work (Damien, 7 Oct).**
 
 Database: `jobs` callback columns and `callback_costs`, `sql/2026-10-07-callbacks.sql`, applied on live 7 Oct. No more SQL needed.
 
@@ -145,6 +161,14 @@ What is built:
 - App (screen only, OTA-able): job shows `#4199-C1`, materials marked "Laid on the original job", Client photos and Original job chips, both read only. Crew sees no cause, chargeable flag or cost.
 - Inbox finding: "file to callback" from the inbox cannot work. `message_attachments` is never written, so inbound attachments are not stored. Office uploads client photos into Client photos on the callback instead.
 - Scratch tests: `/home/user/terra-scratch-tests/callbacks/`.
+- **Committed and pushed 7 Oct as `d788d17`.** Damien publishes the website and the OTA himself.
+
+**Client photos from email (Damien, 7 Oct). Build after SWMS Stages 2 and 3:**
+- Idea 1 only: the email agent collects photos from emails sent by anyone on a contact or company card. Saved once, linked to the person, and to the job when the thread or address matches. Skip logos and signature images.
+- Mailboxes: team@ and damien@. Not billing@.
+- First run looks back 90 days.
+- Build the texted no-login photo link in the same piece of work. It is no longer deferred.
+- Not chosen for now: photo picker in Create callback, search, unmatched tray, forward to team+4199@, MMS. Offer them again once idea 1 is live.
 
 ## 10. Payments
 
@@ -198,7 +222,7 @@ Nothing for these exists in the code. Damien to paste or re-state the spec.
 - **Camera scanner:** not in 1.0.2. Damien chose: scanner comes in a later store build, after the stock work.
 - **Publish:** `62a646c` published 7 Oct. Checked the live bundle: Show to Crew, Duplicate cards and Referrers are in it. Damien to eyeball one job page's contacts.
 - **Transfer pack:** Damien sent the review prompt for `content.md` (section 13) and Specs 2 to 6 from the other chat, but the ZIP did not arrive. Waiting for it. Spec 1 not found here yet. No comparison done, nothing built for it.
-- **Texted no-login photo link (callbacks):** deferred. Remind Damien at every check-in.
+- **Texted no-login photo link (callbacks):** Damien chose 7 Oct to build it with the email photo work, after SWMS Stages 2 and 3.
 - **Stripe:** keys not given yet.
 - **Xero:** keys not given yet.
 - **Google client ID and secret:** set for the mailboxes. No separate Google sign-in keys.
@@ -209,8 +233,9 @@ Nothing for these exists in the code. Damien to paste or re-state the spec.
 
 ## 15. Work order (Damien, 7 Oct)
 
-1. Finish callbacks.
+1. Finish callbacks. Done 7 Oct (`d788d17`).
 2. SWMS Stages 2 and 3.
+2b. Client photos from email, plus the texted photo link.
 3. Client invoices, then Stripe and Xero.
 4. Product arrived and delivery (spec needed).
 5. Stock WIP.
@@ -226,4 +251,31 @@ SWMS Stage 4 (offline signing) and the camera scanner go in the next store build
 - Never print or commit secrets.
 - No EAS builds in the sandbox. Builds start from the mobile publish dashboard.
 - Checks before a push: lint, web build, both type checks.
-- Every database change so far: backup in `/home/user/backups/`, latest `terra-live-pre-jc-callbacks-2026-10-07.db` (87 tables, 14,185 rows).
+- Every database change so far: backup in `/home/user/backups/`, latest `terra-live-pre-swms-stage2-apply-2026-10-08.db` (89 tables, 14,209 rows, integrity ok). Taken just before SWMS Stage 2 was applied on 8 Oct.
+
+---
+
+## 17. Archive locations (8 Oct)
+
+Sandbox cleanup on 8 Oct. Everything worth keeping was archived first. Each place was checked.
+
+**GitHub**
+- Branch `archive/swms-stage2-wip`, commit `e501d1f`. Parent is `d788d17` (Callbacks, `main`).
+- Holds the 21 SWMS Stage 2 files, including this file. `main` was not touched.
+- Safe to delete once Stage 2 is committed to `main`.
+
+**Supabase** (project `yozjpzkcbbvhjdyygetf`, bucket `terra-backup`)
+- Database snapshot: `database/2026-10-07/193943256-utc.sqlite.gz` (89 tables, 14,146 rows).
+- Postgres copy: schema `terra_backup`, 89 tables.
+- Sandbox files: manifest `sandbox/manifests/2026-10-07T19-44-29.458Z.json`, also `sandbox/latest.json`. Files are under `sandbox/objects/<sha256>.gz`. 1,629 files, 0 failed.
+- Media: 30 files, 0 failed.
+- Verify run on 8 Oct: 226 checks passed, 0 failed.
+- SDK 54 rollback: `sandbox/sdk54-rollback/2026-10-05T03-13-16-817Z.tar.zst`. The local folder was deleted on 5 Oct. This is the only copy. Do not delete it.
+- `sandbox/latest-incomplete.json` is from a first run that stopped on 3 unreadable files. Leave it.
+- The backup runs every 6 hours (schedule, Brisbane time).
+
+**Sandbox only**
+- Live backups before SWMS Stage 2: `/home/user/backups/terra-live-pre-swms-stage2-2026-10-08.db` (dry-run source) and `terra-live-pre-swms-stage2-apply-2026-10-08.db` (taken just before applying).
+- Test screenshots, PDFs and small scripts from 5 to 7 Oct: `/home/user/terra-scratch-tests/evidence/2026-10-07/`.
+- `terra-release/check-b6/b6.aab` (83 MB) is local only. The backup tool skips `.aab` files. Build 7 lives in EAS.
+

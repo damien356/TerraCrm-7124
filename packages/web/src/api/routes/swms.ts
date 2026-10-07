@@ -8,18 +8,20 @@ import { installerOnly, staffOnly } from "../middleware/auth";
 import { putObject, signGet, signPut } from "../lib/s3";
 import { addLocalDays, todayLocal } from "../lib/local-date";
 import {
-  COMMON_HAZARDS,
-  SDS_CATALOGUE,
-  SECTIONS,
-  SECTION_KEYS,
-  buildSnapshot,
+  buildSnapshotFrom,
+  pinnedFor,
+  publishedLibrary,
+  reviewDate,
+  sdsCatalogue,
   sdsCodesIn,
-  sectionsFor,
+  sectionsForLib,
+  type Library,
   type SwmsSnapshot,
-} from "../lib/swms-library";
+} from "../lib/swms-content";
 import { swmsBoard, swmsRequirement } from "../lib/swms";
 import { checkSignature, signatureInput, tidySignature, type Signature } from "../lib/signature";
 import { renderSwmsPdf } from "../lib/swmsPdf";
+import { logChange } from "../lib/swms-admin";
 import { ownTaskOrThrow } from "./field";
 
 /**
@@ -30,7 +32,7 @@ import { ownTaskOrThrow } from "./field";
  * signed, and keep the safety data sheets current.
  */
 
-const sectionKey = z.enum(SECTION_KEYS);
+const sectionKey = z.string().min(1).max(80);
 
 /** The active sheet per code. Newest upload wins if two are active. */
 async function activeDocs(codes?: string[]) {
@@ -53,9 +55,11 @@ async function activeDocs(codes?: string[]) {
   return out;
 }
 
-const catalogueName = (code: string) => SDS_CATALOGUE.find((c) => c.code === code)?.product ?? code;
+async function catalogueName(code: string) {
+  return (await sdsCatalogue()).find((c) => c.code === code)?.product ?? code;
+}
 
-async function jobContext(jobId: number) {
+async function jobContext(jobId: number, lib?: Library) {
   const [job] = await db
     .select({
       id: schema.jobs.id,
@@ -79,7 +83,10 @@ async function jobContext(jobId: number) {
   const siteAddress = [job.address, job.suburb, [job.state, job.postcode].filter(Boolean).join(" ")]
     .filter(Boolean)
     .join(", ");
-  return { job, siteAddress, autoSections: sectionsFor(skills.map((s) => s.name), job.category) };
+  const autoSections = lib
+    ? sectionsForLib(lib, skills.map((s) => s.name), job.category, await pinnedFor(jobId))
+    : [];
+  return { job, siteAddress, autoSections };
 }
 
 /** Ticked ids back out of a stored snapshot, for "same as last time". */
@@ -124,8 +131,9 @@ export const swms = {
   forTask: installerOnly.input(z.object({ taskId: z.number() })).handler(async ({ input, context }) => {
     const task = await ownTaskOrThrow(input.taskId, context.installerId);
     const today = todayLocal();
+    const lib = await publishedLibrary();
     const [{ job, siteAddress, autoSections }, req, me] = await Promise.all([
-      jobContext(task.jobId),
+      jobContext(task.jobId, lib),
       swmsRequirement([task.jobId]),
       db.select({ name: schema.installers.name }).from(schema.installers).where(eq(schema.installers.id, context.installerId)),
     ]);
@@ -140,7 +148,7 @@ export const swms = {
 
     const docs = await activeDocs();
     const sds: Record<string, { product: string; revision: string; url: string } | null> = {};
-    for (const c of SDS_CATALOGUE) {
+    for (const c of await sdsCatalogue()) {
       const d = docs.get(c.code);
       sds[c.code] = d ? { product: d.product, revision: d.revision, url: await signGet(d.storageKey) } : null;
     }
@@ -155,8 +163,8 @@ export const swms = {
         jobTitle: job.title,
         siteAddress,
       },
-      common: COMMON_HAZARDS,
-      sections: SECTION_KEYS.map((k) => SECTIONS[k]),
+      common: lib.common,
+      sections: lib.sections.map((s) => ({ key: s.key, title: s.title, task: s.task, items: s.items })),
       autoSections,
       previous: earlier
         ? {
@@ -176,7 +184,7 @@ export const swms = {
       z.object({
         taskId: z.number(),
         common: z.array(z.string()).max(50),
-        sections: z.array(z.object({ key: sectionKey, checked: z.array(z.string()).max(50) })).max(SECTION_KEYS.length),
+        sections: z.array(z.object({ key: sectionKey, checked: z.array(z.string()).max(80) })).max(40),
         customHazard: z.string().max(2000).default(""),
         signedName: z.string().trim().min(2, "Type your name.").max(80),
         signature: signatureInput,
@@ -214,11 +222,11 @@ export const swms = {
         basedOn = b ?? null;
       }
 
-      const snapshot = buildSnapshot(input.common, input.sections);
+      const snapshot = buildSnapshotFrom(await publishedLibrary(), input.common, input.sections);
       const codes = sdsCodesIn(snapshot);
       const docs = await activeDocs(codes);
       const attached = codes.map((c) => docs.get(c)).filter((d): d is NonNullable<typeof d> => Boolean(d));
-      const missing = codes.filter((c) => !docs.has(c)).map(catalogueName);
+      const missing = await Promise.all(codes.filter((c) => !docs.has(c)).map(catalogueName));
 
       const pdf = await renderSwmsPdf({
         jobNumber: job.number,
@@ -375,12 +383,19 @@ export const swms = {
       .select()
       .from(schema.safetyDocs)
       .orderBy(asc(schema.safetyDocs.code), desc(schema.safetyDocs.createdAt));
-    const docs = await Promise.all(rows.map(async (r) => ({ ...r, url: await signGet(r.storageKey) })));
+    const docs = await Promise.all(rows.map(async (r) => ({ ...r, url: await signGet(r.storageKey), reviewDue: reviewDate(r) })));
+    const today = todayLocal();
     return {
-      catalogue: SDS_CATALOGUE.map((c) => {
+      today,
+      catalogue: (await sdsCatalogue()).map((c) => {
         const mine = docs.filter((d) => d.code === c.code);
         const current = mine.find((d) => d.active && d.kind === "sds") ?? null;
-        return { ...c, current, others: mine.filter((d) => d !== current) };
+        return {
+          ...c,
+          current,
+          expired: Boolean(current?.reviewDue && current.reviewDue < today),
+          others: mine.filter((d) => d !== current),
+        };
       }),
     };
   }),
@@ -397,10 +412,11 @@ export const swms = {
   docSave: staffOnly
     .input(
       z.object({
-        code: z.string().refine((c) => SDS_CATALOGUE.some((x) => x.code === c), "Unknown product"),
+        code: z.string().min(1).max(80),
         kind: z.enum(["sds", "pds"]).default("sds"),
         revision: z.string().max(80).default(""),
         issuedOn: z.string().max(20).nullable().optional(),
+        reviewOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
         region: z.enum(["AU", "NZ"]).default("AU"),
         storageKey: z.string().startsWith("safety/sds/"),
         filename: z.string().max(200).default(""),
@@ -409,8 +425,10 @@ export const swms = {
       }),
     )
     .handler(async ({ input, context }) => {
-      const product = catalogueName(input.code);
-      const supplier = SDS_CATALOGUE.find((c) => c.code === input.code)?.supplier ?? "";
+      const entry = (await sdsCatalogue()).find((c) => c.code === input.code);
+      if (!entry) throw new ORPCError("BAD_REQUEST", { message: "Unknown product" });
+      const product = entry.product;
+      const supplier = entry.supplier;
       if (input.kind === "sds") {
         await db
           .update(schema.safetyDocs)
@@ -422,17 +440,27 @@ export const swms = {
         .values({
           ...input,
           issuedOn: input.issuedOn ?? null,
+          reviewOn: input.reviewOn ?? null,
           sizeBytes: input.sizeBytes ?? null,
           product,
           supplier,
           uploadedByName: context.actor.name,
         })
         .returning();
+      await logChange(
+        "sds",
+        row!.id,
+        "uploaded",
+        `Uploaded ${input.kind === "sds" ? "the SDS" : "a product data sheet"} for ${product}${input.revision ? `, ${input.revision}` : ""}.`,
+        { name: context.actor.name, role: context.actor.role },
+      );
       return row!;
     }),
 
-  docArchive: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  docArchive: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
+    const [d] = await db.select().from(schema.safetyDocs).where(eq(schema.safetyDocs.id, input.id));
     await db.update(schema.safetyDocs).set({ active: false, updatedAt: new Date() }).where(eq(schema.safetyDocs.id, input.id));
+    if (d) await logChange("sds", d.id, "retired", `Retired the SDS for ${d.product}. Past SWMS keep their link.`, { name: context.actor.name, role: context.actor.role });
     return { ok: true };
   }),
 };

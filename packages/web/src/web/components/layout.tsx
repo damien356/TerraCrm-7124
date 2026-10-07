@@ -21,6 +21,7 @@ import {
   Mail,
   MapPinned,
   ShieldCheck,
+  BookOpen,
   Menu,
   Mic,
   PieChart,
@@ -86,6 +87,7 @@ const NAV: NavEntry[] = [
       { to: "/schedule", label: "Board", icon: CalendarDays },
       { to: "/crew", label: "Crew map", icon: MapPinned },
       { to: "/safety", label: "SWMS and SDS", icon: ShieldCheck },
+      { to: "/swms-library", label: "SWMS library", icon: BookOpen },
     ],
   },
   {
