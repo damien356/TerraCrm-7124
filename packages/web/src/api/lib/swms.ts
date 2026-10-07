@@ -4,6 +4,7 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { todayLocal } from "./local-date";
+import { openBlockingFlags } from "./swms-checks";
 
 /* ---------------------------------------------------------------------------
  * When a SWMS is needed, and whether it has been done.
@@ -77,6 +78,16 @@ export async function swmsNeededFor(installerId: number, jobIds: number[]) {
  * but this is the one that counts.
  */
 export async function assertSwmsDone(jobId: number, installerId: number, action: "start" | "finish") {
+  // A red card that stops the job holds Start for everyone on it, signed or not.
+  if (action === "start") {
+    const [stop] = await openBlockingFlags(jobId);
+    if (stop) {
+      throw new ORPCError("PRECONDITION_FAILED", {
+        message: `Red card on this job: "${stop.question}". The office has been told. Do not start until they call you.`,
+        data: { swmsBlocked: true, jobId },
+      });
+    }
+  }
   const req = (await swmsRequirement([jobId])).get(jobId);
   if (!req?.required) return;
   const signed = await swmsSignedJobs(installerId, [jobId]);

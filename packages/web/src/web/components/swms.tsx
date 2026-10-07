@@ -1,9 +1,12 @@
-import { FileText, ShieldAlert, ShieldCheck, X } from "lucide-react";
+import * as React from "react";
+import { FileText, Mail, MapPin, ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { Card, CardHeader, Empty, Loading } from "./ui/card";
+import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Checkbox, Select } from "./ui/field";
 import { useSetCompanySwms, useSetContactSwms, useSetJobSwms, useSwmsJob } from "../queries/swms";
 import { usePinJobTemplate, useSwmsJobTemplates } from "../queries/swms-lib";
+import { ClearedFlags, EmailSwmsModal, answerLabel } from "./swms-flags";
 
 const GREEN = "#3F7D3A";
 const RUST = "#C0603F";
@@ -33,6 +36,8 @@ export function SwmsJobCard({ jobId }: { jobId: number }) {
   const q = useSwmsJob(jobId);
   const set = useSetJobSwms();
   const d = q.data;
+  const [emailing, setEmailing] = React.useState<{ recordId: number | null } | null>(null);
+  const hasPdf = !!d?.records.some((r) => r.pdfUrl);
 
   const value = d?.override === null || d?.override === undefined ? "follow" : d.override ? "on" : "off";
 
@@ -100,6 +105,36 @@ export function SwmsJobCard({ jobId }: { jobId: number }) {
                       {r.kind === "reconfirm" ? "Daily re-confirm" : "Full review"}, signed as {r.signedName}
                       {r.customHazard ? `. Added: ${r.customHazard}` : ""}
                     </p>
+                    {r.siteAnswers.length > 0 ? (
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Site checks:{" "}
+                        {r.siteAnswers.map((a, i) => (
+                          <span key={a.checkId} style={a.flagged ? { color: RUST, fontWeight: 600 } : undefined}>
+                            {i ? "; " : ""}
+                            {a.question} {answerLabel(a.answer)}
+                          </span>
+                        ))}
+                      </p>
+                    ) : null}
+                    {r.gps ? (
+                      <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                        <MapPin className="size-3" />
+                        {r.gps.status === "ok" && r.gps.lat !== null && r.gps.lng !== null ? (
+                          <a
+                            className="text-primary hover:underline"
+                            href={`https://maps.google.com/?q=${r.gps.lat},${r.gps.lng}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Signed here{r.gps.accuracy ? ` (within ${Math.round(r.gps.accuracy)} m)` : ""}
+                          </a>
+                        ) : r.gps.status === "not_sent" ? (
+                          "Older app, no location"
+                        ) : (
+                          "Location not shared"
+                        )}
+                      </p>
+                    ) : null}
                     {r.sds.length > 0 ? (
                       <p className="mt-1 flex flex-wrap gap-1">
                         {r.sds.map((s) => (
@@ -111,6 +146,14 @@ export function SwmsJobCard({ jobId }: { jobId: number }) {
                     ) : null}
                   </div>
                   {r.pdfUrl ? (
+                    <span className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                      onClick={() => setEmailing({ recordId: r.id })}
+                    >
+                      <Mail className="size-3.5" /> Email
+                    </button>
                     <a
                       href={r.pdfUrl}
                       target="_blank"
@@ -119,14 +162,49 @@ export function SwmsJobCard({ jobId }: { jobId: number }) {
                     >
                       <FileText className="size-3.5" /> PDF
                     </a>
+                    </span>
                   ) : null}
                 </li>
               ))}
             </ul>
           )}
+          {hasPdf ? (
+            <div className="flex justify-end border-t border-border px-4 py-2.5">
+              <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setEmailing({ recordId: null })}>
+                <Mail className="size-3.5" /> Email SWMS
+              </Button>
+            </div>
+          ) : null}
+          <ClearedFlags flags={d.flags} />
+          <EmailLog emails={d.emails} />
         </div>
       )}
+      {emailing && d ? (
+        <EmailSwmsModal jobId={jobId} records={d.records} recordId={emailing.recordId} onClose={() => setEmailing(null)} />
+      ) : null}
     </Card>
+  );
+}
+
+type SwmsEmail = NonNullable<ReturnType<typeof useSwmsJob>["data"]>["emails"][number];
+
+/** Every SWMS email sent from this job, newest first. */
+function EmailLog({ emails }: { emails: SwmsEmail[] }) {
+  if (!emails.length) return null;
+  return (
+    <div className="border-t border-border px-4 py-2.5 text-xs">
+      <p className="mb-1 font-medium text-muted-foreground">Emailed</p>
+      <ul className="grid gap-0.5">
+        {emails.map((e) => (
+          <li key={e.id}>
+            {e.ok ? "Sent to" : "Failed to"} {e.toEmail}, by {e.sentByName},{" "}
+            {new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" }).format(new Date(e.sentAt))}{" "}
+            {swmsTime(e.sentAt)}
+            {e.error ? <span className="text-destructive"> ({e.error})</span> : null}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

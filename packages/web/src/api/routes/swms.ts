@@ -1,11 +1,11 @@
 import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
-import { and, asc, desc, eq, inArray, lt, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, ne } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { installerOnly, staffOnly } from "../middleware/auth";
-import { putObject, signGet, signPut } from "../lib/s3";
+import { getObject, putObject, signGet, signPut } from "../lib/s3";
 import { addLocalDays, todayLocal } from "../lib/local-date";
 import {
   buildSnapshotFrom,
@@ -23,6 +23,23 @@ import { checkSignature, signatureInput, tidySignature, type Signature } from ".
 import { renderSwmsPdf } from "../lib/swmsPdf";
 import { logChange } from "../lib/swms-admin";
 import { ownTaskOrThrow } from "./field";
+import {
+  SWMS_FROM,
+  TEAM_EMAIL,
+  activeSiteChecks,
+  answerLabel,
+  changedSince,
+  checksFor,
+  emailsForJob,
+  flagsForJob,
+  footerTemplates,
+  isCleared,
+  openBlockingFlags,
+  raiseFlag,
+  swmsPeople,
+  type SiteAnswer,
+} from "../lib/swms-checks";
+import { TERRA_PRINT } from "../lib/quotePdf";
 
 /**
  * SWMS for Terra Crew, plus the SDS library it attaches.
@@ -33,6 +50,12 @@ import { ownTaskOrThrow } from "./field";
  */
 
 const sectionKey = z.string().min(1).max(80);
+const answerKey = z.enum(["yes", "no", "unsure", "na"]);
+
+/** What Crew sees when a red card stops the job. */
+function blockedMessage(question: string) {
+  return `Red card on this job: "${question}". The office has been told. Do not start until they call you.`;
+}
 
 /** The active sheet per code. Newest upload wins if two are active. */
 async function activeDocs(codes?: string[]) {
@@ -118,6 +141,10 @@ async function recordWithLinks(r: typeof schema.swmsRecords.$inferSelect) {
     signedAt: r.signedAt,
     customHazard: r.customHazard,
     pdfUrl: r.pdfKey ? await signGet(r.pdfKey) : null,
+    gps: r.gpsStatus
+      ? { status: r.gpsStatus, lat: r.gpsLat ?? null, lng: r.gpsLng ?? null, accuracy: r.gpsAccuracy ?? null }
+      : null,
+    siteAnswers: r.siteAnswers ? (JSON.parse(r.siteAnswers) as SiteAnswer[]) : [],
     sds: await Promise.all(
       docs.map(async (d) => ({ id: d.id, product: d.product, revision: d.revision, url: await signGet(d.storageKey) })),
     ),
@@ -153,6 +180,13 @@ export const swms = {
       sds[c.code] = d ? { product: d.product, revision: d.revision, url: await signGet(d.storageKey) } : null;
     }
 
+    // Stage 3. All optional, so an older app simply ignores them.
+    const [checks, flags, changed] = await Promise.all([
+      activeSiteChecks(),
+      flagsForJob(task.jobId),
+      earlier ? changedSince(earlier.content, lib) : Promise.resolve([]),
+    ]);
+
     return {
       required: req.get(task.jobId)?.required ?? false,
       today,
@@ -171,12 +205,65 @@ export const swms = {
             id: earlier.id,
             workDate: earlier.workDate,
             customHazard: earlier.customHazard,
-            ticked: tickedFrom(earlier.content),
+            // A newer version since then means a full sign. No ticks means an
+            // older app does not offer the quick re-confirm either.
+            ticked: changed.length ? null : tickedFrom(earlier.content),
+            changed: changed.map((c) => ({
+              key: c.key,
+              name: c.name,
+              from: c.from,
+              to: c.to,
+              notes: c.notes.map((n) => ({ version: n.version, whatChanged: n.whatChanged })),
+            })),
           }
         : null,
       sds,
+      /** Every active check. The phone shows the ones for the sections it has picked. */
+      siteChecks: checksFor(checks, lib.sections.map((x) => x.key)),
+      flags: {
+        open: flags
+          .filter((f) => !f.clearedAt)
+          .map((f) => ({ id: f.id, checkId: f.checkId, question: f.question, answer: f.answer, blocks: f.blocks, installerName: f.installerName, createdAt: f.createdAt })),
+        cleared: flags
+          .filter((f) => f.clearedAt)
+          .map((f) => ({ id: f.id, checkId: f.checkId, answer: f.answer, clearedByName: f.clearedByName ?? "", clearNote: f.clearNote ?? "", clearedAt: f.clearedAt! })),
+      },
     };
   }),
+
+  /**
+   * Crew tapped an answer that flags a check which stops the job. The red card
+   * and the email to team@ happen now, before any signing. Other flagged
+   * answers go in with the signing.
+   */
+  reportCheck: installerOnly
+    .input(z.object({ taskId: z.number(), checkId: z.number(), answer: answerKey }))
+    .handler(async ({ input, context }) => {
+      const task = await ownTaskOrThrow(input.taskId, context.installerId);
+      const check = (await activeSiteChecks()).find((c) => c.id === input.checkId);
+      if (!check) throw new ORPCError("NOT_FOUND", { message: "That site check is no longer in use. Pull down to refresh." });
+      if (!check.answers.includes(input.answer)) throw new ORPCError("BAD_REQUEST", { message: "That answer is not one of the choices." });
+      if (!check.flagOn.includes(input.answer)) return { flagged: false, blocks: check.blocks, cleared: false, flagId: null };
+      if (!check.blocks) return { flagged: true, blocks: false, cleared: false, flagId: null };
+      if (isCleared(await flagsForJob(task.jobId), check.id, input.answer)) {
+        return { flagged: true, blocks: true, cleared: true, flagId: null };
+      }
+      const [{ job, siteAddress }, me] = await Promise.all([
+        jobContext(task.jobId),
+        db.select({ name: schema.installers.name }).from(schema.installers).where(eq(schema.installers.id, context.installerId)),
+      ]);
+      const { flag } = await raiseFlag({
+        jobId: task.jobId,
+        taskId: input.taskId,
+        recordId: null,
+        installerId: context.installerId,
+        installerName: me[0]?.name ?? "",
+        check,
+        answer: input.answer,
+        job: { number: job.number, title: job.title, siteAddress },
+      });
+      return { flagged: true, blocks: true, cleared: false, flagId: flag?.id ?? null };
+    }),
 
   /** Sign it. Builds the PDF, stores it against the job, attaches the right SDS. */
   sign: installerOnly
@@ -189,6 +276,17 @@ export const swms = {
         signedName: z.string().trim().min(2, "Type your name.").max(80),
         signature: signatureInput,
         basedOnId: z.number().nullable().optional(),
+        /** Stage 3. Left out by older apps. */
+        siteAnswers: z.array(z.object({ checkId: z.number(), answer: answerKey })).max(60).optional(),
+        gps: z
+          .object({
+            status: z.enum(["ok", "denied", "timeout", "unavailable"]),
+            lat: z.number().min(-90).max(90).nullable(),
+            lng: z.number().min(-180).max(180).nullable(),
+            accuracy: z.number().min(0).max(1_000_000).nullable(),
+          })
+          .nullable()
+          .optional(),
       }),
     )
     .handler(async ({ input, context }) => {
@@ -199,17 +297,26 @@ export const swms = {
       const today = todayLocal();
       const signedAt = new Date();
 
-      const [{ job, siteAddress }, me] = await Promise.all([
+      const [{ job, siteAddress }, me, people] = await Promise.all([
         jobContext(task.jobId),
         db.select({ name: schema.installers.name }).from(schema.installers).where(eq(schema.installers.id, context.installerId)),
+        swmsPeople(task.jobId),
       ]);
       const installerName = me[0]?.name ?? input.signedName;
 
+      // A red card that stops the job: nobody signs until Office clears it.
+      const stopped = await openBlockingFlags(task.jobId);
+      if (stopped.length) {
+        throw new ORPCError("PRECONDITION_FAILED", { message: blockedMessage(stopped[0]!.question), data: { swmsBlocked: true } });
+      }
+
+      const lib = await publishedLibrary();
+
       // A re-confirm must point at my own earlier SWMS on this same job.
-      let basedOn: { id: number; workDate: string } | null = null;
+      let basedOn: { id: number; workDate: string; content: string } | null = null;
       if (input.basedOnId) {
         const [b] = await db
-          .select({ id: schema.swmsRecords.id, workDate: schema.swmsRecords.workDate })
+          .select({ id: schema.swmsRecords.id, workDate: schema.swmsRecords.workDate, content: schema.swmsRecords.content })
           .from(schema.swmsRecords)
           .where(
             and(
@@ -220,9 +327,49 @@ export const swms = {
             ),
           );
         basedOn = b ?? null;
+        if (basedOn && (await changedSince(basedOn.content, lib)).length) {
+          throw new ORPCError("BAD_REQUEST", {
+            message: "The SWMS has changed since you last signed. Go back, read what changed, and sign it in full.",
+          });
+        }
       }
 
-      const snapshot = buildSnapshotFrom(await publishedLibrary(), input.common, input.sections);
+      // Site checks. An older app sends none, and signs as before.
+      const checks = checksFor(await activeSiteChecks(), input.sections.map((x) => x.key));
+      const flags = input.siteAnswers ? await flagsForJob(task.jobId) : [];
+      const answers: SiteAnswer[] = [];
+      if (input.siteAnswers) {
+        const given = new Map(input.siteAnswers.map((a) => [a.checkId, a.answer]));
+        for (const c of checks) {
+          const a = given.get(c.id);
+          if (!a) throw new ORPCError("BAD_REQUEST", { message: `Answer the site check: "${c.question}"` });
+          if (!c.answers.includes(a)) throw new ORPCError("BAD_REQUEST", { message: `"${answerLabel(a)}" is not an answer to "${c.question}".` });
+          const flagged = c.flagOn.includes(a);
+          answers.push({ checkId: c.id, question: c.question, answer: a, flagged, blocks: c.blocks, cleared: flagged && isCleared(flags, c.id, a) });
+        }
+        // The phone reports these as they are tapped. If it did not, do it now and stop.
+        const stopper = answers.find((a) => a.flagged && a.blocks && !a.cleared);
+        if (stopper) {
+          await raiseFlag({
+            jobId: task.jobId,
+            taskId: input.taskId,
+            recordId: null,
+            installerId: context.installerId,
+            installerName,
+            check: checks.find((c) => c.id === stopper.checkId)!,
+            answer: stopper.answer,
+            job: { number: job.number, title: job.title, siteAddress },
+          });
+          throw new ORPCError("PRECONDITION_FAILED", { message: blockedMessage(stopper.question), data: { swmsBlocked: true } });
+        }
+      }
+      const gps = input.gps
+        ? input.gps.status === "ok" && input.gps.lat !== null && input.gps.lng !== null
+          ? input.gps
+          : { status: input.gps.status, lat: null, lng: null, accuracy: null }
+        : { status: "not_sent", lat: null, lng: null, accuracy: null };
+
+      const snapshot = buildSnapshotFrom(lib, input.common, input.sections);
       const codes = sdsCodesIn(snapshot);
       const docs = await activeDocs(codes);
       const attached = codes.map((c) => docs.get(c)).filter((d): d is NonNullable<typeof d> => Boolean(d));
@@ -248,6 +395,11 @@ export const swms = {
         })),
         missingSds: missing,
         signature,
+        builder: people.builder,
+        supervisor: people.supervisor,
+        gps,
+        siteAnswers: answers,
+        templates: await footerTemplates(snapshot),
       });
       const safeName = installerName.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "") || "installer";
       const key = `jobs/${task.jobId}/swms/${today}-${context.installerId}-${Date.now()}.pdf`;
@@ -271,8 +423,27 @@ export const swms = {
           sdsDocIds: JSON.stringify(attached.map((d) => d.id)),
           pdfKey: key,
           signedAt,
+          gpsLat: gps.lat,
+          gpsLng: gps.lng,
+          gpsAccuracy: gps.accuracy,
+          gpsStatus: gps.status,
+          siteAnswers: input.siteAnswers ? JSON.stringify(answers) : null,
         })
         .returning();
+
+      // Flagged answers that do not stop the job: red card and email, once.
+      for (const a of answers.filter((x) => x.flagged && !x.blocks && !x.cleared)) {
+        await raiseFlag({
+          jobId: task.jobId,
+          taskId: input.taskId,
+          recordId: row!.id,
+          installerId: context.installerId,
+          installerName,
+          check: checks.find((c) => c.id === a.checkId)!,
+          answer: a.answer,
+          job: { number: job.number, title: job.title, siteAddress },
+        });
+      }
 
       await db.insert(schema.activityLog).values({
         jobId: task.jobId,
@@ -301,8 +472,11 @@ export const swms = {
       .orderBy(desc(schema.swmsRecords.workDate), desc(schema.swmsRecords.signedAt));
     const today = todayLocal();
     const board = req.required ? (await swmsBoard(addLocalDays(today, -60), addLocalDays(today, 60))).filter((r) => r.jobId === input.jobId) : [];
+    const [flags, emails] = await Promise.all([flagsForJob(input.jobId), emailsForJob(input.jobId)]);
     return {
       ...req,
+      flags,
+      emails,
       records: await Promise.all(records.map(recordWithLinks)),
       outstanding: board
         .filter((r) => !r.record && r.date <= today)
@@ -375,6 +549,114 @@ export const swms = {
     if (!r) throw new ORPCError("NOT_FOUND", { message: "Not found" });
     return recordWithLinks(r);
   }),
+
+  /** Red cards on a job, open first. */
+  flags: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => flagsForJob(input.jobId)),
+
+  /** Clear a red card. Needs a note. Who and when are kept, nothing is deleted. */
+  clearFlag: staffOnly
+    .input(z.object({ id: z.number(), note: z.string().trim().min(3, "Write a short note on what was sorted.").max(1000) }))
+    .handler(async ({ input, context }) => {
+      const [f] = await db.select().from(schema.swmsFlags).where(eq(schema.swmsFlags.id, input.id));
+      if (!f) throw new ORPCError("NOT_FOUND", { message: "Red card not found" });
+      if (f.clearedAt) throw new ORPCError("BAD_REQUEST", { message: `Already cleared by ${f.clearedByName || "someone"}.` });
+      await db
+        .update(schema.swmsFlags)
+        .set({ clearedAt: new Date(), clearedByName: context.actor.name, clearNote: input.note })
+        .where(and(eq(schema.swmsFlags.id, f.id), isNull(schema.swmsFlags.clearedAt)));
+      await db.insert(schema.activityLog).values({
+        jobId: f.jobId,
+        entityType: "job",
+        entityId: f.jobId,
+        action: "swms_flag_cleared",
+        detail: `Cleared the SWMS red card "${f.question}" (${answerLabel(f.answer)}): ${input.note}`,
+        actorName: context.actor.name,
+        actorRole: context.actor.role === "admin" ? "admin" : "office",
+      });
+      return { ok: true };
+    }),
+
+  /** Who the SWMS email goes to: builder contact, then supervisor, then the builder company. */
+  emailPeople: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => swmsPeople(input.jobId)),
+
+  /** Office emails a signed SWMS PDF. Every address is logged on the job. */
+  emailRecord: staffOnly
+    .input(
+      z.object({
+        recordId: z.number(),
+        to: z.array(z.string().trim().toLowerCase().email("Check the email address.")).min(1, "Add an email address.").max(10),
+        message: z.string().max(2000).default(""),
+      }),
+    )
+    .handler(async ({ input, context }) => {
+      const [r] = await db.select().from(schema.swmsRecords).where(eq(schema.swmsRecords.id, input.recordId));
+      if (!r) throw new ORPCError("NOT_FOUND", { message: "SWMS not found" });
+      if (!r.pdfKey) throw new ORPCError("BAD_REQUEST", { message: "This SWMS has no PDF." });
+      const { job } = await jobContext(r.jobId);
+      const pdf = await getObject(r.pdfKey);
+      const safeName = r.installerName.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "") || "installer";
+      const filename = `SWMS Job ${job.number} ${r.workDate} ${safeName}.pdf`;
+      const subject = `SWMS: Job #${job.number}${r.siteAddress ? `, ${r.siteAddress}` : ""}, ${r.workDate}`;
+      const note = input.message.trim();
+      const text = [
+        "Hi,",
+        "",
+        `Attached is the signed Safe Work Method Statement for ${r.installerName} on ${r.workDate}${r.siteAddress ? ` at ${r.siteAddress}` : ""} (Job #${job.number}).`,
+        ...(note ? ["", note] : []),
+        "",
+        "Thanks,",
+        context.actor.name,
+        "Terra Flooring",
+        TERRA_PRINT.phones,
+      ].join("\n");
+      const esc = (x: string) => x.replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[ch]!);
+      const html = text
+        .split("\n\n")
+        .map((p) => `<p>${esc(p).replace(/\n/g, "<br>")}</p>`)
+        .join("");
+      const { sendEmail } = await import("../lib/email");
+      const results: Array<{ to: string; ok: boolean; error: string | null }> = [];
+      for (const to of new Set(input.to)) {
+        let ok = false;
+        let error: string | null = null;
+        try {
+          const out = await sendEmail({
+            to,
+            from: SWMS_FROM,
+            replyTo: TEAM_EMAIL,
+            subject,
+            text,
+            html,
+            attachments: [{ filename, content: pdf.toString("base64") }],
+          });
+          ok = out.ok;
+          if (!out.ok) error = out.reason;
+        } catch (e) {
+          error = e instanceof Error ? e.message : String(e);
+        }
+        await db.insert(schema.swmsEmails).values({
+          jobId: r.jobId,
+          recordId: r.id,
+          toEmail: to,
+          sentByName: context.actor.name,
+          ok,
+          error,
+        });
+        results.push({ to, ok, error });
+      }
+      const sent = results.filter((x) => x.ok).map((x) => x.to);
+      const failed = results.filter((x) => !x.ok).map((x) => x.to);
+      await db.insert(schema.activityLog).values({
+        jobId: r.jobId,
+        entityType: "job",
+        entityId: r.jobId,
+        action: "swms_emailed",
+        detail: `Emailed the SWMS for ${r.installerName}, ${r.workDate}${sent.length ? ` to ${sent.join(", ")}` : ""}${failed.length ? `. Not sent to ${failed.join(", ")}` : ""}`,
+        actorName: context.actor.name,
+        actorRole: context.actor.role === "admin" ? "admin" : "office",
+      });
+      return { results };
+    }),
 
   /* ------------------------------ SDS library --------------------------- */
 

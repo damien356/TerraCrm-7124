@@ -52,3 +52,18 @@ export function useArchiveSds() {
   const done = useInvalidate();
   return useMutation(orpc.swms.docArchive.mutationOptions({ onSuccess: done }));
 }
+
+/** Who the SWMS email goes to. Only loaded when the email box opens. */
+export function useSwmsEmailPeople(jobId: number, enabled: boolean) {
+  return useQuery(orpc.swms.emailPeople.queryOptions({ input: { jobId }, enabled, staleTime: 0 }));
+}
+
+export function useClearSwmsFlag() {
+  const done = useInvalidate();
+  return useMutation(orpc.swms.clearFlag.mutationOptions({ onSuccess: done }));
+}
+
+export function useEmailSwms() {
+  const done = useInvalidate();
+  return useMutation(orpc.swms.emailRecord.mutationOptions({ onSuccess: done }));
+}

@@ -2988,6 +2988,15 @@ export const swmsRecords = sqliteTable(
     sdsDocIds: text("sds_doc_ids").notNull().default("[]"),
     pdfKey: text("pdf_key"),
     signedAt: integer("signed_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+    /** Where the phone was at signing (Stage 3). Null on older signings. */
+    gpsLat: real("gps_lat"),
+    gpsLng: real("gps_lng"),
+    /** Metres. */
+    gpsAccuracy: real("gps_accuracy"),
+    /** ok · denied · timeout · unavailable · not_sent (an older app). Null before Stage 3. */
+    gpsStatus: text("gps_status"),
+    /** JSON list of { checkId, question, answer, flagged, blocks, cleared }. */
+    siteAnswers: text("site_answers"),
     ...timestamps,
   },
   (t) => [index("swms_job_day_idx").on(t.jobId, t.workDate), index("swms_installer_idx").on(t.installerId, t.workDate)],
@@ -3106,6 +3115,53 @@ export const swmsChanges = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
   },
   (t) => [index("swms_changes_entity_idx").on(t.entityType, t.entityId)],
+);
+
+/**
+ * A flagged site check answer: the red card on the job (Stage 3). One open per
+ * job and check. Clearing fills in who, when and the note. Nothing is deleted.
+ */
+export const swmsFlags = sqliteTable(
+  "swms_flags",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    /** The signing it came with. Null when Crew flagged it before signing (a check that blocks). */
+    recordId: integer("record_id").references(() => swmsRecords.id, { onDelete: "set null" }),
+    taskId: integer("task_id").references(() => jobTasks.id, { onDelete: "set null" }),
+    installerId: integer("installer_id").references(() => installers.id, { onDelete: "set null" }),
+    installerName: text("installer_name").notNull().default(""),
+    checkId: integer("check_id").references(() => swmsSiteChecks.id, { onDelete: "set null" }),
+    question: text("question").notNull(),
+    answer: text("answer").notNull(),
+    blocks: integer("blocks", { mode: "boolean" }).notNull().default(false),
+    emailed: integer("emailed", { mode: "boolean" }).notNull().default(false),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+    clearedByName: text("cleared_by_name"),
+    clearedAt: integer("cleared_at", { mode: "timestamp" }),
+    clearNote: text("clear_note"),
+  },
+  (t) => [index("swms_flags_job_idx").on(t.jobId, t.clearedAt)],
+);
+
+/** Every time Office emails a signed SWMS to the builder. One row per address. */
+export const swmsEmails = sqliteTable(
+  "swms_emails",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    recordId: integer("record_id").references(() => swmsRecords.id, { onDelete: "set null" }),
+    toEmail: text("to_email").notNull(),
+    sentByName: text("sent_by_name").notNull().default(""),
+    sentAt: integer("sent_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+    ok: integer("ok", { mode: "boolean" }).notNull().default(false),
+    error: text("error"),
+  },
+  (t) => [index("swms_emails_job_idx").on(t.jobId, t.sentAt)],
 );
 
 /** Extra templates Office pins on one job, on top of the ones the labour brings in. */

@@ -22,3 +22,16 @@ export function useSignSwms() {
     }),
   );
 }
+
+/**
+ * A tapped answer that stops the job. The server raises the red card and
+ * emails team@ straight away, then the screen refreshes to show it.
+ */
+export function useReportCheck() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.swms.reportCheck.mutationOptions({
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: orpc.swms.key() }),
+    }),
+  );
+}

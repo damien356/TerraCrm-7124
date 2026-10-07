@@ -6,6 +6,7 @@ import { MemoButton } from "../components/voice-memo";
 import { JobFile } from "../components/job-file";
 import { JobVisits } from "../components/crew-updates";
 import { SwmsJobCard } from "../components/swms";
+import { SwmsRedCards } from "../components/swms-flags";
 import { JobForecastCard, MeasureUpModal } from "../components/costing";
 import { JobCashCard } from "../components/job-cash";
 import { PurchaseOrdersCard } from "../components/purchase-orders";
@@ -385,6 +386,7 @@ export default function JobDetailPage() {
       <div className={tab === "job" ? "grid gap-4 lg:grid-cols-[1fr_340px]" : "hidden"}>
         <div className="grid gap-4">
           {isCallback ? <CallbackBanner job={j} /> : null}
+          <SwmsRedCards jobId={j.id} />
 
           {/* header facts */}
           <Card className="px-4 py-3">

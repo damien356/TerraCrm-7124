@@ -28,7 +28,7 @@ export function SiteChecksTab({ data }: { data: Overview }) {
     <Card>
       <CardHeader
         title="Site checks"
-        subtitle="Questions the crew answers on site before they start. Crew sees these from Stage 3, along with the red job card and the email to team@."
+        subtitle="Questions the crew answers on site before they start. A flagged answer raises a red card on the job and emails team@."
         action={
           <Button size="sm" onClick={() => setEdit("new")}>
             <Plus className="size-3.5" /> New check
@@ -139,7 +139,7 @@ function CheckEditor({ data, c, onClose }: { data: Overview; c: SiteCheck | null
           <Checkbox id="check-blocks" checked={blocks} onChange={(e) => setBlocks(e.target.checked)} />
           <span>
             Stop the job, not just flag it
-            <span className="block text-xs text-muted-foreground">Crew can't start until Office clears it.</span>
+            <span className="block text-xs text-muted-foreground">Crew can't sign the SWMS or start until Office clears it.</span>
           </span>
         </label>
         <div className="grid gap-1.5">

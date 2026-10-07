@@ -5,7 +5,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Colors, Fonts } from "@/constants/theme";
 import { fmtDayLabel } from "@/lib/format";
-import { useSignSwms, useSwmsForTask } from "@/queries/swms";
+import * as Location from "expo-location";
+import { useReportCheck, useSignSwms, useSwmsForTask } from "@/queries/swms";
 import { useStartTask } from "@/queries/field";
 import { SignaturePad, type SignatureValue } from "@/components/signature-pad";
 
@@ -14,6 +15,87 @@ const c = Colors.light;
 type Data = NonNullable<ReturnType<typeof useSwmsForTask>["data"]>;
 type SectionKey = Data["sections"][number]["key"];
 type Item = Data["common"][number];
+type SiteCheck = NonNullable<Data["siteChecks"]>[number];
+type Answer = "yes" | "no" | "unsure" | "na";
+type Gps = { status: "ok" | "denied" | "timeout" | "unavailable"; lat: number | null; lng: number | null; accuracy: number | null };
+
+const ANSWER_LABEL: Record<string, string> = { yes: "Yes", no: "No", unsure: "Unsure", na: "N/A" };
+const RED = "#B3261E";
+
+/** Where the phone is when it signs. Never holds up signing for more than about 10 seconds. */
+async function where(): Promise<Gps> {
+  const none = (status: Gps["status"]): Gps => ({ status, lat: null, lng: null, accuracy: null });
+  try {
+    const perm = await Location.requestForegroundPermissionsAsync();
+    if (perm.status !== "granted") return none("denied");
+    const fix = await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+      new Promise<null>((r) => setTimeout(() => r(null), 10000)),
+    ]);
+    if (!fix) {
+      const last = await Location.getLastKnownPositionAsync({ maxAge: 5 * 60 * 1000 }).catch(() => null);
+      if (!last) return none("timeout");
+      return { status: "ok", lat: last.coords.latitude, lng: last.coords.longitude, accuracy: last.coords.accuracy ?? null };
+    }
+    return { status: "ok", lat: fix.coords.latitude, lng: fix.coords.longitude, accuracy: fix.coords.accuracy ?? null };
+  } catch {
+    return none("unavailable");
+  }
+}
+
+function CheckRow({
+  check,
+  value,
+  onPick,
+  disabled,
+  last,
+}: {
+  check: SiteCheck;
+  value: string | undefined;
+  onPick: (a: Answer) => void;
+  disabled: boolean;
+  last: boolean;
+}) {
+  const flagged = !!value && check.flagOn.includes(value);
+  return (
+    <View style={{ paddingVertical: 12, borderBottomWidth: last ? 0 : 1, borderBottomColor: c.border }}>
+      <Text style={{ fontFamily: Fonts.medium, fontSize: 14.5, color: c.foreground, lineHeight: 20 }}>{check.question}</Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 9 }}>
+        {check.answers.map((a) => {
+          const on = value === a;
+          const bad = on && check.flagOn.includes(a);
+          return (
+            <Pressable
+              key={a}
+              disabled={disabled}
+              onPress={() => onPick(a as Answer)}
+              style={({ pressed }) => ({
+                minWidth: 64,
+                alignItems: "center",
+                borderWidth: 1.5,
+                borderColor: on ? (bad ? RED : c.success) : c.border,
+                backgroundColor: on ? (bad ? "#FBE3DF" : "#E4F0E2") : "#FFFFFF",
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 9,
+                opacity: pressed || disabled ? 0.7 : 1,
+              })}
+            >
+              <Text style={{ fontFamily: Fonts.medium, fontSize: 14, color: on ? (bad ? RED : "#2F5F2B") : c.foreground }}>
+                {ANSWER_LABEL[a] ?? a}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      {flagged && !check.blocks ? (
+        <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: "#8A5A11", marginTop: 7, lineHeight: 17 }}>
+          The office will be told when you sign. You can still sign and start.
+        </Text>
+      ) : null}
+    </View>
+  );
+}
 
 function timeOf(d: Date | string) {
   const x = new Date(d);
@@ -130,6 +212,7 @@ export default function SwmsScreen() {
   const q = useSwmsForTask(taskId);
   const sign = useSignSwms();
   const start = useStartTask();
+  const report = useReportCheck();
 
   const [ready, setReady] = useState(false);
   const [common, setCommon] = useState<Set<string>>(new Set());
@@ -144,6 +227,8 @@ export default function SwmsScreen() {
   const [drawing, setDrawing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nextStep, setNextStep] = useState<string | null>(null);
+  const [answers, setAnswers] = useState<Record<number, Answer>>({});
+  const [locating, setLocating] = useState(false);
 
   const d = q.data;
   const byKey = useMemo(() => new Map((d?.sections ?? []).map((s) => [s.key, s])), [d]);
@@ -159,6 +244,25 @@ export default function SwmsScreen() {
     setName(d.prefill.installerName);
     setReady(true);
   }, [d, ready]);
+
+  // Site checks for the work picked: every-job ones plus the picked sections.
+  const checks = useMemo(
+    () => (d?.siteChecks ?? []).filter((x) => x.appliesAll || x.templateKeys.some((k) => picked.includes(k as SectionKey))),
+    [d, picked],
+  );
+  const stopped = (d?.flags?.open ?? []).filter((f) => f.blocks);
+
+  async function pick(check: SiteCheck, a: Answer) {
+    setError(null);
+    setAnswers((prev) => ({ ...prev, [check.id]: a }));
+    if (!check.blocks || !check.flagOn.includes(a)) return;
+    // Stops the job: the office hears now, not at signing.
+    try {
+      await report.mutateAsync({ taskId, checkId: check.id, answer: a });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't reach the office. Call them before you start.");
+    }
+  }
 
   function toggleCommon(itemId: string) {
     setBasedOnId(null);
@@ -211,8 +315,16 @@ export default function SwmsScreen() {
     if (!readOk) return setError("Tick that you've read and understood it.");
     if (name.trim().length < 2) return setError("Type your name.");
     if (!sig) return setError("Sign in the box before saving.");
+    if (stopped.length) return setError("The office has to clear the red card before you can sign.");
+    const missing = checks.find((x) => !answers[x.id]);
+    if (missing) return setError(`Answer the site check: "${missing.question}"`);
+    setLocating(true);
+    const gps = await where();
+    setLocating(false);
     try {
       await sign.mutateAsync({
+        siteAnswers: d.siteChecks ? checks.map((x) => ({ checkId: x.id, answer: answers[x.id]! })) : undefined,
+        gps,
         taskId,
         common: [...common],
         sections: picked.map((k) => ({ key: k, checked: [...(ticked[k] ?? [])] })),
@@ -223,6 +335,8 @@ export default function SwmsScreen() {
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't save that. Try again.");
+      // A red card may have just gone up. Show it.
+      void q.refetch();
       return;
     }
     if (then === "start") {
@@ -381,7 +495,9 @@ export default function SwmsScreen() {
   }
 
   const others = d.sections.filter((s) => !picked.includes(s.key));
-  const busy = sign.isPending || start.isPending;
+  const busy = sign.isPending || start.isPending || locating;
+  const blocked = stopped.length > 0;
+  const changed = d.previous?.changed ?? [];
 
   return (
     <SafeAreaView edges={["top", "left", "right"]} style={{ flex: 1, backgroundColor: c.background }}>
@@ -433,6 +549,31 @@ export default function SwmsScreen() {
               </Text>
             </View>
           </Pressable>
+        ) : null}
+
+        {changed.length ? (
+          <View style={{ backgroundColor: "#FBEDD8", borderRadius: 12, padding: 13, marginTop: 16 }}>
+            <Text style={{ fontFamily: Fonts.bold, fontSize: 14.5, color: "#8A5A11" }}>
+              The SWMS has changed since you last signed
+            </Text>
+            <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: "#8A5A11", marginTop: 2, lineHeight: 17 }}>
+              Read it through and sign it in full today.
+            </Text>
+            {changed.map((ch) => (
+              <View key={ch.key} style={{ marginTop: 8 }}>
+                <Text style={{ fontFamily: Fonts.medium, fontSize: 13.5, color: "#8A5A11" }}>
+                  {ch.name}: version {ch.from} to {ch.to}
+                </Text>
+                {ch.notes
+                  .filter((n) => n.whatChanged)
+                  .map((n) => (
+                    <Text key={n.version} style={{ fontFamily: Fonts.sans, fontSize: 13, color: "#8A5A11", marginTop: 2, lineHeight: 18 }}>
+                      {`• ${n.whatChanged}`}
+                    </Text>
+                  ))}
+              </View>
+            ))}
+          </View>
         ) : null}
 
         <Heading hint="On every job. Untick anything that doesn't apply today.">EVERY JOB</Heading>
@@ -545,6 +686,46 @@ export default function SwmsScreen() {
           }}
         />
 
+        {checks.length ? (
+          <>
+            <Heading hint="Answer each one for this site today.">SITE CHECKS</Heading>
+            <Card>
+              {checks.map((x, i) => (
+                <CheckRow
+                  key={x.id}
+                  check={x}
+                  value={answers[x.id]}
+                  onPick={(a) => void pick(x, a)}
+                  disabled={report.isPending}
+                  last={i === checks.length - 1}
+                />
+              ))}
+            </Card>
+          </>
+        ) : null}
+
+        {blocked ? (
+          <View style={{ borderWidth: 2, borderColor: RED, backgroundColor: "#FBE3DF", borderRadius: 12, padding: 14, marginTop: 16 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Ionicons name="hand-left" size={20} color={RED} />
+              <Text style={{ fontFamily: Fonts.bold, fontSize: 16, color: RED }}>Do not start</Text>
+            </View>
+            {stopped.map((f) => (
+              <Text key={f.id} style={{ fontFamily: Fonts.medium, fontSize: 14, color: "#8B2F22", marginTop: 6, lineHeight: 19 }}>
+                {f.question} {ANSWER_LABEL[f.answer] ?? f.answer}
+              </Text>
+            ))}
+            <Text style={{ fontFamily: Fonts.sans, fontSize: 13.5, color: "#8B2F22", marginTop: 6, lineHeight: 19 }}>
+              The office has been told. Wait for them to call you. You can sign once they clear it.
+            </Text>
+            <Pressable onPress={() => void q.refetch()} hitSlop={6} style={{ marginTop: 10 }}>
+              <Text style={{ fontFamily: Fonts.medium, fontSize: 14, color: RED }}>
+                {q.isFetching ? "Checking..." : "Check again"}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
+
         <Heading>SIGN OFF</Heading>
         <Pressable
           onPress={() => setReadOk((v) => !v)}
@@ -603,10 +784,10 @@ export default function SwmsScreen() {
         }}
       >
         <Pressable
-          disabled={busy}
+          disabled={busy || blocked}
           onPress={() => void onSign()}
           style={({ pressed }) => ({
-            backgroundColor: c.primary,
+            backgroundColor: blocked ? c.mutedForeground : c.primary,
             borderRadius: 14,
             paddingVertical: 17,
             alignItems: "center",
@@ -617,7 +798,7 @@ export default function SwmsScreen() {
             <ActivityIndicator color="#FFFFFF" />
           ) : (
             <Text style={{ fontFamily: Fonts.bold, fontSize: 16.5, color: "#FFFFFF" }}>
-              {then === "start" ? "Sign and start the job" : "Sign the SWMS"}
+              {blocked ? "Waiting for the office" : then === "start" ? "Sign and start the job" : "Sign the SWMS"}
             </Text>
           )}
         </Pressable>

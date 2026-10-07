@@ -133,7 +133,33 @@ Plan: `/home/user/plans/swms/stage2-plan.md` (approved). Code is on `main` as co
 - **Checked 8 Oct:** lint, build, api tsc 0, app tsc 172 (baseline), mobile tsc 0. Scratch test 72 checks passed. Screens checked on a scratch copy as Office. Dry run on a copy of the live backup `terra-live-pre-swms-stage2-2026-10-08.db`: no existing row changed, library equals the built-in content.
 - **Applied 8 Oct:** fresh backup first, `terra-live-pre-swms-stage2-apply-2026-10-08.db` (89 tables, 14,209 rows, integrity ok). Then the script `terra-scratch-tests/swms/s2-apply.tmp.ts`. The live site runs the older code, which does not read the new tables, so nothing changes for users until the code is pushed and published.
 - **Published 8 Oct.** Checked on the live site: the SWMS library page is in the build and its server calls answer.
-- **Next:** phone app check against the library, then Stage 3.
+- **Next:** phone app check against the library. Stage 3 is below.
+
+### SWMS Stage 3 (Applied to the database 8 Oct. Code pushed, not yet published)
+
+Plan: `/home/user/plans/swms/stage3-plan.md` (approved and edited by Damien).
+
+**Damien's decisions, 8 Oct:**
+- A flagged answer on a site check marked "stops the job" means Crew cannot sign or start until Office or Admin clears the red card with a note.
+- A flagged answer on any other check raises a red card and emails team@, but Crew can still sign.
+- The builder gets an email only when Office presses "Email SWMS". Never automatic.
+- GPS denied or timed out: Crew can still sign. The PDF says "Location not shared".
+- Check 1 "Site induction done, or signed in with the builder" now stops the job.
+
+**What was built:**
+- **Database:** `sql/2026-10-08-swms-stage3.sql`. Additive only: new tables `swms_flags` and `swms_emails`, and 5 new columns on `swms_records` (site answers, GPS and related).
+- **Server:** `lib/swms-checks.ts` (answer checks, red cards, team@ email, dedupe), `lib/swms.ts`, `routes/swms.ts`. Sign and start answer 412 while a stopping red card is open. Field cannot clear a card. Clearing needs a note of 3 or more characters. A cleared answer does not raise a new card for the same answer. Signs from older apps are stored as `not_sent` with no red card.
+- **Re-sign:** when a new version is published mid-job, "Same as last time" is refused and the app shows what changed.
+- **PDF** (`lib/swmsPdf.ts`): logo, SITE CHECKS with the answers, LOCATION (map link, "Location not shared" or "Older app, no location"), Reviewed by, footer with "Page X of Y".
+- **Email SWMS:** Office picks the addresses on the job card. The PDF goes as an attachment from team@. Each send is logged in `swms_emails` and job history.
+- **Web:** red cards on the job page (`components/swms-flags.tsx`), clear with a note. SWMS card shows site answers (flagged ones in rust), location, the email button, cleared cards and the email log. Site checks editor explains the "stops the job" setting.
+- **App** (screen only, OTA-able): SITE CHECKS section filtered by the picked templates. A stopping answer shows a red "Do not start" card with "Check again", and Sign reads "Waiting for the office". Other flagged answers show a note. "What changed" banner. GPS through `expo-location` with a 10 second timeout and the last known location as fallback.
+- **Checked 8 Oct:** lint 0, build ok, api tsc 0, app tsc 172 (baseline), mobile tsc 0. Scratch test 74 checks passed (`terra-scratch-tests/swms/s3.tmp.test.ts`). Phone flow tested on Expo web against a scratch server, and the office screens on the built site against a scratch copy. PDF checked by eye.
+- **Backups:** `backups/terra-live-pre-swms-stage3-2026-10-08.db` and, just before the apply, `backups/terra-live-pre-swms-stage3-apply-2026-10-08.db` (96 tables, 14,283 rows, integrity ok).
+- **Applied 8 Oct** with Damien's OK, by `terra-scratch-tests/swms/s3-apply.tmp.ts`: 9 of 9 statements ran, no existing row counts changed. Then `s3-block.tmp.ts` set check 1 to stop the job, logged as one change by Damien.
+- Live still runs the Stage 2 code, so nothing changes for users until the code is published.
+- **Publish order:** website first, then the OTA. Phones without the OTA still sign as before. They send no answers, so they raise no red card.
+- **Next:** Damien publishes. Then check the job page and SWMS library on the live site, and mark this published. Phone test on job #4446 once David is on 1.0.2.
 
 ## 9. Callbacks (Live on the website, published 8 Oct)
 
