@@ -5,6 +5,11 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
+import { addJobPerson, customerTag, personInput, removeJobTag, updateJobPerson } from "../lib/job-people";
+import { PERSON_TAGS, legacyRoleToTag, parseTags } from "../lib/person-tags";
+import { installerForStaff, taskForStaff } from "../lib/staff-view";
+
+const tagList = z.array(z.enum(PERSON_TAGS));
 
 export const createJobInput = z.object({
   title: z.string().default(""),
@@ -26,12 +31,14 @@ export const createJobInput = z.object({
    * it reads back through the same link every other person on the job uses.
    */
   supervisorContactId: z.number().nullable().optional(),
+  /** Anyone else on the job, each with their tags and ticks. */
+  people: z.array(personInput).max(20).optional(),
 });
 
 /** Shared with voice memos, so a job said out loud lands exactly like one typed in. */
 export async function createJob(input: z.input<typeof createJobInput>, actor: Pick<Actor, "name" | "role">) {
   const parsed = createJobInput.parse(input);
-  const { supervisorContactId, ...jobInput } = parsed;
+  const { supervisorContactId, people, ...jobInput } = parsed;
   await assertSupervisor(jobInput.companyId, supervisorContactId);
   const [maxRow] = await db.select({ max: sql<number>`coalesce(max(${schema.jobs.number}), 200)` }).from(schema.jobs);
   const number = Number(maxRow?.max ?? 200) + 1;
@@ -58,34 +65,37 @@ export async function createJob(input: z.input<typeof createJobInput>, actor: Pi
     })
     .returning();
 
+  // The customer is tagged Owner (or Builder contact when they sit in the
+  // billed company), so a new job never starts with nobody tagged.
   if (row && jobInput.contactId) {
-    await db
-      .insert(schema.jobContacts)
-      .values({
-        jobId: row.id,
-        contactId: jobInput.contactId,
-        role: "job_contact",
-        isPrimary: true,
-        onSiteContact: true,
-        receivesSms: true,
-        receivesEmail: true,
-        canApproveQuote: true,
-      })
-      .onConflictDoNothing();
+    const tag = await customerTag(jobInput.contactId, jobInput.companyId);
+    await addJobPerson(row.id, jobInput.contactId, {
+      tags: [tag],
+      isPrimary: true,
+      // Site access by default only for the owner. A builder's own person is ticked by hand.
+      onSiteContact: tag === "owner",
+      receivesSms: true,
+      receivesEmail: true,
+      canApproveQuote: true,
+      // Crew sees the owner on a private job. A builder's own person is ticked by hand.
+      showToCrew: tag === "owner",
+    });
   }
 
   if (row && supervisorContactId) {
-    await db
-      .insert(schema.jobContacts)
-      .values({
-        jobId: row.id,
-        contactId: supervisorContactId,
-        role: "supervisor",
-        isPrimary: true,
-        receivesEmail: true,
-        canApproveQuote: true,
-      })
-      .onConflictDoNothing();
+    await addJobPerson(row.id, supervisorContactId, {
+      tags: ["supervisor"],
+      isPrimary: true,
+      receivesEmail: true,
+      canApproveQuote: true,
+    });
+  }
+
+  if (row && people?.length) {
+    for (const p of people) {
+      if (p.tags.includes("supervisor")) continue; // the supervisor comes only through supervisorContactId
+      await addJobPerson(row.id, p.contactId, p);
+    }
   }
 
   await db.insert(schema.activityLog).values({
@@ -176,7 +186,7 @@ export const jobs = {
       }));
     }),
 
-  get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     const [row] = await db
       .select({
         job: schema.jobs,
@@ -196,11 +206,12 @@ export const jobs = {
 
     const [people, tasks, materials, photos, quoteRows, invoiceRows, activity] = await Promise.all([
       db
-        .select({ link: schema.jobContacts, contact: schema.contacts })
+        .select({ link: schema.jobContacts, contact: schema.contacts, actedFor: { id: schema.companies.id, name: schema.companies.name } })
         .from(schema.jobContacts)
         .innerJoin(schema.contacts, eq(schema.contacts.id, schema.jobContacts.contactId))
+        .leftJoin(schema.companies, eq(schema.companies.id, schema.jobContacts.actedForCompanyId))
         .where(eq(schema.jobContacts.jobId, input.id))
-        .orderBy(desc(schema.jobContacts.isPrimary)),
+        .orderBy(desc(schema.jobContacts.isPrimary), asc(schema.jobContacts.id)),
       db
         .select({
           task: schema.jobTasks,
@@ -234,11 +245,17 @@ export const jobs = {
       site: row.site,
       contact: row.contact,
       company: row.company,
-      contacts: people,
+      contacts: people.map((p) => ({
+        link: { ...p.link, tags: parseTags(p.link.tags) },
+        contact: p.contact,
+        actedForCompanyName: p.actedFor?.id ? p.actedFor.name : null,
+      })),
+      /** True when nobody on the job holds a tag yet (old ServiceM8 jobs). The job page asks to tag people. */
+      needsPeopleTagged: people.every((p) => parseTags(p.link.tags).length === 0),
       tasks: tasks.map((t) => ({
-        ...t.task,
+        ...taskForStaff(t.task, context.actor),
         skill: t.skill,
-        installer: t.installer,
+        installer: installerForStaff(t.installer, context.actor),
         pendingOffers: Number(t.offerCount ?? 0),
       })),
       materials,
@@ -325,44 +342,72 @@ export const jobs = {
     }),
 
   /* ------------------------- job contacts ------------------------- */
+  /**
+   * Puts a person on the job with their tags and ticks. A person already on
+   * the job is merged (tags join), never added twice. Supervisor goes through
+   * setSupervisor, because a job has one and it must sit in the billed company.
+   */
   addContact: staffOnly
     .input(
       z.object({
         jobId: z.number(),
         contactId: z.number(),
-        role: z.string().default("job_contact"),
+        tags: tagList.optional(),
+        /** Legacy single role, mapped onto a tag when `tags` is left out. */
+        role: z.string().optional(),
         isPrimary: z.boolean().default(false),
         onSiteContact: z.boolean().default(false),
         receivesSms: z.boolean().default(false),
         receivesEmail: z.boolean().default(false),
         canApproveQuote: z.boolean().default(false),
+        /** Left out, a tenant starts shown to crew. */
+        showToCrew: z.boolean().optional(),
+        whenToContact: z.string().nullable().optional(),
       }),
     )
     .handler(async ({ input }) => {
-      const [row] = await db.insert(schema.jobContacts).values(input).onConflictDoNothing().returning();
-      return row ?? { ok: true };
+      const { jobId, contactId, role, ...rest } = input;
+      const [job] = await db.select({ id: schema.jobs.id, companyId: schema.jobs.companyId }).from(schema.jobs).where(eq(schema.jobs.id, jobId));
+      if (!job) throw new ORPCError("NOT_FOUND", { message: "Job not found" });
+      const tags = rest.tags?.length ? rest.tags : [legacyRoleToTag(role, !!job.companyId)];
+      if (tags.includes("supervisor")) await assertSupervisor(job.companyId, contactId);
+      if (tags.includes("supervisor")) await removeJobTag(jobId, "supervisor", contactId);
+      const row = await addJobPerson(jobId, contactId, { ...rest, tags });
+      return { ...row, tags: parseTags(row.tags) };
     }),
 
+  /** Edits one person on a job. `tags` replaces their whole list and must keep at least one. */
   updateContact: staffOnly
     .input(
       z.object({
         id: z.number(),
+        tags: tagList.min(1, "Pick at least one tag").optional(),
         role: z.string().optional(),
         isPrimary: z.boolean().optional(),
         onSiteContact: z.boolean().optional(),
         receivesSms: z.boolean().optional(),
         receivesEmail: z.boolean().optional(),
         canApproveQuote: z.boolean().optional(),
+        showToCrew: z.boolean().optional(),
+        whenToContact: z.string().nullable().optional(),
       }),
     )
     .handler(async ({ input }) => {
-      const { id, ...rest } = input;
-      const [row] = await db
-        .update(schema.jobContacts)
-        .set({ ...rest, updatedAt: new Date() })
-        .where(eq(schema.jobContacts.id, id))
-        .returning();
-      return row;
+      const { id, role, ...rest } = input;
+      const [existing] = await db
+        .select({ link: schema.jobContacts, companyId: schema.jobs.companyId })
+        .from(schema.jobContacts)
+        .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobContacts.jobId))
+        .where(eq(schema.jobContacts.id, id));
+      if (!existing) throw new ORPCError("NOT_FOUND", { message: "That person is not on this job" });
+      const tags = rest.tags ?? (role ? [legacyRoleToTag(role, !!existing.companyId)] : undefined);
+      const hadSup = parseTags(existing.link.tags).includes("supervisor");
+      if (tags?.includes("supervisor") && !hadSup) {
+        await assertSupervisor(existing.companyId, existing.link.contactId);
+        await removeJobTag(existing.link.jobId, "supervisor", existing.link.contactId);
+      }
+      const row = await updateJobPerson(id, { ...rest, tags });
+      return row ? { ...row, tags: parseTags(row.tags) } : null;
     }),
 
   removeContact: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
@@ -380,23 +425,17 @@ export const jobs = {
     .handler(async ({ input }) => {
       const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, input.jobId));
       if (job?.companyId) await assertSupervisor(job.companyId, input.contactId);
-      await db
-        .delete(schema.jobContacts)
-        .where(and(eq(schema.jobContacts.jobId, input.jobId), eq(schema.jobContacts.role, "supervisor")));
+      // The old supervisor loses the tag. Anyone left with no tags comes off the job.
+      await removeJobTag(input.jobId, "supervisor", input.contactId);
 
       if (!input.contactId) return { ok: true, contactId: null };
 
-      await db
-        .insert(schema.jobContacts)
-        .values({
-          jobId: input.jobId,
-          contactId: input.contactId,
-          role: "supervisor",
-          isPrimary: true,
-          receivesEmail: true,
-          canApproveQuote: true,
-        })
-        .onConflictDoNothing();
+      await addJobPerson(input.jobId, input.contactId, {
+        tags: ["supervisor"],
+        isPrimary: true,
+        receivesEmail: true,
+        canApproveQuote: true,
+      });
 
       return { ok: true, contactId: input.contactId };
     }),

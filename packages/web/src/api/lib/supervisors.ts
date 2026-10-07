@@ -7,7 +7,7 @@ import * as schema from "../database/schema";
  * SUPERVISORS, STARTING CLEAN.
  *
  * A job belongs to a supervisor only when someone picked them on it (a
- * job_contacts row with role 'supervisor'). A quote belongs to a supervisor
+ * job_contacts row tagged 'supervisor'). A quote belongs to a supervisor
  * only through quotes.supervisor_contact_id. Nothing is guessed from the old
  * ServiceM8 contact data, so the numbers build up from new work.
  */
@@ -94,7 +94,7 @@ export async function loadJobs(): Promise<SupJob[]> {
     join jobs j on j.id = jcs.job_id
     left join job_statuses s on s.id = j.status_id
     left join companies co on co.id = j.company_id
-    where jcs.role = 'supervisor'
+    where exists (select 1 from json_each(jcs.tags) where json_each.value = 'supervisor')
   `);
   return rows.map((r) => {
     const complete = Number(r.inst_n) > 0 && Number(r.mat_n) > 0;
@@ -476,17 +476,14 @@ export async function supervisorDetail(id: number, canSeeCosts: boolean) {
 
 /* ------------------------------ the new rule ------------------------------ */
 
-export const SUPERVISOR_REQUIRED_MESSAGE =
-  "Pick the supervisor who asked for this work. Add them if they are not in the list.";
-
 /**
- * When the customer is a company, a supervisor must be picked and must belong
- * to that company. Throws a plain-English error otherwise.
+ * A supervisor is optional, even on a company job or quote. Not every company
+ * works through supervisors. When one is picked they must belong to that
+ * company. Throws a plain-English error otherwise.
  */
 export async function assertSupervisor(companyId: number | null | undefined, supervisorId: number | null | undefined) {
   const { ORPCError } = await import("@orpc/server");
-  if (!companyId) return;
-  if (!supervisorId) throw new ORPCError("BAD_REQUEST", { message: SUPERVISOR_REQUIRED_MESSAGE });
+  if (!companyId || !supervisorId) return;
   const [m] = await db.all<{ n: number }>(
     sql`select count(*) as n from company_contacts where company_id = ${companyId} and contact_id = ${supervisorId}`,
   );
@@ -504,7 +501,7 @@ const ALERT_FROM = "Terra Flooring <team@terraflooring.com.au>";
 export async function isSupervisor(contactId: number): Promise<boolean> {
   const [r] = await db.all<{ n: number }>(sql`
     select (
-      (select count(*) from job_contacts where contact_id = ${contactId} and role = 'supervisor') +
+      (select count(*) from job_contacts jc where jc.contact_id = ${contactId} and exists (select 1 from json_each(jc.tags) where json_each.value = 'supervisor')) +
       (select count(*) from quotes where supervisor_contact_id = ${contactId}) +
       (select count(*) from company_contacts where contact_id = ${contactId} and role = 'supervisor')
     ) as n`);

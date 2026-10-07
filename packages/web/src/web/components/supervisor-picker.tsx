@@ -6,6 +6,9 @@ import { Combobox } from "./ui/combobox";
 import { Spinner } from "./ui/card";
 import { useCompanyPeople } from "../queries/companies";
 import { useCreateContact } from "../queries/contacts";
+import { useMutation } from "@tanstack/react-query";
+import { orpc } from "../lib/api";
+import { ContactMatches, type ContactMatch } from "./contact-matches";
 
 /**
  * SUPERVISOR PICKER.
@@ -44,6 +47,7 @@ export function SupervisorPicker({
 }) {
   const people = useCompanyPeople(companyId, SENDER_ROLES);
   const createContact = useCreateContact();
+  const link = useMutation(orpc.contacts.linkCompany.mutationOptions());
 
   const [adding, setAdding] = React.useState(false);
   const [firstName, setFirstName] = React.useState("");
@@ -93,6 +97,24 @@ export function SupervisorPicker({
     }
   }
 
+  /** The person is already in Ops: file them under this company as a supervisor and pick them. */
+  async function pickExisting(m: ContactMatch) {
+    setError(null);
+    if (!companyId) return;
+    try {
+      await link.mutateAsync({ contactId: m.id, companyId, role: "supervisor" });
+      await people.refetch();
+      onChange(String(m.id));
+      setFirstName("");
+      setLastName("");
+      setMobile("");
+      setEmail("");
+      setAdding(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   if (!companyId) {
     return (
       <Field label="Supervisor" hint={disabledReason ?? "Pick a company first, then their supervisor."}>
@@ -103,7 +125,7 @@ export function SupervisorPicker({
 
   return (
     <Field
-      label={required ? "Supervisor (required)" : "Supervisor"}
+      label={required ? "Supervisor (required)" : "Supervisor (optional)"}
       hint="The person at the company who sent this work. Not in the list? Add them below."
     >
       <div className="space-y-2">
@@ -124,6 +146,12 @@ export function SupervisorPicker({
               <Input value={mobile} onChange={(e) => setMobile(e.target.value)} placeholder="Mobile" />
               <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" />
             </div>
+            <ContactMatches
+              input={{ firstName, lastName, mobile, email }}
+              onUse={pickExisting}
+              busyId={link.isPending ? (link.variables?.contactId ?? null) : null}
+              useLabel="Use that card"
+            />
             <p className="text-xs text-muted-foreground">
               They get saved as a supervisor at this company, so they are there next time too.
             </p>

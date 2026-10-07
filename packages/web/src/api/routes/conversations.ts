@@ -4,6 +4,7 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { staffOnly, type Actor } from "../middleware/auth";
+import { parseTags } from "../lib/person-tags";
 import { conversationReplyTo, CONVERSATION_FROM, sendEmail } from "../lib/email";
 import { normaliseMobile, sendSms, smsParts, SMS_OPT_OUT } from "../lib/sms";
 import {
@@ -355,12 +356,16 @@ export const conversations = {
             id: -1,
             jobId: input.jobId,
             contactId: owner.id,
-            role: "job_contact",
+            role: job.companyId ? "other" : "owner",
+            tags: JSON.stringify([job.companyId ? "other" : "owner"]),
             isPrimary: true,
             onSiteContact: false,
             receivesSms: true,
             receivesEmail: true,
             canApproveQuote: true,
+            showToCrew: false,
+            whenToContact: null,
+            actedForCompanyId: null,
             createdAt: owner.createdAt,
             updatedAt: owner.updatedAt,
           },
@@ -393,6 +398,7 @@ export const conversations = {
         contactId: contact.id,
         name: fullName(contact),
         role: link.role,
+        tags: parseTags(link.tags),
         email: contact.email,
         mobile: contact.mobile,
         receivesEmail: Boolean(link.receivesEmail) && Boolean(contact.email),

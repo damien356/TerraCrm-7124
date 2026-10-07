@@ -12,33 +12,37 @@ export function useContact(id: number | null) {
   );
 }
 
-function useContactMutation(name: "create" | "update" | "linkCompany" | "unlinkCompany" | "moveCompany") {
+/* One options object per hook: a helper indexed by a name union gave every hook a union input type. */
+function useContactRefresh() {
   const queryClient = useQueryClient();
-  return orpc.contacts[name].mutationOptions({
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: orpc.contacts.key() });
-      queryClient.invalidateQueries({ queryKey: orpc.companies.key() });
-      queryClient.invalidateQueries({ queryKey: orpc.intel.key() });
-      queryClient.invalidateQueries({ queryKey: orpc.finance.key() });
-    },
-  });
+  return () => {
+    queryClient.invalidateQueries({ queryKey: orpc.contacts.key() });
+    queryClient.invalidateQueries({ queryKey: orpc.companies.key() });
+    queryClient.invalidateQueries({ queryKey: orpc.intel.key() });
+    queryClient.invalidateQueries({ queryKey: orpc.finance.key() });
+  };
 }
 
 export function useCreateContact() {
-  return useMutation(useContactMutation("create"));
+  const onSuccess = useContactRefresh();
+  return useMutation(orpc.contacts.create.mutationOptions({ onSuccess }));
 }
 export function useUpdateContact() {
-  return useMutation(useContactMutation("update"));
+  const onSuccess = useContactRefresh();
+  return useMutation(orpc.contacts.update.mutationOptions({ onSuccess }));
 }
 export function useLinkCompany() {
-  return useMutation(useContactMutation("linkCompany"));
+  const onSuccess = useContactRefresh();
+  return useMutation(orpc.contacts.linkCompany.mutationOptions({ onSuccess }));
 }
 export function useUnlinkCompany() {
-  return useMutation(useContactMutation("unlinkCompany"));
+  const onSuccess = useContactRefresh();
+  return useMutation(orpc.contacts.unlinkCompany.mutationOptions({ onSuccess }));
 }
 
 export function useMoveSupervisorCompany() {
-  return useMutation(useContactMutation("moveCompany"));
+  const onSuccess = useContactRefresh();
+  return useMutation(orpc.contacts.moveCompany.mutationOptions({ onSuccess }));
 }
 
 /**

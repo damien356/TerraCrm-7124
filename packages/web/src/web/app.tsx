@@ -35,6 +35,9 @@ import ProfitabilityPage from "./pages/finance-profitability";
 import TemplatesPage from "./pages/templates";
 import SegmentsPage from "./pages/segments";
 import TerraAiPage from "./pages/terra-ai";
+import ReferrersPage from "./pages/referrers";
+import DuplicatesPage from "./pages/duplicates";
+import CompanyTypesPage from "./pages/company-types";
 
 // Finish a returning managed sign-in before anything renders. This top-level
 // await resolves before __main.tsx mounts React (app.tsx is its dependency).
@@ -66,9 +69,11 @@ function App() {
           <Route path="/clients" component={ClientsPage} />
           <Route path="/clients/:id" component={ContactDetailPage} />
           <Route path="/companies" component={CompaniesPage} />
+          <Route path="/companies/types" component={CompanyTypesPage} />
           <Route path="/companies/:id" component={CompanyDetailPage} />
           <Route path="/supervisors" component={SupervisorsPage} />
           <Route path="/supervisors/:id" component={SupervisorDetailPage} />
+          <Route path="/referrers" component={ReferrersPage} />
           <Route path="/finance/cashflow" component={CashflowPage} />
           <Route path="/finance/forecasting" component={ForecastingPage} />
           <Route path="/finance/invoices" component={InvoicesPage} />
@@ -79,6 +84,7 @@ function App() {
           <Route path="/marketing/templates" component={TemplatesPage} />
           <Route path="/marketing/segments" component={SegmentsPage} />
           <Route path="/terra-ai" component={TerraAiPage} />
+          <Route path="/review/duplicates" component={DuplicatesPage} />
           <Route path="/review" component={ReviewPage} />
           <Route path="/installers">{() => <Redirect to="/team" />}</Route>
           <Route path="/team" component={TeamPage} />

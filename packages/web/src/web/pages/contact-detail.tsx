@@ -316,7 +316,7 @@ export default function ContactDetailPage() {
         </div>
       </div>
 
-      <EditContactModal open={edit} onClose={() => setEdit(false)} contact={c} onSave={update.mutateAsync} />
+      <EditContactModal open={edit} onClose={() => setEdit(false)} contact={c} onSave={(input) => update.mutateAsync(input as Parameters<typeof update.mutateAsync>[0])} />
 
       <Modal
         open={linkModal}

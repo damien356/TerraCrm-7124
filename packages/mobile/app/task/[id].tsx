@@ -365,13 +365,19 @@ export default function TaskScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={{ fontFamily: Fonts.medium, fontSize: 15, color: c.foreground }}>{p.name}</Text>
                     <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: c.mutedForeground }}>
-                      {p.role.replace(/_/g, " ")}
-                      {p.onSite ? " · on site" : ""}
+                      {p.label || p.role.replace(/_/g, " ")}
                     </Text>
+                    {p.whenToContact ? (
+                      <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: c.foreground, marginTop: 3 }}>
+                        {p.whenToContact}
+                      </Text>
+                    ) : null}
                   </View>
-                  {p.mobile ? (
+                  {p.mobile || p.phone ? (
                     <Pressable
-                      onPress={() => void Linking.openURL(`tel:${p.mobile}`)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Call ${p.name}`}
+                      onPress={() => void Linking.openURL(`tel:${(p.mobile || p.phone || "").replace(/\s+/g, "")}`)}
                       style={({ pressed }) => ({
                         flexDirection: "row",
                         alignItems: "center",

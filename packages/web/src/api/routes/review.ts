@@ -3,6 +3,7 @@ import { and, asc, desc, eq, inArray, like, or, sql, type SQL } from "drizzle-or
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
+import { COMPANY_TYPES } from "../lib/person-tags";
 
 /**
  * The ServiceM8 import review queue.
@@ -224,7 +225,7 @@ export const review = {
         /** Only used by block and archive. */
         reason: z.string().nullable().optional(),
         /** Only used by business. */
-        companyType: z.enum(["builder", "agency", "commercial", "strata", "retail", "other"]).default("builder"),
+        companyType: z.enum(COMPANY_TYPES).default("builder"),
         /**
          * Only used by business, and only sensible one record at a time. Lets him
          * correct the ServiceM8 name before it becomes the company name. Blank

@@ -168,12 +168,12 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
   const job = (n: number) => jobRows.find((j) => j.number === n)!.id;
 
   await d.insert(s.jobContacts).values([
-    { jobId: job(9218), contactId: c("Kerry"), role: "job_contact", isPrimary: true, onSiteContact: true, receivesSms: true, receivesEmail: true, canApproveQuote: true },
-    { jobId: job(9221), contactId: c("Janelle"), role: "property_manager", isPrimary: true, onSiteContact: true, receivesEmail: true, canApproveQuote: true },
-    { jobId: job(9224), contactId: c("Rick"), role: "supervisor", isPrimary: true, onSiteContact: true, receivesSms: true },
-    { jobId: job(9226), contactId: c("Carol"), role: "job_contact", isPrimary: true, onSiteContact: true, receivesSms: true },
-    { jobId: job(9210), contactId: c("Tom"), role: "job_contact", isPrimary: true, onSiteContact: true, receivesSms: true },
-    { jobId: job(9229), contactId: c("Priya"), role: "job_contact", isPrimary: true, receivesEmail: true, canApproveQuote: true },
+    { jobId: job(9218), contactId: c("Kerry"), role: "owner", tags: '["owner"]', isPrimary: true, onSiteContact: true, receivesSms: true, receivesEmail: true, canApproveQuote: true, showToCrew: true },
+    { jobId: job(9221), contactId: c("Janelle"), role: "property_manager", tags: '["property_manager"]', isPrimary: true, onSiteContact: true, receivesEmail: true, canApproveQuote: true, showToCrew: true },
+    { jobId: job(9224), contactId: c("Rick"), role: "supervisor", tags: '["supervisor"]', isPrimary: true, onSiteContact: true, receivesSms: true, showToCrew: true },
+    { jobId: job(9226), contactId: c("Carol"), role: "owner", tags: '["owner"]', isPrimary: true, onSiteContact: true, receivesSms: true, showToCrew: true },
+    { jobId: job(9210), contactId: c("Tom"), role: "owner", tags: '["owner"]', isPrimary: true, onSiteContact: true, receivesSms: true, showToCrew: true },
+    { jobId: job(9229), contactId: c("Priya"), role: "owner", tags: '["owner"]', isPrimary: true, receivesEmail: true, canApproveQuote: true },
   ]);
 
   /* ------------------------------------------------------------ tasks */

@@ -387,7 +387,7 @@ export const installerInvoices = {
       return rows.map((r) => ({ ...r, bankAccountName: null, bankBsb: null, bankAccountNumber: null }));
     }),
 
-  /** A signed link to any invoice PDF, for accounts. */
+  /** A signed link to any invoice PDF, for accounts. Office gets it too (Damien, 7 Oct), bank details and all. */
   adminDownloadUrl: staffOnly.input(z.object({ invoiceId: z.number() })).handler(async ({ input }) => {
     const [row] = await db.select().from(schema.installerInvoices).where(eq(schema.installerInvoices.id, input.invoiceId));
     if (!row || !row.pdfKey) throw new ORPCError("NOT_FOUND", { message: "Invoice not found" });

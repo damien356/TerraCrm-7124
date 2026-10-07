@@ -9,6 +9,8 @@ import {
   ClipboardList,
   FileText,
   HandCoins,
+  Handshake,
+  CopyCheck,
   HardHat,
   MessagesSquare,
   KeyRound,
@@ -92,6 +94,7 @@ const NAV: NavEntry[] = [
       { to: "/clients", label: "Clients", icon: Users },
       { to: "/companies", label: "Companies", icon: Building2 },
       { to: "/supervisors", label: "Supervisors", icon: UserRoundSearch },
+      { to: "/referrers", label: "Referrers", icon: Handshake },
     ],
   },
   {
@@ -125,6 +128,7 @@ const NAV: NavEntry[] = [
       { to: "/products", label: "Price book", icon: Tags },
       { to: "/team", label: "People", icon: KeyRound },
       { to: "/review", label: "Import review", icon: ListChecks },
+      { to: "/review/duplicates", label: "Duplicate cards", icon: CopyCheck },
     ],
   },
 ];
@@ -146,6 +150,8 @@ const ADMIN_ONLY_PATHS = [
   "/team",
   "/review",
 ];
+
+const LEAF_PATHS = NAV.flatMap((e) => (isSection(e) ? e.children.map((c) => c.to) : [e.to]));
 
 function officeCanOpen(path: string) {
   return !ADMIN_ONLY_PATHS.some((p) => matches(path, p));
@@ -182,7 +188,8 @@ function NavLink({
   onNavigate,
 }: NavLeaf & { nested?: boolean; onNavigate?: () => void }) {
   const [location] = useLocation();
-  const active = matches(location, to);
+  // A deeper nav entry wins: /review/duplicates lights its own line, not Import review too.
+  const active = matches(location, to) && !LEAF_PATHS.some((p) => p.startsWith(`${to}/`) && matches(location, p));
   return (
     <Link
       to={to}

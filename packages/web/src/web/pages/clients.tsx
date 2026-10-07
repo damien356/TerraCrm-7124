@@ -1,5 +1,6 @@
 import * as React from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search } from "lucide-react";
 import { Page } from "../components/layout";
 import { MemoButton } from "../components/voice-memo";
@@ -15,6 +16,8 @@ import {
 import { Modal } from "../components/ui/modal";
 import { Combobox } from "../components/ui/combobox";
 import { useCreateContact } from "../queries/contacts";
+import { ContactMatches, type ContactMatch } from "../components/contact-matches";
+import { orpc } from "../lib/api";
 import { useCompanies } from "../queries/companies";
 import { useClientIntel, type ListSort } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
@@ -54,6 +57,25 @@ export function NewContactModal({
     notes: "",
   });
   const [error, setError] = React.useState<string | null>(null);
+  const [, navigate] = useLocation();
+  const qc = useQueryClient();
+  const link = useMutation(orpc.contacts.linkCompany.mutationOptions());
+
+  /** Use the card that is already there, filed under the company if one was picked. */
+  async function pickExisting(m: ContactMatch) {
+    setError(null);
+    try {
+      if (form.companyId) {
+        await link.mutateAsync({ contactId: m.id, companyId: Number(form.companyId), role: form.companyRole });
+        qc.invalidateQueries({ queryKey: orpc.contacts.key() });
+        qc.invalidateQueries({ queryKey: orpc.companies.key() });
+      }
+      onClose();
+      navigate(`/clients/${m.id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -132,6 +154,14 @@ export function NewContactModal({
             onChange={(e) => set("email", e.target.value)}
           />
         </Field>
+        <div className="sm:col-span-2 empty:hidden">
+          <ContactMatches
+            input={{ firstName: form.firstName, lastName: form.lastName, mobile: form.mobile, email: form.email }}
+            onUse={pickExisting}
+            busyId={link.isPending ? (link.variables?.contactId ?? null) : null}
+            useLabel={form.companyId ? "Use that card, file under company" : "Open that card"}
+          />
+        </div>
         <Field label="Address" className="sm:col-span-2">
           <Input
             value={form.address}

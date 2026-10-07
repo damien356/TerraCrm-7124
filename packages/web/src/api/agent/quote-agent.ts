@@ -242,7 +242,7 @@ function quoteBrief(state: QuoteState, actor: Pick<Actor, "role">) {
   );
   return [
     `Quote #${q.number} v${q.version}, status ${q.status}${LOCKED.includes(q.status) ? " (LOCKED, no changes possible)" : ""}.`,
-    `Customer: ${state.customer ?? "none attached"}${q.companyId ? `, company quote, supervisor ${q.supervisorContactId ? "set" : "NOT set"}` : ""}.`,
+    `Customer: ${state.customer ?? "none attached"}${q.companyId ? `, company quote, supervisor ${q.supervisorContactId ? "set" : "none (optional)"}` : ""}.`,
     `Subtotal ${money(q.subtotal)} ex GST, total ${money(q.total)} inc GST. Discount off the price book ${state.discountPct}%.`,
     `Client view: ${q.bundleMode}. Sections:`,
     ...(bundles.length ? bundles : ["- none yet"]),

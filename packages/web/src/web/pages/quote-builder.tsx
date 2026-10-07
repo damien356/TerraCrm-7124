@@ -10,6 +10,7 @@ import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field
 import { Modal } from "../components/ui/modal";
 import { LabourPicker, ProductPicker } from "../components/quote-pickers";
 import { SupervisorPicker } from "../components/supervisor-picker";
+import { QuotePeopleCard } from "../components/job-people";
 import { QuoteCustomerPanel } from "../components/quote-customer";
 import { QuoteBundlesCard } from "../components/quote-bundles";
 import { QuoteAgentCard } from "../components/quote-agent";
@@ -663,12 +664,11 @@ export default function QuoteBuilderPage() {
       ) : null}
 
       {q.company && !locked && !q.supervisorContactId ? (
-        <div className="mb-4 rounded-lg border border-[var(--warning)]/40 bg-[var(--warning)]/10 p-3">
-          <p className="mb-2 text-sm font-medium">Supervisor missing. This quote can't be sent until one is picked.</p>
+        <div className="mb-4 rounded-lg border border-border bg-muted/40 p-3">
+          <p className="mb-2 text-sm text-muted-foreground">No supervisor on this quote. Optional. Pick one if this company works through supervisors.</p>
           <SupervisorPicker
             companyId={q.company.id}
             value=""
-            required
             onChange={(v) => v && run(() => update.mutateAsync({ id: q.id, supervisorContactId: Number(v) }))}
           />
         </div>
@@ -804,6 +804,8 @@ export default function QuoteBuilderPage() {
             </div>
           </Card>
           ) : null}
+
+          <QuotePeopleCard quoteId={q.id} locked={q.status === "accepted"} />
 
           <Card>
             <CardHeader title="Notes on the quote" />

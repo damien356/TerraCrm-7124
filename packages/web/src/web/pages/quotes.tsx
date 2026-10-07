@@ -9,6 +9,7 @@ import { Button } from "../components/ui/button";
 import { Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { Combobox } from "../components/ui/combobox";
+import { QuotePeopleDraft, draftsToInput, type PersonDraft } from "../components/job-people";
 import { useCreateQuote, useDepositDefault, useQuoteStats, useQuotes } from "../queries/quotes";
 import { ContactPicker } from "../components/contact-picker";
 import { useCompanies, useSites } from "../queries/companies";
@@ -64,6 +65,7 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
     validDays: "30",
     notes: "",
   });
+  const [people, setPeople] = React.useState<PersonDraft[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const sites = useSites(form.contactId ? { contactId: Number(form.contactId) } : {});
   const depositDefault = useDepositDefault({
@@ -78,10 +80,6 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
 
   async function submit() {
     setError(null);
-    if (form.companyId && !form.supervisorContactId) {
-      setError("Pick the supervisor who asked for this quote, or add them, before saving.");
-      return;
-    }
     try {
       const quote = await create.mutateAsync({
         contactId: form.contactId ? Number(form.contactId) : null,
@@ -92,6 +90,8 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
         depositPercent: depositTyped ? Math.min(100, Math.max(0, Number(form.depositPercent) || 0)) : undefined,
         validDays: Number(form.validDays) || 30,
         notes: form.notes || null,
+        // Beyond the customer and supervisor. Merged onto one row per person on the job.
+        people: draftsToInput(people),
         items: [],
       });
       onClose();
@@ -145,7 +145,6 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
               companyId={Number(form.companyId)}
               value={form.supervisorContactId}
               onChange={(v) => set("supervisorContactId", v)}
-              required
             />
           </div>
         ) : null}
@@ -175,6 +174,9 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
         <Field label="Notes for the customer" className="sm:col-span-2">
           <Textarea rows={2} value={form.notes} onChange={(e) => set("notes", e.target.value)} />
         </Field>
+        <div className="sm:col-span-2">
+          <QuotePeopleDraft value={people} onChange={setPeople} />
+        </div>
       </div>
       {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
     </Modal>

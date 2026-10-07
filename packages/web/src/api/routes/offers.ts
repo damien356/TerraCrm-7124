@@ -7,6 +7,7 @@ import { staffOnly } from "../middleware/auth";
 import { pushToInstaller, pushToOffice } from "../lib/push";
 import { blockedReason } from "../lib/availability";
 import { lockTaskLabour } from "./costing";
+import { installerForStaff, taskForStaff } from "../lib/staff-view";
 
 /**
  * Dispatch is DIRECT or BROADCAST.
@@ -334,19 +335,20 @@ export const offers = {
   }),
 
   /** Full offer history for one task, so the office can see who said no and why. */
-  forTask: staffOnly.input(z.object({ taskId: z.number() })).handler(async ({ input }) => {
+  forTask: staffOnly.input(z.object({ taskId: z.number() })).handler(async ({ input, context }) => {
     await expireStale();
-    return db
+    const rows = await db
       .select({ offer: schema.taskOffers, installer: schema.installers })
       .from(schema.taskOffers)
       .innerJoin(schema.installers, eq(schema.installers.id, schema.taskOffers.installerId))
       .where(eq(schema.taskOffers.taskId, input.taskId))
       .orderBy(desc(schema.taskOffers.sentAt));
+    return rows.map((r) => ({ ...r, installer: installerForStaff(r.installer, context.actor) }));
   }),
 
   /** Recently declined, with reasons — Damien wanted the reason mandatory. */
-  declines: staffOnly.handler(() =>
-    db
+  declines: staffOnly.handler(async ({ context }) => {
+    const rows = await db
       .select({
         offer: schema.taskOffers,
         installer: schema.installers,
@@ -359,8 +361,13 @@ export const offers = {
       .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
       .where(eq(schema.taskOffers.status, "declined"))
       .orderBy(desc(schema.taskOffers.respondedAt))
-      .limit(30),
-  ),
+      .limit(30);
+    return rows.map((r) => ({
+      ...r,
+      installer: installerForStaff(r.installer, context.actor),
+      task: taskForStaff(r.task, context.actor),
+    }));
+  }),
 };
 
 /**

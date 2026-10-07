@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { assertSupervisor, SUPERVISOR_REQUIRED_MESSAGE } from "../lib/supervisors";
+import { assertSupervisor } from "../lib/supervisors";
 import { and, asc, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
@@ -15,6 +15,7 @@ import { normaliseMobile } from "../lib/sms";
 import { createContact } from "./contacts";
 import { bundlesFor, copyBundles } from "./quoteBundles";
 import { leadToQuotedOnSend } from "../lib/job-stage";
+import { addQuotePerson, carryQuotePeopleToJob, copyQuotePeople, personInput } from "../lib/job-people";
 
 /**
  * Quotes are for Admin and Office. Field crew must never reach any procedure
@@ -144,9 +145,6 @@ async function assertDiscountAllowed(quote: typeof schema.quotes.$inferSelect, i
 
 /** The checks every path to a customer goes through: Send, Accept and Convert to job. */
 async function assertReadyToGoOut(quote: typeof schema.quotes.$inferSelect, actor: Actor) {
-  if (quote.companyId && !quote.supervisorContactId) {
-    throw new ORPCError("BAD_REQUEST", { message: `Supervisor missing. ${SUPERVISOR_REQUIRED_MESSAGE}` });
-  }
   const items = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quote.id));
   await assertDiscountAllowed(quote, items, actor);
 }
@@ -318,6 +316,8 @@ export const quotes = {
         companyId: z.number().nullable().optional(),
         /** Required when companyId is set. */
         supervisorContactId: z.number().nullable().optional(),
+        /** Job contacts beyond the customer and supervisor. Carried onto the job on accept. */
+        people: z.array(personInput).max(20).default([]),
         siteId: z.number().nullable().optional(),
         /** Left out, it comes off the company or contact card (lib/deposits.ts). */
         depositPercent: z.number().min(0).max(100).optional(),
@@ -408,6 +408,11 @@ export const quotes = {
             flagReason: item.flagReason ?? null,
           })),
         );
+      }
+
+      for (const p of input.people) {
+        if (p.tags.includes("supervisor")) continue; // the supervisor comes only through supervisorContactId
+        await addQuotePerson(row.id, p.contactId, p);
       }
 
       const totals = await recalc(row.id);
@@ -1054,12 +1059,14 @@ export const quotes = {
           ),
         );
 
-      // Keep the linked job's value honest with the accepted price.
+      // Keep the linked job's value honest with the accepted price, and put
+      // the quote's people on the job.
       if (quote.jobId) {
         await db
           .update(schema.jobs)
           .set({ value: quote.total, updatedAt: new Date() })
           .where(eq(schema.jobs.id, quote.jobId));
+        await carryQuotePeopleToJob(quote.id, quote.jobId);
       }
 
       await db.insert(schema.activityLog).values({
@@ -1158,6 +1165,7 @@ export const quotes = {
     }
 
     await copyBundles(quote.id, row.id);
+    await copyQuotePeople(quote.id, row.id);
     const totals = await recalc(row.id);
 
     await db.insert(schema.activityLog).values({
@@ -1240,35 +1248,8 @@ export const quotes = {
 
       if (!job) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Job not created" });
 
-      if (quote.contactId) {
-        await db
-          .insert(schema.jobContacts)
-          .values({
-            jobId: job.id,
-            contactId: quote.contactId,
-            role: "job_contact",
-            isPrimary: true,
-            onSiteContact: true,
-            receivesSms: true,
-            receivesEmail: true,
-            canApproveQuote: true,
-          })
-          .onConflictDoNothing();
-      }
-
-      if (quote.companyId && quote.supervisorContactId) {
-        await db
-          .insert(schema.jobContacts)
-          .values({
-            jobId: job.id,
-            contactId: quote.supervisorContactId,
-            role: "supervisor",
-            isPrimary: true,
-            receivesEmail: true,
-            canApproveQuote: true,
-          })
-          .onConflictDoNothing();
-      }
+      // Customer, supervisor and every job contact on the quote, one row per person.
+      await carryQuotePeopleToJob(quote.id, job.id);
 
       // Supply lines become materials to order.
       const supplyLines = items.filter((i) => i.kind === "supply" || i.kind === "accessory");

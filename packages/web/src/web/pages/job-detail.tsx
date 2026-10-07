@@ -18,35 +18,21 @@ import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import {
-  useAddJobContact,
   useAddJobNote,
   useAddMaterial,
   useJob,
-  useRemoveJobContact,
   useRemoveMaterial,
   useSetJobSupervisor,
   useUpdateJob,
-  useUpdateJobContact,
   useUpdateMaterial,
 } from "../queries/jobs";
 import { SupervisorPicker } from "../components/supervisor-picker";
 import { useCreateTask, useRemoveTask } from "../queries/tasks";
 import { useBootstrap } from "../queries/settings";
-import { ContactPicker } from "../components/contact-picker";
+import { JobPeopleCard } from "../components/job-people";
 
 const money = (n: number) =>
   n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
-
-const JOB_CONTACT_ROLES = [
-  "job_contact",
-  "property_manager",
-  "tenant",
-  "accounts",
-  "supervisor",
-  "owner",
-  "referrer",
-  "other",
-];
 
 const roleLabel = (r: string) => r.replace(/_/g, " ");
 
@@ -196,84 +182,6 @@ function NewTaskModal({ jobId, open, onClose, furniture }: { jobId: number; open
   );
 }
 
-/* ------------------------------ job contacts ----------------------------- */
-
-function AddContactModal({ jobId, open, onClose }: { jobId: number; open: boolean; onClose: () => void }) {
-  const add = useAddJobContact();
-  const [contactId, setContactId] = React.useState("");
-  const [role, setRole] = React.useState("job_contact");
-  const [flags, setFlags] = React.useState({
-    receivesSms: false,
-    receivesEmail: false,
-    canApproveQuote: false,
-    onSiteContact: false,
-  });
-  const [error, setError] = React.useState<string | null>(null);
-
-  async function submit() {
-    setError(null);
-    try {
-      await add.mutateAsync({ jobId, contactId: Number(contactId), role, isPrimary: false, ...flags });
-      onClose();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Add someone to this job"
-      subtitle="Property manager, tenant, accounts, supervisor — each with their own comms."
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={submit} disabled={!contactId || add.isPending}>
-            Add
-          </Button>
-        </>
-      }
-    >
-      <div className="grid gap-3">
-        <Field label="Person">
-          <ContactPicker value={contactId} onChange={setContactId} emptyLabel="Pick a contact" />
-        </Field>
-        <Field label="Role on this job">
-          <Select value={role} onChange={(e) => setRole(e.target.value)}>
-            {JOB_CONTACT_ROLES.map((r) => (
-              <option key={r} value={r}>
-                {roleLabel(r)}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {(
-            [
-              ["receivesSms", "Gets the SMS updates"],
-              ["receivesEmail", "Gets the emails"],
-              ["canApproveQuote", "Can approve the quote"],
-              ["onSiteContact", "On-site contact"],
-            ] as const
-          ).map(([key, label]) => (
-            <label htmlFor={`job_detail_cb1`} key={key} className="flex items-center gap-2 text-sm">
-              <Checkbox id={`job_detail_cb1`}
-                checked={flags[key]}
-                onChange={(e) => setFlags((f) => ({ ...f, [key]: e.target.checked }))}
-              />
-              {label}
-            </label>
-          ))}
-        </div>
-      </div>
-      {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
-    </Modal>
-  );
-}
-
 /* -------------------------------- the page ------------------------------- */
 
 /**
@@ -373,8 +281,6 @@ export default function JobDetailPage() {
   const job = useJob(Number.isFinite(id) ? id : null);
   const bootstrap = useBootstrap();
   const updateJob = useUpdateJob();
-  const updateContact = useUpdateJobContact();
-  const removeContact = useRemoveJobContact();
   const addMaterial = useAddMaterial();
   const updateMaterial = useUpdateMaterial();
   const removeMaterial = useRemoveMaterial();
@@ -386,7 +292,6 @@ export default function JobDetailPage() {
   const wantsThread = new URLSearchParams(searchString).get("tab") === "conversation";
   const [tab, setTab] = React.useState<"job" | "conversation">(wantsThread ? "conversation" : "job");
   const [taskModal, setTaskModal] = React.useState(false);
-  const [contactModal, setContactModal] = React.useState(false);
   const [measuring, setMeasuring] = React.useState<{ id: number; title: string } | null>(null);
   const [booking, setBooking] = React.useState<number | null>(null);
   const [note, setNote] = React.useState("");
@@ -583,7 +488,7 @@ export default function JobDetailPage() {
             jobId={j.id}
             companyId={j.companyId ?? null}
             current={(() => {
-              const row = j.contacts.find((p) => p.link.role === "supervisor");
+              const row = j.contacts.find((p) => p.link.tags.includes("supervisor"));
               return row
                 ? {
                     contactId: row.contact.id,
@@ -594,65 +499,12 @@ export default function JobDetailPage() {
           />
 
           {/* people on the job */}
-          <Card>
-            <CardHeader
-              title="People on this job"
-              subtitle="Each one has their own comms flags."
-              action={
-                <Button variant="secondary" onClick={() => setContactModal(true)}>
-                  <Plus className="size-3.5" />
-                  Add
-                </Button>
-              }
-            />
-            {j.contacts.length === 0 ? (
-              <Empty>Nobody linked yet.</Empty>
-            ) : (
-              <ul className="divide-y divide-border">
-                {j.contacts.map(({ link, contact }) => (
-                  <li key={link.id} className="px-4 py-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <Link to={`/clients/${contact.id}`} className="text-sm font-medium text-primary hover:underline">
-                          {contact.firstName} {contact.lastName}
-                        </Link>
-                        <p className="text-xs text-muted-foreground">
-                          {roleLabel(link.role)}
-                          {contact.mobile ? ` · ${contact.mobile}` : ""}
-                          {link.isPrimary ? " · primary" : ""}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => removeContact.mutate({ id: link.id })}
-                        className="text-muted-foreground transition-colors hover:text-destructive"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-                      {(
-                        [
-                          ["receivesSms", "SMS"],
-                          ["receivesEmail", "Email"],
-                          ["canApproveQuote", "Can approve quotes"],
-                          ["onSiteContact", "On site"],
-                        ] as const
-                      ).map(([key, label]) => (
-                        <label htmlFor={`job_detail_cb3`} key={key} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                          <Checkbox id={`job_detail_cb3`}
-                            checked={Boolean(link[key])}
-                            onChange={(e) => updateContact.mutate({ id: link.id, [key]: e.target.checked })}
-                          />
-                          {label}
-                        </label>
-                      ))}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
+          <JobPeopleCard
+            jobId={j.id}
+            people={j.contacts}
+            needsPeopleTagged={j.needsPeopleTagged}
+            canRemove={bootstrap.data?.actor.role === "admin"}
+          />
 
           {/* materials */}
           <Card>
@@ -818,7 +670,6 @@ export default function JobDetailPage() {
       ) : null}
 
       <NewTaskModal jobId={j.id} open={taskModal} onClose={() => setTaskModal(false)} furniture={j.furnitureOnSite} />
-      <AddContactModal jobId={j.id} open={contactModal} onClose={() => setContactModal(false)} />
       <MeasureUpModal
         taskId={measuring?.id ?? null}
         title={measuring?.title ?? ""}

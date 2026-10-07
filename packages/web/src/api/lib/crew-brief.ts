@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { workDaysFor, type WorkDay } from "./crew-days";
+import { crewPeopleFor } from "./crew-people";
 import { addLocalDays, localTimeOn, sayDay, sayTime, todayLocal } from "./local-date";
 
 /* ---------------------------------------------------------------------------
@@ -96,7 +97,6 @@ export async function briefFor(taskId: number): Promise<Brief | null> {
       skillName: schema.skills.name,
       jobNumber: schema.jobs.number,
       jobContactId: schema.jobs.contactId,
-      jobCompanyId: schema.jobs.companyId,
       furnitureOnSite: schema.jobs.furnitureOnSite,
       jobAccess: schema.jobs.accessNotes,
       address: schema.sites.address,
@@ -112,50 +112,20 @@ export async function briefFor(taskId: number): Promise<Brief | null> {
     .where(eq(schema.jobTasks.id, taskId));
   if (!row) return null;
 
-  const people = await db
-    .select({
-      role: schema.jobContacts.role,
-      onSite: schema.jobContacts.onSiteContact,
-      isPrimary: schema.jobContacts.isPrimary,
-      firstName: schema.contacts.firstName,
-      lastName: schema.contacts.lastName,
-      mobile: schema.contacts.mobile,
-      phone: schema.contacts.phone,
-    })
-    .from(schema.jobContacts)
-    .innerJoin(schema.contacts, eq(schema.contacts.id, schema.jobContacts.contactId))
-    .where(eq(schema.jobContacts.jobId, row.jobId));
-
-  /* The person to text or ring about today: whoever is flagged on site, then
-   * the job contact, then a property manager. Someone with a mobile beats
-   * someone without. */
-  const rank = (p: (typeof people)[number]) =>
-    (p.onSite ? 0 : p.role === "job_contact" ? 10 : p.role === "property_manager" ? 20 : 90) +
-    (p.mobile ? 0 : 5) +
-    (p.isPrimary ? 0 : 1);
-  const usable = people.filter((p) => p.onSite || p.role === "job_contact" || p.role === "property_manager");
-  usable.sort((a, b) => rank(a) - rank(b));
-  let contact: SiteContact | null = usable[0]
-    ? {
-        name: fullName(usable[0]),
-        firstName: usable[0].firstName.trim(),
-        mobile: usable[0].mobile,
-        phone: usable[0].phone,
-        role: usable[0].role,
-      }
+  /* The person to text or ring about today: the first person ticked Show to
+   * Crew, Site access ranked first (lib/crew-people.ts). Never the company. */
+  const people = (await crewPeopleFor([row.jobId])).get(row.jobId) ?? [];
+  const first = people[0];
+  const contact: SiteContact | null = first
+    ? { name: first.name, firstName: first.firstName, mobile: first.mobile, phone: first.phone, role: first.label }
     : null;
 
+  // The job's name as crew say it ("the Smith job"). The customer's own name
+  // only, never the billing company.
   let customerName: string | null = null;
   if (row.jobContactId) {
     const [c] = await db.select().from(schema.contacts).where(eq(schema.contacts.id, row.jobContactId));
-    if (c) {
-      customerName = fullName(c) || null;
-      if (!contact) contact = { name: fullName(c), firstName: c.firstName.trim(), mobile: c.mobile, phone: c.phone, role: "customer" };
-    }
-  }
-  if (!customerName && row.jobCompanyId) {
-    const [co] = await db.select({ name: schema.companies.name }).from(schema.companies).where(eq(schema.companies.id, row.jobCompanyId));
-    customerName = co?.name ?? null;
+    if (c) customerName = fullName(c) || null;
   }
 
   const street = row.address?.trim() || null;

@@ -11,12 +11,14 @@ import { addLocalDays, todayLocal } from "../lib/local-date";
 import { taskIdsOn } from "../lib/crew-days";
 import { completionPhotosOn, minCompletionPhotos, recheckPhotoFlags } from "../lib/site-visits";
 import { assertSwmsDone, swmsNeededFor } from "../lib/swms";
+import { crewPeopleFor } from "../lib/crew-people";
 
 /**
  * THE INSTALLER API. Every single query here filters by `context.installerId`.
  *
  * Installers may see: their own tasks, the address, access notes, the scope,
- * the materials, the customer's name and phone, and THEIR OWN pay.
+ * the materials, the people the office ticked Show to Crew on the job (name,
+ * phone, tags on that job, note), and THEIR OWN pay.
  * Installers must NEVER see: customer pricing, margins, quotes, invoices,
  * supplier costs, or any other installer's tasks or rates. That is enforced
  * here on the server — never in the UI.
@@ -63,20 +65,9 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
 
   if (rows.length === 0) return [];
 
-  // On-site contacts only, and only the ones flagged as reachable.
+  // Crew sees only the Site access and Decision-maker people (lib/crew-people.ts).
   const jobIds = [...new Set(rows.map((r) => r.jobId))];
-  const people = await db
-    .select({
-      jobId: schema.jobContacts.jobId,
-      role: schema.jobContacts.role,
-      onSite: schema.jobContacts.onSiteContact,
-      firstName: schema.contacts.firstName,
-      lastName: schema.contacts.lastName,
-      mobile: schema.contacts.mobile,
-    })
-    .from(schema.jobContacts)
-    .innerJoin(schema.contacts, eq(schema.contacts.id, schema.jobContacts.contactId))
-    .where(inArray(schema.jobContacts.jobId, jobIds));
+  const people = await crewPeopleFor(jobIds);
   // SWMS: required on the job, and whether I've signed today's.
   const swms = await swmsNeededFor(installerId, jobIds);
 
@@ -104,14 +95,7 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
       payBreakdown,
       swmsRequired: swms.get(r.jobId)?.required ?? false,
       swmsSignedToday: swms.get(r.jobId)?.signedToday ?? false,
-      contacts: people
-        .filter((p) => p.jobId === r.jobId && (p.onSite || p.role === "job_contact" || p.role === "property_manager"))
-        .map((p) => ({
-          name: `${p.firstName} ${p.lastName}`.trim(),
-          mobile: p.mobile,
-          role: p.role,
-          onSite: p.onSite,
-        })),
+      contacts: people.get(r.jobId) ?? [],
     };
   });
 }

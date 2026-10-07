@@ -13,9 +13,34 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { authClient } from "@/lib/auth";
+import { siteUrl } from "@/lib/api";
 import { Colors, Fonts } from "@/constants/theme";
 
 const c = Colors.light;
+
+/**
+ * A sign-in that throws (rather than coming back with res.error) used to say
+ * "Couldn't reach the server" whatever the cause. This checks whether the
+ * server answers at all, so the message says which it is, and keeps the
+ * phone's own error text so a screenshot tells us what went wrong.
+ */
+async function explainThrow(e: unknown): Promise<string> {
+  const detail = e instanceof Error ? `${e.name}: ${e.message}` : String(e ?? "unknown");
+  let reachable = false;
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch(`${siteUrl}/api/auth/get-session`, { signal: ctl.signal, credentials: "omit" });
+    clearTimeout(t);
+    reachable = r.status < 500;
+  } catch {
+    reachable = false;
+  }
+  const host = siteUrl.replace(/^https?:\/\//, "") || "no server set";
+  return reachable
+    ? `Sign-in failed on this phone. Send a screenshot to the office.\n(${host} · ${detail})`
+    : `Couldn't reach the server. Check your connection and try again.\n(${host} · ${detail})`;
+}
 
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
@@ -32,11 +57,11 @@ export default function LoginScreen() {
       // with it, and nobody's password here ends in one.
       const res = await authClient.signIn.email({ email: email.trim(), password: password.trim() });
       if (res.error) setError(res.error.message ?? "Couldn't sign you in.");
-    } catch {
+    } catch (e) {
       // A dropped connection or a CORS block throws instead of resolving with
       // res.error. Without this catch, busy is never cleared and the button
       // spins forever with no explanation.
-      setError("Couldn't reach the server. Check your connection and try again.");
+      setError(await explainThrow(e));
     } finally {
       setBusy(null);
     }
@@ -50,8 +75,8 @@ export default function LoginScreen() {
       if (res.error && res.error.code !== "AUTH_SESSION_DISMISSED") {
         setError(res.error.message ?? "Couldn't sign you in.");
       }
-    } catch {
-      setError("Couldn't reach the server. Check your connection and try again.");
+    } catch (e) {
+      setError(await explainThrow(e));
     } finally {
       setBusy(null);
     }

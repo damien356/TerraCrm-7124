@@ -24,9 +24,12 @@ export function ContactPicker({
   emptyLabel = "Select a person…",
   disabled,
   className,
+  onPicked,
 }: {
   value: string;
   onChange: (value: string) => void;
+  /** The picked person's name, for lists that show who was picked before saving. */
+  onPicked?: (label: string) => void;
   placeholder?: string;
   emptyLabel?: string;
   disabled?: boolean;
@@ -49,7 +52,9 @@ export function ContactPicker({
     <Combobox
       value={value}
       onChange={(v) => {
-        setPickedLabel(options.find((o) => o.value === v)?.label ?? "");
+        const label = options.find((o) => o.value === v)?.label ?? "";
+        setPickedLabel(label);
+        onPicked?.(label);
         onChange(v);
       }}
       options={options}

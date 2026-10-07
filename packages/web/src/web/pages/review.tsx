@@ -8,10 +8,10 @@ import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { useResolveReview, useReviewQueue, useReviewStats } from "../queries/review";
+import { COMPANY_TYPES, COMPANY_TYPE_LABELS } from "../../api/lib/person-tags";
 
 type Decision = "homeowner" | "business" | "block" | "archive" | "reopen";
 
-const COMPANY_TYPES = ["builder", "agency", "commercial", "strata", "retail", "other"] as const;
 
 const DECISION_LABEL: Record<string, string> = {
   homeowner: "Called a homeowner",
@@ -135,7 +135,7 @@ function DecisionModal({
           <Select value={companyType} onChange={(e) => setCompanyType(e.target.value as (typeof COMPANY_TYPES)[number])}>
               {COMPANY_TYPES.map((t) => (
                 <option key={t} value={t}>
-                  {t}
+                  {COMPANY_TYPE_LABELS[t]}
                 </option>
               ))}
             </Select>

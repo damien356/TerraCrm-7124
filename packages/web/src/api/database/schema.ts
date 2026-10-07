@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, real, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, unique, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 
 export * from "./auth-schema";
 
@@ -48,7 +48,7 @@ export const companies = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     name: text("name").notNull(),
     abn: text("abn"),
-    /** builder · agency · commercial · strata · retail · other */
+    /** builder · real_estate · property_manager · insurer · commercial · government · retail · other */
     type: text("type").notNull().default("builder"),
     phone: text("phone"),
     email: text("email"),
@@ -557,6 +557,26 @@ export const jobs = sqliteTable(
     category: text("category"),
     /** SWMS override for this job. Null follows the client and company, true or false wins. */
     requiresSwms: integer("requires_swms", { mode: "boolean" }),
+    /**
+     * CALLBACKS. A callback is a normal job linked to the original. Every
+     * callback in a chain points at the ORIGINAL job, never at another
+     * callback, so the chain is one level deep and easy to list.
+     */
+    parentJobId: integer("parent_job_id").references((): AnySQLiteColumn => jobs.id, { onDelete: "set null" }),
+    /** 1, 2, 3 within the chain. */
+    callbackSeq: integer("callback_seq"),
+    /**
+     * What people see instead of the number, e.g. "3981-C1". Null on normal
+     * jobs. Stored, not worked out on read, because the parent's number never
+     * changes and every list would otherwise need a join.
+     */
+    displayNumber: text("display_number"),
+    /** installer_error · product_fault · customer_damage · wear_and_tear · warranty · other. Never shown to Crew. */
+    callbackCause: text("callback_cause"),
+    /** True: quoted and invoiced as normal. False: nothing is billed. Never shown to Crew. */
+    callbackChargeable: integer("callback_chargeable", { mode: "boolean" }),
+    /** Installer error only: does the installer get paid for the return visit. Decided per callback. */
+    callbackPayInstaller: integer("callback_pay_installer", { mode: "boolean" }),
     ...timestamps,
   },
   (t) => [
@@ -564,7 +584,31 @@ export const jobs = sqliteTable(
     index("jobs_site_idx").on(t.siteId),
     index("jobs_external_idx").on(t.externalRef),
     index("jobs_contact_idx").on(t.contactId),
+    index("jobs_parent_idx").on(t.parentJobId),
+    unique("jobs_display_number_uq").on(t.displayNumber),
   ],
+);
+
+/**
+ * What fixing a callback cost Terra: labour, replacement product, the return
+ * trip. Held against the installer whose work caused it. Tracked and reported
+ * only, never charged to the installer's account. Admin only: it is cost.
+ */
+export const callbackCosts = sqliteTable(
+  "callback_costs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    /** The installer the cost is held against: whoever did the original work. */
+    installerId: integer("installer_id").references(() => installers.id, { onDelete: "set null" }),
+    /** labour · product · trip · other */
+    kind: text("kind").notNull().default("labour"),
+    description: text("description").notNull().default(""),
+    /** Dollars ex GST. */
+    amount: real("amount").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [index("callback_costs_job_idx").on(t.jobId), index("callback_costs_installer_idx").on(t.installerId)],
 );
 
 /** Many contacts per job, each with a role and its own comms flags. */
@@ -574,16 +618,32 @@ export const jobContacts = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
     contactId: integer("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
-    /** job_contact · property_manager · tenant · accounts · supervisor · owner · referrer · other */
-    role: text("role").notNull().default("job_contact"),
+    /** Legacy single role. Now always the first entry of `tags`, kept so older readers still work. */
+    role: text("role").notNull().default("other"),
+    /**
+     * JSON list of tags this person holds on this job (lib/person-tags.ts):
+     * owner · tenant · supervisor · property_manager · builder_contact · accounts · other.
+     */
+    tags: text("tags").notNull().default("[]"),
     isPrimary: integer("is_primary", { mode: "boolean" }).notNull().default(false),
+    /** Site access: the person Crew rings to get in. */
     onSiteContact: integer("on_site_contact", { mode: "boolean" }).notNull().default(false),
     receivesSms: integer("receives_sms", { mode: "boolean" }).notNull().default(false),
     receivesEmail: integer("receives_email", { mode: "boolean" }).notNull().default(false),
+    /** Decision-maker: approves colour, product and sign-off. */
     canApproveQuote: integer("can_approve_quote", { mode: "boolean" }).notNull().default(false),
+    /**
+     * Show to Crew: Crew sees this person on this job (name, number, tags, note).
+     * Chosen job by job. Any tag can be shown, Supervisor included.
+     */
+    showToCrew: integer("show_to_crew", { mode: "boolean" }).notNull().default(false),
+    /** When and how to reach them on this job. Crew sees it next to the call button. */
+    whenToContact: text("when_to_contact"),
+    /** The company they acted for when added. Referral credit stays with it if they move. */
+    actedForCompanyId: integer("acted_for_company_id").references(() => companies.id, { onDelete: "set null" }),
     ...timestamps,
   },
-  (t) => [unique("job_contact_unique").on(t.jobId, t.contactId, t.role)],
+  (t) => [unique("job_contact_person_uq").on(t.jobId, t.contactId)],
 );
 
 /* ---------------------------------------------------------------------------
@@ -1276,7 +1336,7 @@ export const quotes = sqliteTable(
     jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
     contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
     companyId: integer("company_id").references(() => companies.id, { onDelete: "set null" }),
-    /** The supervisor who asked for this quote. Required whenever a company is set. */
+    /** The supervisor who asked for this quote. Optional. Only ever someone at the quote's company. */
     supervisorContactId: integer("supervisor_contact_id").references(() => contacts.id, { onDelete: "set null" }),
     siteId: integer("site_id").references(() => sites.id, { onDelete: "set null" }),
     /** draft · needs_review · sent · accepted · declined · expired */
@@ -1340,6 +1400,27 @@ export const quoteItems = sqliteTable(
     ...timestamps,
   },
   (t) => [index("quote_items_quote_idx").on(t.quoteId)],
+);
+
+/** People on a quote, same shape as job_contacts. Copied onto the job on accept or convert. */
+export const quoteContacts = sqliteTable(
+  "quote_contacts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    quoteId: integer("quote_id").notNull().references(() => quotes.id, { onDelete: "cascade" }),
+    contactId: integer("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
+    tags: text("tags").notNull().default("[]"),
+    canApproveQuote: integer("can_approve_quote", { mode: "boolean" }).notNull().default(false),
+    onSiteContact: integer("on_site_contact", { mode: "boolean" }).notNull().default(false),
+    receivesSms: integer("receives_sms", { mode: "boolean" }).notNull().default(false),
+    receivesEmail: integer("receives_email", { mode: "boolean" }).notNull().default(false),
+    /** Show to Crew, carried onto the job with the person. */
+    showToCrew: integer("show_to_crew", { mode: "boolean" }).notNull().default(false),
+    whenToContact: text("when_to_contact"),
+    actedForCompanyId: integer("acted_for_company_id").references(() => companies.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [unique("quote_contact_person_uq").on(t.quoteId, t.contactId)],
 );
 
 /* ---------------------------------------------------------------------------

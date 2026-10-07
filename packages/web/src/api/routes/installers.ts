@@ -6,6 +6,7 @@ import * as schema from "../database/schema";
 import { adminOnly, staffOnly } from "../middleware/auth";
 import { blockedInstallerIds } from "../lib/availability";
 import { installerLogoKey, signGet, signPut } from "../lib/s3";
+import { taskForStaff } from "../lib/staff-view";
 
 /**
  * Skills are TICKS on the installer card (`installer_skills`) with a per-skill
@@ -127,7 +128,7 @@ export const installers = {
         rate: isAdmin ? s.link.rate : null,
         canLead: s.link.canLead,
       })),
-      recentTasks: recent,
+      recentTasks: recent.map((r) => ({ ...r, task: taskForStaff(r.task, context.actor) })),
       stats: {
         completed: Number(stats[0]?.completed ?? 0),
         total: Number(stats[0]?.total ?? 0),

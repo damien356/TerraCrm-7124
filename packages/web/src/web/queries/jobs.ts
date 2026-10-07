@@ -17,59 +17,48 @@ export function useJob(id: number | null) {
   );
 }
 
-function useJobMutation(
-  name:
-    | "create"
-    | "update"
-    | "addContact"
-    | "updateContact"
-    | "removeContact"
-    | "setSupervisor"
-    | "addMaterial"
-    | "updateMaterial"
-    | "removeMaterial"
-    | "addNote",
-) {
+/*
+ * One options object per hook. A shared helper indexed by a name union gave
+ * every hook a union input type, which tsc resolved differently from build to
+ * build (and so it rejected valid calls).
+ */
+function useJobRefresh() {
   const queryClient = useQueryClient();
-  return orpc.jobs[name].mutationOptions({
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: orpc.jobs.key() });
-      queryClient.invalidateQueries({ queryKey: orpc.tasks.key() });
-      queryClient.invalidateQueries({ queryKey: orpc.dashboard.key() });
-      // The PO card lists the job's materials.
-      queryClient.invalidateQueries({ queryKey: orpc.purchasing.key() });
-    },
-  });
+  return () => {
+    queryClient.invalidateQueries({ queryKey: orpc.jobs.key() });
+    queryClient.invalidateQueries({ queryKey: orpc.tasks.key() });
+    queryClient.invalidateQueries({ queryKey: orpc.dashboard.key() });
+    // The PO card lists the job's materials.
+    queryClient.invalidateQueries({ queryKey: orpc.purchasing.key() });
+  };
 }
 
 export function useCreateJob() {
-  return useMutation(useJobMutation("create"));
+  const onSuccess = useJobRefresh();
+  return useMutation(orpc.jobs.create.mutationOptions({ onSuccess }));
 }
 export function useUpdateJob() {
-  return useMutation(useJobMutation("update"));
-}
-export function useAddJobContact() {
-  return useMutation(useJobMutation("addContact"));
-}
-export function useUpdateJobContact() {
-  return useMutation(useJobMutation("updateContact"));
-}
-export function useRemoveJobContact() {
-  return useMutation(useJobMutation("removeContact"));
+  const onSuccess = useJobRefresh();
+  return useMutation(orpc.jobs.update.mutationOptions({ onSuccess }));
 }
 /** Sets, changes or clears the supervisor who sent the job. */
 export function useSetJobSupervisor() {
-  return useMutation(useJobMutation("setSupervisor"));
+  const onSuccess = useJobRefresh();
+  return useMutation(orpc.jobs.setSupervisor.mutationOptions({ onSuccess }));
 }
 export function useAddMaterial() {
-  return useMutation(useJobMutation("addMaterial"));
+  const onSuccess = useJobRefresh();
+  return useMutation(orpc.jobs.addMaterial.mutationOptions({ onSuccess }));
 }
 export function useUpdateMaterial() {
-  return useMutation(useJobMutation("updateMaterial"));
+  const onSuccess = useJobRefresh();
+  return useMutation(orpc.jobs.updateMaterial.mutationOptions({ onSuccess }));
 }
 export function useRemoveMaterial() {
-  return useMutation(useJobMutation("removeMaterial"));
+  const onSuccess = useJobRefresh();
+  return useMutation(orpc.jobs.removeMaterial.mutationOptions({ onSuccess }));
 }
 export function useAddJobNote() {
-  return useMutation(useJobMutation("addNote"));
+  const onSuccess = useJobRefresh();
+  return useMutation(orpc.jobs.addNote.mutationOptions({ onSuccess }));
 }

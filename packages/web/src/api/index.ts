@@ -46,6 +46,7 @@ import { payables } from "./routes/payables";
 import { priceChecks } from "./routes/price-checks";
 import { mail } from "./routes/mail";
 import { swms } from "./routes/swms";
+import { people } from "./routes/people";
 import { bootMailAgent } from "./lib/mail-agent";
 import { finishConnect } from "./lib/gmail";
 import { bootReminders } from "./lib/reminders";
@@ -151,6 +152,8 @@ export const router = {
   swms,
   /** The email agent's three mailboxes. Read only, team@ can also send. */
   mail,
+  /** Job and quote people, duplicate cards, company retype, and referral value. */
+  people,
 };
 
 export type AppRouter = typeof router;

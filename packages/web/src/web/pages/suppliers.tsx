@@ -2,6 +2,7 @@ import * as React from "react";
 import { useSearch } from "wouter";
 import { AlertTriangle, Calculator, ChevronDown, ChevronUp, Fuel, Mail, Pencil, Plus, Trash2, Truck } from "lucide-react";
 import { Page } from "../components/layout";
+import { useBootstrap } from "../queries/settings";
 import { Card, CardHeader, Empty, Loading } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -785,6 +786,7 @@ export default function SuppliersPage() {
   const feeUpdate = useUpdateSupplierFee();
   const feeDelete = useDeleteSupplierFee();
 
+  const isAdmin = useBootstrap().data?.actor.role === "admin";
   const supplier = detail.data?.supplier;
   const fees = (detail.data?.fees ?? []).filter((f) => f.active);
 
@@ -896,6 +898,8 @@ export default function SuppliersPage() {
 
               <FreightCard supplier={supplier} />
 
+              {/* Supplier charges are costs: Admin only. The server sends Office none. */}
+              {isAdmin ? (
               <Card>
                 <CardHeader
                   title={
@@ -986,8 +990,11 @@ export default function SuppliersPage() {
                   </div>
                 )}
               </Card>
+              ) : null}
 
-              <OrderCostCard supplierId={supplier.id} supplierName={supplier.name} fees={detail.data?.fees ?? []} />
+              {isAdmin ? (
+                <OrderCostCard supplierId={supplier.id} supplierName={supplier.name} fees={detail.data?.fees ?? []} />
+              ) : null}
               <NewFeeModal supplierId={supplier.id} open={newFeeOpen} onClose={() => setNewFeeOpen(false)} />
             </React.Fragment>
           )}

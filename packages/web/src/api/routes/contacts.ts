@@ -161,6 +161,11 @@ export const contacts = {
             select jc.role from job_contacts jc
             where jc.job_id = jobs.id and jc.contact_id = ${input.id} limit 1
           )`,
+          /** JSON list of this person's tags on the job (lib/person-tags.ts). */
+          tags: sql<string | null>`(
+            select jc.tags from job_contacts jc
+            where jc.job_id = jobs.id and jc.contact_id = ${input.id} limit 1
+          )`,
         })
         .from(schema.jobs)
         .leftJoin(schema.jobStatuses, eq(schema.jobStatuses.id, schema.jobs.statusId))

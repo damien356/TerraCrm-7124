@@ -14,8 +14,8 @@ import { useCompany, useUpdateCompany } from "../queries/companies";
 import { useCompanyIntelDetail } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
 import { typeLabel } from "./companies";
+import { COMPANY_TYPES } from "../../api/lib/person-tags";
 
-const COMPANY_TYPES = ["builder", "property_manager", "commercial", "government", "retail", "other"];
 const roleLabel = (r: string) => r.replace(/_/g, " ");
 
 function Fact({ label, children }: { label: string; children: React.ReactNode }) {

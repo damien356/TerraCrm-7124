@@ -13,6 +13,7 @@ import { SupervisorPicker } from "../components/supervisor-picker";
 import { useCreateJob, useJobs } from "../queries/jobs";
 import { useBootstrap } from "../queries/settings";
 import { ContactPicker } from "../components/contact-picker";
+import { QuotePeopleDraft, draftsToInput, type PersonDraft } from "../components/job-people";
 import { useCompanies, useSites } from "../queries/companies";
 
 const money = (n: number) =>
@@ -39,6 +40,7 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
     source: "phone",
   });
   const [error, setError] = React.useState<string | null>(null);
+  const [people, setPeople] = React.useState<PersonDraft[]>([]);
 
   function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -46,10 +48,6 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
 
   async function submit() {
     setError(null);
-    if (form.companyId && !form.supervisorContactId) {
-      setError("Pick the supervisor who sent this job, or add them, before saving.");
-      return;
-    }
     try {
       await create.mutateAsync({
         title: form.title,
@@ -67,6 +65,7 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
         source: form.source,
         supervisorContactId:
           form.companyId && form.supervisorContactId ? Number(form.supervisorContactId) : null,
+        people: draftsToInput(people),
       });
       onClose();
     } catch (e) {
@@ -123,7 +122,6 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
           companyId={form.companyId ? Number(form.companyId) : null}
           value={form.supervisorContactId}
           onChange={(v) => set("supervisorContactId", v)}
-          required
         />
         <Field label="Site">
           <Select value={form.siteId} onChange={(e) => set("siteId", e.target.value)}>
@@ -195,6 +193,9 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
             placeholder="Gate code, parking, dog on site, lift booking…"
           />
         </Field>
+        <div className="sm:col-span-2">
+          <QuotePeopleDraft value={people} onChange={setPeople} hint="Owner, tenant, agent, accounts. Tick Site access for anyone the crew should see." />
+        </div>
       </div>
       {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
     </Modal>

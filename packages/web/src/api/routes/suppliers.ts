@@ -106,9 +106,11 @@ export const suppliers = {
       return rows.map((r) => ({ ...r.supplier, feeCount: Number(r.feeCount ?? 0) }));
     }),
 
-  get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     const [supplier] = await db.select().from(schema.suppliers).where(eq(schema.suppliers.id, input.id));
     if (!supplier) throw new ORPCError("NOT_FOUND", { message: "Supplier not found" });
+    // Supplier charges are costs. Office sees the supplier, not what they charge us.
+    if (context.actor.role !== "admin") return { supplier, fees: [] as (typeof schema.supplierFeeRules.$inferSelect)[] };
     const fees = await db
       .select()
       .from(schema.supplierFeeRules)

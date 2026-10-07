@@ -8,6 +8,7 @@ import { checkDays, nonWorkingWeekdays } from "../lib/availability";
 import { daysFromQty } from "../lib/day-estimate";
 import { matchInstaller, parseBookingLine } from "../lib/booking-command";
 import { lockTaskLabour } from "./costing";
+import { installerForStaff, taskForStaff } from "../lib/staff-view";
 
 /**
  * TASKS ARE THE DISPATCH UNIT — not jobs. One job can be five separate
@@ -156,7 +157,7 @@ export const tasks = {
   /** The dispatch board feed: every task in a date window, plus the unassigned queue. */
   board: staffOnly
     .input(z.object({ from: z.string(), to: z.string() }))
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
       const scheduled = await db
         .select({
           task: schema.jobTasks,
@@ -249,7 +250,7 @@ export const tasks = {
         .orderBy(asc(schema.jobTasks.createdAt));
 
       const shape = (r: (typeof scheduled)[number] | (typeof unassigned)[number]) => ({
-        ...r.task,
+        ...taskForStaff(r.task, context.actor),
         skill: r.skill,
         jobNumber: r.job.number,
         jobTitle: r.job.title,
@@ -282,7 +283,7 @@ export const tasks = {
       };
     }),
 
-  get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     const [row] = await db
       .select({
         task: schema.jobTasks,
@@ -322,14 +323,14 @@ export const tasks = {
     ]);
 
     return {
-      ...row.task,
+      ...taskForStaff(row.task, context.actor),
       skill: row.skill,
       job: row.job,
       site: row.site,
-      installer: row.installer,
+      installer: installerForStaff(row.installer, context.actor),
       checklist,
       photos,
-      offers,
+      offers: offers.map((o) => ({ ...o, installer: installerForStaff(o.installer, context.actor) })),
       days: days.map((d) => ({ ...d.day, installerName: d.installer?.name ?? null })),
       suggested,
     };
@@ -404,7 +405,7 @@ export const tasks = {
         seq: z.number().int().optional(),
       }),
     )
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
       const { id, ...rest } = input;
       const [existing] = await db
         .select({ task: schema.jobTasks, job: schema.jobs })
@@ -424,7 +425,7 @@ export const tasks = {
         .set({ ...rest, updatedAt: new Date() })
         .where(eq(schema.jobTasks.id, id))
         .returning();
-      return row;
+      return row ? taskForStaff(row, context.actor) : row;
     }),
 
   /**
@@ -617,7 +618,7 @@ export const tasks = {
         actorRole: context.actor.role,
       });
 
-      return row;
+      return row ? taskForStaff(row, context.actor) : row;
     }),
 
   /* --------------------------- booking a run --------------------------- */
@@ -1151,7 +1152,7 @@ export const tasks = {
       actorName: context.actor.name,
       actorRole: context.actor.role,
     });
-    return row;
+    return row ? taskForStaff(row, context.actor) : row;
   }),
 
   setStatus: staffOnly
@@ -1186,7 +1187,7 @@ export const tasks = {
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
-      return row;
+      return row ? taskForStaff(row, context.actor) : row;
     }),
 
   remove: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {

@@ -52,7 +52,8 @@ const HAS_COSTS = sql`exists (select 1 from job_costs jc where jc.job_id = j.id)
  */
 const senderFor = (j: string) => sql`coalesce(
   (select jcs.contact_id from job_contacts jcs
-     where jcs.job_id = ${sql.raw(j)}.id and jcs.role in ('supervisor','manager','owner','purchasing')
+     where jcs.job_id = ${sql.raw(j)}.id
+       and exists (select 1 from json_each(jcs.tags) where json_each.value in ('supervisor','builder_contact'))
      order by jcs.is_primary desc limit 1),
   ${sql.raw(j)}.contact_id,
   ${sql.raw(j)}.bill_to_contact_id,
@@ -487,7 +488,7 @@ export const intel = {
     .handler(async ({ input }) => {
       /*
        * The supervisor scope counts only jobs with a real `job_contacts` row at
-       * role 'supervisor'. It deliberately does NOT use the softer sender
+       * tag 'supervisor'. It deliberately does NOT use the softer sender
        * fallback chain above, because a guess dressed up as a name is worse
        * than an honest gap. Jobs with nobody recorded fall out of the list and
        * are counted by `supervisorAttribution` instead.
@@ -509,23 +510,23 @@ export const intel = {
             (select co2.name from job_contacts jc2
                join jobs j2 on j2.id = jc2.job_id
                join companies co2 on co2.id = j2.company_id
-               where jc2.contact_id = c.id and jc2.role = 'supervisor'
+               where jc2.contact_id = c.id and exists (select 1 from json_each(jc2.tags) where json_each.value = 'supervisor')
                order by j2.number desc limit 1)
           ) as company_name,
           (select coalesce(sum(i.total - i.amount_paid), 0) from invoices i
              where i.status not in ('paid','void')
                and i.job_id in (select jc3.job_id from job_contacts jc3
-                                  where jc3.contact_id = c.id and jc3.role = 'supervisor')) as outstanding,
+                                  where jc3.contact_id = c.id and exists (select 1 from json_each(jc3.tags) where json_each.value = 'supervisor'))) as outstanding,
           (select avg(julianday(i.paid_at, 'unixepoch') - julianday(i.created_at, 'unixepoch'))
              from invoices i
              where i.paid_at is not null
                and i.job_id in (select jc4.job_id from job_contacts jc4
-                                  where jc4.contact_id = c.id and jc4.role = 'supervisor')) as avg_days_to_pay,
+                                  where jc4.contact_id = c.id and exists (select 1 from json_each(jc4.tags) where json_each.value = 'supervisor'))) as avg_days_to_pay,
           (select count(*) from quotes q where q.contact_id = c.id) as quotes_total,
           (select count(*) from quotes q where q.contact_id = c.id and q.status = 'accepted') as quotes_won,
           ${AGG}
         from contacts c
-        join job_contacts jcs on jcs.contact_id = c.id and jcs.role = 'supervisor'
+        join job_contacts jcs on jcs.contact_id = c.id and exists (select 1 from json_each(jcs.tags) where json_each.value = 'supervisor')
         join jobs j on j.id = jcs.job_id
         left join job_statuses s on s.id = j.status_id
         group by c.id having total_jobs > 0
@@ -618,10 +619,10 @@ export const intel = {
     }>(sql`
       select count(*) as total_jobs,
         coalesce(sum(case when exists (
-          select 1 from job_contacts jc where jc.job_id = j.id and jc.role = 'supervisor'
+          select 1 from job_contacts jc where jc.job_id = j.id and exists (select 1 from json_each(jc.tags) where json_each.value = 'supervisor')
         ) then 1 end), 0) as with_supervisor,
         coalesce(sum(case when not exists (
-          select 1 from job_contacts jc where jc.job_id = j.id and jc.role = 'supervisor'
+          select 1 from job_contacts jc where jc.job_id = j.id and exists (select 1 from json_each(jc.tags) where json_each.value = 'supervisor')
         ) then j.value end), 0) as without_value
       from jobs j
       left join job_statuses s on s.id = j.status_id

@@ -9,16 +9,9 @@ import { Modal } from "../components/ui/modal";
 import { useCreateCompany } from "../queries/companies";
 import { useCompanyIntel, type ListSort } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
+import { COMPANY_TYPES, COMPANY_TYPE_LABELS } from "../../api/lib/person-tags";
 
-const COMPANY_TYPES = [
-  "builder",
-  "property_manager",
-  "commercial",
-  "government",
-  "retail",
-  "other",
-];
-export const typeLabel = (t: string) => t.replace(/_/g, " ");
+export const typeLabel = (t: string) => COMPANY_TYPE_LABELS[t] ?? t.replace(/_/g, " ");
 
 export function NewCompanyModal({
   open,
@@ -198,10 +191,15 @@ export default function CompaniesPage() {
       title="Companies"
       subtitle="Builders, agencies and commercial accounts, ranked by what they have put through Terra."
       actions={
-        <Button onClick={() => setModal(true)}>
-          <Plus className="size-4" />
-          New company
-        </Button>
+        <>
+          <Link to="/companies/types" className="text-[13px] font-medium text-primary hover:underline">
+            Check company types
+          </Link>
+          <Button onClick={() => setModal(true)}>
+            <Plus className="size-4" />
+            New company
+          </Button>
+        </>
       }
     >
       <div className="mb-3 flex flex-wrap items-center gap-2">

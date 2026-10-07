@@ -83,7 +83,6 @@ export function checkQuote(input: CheckInput): { ok: boolean; items: CheckItem[]
     return { ok: false, items: out };
   }
   if (!input.hasCustomer) add("stop", "no_customer", "No customer on the quote.");
-  if (input.isCompany && !input.hasSupervisor) add("stop", "no_supervisor", "Company quote with no supervisor picked.");
 
   for (const l of lines.filter((x) => x.flagged)) {
     add("stop", "flagged", `Needs checking: ${short(l.description)}.${l.flagReason ? ` ${l.flagReason}` : ""}`, [l.id]);
