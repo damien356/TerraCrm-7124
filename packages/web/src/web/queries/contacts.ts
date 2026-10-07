@@ -40,3 +40,21 @@ export function useUnlinkCompany() {
 export function useMoveSupervisorCompany() {
   return useMutation(useContactMutation("moveCompany"));
 }
+
+/**
+ * Clients by name, mobile, email or suburb, searched on the server. The
+ * pickers use this rather than loading the list, which is too long to load
+ * whole. Idle until something is typed. Keeps the last answer on screen while
+ * the next keystroke's answer is on its way.
+ */
+export function useContactSearch(search: string) {
+  const q = search.trim();
+  return useQuery(
+    orpc.contacts.list.queryOptions({
+      input: { search: q, limit: 30 },
+      enabled: q.length > 0,
+      staleTime: 20_000,
+      placeholderData: (prev) => prev,
+    }),
+  );
+}

@@ -22,6 +22,10 @@ export function Combobox({
   emptyLabel = "None",
   disabled,
   className,
+  onQueryChange,
+  selectedLabel,
+  loading,
+  idleHint,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -30,6 +34,18 @@ export function Combobox({
   emptyLabel?: string;
   disabled?: boolean;
   className?: string;
+  /**
+   * Server search mode. When set, every keystroke is handed out and `options`
+   * are taken as already matched, so nothing is filtered here. For lists too
+   * long to load whole (clients).
+   */
+  onQueryChange?: (query: string) => void;
+  /** Name to show for `value` when it is not among the current options. */
+  selectedLabel?: string;
+  /** Server search still running. */
+  loading?: boolean;
+  /** Shown in server search mode before anything is typed. */
+  idleHint?: string;
 }) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
@@ -37,17 +53,23 @@ export function Combobox({
   const rootRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
 
-  const selected = options.find((o) => o.value === value) ?? null;
+  const serverSearch = onQueryChange !== undefined;
+  const selected =
+    options.find((o) => o.value === value) ?? (value && selectedLabel ? { value, label: selectedLabel } : null);
+
+  React.useEffect(() => {
+    onQueryChange?.(query);
+  }, [query, onQueryChange]);
 
   const filtered = React.useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return options;
+    if (!q || serverSearch) return options;
     return options.filter(
       (o) =>
         o.label.toLowerCase().includes(q) ||
         (o.sublabel ?? "").toLowerCase().includes(q),
     );
-  }, [options, query]);
+  }, [options, query, serverSearch]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -144,7 +166,11 @@ export function Combobox({
           >
             {emptyLabel}
           </button>
-          {filtered.length === 0 ? (
+          {serverSearch && !query.trim() && idleHint ? (
+            <div className="px-3 py-2 text-sm text-muted-foreground">{idleHint}</div>
+          ) : loading && filtered.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-muted-foreground">Searching…</div>
+          ) : filtered.length === 0 ? (
             <div className="px-3 py-2 text-sm text-muted-foreground">No matches</div>
           ) : (
             filtered.map((o, i) => (

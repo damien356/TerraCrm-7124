@@ -12,7 +12,7 @@ import { Combobox } from "../components/ui/combobox";
 import { SupervisorPicker } from "../components/supervisor-picker";
 import { useCreateJob, useJobs } from "../queries/jobs";
 import { useBootstrap } from "../queries/settings";
-import { useContacts } from "../queries/contacts";
+import { ContactPicker } from "../components/contact-picker";
 import { useCompanies, useSites } from "../queries/companies";
 
 const money = (n: number) =>
@@ -20,7 +20,6 @@ const money = (n: number) =>
 
 export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const bootstrap = useBootstrap();
-  const contacts = useContacts();
   const companies = useCompanies();
   const sites = useSites();
   const create = useCreateJob();
@@ -103,16 +102,7 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
           />
         </Field>
         <Field label="Contact (the person)">
-          <Combobox
-            value={form.contactId}
-            onChange={(v) => set("contactId", v)}
-            placeholder="Search contacts…"
-            emptyLabel="None"
-            options={(contacts.data ?? []).map((c) => ({
-              value: String(c.id),
-              label: `${c.firstName} ${c.lastName}`,
-            }))}
-          />
+          <ContactPicker value={form.contactId} onChange={(v) => set("contactId", v)} emptyLabel="None" />
         </Field>
         <Field label="Company (optional)">
           <Combobox

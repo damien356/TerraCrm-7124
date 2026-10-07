@@ -32,7 +32,7 @@ import {
 import { SupervisorPicker } from "../components/supervisor-picker";
 import { useCreateTask, useRemoveTask } from "../queries/tasks";
 import { useBootstrap } from "../queries/settings";
-import { useContacts } from "../queries/contacts";
+import { ContactPicker } from "../components/contact-picker";
 
 const money = (n: number) =>
   n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
@@ -199,7 +199,6 @@ function NewTaskModal({ jobId, open, onClose, furniture }: { jobId: number; open
 /* ------------------------------ job contacts ----------------------------- */
 
 function AddContactModal({ jobId, open, onClose }: { jobId: number; open: boolean; onClose: () => void }) {
-  const contacts = useContacts();
   const add = useAddJobContact();
   const [contactId, setContactId] = React.useState("");
   const [role, setRole] = React.useState("job_contact");
@@ -240,14 +239,7 @@ function AddContactModal({ jobId, open, onClose }: { jobId: number; open: boolea
     >
       <div className="grid gap-3">
         <Field label="Person">
-          <Select value={contactId} onChange={(e) => setContactId(e.target.value)}>
-            <option value="">Pick a contact</option>
-            {(contacts.data ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.firstName} {c.lastName} {c.companyNames ? `— ${c.companyNames}` : ""}
-              </option>
-            ))}
-          </Select>
+          <ContactPicker value={contactId} onChange={setContactId} emptyLabel="Pick a contact" />
         </Field>
         <Field label="Role on this job">
           <Select value={role} onChange={(e) => setRole(e.target.value)}>

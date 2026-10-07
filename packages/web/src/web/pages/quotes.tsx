@@ -10,7 +10,7 @@ import { Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { Combobox } from "../components/ui/combobox";
 import { useCreateQuote, useDepositDefault, useQuoteStats, useQuotes } from "../queries/quotes";
-import { useContacts } from "../queries/contacts";
+import { ContactPicker } from "../components/contact-picker";
 import { useCompanies, useSites } from "../queries/companies";
 
 const money = (n: number) =>
@@ -52,7 +52,6 @@ export function depositHint(source: string | undefined) {
 
 export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [, navigate] = useLocation();
-  const contacts = useContacts();
   const companies = useCompanies();
   const create = useCreateQuote();
   const [form, setForm] = React.useState({
@@ -123,16 +122,9 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
     >
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Customer" className="sm:col-span-2">
-          <Combobox
+          <ContactPicker
             value={form.contactId}
-            onChange={(v) => set("contactId", v)}
-            placeholder="Search people…"
-            emptyLabel="Select a person…"
-            options={(contacts.data ?? []).map((c) => ({
-              value: String(c.id),
-              label: `${c.firstName} ${c.lastName}`,
-              sublabel: c.suburb ?? undefined,
-            }))}
+            onChange={(v) => setForm((f) => ({ ...f, contactId: v, siteId: "" }))}
           />
         </Field>
         <Field label="Bill the company?" hint="Leave as none for a private customer">

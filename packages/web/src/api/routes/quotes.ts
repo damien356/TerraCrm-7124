@@ -14,6 +14,7 @@ import { forgetNames } from "../lib/memo-context";
 import { normaliseMobile } from "../lib/sms";
 import { createContact } from "./contacts";
 import { bundlesFor, copyBundles } from "./quoteBundles";
+import { leadToQuotedOnSend } from "../lib/job-stage";
 
 /**
  * Quotes are for Admin and Office. Field crew must never reach any procedure
@@ -1022,6 +1023,7 @@ export const quotes = {
       actorName: context.actor.name,
       actorRole: context.actor.role,
     });
+    await leadToQuotedOnSend({ jobId: quote.jobId, quoteNumber: quote.number, actor: context.actor });
 
     return row;
   }),

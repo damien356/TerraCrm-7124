@@ -77,15 +77,31 @@ export const contacts = {
         where.push(sql`${schema.contacts.marketingBasis} != 'none'`);
         where.push(eq(schema.contacts.doNotMarket, false));
       }
-      if (input.search) {
-        const q = `%${input.search.toLowerCase()}%`;
+      // Every word has to match somewhere, so "marcos brancea" finds Marcos
+      // Brancea and "brancea bahrs" finds him by suburb. A search that is only
+      // a number ("0434 107", "+61 434") is read as one phone number. Phones
+      // are compared as bare digits with the leading 0 or 61 dropped, so the
+      // local "0434 107" finds "+61434107559" and the other way round.
+      const raw = (input.search ?? "").trim();
+      const compact = raw.replace(/[\s()+.-]/g, "");
+      const words = /^\d{3,}$/.test(compact) ? [compact] : raw.toLowerCase().split(/\s+/).filter(Boolean);
+      const bareMobile = sql`replace(replace(replace(replace(replace(coalesce(${schema.contacts.mobile}, ''), ' ', ''), '+', ''), '-', ''), '(', ''), ')', '')`;
+      const barePhone = sql`replace(replace(replace(replace(replace(coalesce(${schema.contacts.phone}, ''), ' ', ''), '+', ''), '-', ''), '(', ''), ')', '')`;
+      for (const word of words) {
+        const q = `%${word}%`;
+        const digits = word.replace(/\D/g, "");
+        const core = digits.startsWith("61") ? digits.slice(2) : digits.startsWith("0") ? digits.slice(1) : digits;
+        const phoneMatches =
+          digits.length >= 3 && core.length >= 2
+            ? [like(bareMobile, `%${core}%`), like(barePhone, `%${core}%`)]
+            : [];
         where.push(
           or(
             like(sql`lower(${schema.contacts.firstName})`, q),
             like(sql`lower(${schema.contacts.lastName})`, q),
             like(sql`lower(coalesce(${schema.contacts.email}, ''))`, q),
-            like(sql`coalesce(${schema.contacts.mobile}, '')`, `%${input.search}%`),
             like(sql`lower(coalesce(${schema.contacts.suburb}, ''))`, q),
+            ...phoneMatches,
           ),
         );
       }
