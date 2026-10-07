@@ -1,11 +1,11 @@
 # Terra Ops: project notes
 
-Last updated: 8 Oct 2026 Brisbane (archive locations added in section 17). Checked against the code, GitHub `main` (SWMS Stage 1 commit on top of `62a646c`), and the live database.
+Last updated: 8 Oct 2026 Brisbane. Checked against the code, GitHub `main` (`8878174` and the notes commit after it), the live site and the live database.
 This file replaces `STATE.md` as the source of truth. `STATE.md` (29 Sep) is out of date.
 
 Status words used below:
 - **Live**: built and running on ops.terraflooring.com.au.
-- **Pushed, not published**: on GitHub `main` and its database change applied on live, but the site still runs the older version until Damien publishes. (Everything up to `62a646c` was published 7 Oct, so those items are now Live.)
+- **Pushed, not published**: on GitHub `main` and its database change applied on live, but the site still runs the older version until Damien publishes. (Everything up to `8878174` was published 8 Oct, so those items are now Live.)
 - **Built, not live**: code written in the sandbox, not pushed, its database change not applied.
 - **Started**: part written, paused.
 - **Not built**: nothing in the code yet.
@@ -89,7 +89,7 @@ Current rule (Damien, 6 Oct):
 - Sales figures only. Office can see it.
 - Shipped with job contacts (section 6), commit `62a646c`.
 
-## 8. SWMS (Stage 1 live, published 7 Oct. Stage 2 database applied 8 Oct, code not pushed)
+## 8. SWMS (Stage 1 live 7 Oct. Stage 2 live, published 8 Oct)
 
 Plans: `/home/user/plans/swms/editor-brief.md` and `/home/user/plans/swms/library.md` (Damien's 7 Oct attachments).
 
@@ -118,9 +118,9 @@ Plans: `/home/user/plans/swms/editor-brief.md` and `/home/user/plans/swms/librar
 - **Phone test:** use job #4446 "DEMO job for installer app" (its only task is already complete, so it needs a new task for today). The stored demo.installer@ password no longer signs in on live.
 - Stages 2 and 3 come after callbacks (Damien, 7 Oct). Stage 4 waits for the next store build.
 
-### SWMS Stage 2 (Database applied 8 Oct, code not pushed)
+### SWMS Stage 2 (Live, published 8 Oct. `8878174`)
 
-Plan: `/home/user/plans/swms/stage2-plan.md` (approved). Code is on GitHub branch `archive/swms-stage2-wip`, not on `main`.
+Plan: `/home/user/plans/swms/stage2-plan.md` (approved). Code is on `main` as commit `8878174`.
 
 - **Database:** SQL file `packages/web/src/api/database/sql/2026-10-07-swms-stage2.sql`. Additive only: `safety_docs.review_on` plus 7 new tables (`sds_products`, `swms_blocks`, `swms_templates`, `swms_template_versions`, `swms_site_checks`, `swms_changes`, `job_swms_templates`). Applied to live 8 Oct with Damien's OK. Live now has 96 tables. No existing row changed. Seed result on live: 10 published, 9 drafts, 19 blocks, 7 site checks, 8 SDS products.
 - **Seed** (`lib/swms-seed.ts`): today's built-in content becomes 10 published templates at version 1, so crew sees no change. The 9 library templates load as drafts. 19 blocks, 7 site checks, 8 SDS products. Runs once.
@@ -132,9 +132,10 @@ Plan: `/home/user/plans/swms/stage2-plan.md` (approved). Code is on GitHub branc
 - **PDF:** risk line under each hazard, PPE line under each section.
 - **Checked 8 Oct:** lint, build, api tsc 0, app tsc 172 (baseline), mobile tsc 0. Scratch test 72 checks passed. Screens checked on a scratch copy as Office. Dry run on a copy of the live backup `terra-live-pre-swms-stage2-2026-10-08.db`: no existing row changed, library equals the built-in content.
 - **Applied 8 Oct:** fresh backup first, `terra-live-pre-swms-stage2-apply-2026-10-08.db` (89 tables, 14,209 rows, integrity ok). Then the script `terra-scratch-tests/swms/s2-apply.tmp.ts`. The live site runs the older code, which does not read the new tables, so nothing changes for users until the code is pushed and published.
-- **Next:** commit and push to `main` (Damien's OK), publish, then Stage 3.
+- **Published 8 Oct.** Checked on the live site: the SWMS library page is in the build and its server calls answer.
+- **Next:** phone app check against the library, then Stage 3.
 
-## 9. Callbacks (Built 7 Oct, not yet published)
+## 9. Callbacks (Live on the website, published 8 Oct)
 
 Plan: `/home/user/plans/callbacks-plan.md`. Damien's decisions, 7 Oct:
 - A callback is a normal job row linked to the original. It takes the next job number underneath but shows as `#3981-C1` everywhere. Search finds either.
@@ -161,7 +162,7 @@ What is built:
 - App (screen only, OTA-able): job shows `#4199-C1`, materials marked "Laid on the original job", Client photos and Original job chips, both read only. Crew sees no cause, chargeable flag or cost.
 - Inbox finding: "file to callback" from the inbox cannot work. `message_attachments` is never written, so inbound attachments are not stored. Office uploads client photos into Client photos on the callback instead.
 - Scratch tests: `/home/user/terra-scratch-tests/callbacks/`.
-- **Committed and pushed 7 Oct as `d788d17`.** Damien publishes the website and the OTA himself.
+- **Committed and pushed 7 Oct as `d788d17`.** Website published 8 Oct with SWMS Stage 2 (checked on the live site). The app screen changes reach phones by OTA, which Damien publishes himself.
 
 **Client photos from email (Damien, 7 Oct). Build after SWMS Stages 2 and 3:**
 - Idea 1 only: the email agent collects photos from emails sent by anyone on a contact or company card. Saved once, linked to the person, and to the job when the thread or address matches. Skip logos and signature images.
@@ -234,7 +235,7 @@ Nothing for these exists in the code. Damien to paste or re-state the spec.
 ## 15. Work order (Damien, 7 Oct)
 
 1. Finish callbacks. Done 7 Oct (`d788d17`).
-2. SWMS Stages 2 and 3.
+2. SWMS Stages 2 and 3. Stage 2 live 8 Oct. Stage 3 next.
 2b. Client photos from email, plus the texted photo link.
 3. Client invoices, then Stripe and Xero.
 4. Product arrived and delivery (spec needed).
@@ -260,9 +261,7 @@ SWMS Stage 4 (offline signing) and the camera scanner go in the next store build
 Sandbox cleanup on 8 Oct. Everything worth keeping was archived first. Each place was checked.
 
 **GitHub**
-- Branch `archive/swms-stage2-wip`, commit `e501d1f`. Parent is `d788d17` (Callbacks, `main`).
-- Holds the 21 SWMS Stage 2 files, including this file. `main` was not touched.
-- Safe to delete once Stage 2 is committed to `main`.
+- Branch `archive/swms-stage2-wip` (commit `e501d1f`) held the 21 SWMS Stage 2 files during cleanup. Stage 2 was pushed to `main` as `8878174` on 8 Oct and the branch was deleted with Damien's OK.
 
 **Supabase** (project `yozjpzkcbbvhjdyygetf`, bucket `terra-backup`)
 - Database snapshot: `database/2026-10-07/193943256-utc.sqlite.gz` (89 tables, 14,146 rows).
