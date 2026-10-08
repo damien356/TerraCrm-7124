@@ -90,7 +90,7 @@ export const SECTIONS: Record<SectionKey, SwmsSection> = {
       {
         id: "removal_asbestos",
         label:
-          "Asbestos. Old vinyl, vinyl tiles, lino backing, glue and some underlays can contain asbestos (common before 1990, banned in 2003).",
+          "Asbestos. Old vinyl, vinyl tiles, lino backing, glue and some underlays can contain asbestos in buildings built before 1986.",
         controls:
           "Check the asbestos register or the build date before lifting. If you are unsure, do not lift, cut, sand or grind it. Stop work and call the office.",
       },
