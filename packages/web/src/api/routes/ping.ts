@@ -5,6 +5,9 @@ import { auth } from "../auth";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { withUser } from "../middleware/auth";
+import { isLiveServer } from "../lib/runtime";
+import { mailAgentTicking } from "../lib/mail-agent";
+import { remindersTicking } from "../lib/reminders";
 
 export const ping = base.handler(() => ({ message: `Pong! ${Date.now()}` }));
 
@@ -16,7 +19,7 @@ export const ping = base.handler(() => ({ message: `Pong! ${Date.now()}` }));
 export const diag = base.handler(async () => {
   // Bumped whenever this check changes, so the live answer says which build is
   // actually running rather than leaving us to guess whether a publish landed.
-  const diagVersion = 4;
+  const diagVersion = 5;
 
   const env = {
     databaseUrl: Boolean(process.env.DATABASE_URL),
@@ -69,7 +72,10 @@ export const diag = base.handler(async () => {
     getSession: await step(() => auth.api.getSession({ headers: new Headers() })),
   };
 
-  return { diagVersion, env, databaseHost, database, steps };
+  // Which background timers this process started. Only the live server should.
+  const timers = { liveServer: isLiveServer(), mailAgent: mailAgentTicking(), reminders: remindersTicking() };
+
+  return { diagVersion, env, databaseHost, database, steps, timers };
 });
 
 /**

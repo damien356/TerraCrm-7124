@@ -2,6 +2,7 @@ import { and, eq, isNull, lte } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { pushToOffice, sendPush } from "./push";
+import { isLiveServer } from "./runtime";
 
 /* ---------------------------------------------------------------------------
  * Timed reminders from voice memos ("remind me in an hour to call her").
@@ -15,19 +16,14 @@ import { pushToOffice, sendPush } from "./push";
  * Same gate as the journey engine: the API module is also loaded by the Vite
  * dev server, which points at the live database. A ticker there would buzz
  * Damien's phone off a developer's sandbox, and stamp reminders as sent so the
- * real server never sends them. It only ticks in the published server, where
- * the entry script is `__server.ts`.
+ * real server never sends them. It only ticks on the live server, see
+ * lib/runtime.ts.
  *
  *   REMINDERS=off   never tick
  *   REMINDERS=on    tick regardless of the entry script
  * ------------------------------------------------------------------------- */
 
 const EVERY_MS = 60_000;
-
-function isPublishedServer() {
-  const argv = (process as unknown as { argv?: string[] }).argv ?? [];
-  return (argv[1] ?? "").endsWith("__server.ts");
-}
 
 async function userIdForProfile(profileId: number | null) {
   if (!profileId) return null;
@@ -60,7 +56,13 @@ export async function tickReminders(now = new Date()) {
 
     for (const t of due) {
       // Stamp first: a push that half fails must never repeat every minute.
-      await db.update(schema.officeTasks).set({ remindedAt: now }).where(eq(schema.officeTasks.id, t.id));
+      // Only the process that wins the stamp sends, so two servers never both push.
+      const claimed = await db
+        .update(schema.officeTasks)
+        .set({ remindedAt: now })
+        .where(and(eq(schema.officeTasks.id, t.id), isNull(schema.officeTasks.remindedAt)))
+        .returning({ id: schema.officeTasks.id });
+      if (!claimed.length) continue;
       const message = {
         title: "Reminder",
         body: t.title || "Follow up",
@@ -82,6 +84,10 @@ export async function tickReminders(now = new Date()) {
 
 let booted = false;
 
+let ticking = false;
+/** For the deploy check: did this process start the reminder timer? */
+export const remindersTicking = () => ticking;
+
 export function bootReminders() {
   if (booted) return;
   booted = true;
@@ -90,10 +96,11 @@ export function bootReminders() {
     console.log("[reminders] disabled by REMINDERS=off");
     return;
   }
-  if (mode !== "on" && !isPublishedServer()) {
+  if (mode !== "on" && !isLiveServer()) {
     console.log("[reminders] idle, not the published server, no pushes will be sent");
     return;
   }
+  ticking = true;
   console.log("[reminders] ticking every minute");
   setInterval(() => void tickReminders(), EVERY_MS);
   setTimeout(() => void tickReminders(), 15_000);

@@ -7,6 +7,7 @@ import { putObject } from "./s3";
 import { getMessage, header, listMessageIds, MailboxNotConnected, mailboxFor, pdfBytes, pdfParts } from "./gmail";
 import { isTerraOwn, recordInvoice, recordStatement } from "./invoice-match";
 import { sendAsTeam } from "./agent-mail";
+import { isLiveServer } from "./runtime";
 
 /* ---------------------------------------------------------------------------
  * The email agent. Every 15 minutes it reads new mail with a PDF in billing@,
@@ -247,18 +248,18 @@ export async function runMailAgent(limit = PER_RUN) {
   }
 }
 
-function isPublishedServer() {
-  const argv = (process as unknown as { argv?: string[] }).argv ?? [];
-  return (argv[1] ?? "").endsWith("__server.ts");
-}
-
 let booted = false;
+let ticking = false;
+/** For the deploy check: did this process start the mailbox timer? */
+export const mailAgentTicking = () => ticking;
+
 export function bootMailAgent() {
   if (booted) return;
   booted = true;
   const mode = process.env.MAIL_AGENT;
   if (mode === "off") return void console.log("[mail-agent] disabled by MAIL_AGENT=off");
-  if (mode !== "on" && !isPublishedServer()) return void console.log("[mail-agent] idle, not the published server");
+  if (mode !== "on" && !isLiveServer()) return void console.log("[mail-agent] idle, not the published server");
+  ticking = true;
   console.log("[mail-agent] checking mailboxes every 15 minutes");
   setInterval(() => void runMailAgent().catch((e) => console.error("[mail-agent]", e)), EVERY_MS);
   setTimeout(() => void runMailAgent().catch((e) => console.error("[mail-agent]", e)), 60_000);
