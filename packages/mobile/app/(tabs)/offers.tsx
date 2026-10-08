@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useBottomInset } from "@/hooks/use-bottom-gap";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors, Fonts, tintFor } from "@/constants/theme";
 import { EmptyState } from "@/components/task-card";
@@ -73,6 +74,7 @@ function holdClock(until?: Date | string | null) {
 type Offer = NonNullable<ReturnType<typeof useOffers>["data"]>[number];
 
 export default function OffersScreen() {
+  const bottomInset = useBottomInset();
   const offers = useOffers();
   const accept = useAcceptOffer();
   const decline = useDeclineOffer();
@@ -441,7 +443,7 @@ export default function OffersScreen() {
               borderTopLeftRadius: 20,
               borderTopRightRadius: 20,
               padding: 20,
-              paddingBottom: 32,
+              paddingBottom: Math.max(32, bottomInset + 16),
             }}
           >
             <Text style={{ fontFamily: Fonts.bold, fontSize: 19, color: c.foreground }}>Why can't you do it?</Text>

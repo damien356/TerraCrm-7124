@@ -411,9 +411,8 @@ export const LIBRARY_TEMPLATES: SeedTemplate[] = [
 ];
 
 export const LIBRARY_SITE_CHECKS = [
-  { question: "Site induction done, or signed in with the builder", answers: ["yes", "no"], flagOn: ["no"], appliesAll: true, templateKeys: [] as string[] },
   {
-    question: "Asbestos register checked, or building built after 2003",
+    question: "Asbestos register checked, or building built after 1986",
     answers: ["yes", "no", "unsure"],
     flagOn: ["no", "unsure"],
     appliesAll: false,

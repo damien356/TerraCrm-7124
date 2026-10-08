@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useBottomGap, useBottomInset } from "@/hooks/use-bottom-gap";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Colors, Fonts } from "@/constants/theme";
@@ -206,6 +207,8 @@ function Card({ children }: { children: React.ReactNode }) {
 }
 
 export default function SwmsScreen() {
+  const bottomGap = useBottomGap();
+  const bottomInset = useBottomInset();
   const { id, then } = useLocalSearchParams<{ id: string; then?: string }>();
   const taskId = Number(id);
   const router = useRouter();
@@ -406,7 +409,7 @@ export default function SwmsScreen() {
     return (
       <SafeAreaView edges={["top", "left", "right"]} style={{ flex: 1, backgroundColor: c.background }}>
         {header}
-        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 60 }}>
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 60 + bottomInset }}>
           <Text style={{ fontFamily: Fonts.bold, fontSize: 24, color: c.foreground }}>SWMS</Text>
           <View
             style={{
@@ -505,7 +508,7 @@ export default function SwmsScreen() {
       <ScrollView
         scrollEnabled={!drawing}
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ padding: 16, paddingBottom: 140 }}
+        contentContainerStyle={{ padding: 16, paddingBottom: 140 + bottomInset }}
       >
         <Text style={{ fontFamily: Fonts.bold, fontSize: 24, color: c.foreground }}>Today's SWMS</Text>
         <Text style={{ fontFamily: Fonts.sans, fontSize: 14, color: c.mutedForeground, marginTop: 4, lineHeight: 20 }}>
@@ -777,7 +780,7 @@ export default function SwmsScreen() {
           right: 0,
           bottom: 0,
           padding: 16,
-          paddingBottom: 26,
+          paddingBottom: bottomGap,
           backgroundColor: c.card,
           borderTopWidth: 1,
           borderTopColor: c.border,

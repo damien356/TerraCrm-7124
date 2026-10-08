@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ActivityIndicator, Image, Linking, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import { Colors, Fonts } from "@/constants/theme";
 import { uploadToStorage } from "@/lib/upload";
 import { useAddMedia, useJobFile, useNoDamage } from "@/queries/field";
@@ -32,6 +33,31 @@ type CrewBucket = Exclude<BucketKey, (typeof READ_ONLY)[number]>;
 const isReadOnly = (b: BucketKey) => (READ_ONLY as readonly string[]).includes(b);
 const CALLBACK_ONLY = ["client_reported", "original"] as const;
 
+/** Longest side a job photo is kept at. Sharp on any screen, about a fifth of the size. */
+const MAX_EDGE = 2048;
+
+/**
+ * Phone cameras shoot 4000px and up. Shrink to MAX_EDGE and save as JPEG
+ * (which also turns iPhone HEIC into something every browser shows), so each
+ * photo is a few hundred KB instead of several MB. If the shrink fails for any
+ * reason, the original goes up instead.
+ */
+async function shrinkPhoto(asset: ImagePicker.ImagePickerAsset): Promise<{ uri: string }> {
+  try {
+    const ctx = ImageManipulator.manipulate(asset.uri);
+    const w = asset.width ?? 0;
+    const h = asset.height ?? 0;
+    if (w > MAX_EDGE || h > MAX_EDGE) {
+      ctx.resize(w >= h ? { width: MAX_EDGE } : { height: MAX_EDGE });
+    }
+    const img = await ctx.renderAsync();
+    const out = await img.saveAsync({ compress: 0.75, format: SaveFormat.JPEG });
+    return { uri: out.uri };
+  } catch {
+    return { uri: asset.uri };
+  }
+}
+
 export function JobFileSection({
   taskId,
   jobId,
@@ -48,49 +74,99 @@ export function JobFileSection({
   const [bucket, setBucket] = useState<BucketKey>("area");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [failed, setFailed] = useState<{
+    assets: ImagePicker.ImagePickerAsset[];
+    video: boolean;
+    bucket: CrewBucket;
+  } | null>(null);
 
   const media = file.data?.media ?? [];
   const meta = BUCKETS.find((b) => b.key === bucket)!;
   const items = media.filter((m) => m.bucket === bucket);
   const gates = file.data?.gates;
 
-  async function capture(source: "camera" | "library", video: boolean) {
-    if (isReadOnly(bucket)) return;
-    setError(null);
-    try {
-      const opts: ImagePicker.ImagePickerOptions = {
-        mediaTypes: video ? ["videos"] : ["images"],
-        quality: 0.7,
-        videoMaxDuration: 60,
-      };
-      const res =
-        source === "camera" && Platform.OS !== "web"
-          ? await ImagePicker.launchCameraAsync(opts)
-          : await ImagePicker.launchImageLibraryAsync(opts);
-      if (res.canceled || res.assets.length === 0) return;
+  async function uploadOne(asset: ImagePicker.ImagePickerAsset, video: boolean, target: CrewBucket) {
+    const isVideo = video || asset.type === "video";
+    const ready = isVideo ? { uri: asset.uri } : await shrinkPhoto(asset);
+    const filename = isVideo
+      ? (asset.fileName ?? `${target}-${Date.now()}.mp4`)
+      : `${(asset.fileName ?? `${target}-${Date.now()}`).replace(/\.[^.]+$/, "")}.jpg`;
+    const contentType = isVideo ? (asset.mimeType ?? "video/mp4") : "image/jpeg";
+    const { key, sizeBytes } = await uploadToStorage({ uri: ready.uri, jobId, bucket: target, filename, contentType });
+    await addMedia.mutateAsync({
+      taskId,
+      bucket: target,
+      kind: isVideo ? "video" : "photo",
+      storageKey: key,
+      filename,
+      mime: contentType,
+      sizeBytes,
+      durationSeconds: asset.duration != null ? asset.duration / 1000 : null,
+      areaId: target === "area" ? (areaId ?? null) : null,
+    });
+  }
 
-      setBusy(true);
-      for (const asset of res.assets) {
-        const isVideo = video || asset.type === "video";
-        const filename = asset.fileName ?? `${bucket}-${Date.now()}.${isVideo ? "mp4" : "jpg"}`;
-        const contentType = asset.mimeType ?? (isVideo ? "video/mp4" : "image/jpeg");
-        const { key, sizeBytes } = await uploadToStorage({ uri: asset.uri, jobId, bucket, filename, contentType });
-        await addMedia.mutateAsync({
-          taskId,
-          bucket: bucket as CrewBucket,
-          kind: isVideo ? "video" : "photo",
-          storageKey: key,
-          filename,
-          mime: contentType,
-          sizeBytes,
-          durationSeconds: asset.duration != null ? asset.duration / 1000 : null,
-          areaId: bucket === "area" ? (areaId ?? null) : null,
-        });
+  /** Up to 3 at once, so a dozen photos is a short wait, not a long one. */
+  async function uploadAll(assets: ImagePicker.ImagePickerAsset[], video: boolean, target: CrewBucket) {
+    setBusy(true);
+    setFailed(null);
+    setProgress({ done: 0, total: assets.length });
+    const missed: ImagePicker.ImagePickerAsset[] = [];
+    let done = 0;
+    let next = 0;
+    const worker = async () => {
+      while (next < assets.length) {
+        const asset = assets[next++]!;
+        try {
+          await uploadOne(asset, video, target);
+        } catch {
+          missed.push(asset);
+        }
+        done += 1;
+        setProgress({ done, total: assets.length });
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "That didn't upload. Try again when you've got signal.");
+    };
+    try {
+      await Promise.all(Array.from({ length: Math.min(3, assets.length) }, worker));
+      if (missed.length) {
+        setFailed({ assets: missed, video, bucket: target });
+        setError(
+          missed.length === assets.length
+            ? "That didn't upload. Try again when you've got signal."
+            : `${assets.length - missed.length} of ${assets.length} went up. ${missed.length} didn't. Tap Try again when you've got signal.`,
+        );
+      }
     } finally {
       setBusy(false);
+      setProgress(null);
+    }
+  }
+
+  async function capture(source: "camera" | "library", video: boolean, into?: BucketKey) {
+    // `into` is for buttons that switch tab and shoot in one tap; state has not updated yet.
+    const target = into ?? bucket;
+    if (isReadOnly(target)) return;
+    setError(null);
+    try {
+      const fromLibrary = !(source === "camera" && Platform.OS !== "web");
+      const opts: ImagePicker.ImagePickerOptions = {
+        mediaTypes: video ? ["videos"] : ["images"],
+        // Photos are shrunk here before upload, so take them at full quality.
+        quality: video ? 0.7 : 1,
+        videoMaxDuration: 60,
+        // Pick a whole batch from the gallery in one go.
+        allowsMultipleSelection: fromLibrary && !video,
+        selectionLimit: fromLibrary && !video ? 30 : 1,
+        orderedSelection: true,
+      };
+      const res = fromLibrary
+        ? await ImagePicker.launchImageLibraryAsync(opts)
+        : await ImagePicker.launchCameraAsync(opts);
+      if (res.canceled || res.assets.length === 0) return;
+      await uploadAll(res.assets, video, target as CrewBucket);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "That didn't upload. Try again when you've got signal.");
     }
   }
 
@@ -118,7 +194,7 @@ export function JobFileSection({
             <Pressable
               onPress={() => {
                 setBucket("damage");
-                void capture("camera", false);
+                void capture("camera", false, "damage");
               }}
               style={{ backgroundColor: "#8A5A11", borderRadius: 9, paddingHorizontal: 13, paddingVertical: 9 }}
             >
@@ -244,12 +320,28 @@ export function JobFileSection({
       {busy ? (
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10 }}>
           <ActivityIndicator color={c.primary} />
-          <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: c.mutedForeground }}>Uploading…</Text>
+          <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: c.mutedForeground }}>
+            {progress && progress.total > 1 ? `Uploading ${progress.done} of ${progress.total}…` : "Uploading…"}
+          </Text>
         </View>
       ) : null}
 
       {error ? (
-        <Text style={{ fontFamily: Fonts.medium, fontSize: 12.5, color: c.destructive, marginTop: 8 }}>{error}</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 8 }}>
+          <Text style={{ flex: 1, fontFamily: Fonts.medium, fontSize: 12.5, color: c.destructive }}>{error}</Text>
+          {failed && !busy ? (
+            <Pressable
+              onPress={() => {
+                const f = failed;
+                setError(null);
+                void uploadAll(f.assets, f.video, f.bucket);
+              }}
+              style={{ borderWidth: 1, borderColor: c.destructive, borderRadius: 9, paddingHorizontal: 12, paddingVertical: 7 }}
+            >
+              <Text style={{ fontFamily: Fonts.bold, fontSize: 12.5, color: c.destructive }}>Try again</Text>
+            </Pressable>
+          ) : null}
+        </View>
       ) : null}
 
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 }}>

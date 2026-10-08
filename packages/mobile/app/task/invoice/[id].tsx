@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useBottomGap, useBottomInset } from "@/hooks/use-bottom-gap";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Colors, Fonts } from "@/constants/theme";
@@ -68,6 +69,8 @@ function Card({ children }: { children: React.ReactNode }) {
 }
 
 export default function InvoiceScreen() {
+  const bottomGap = useBottomGap();
+  const bottomInset = useBottomInset();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const taskId = Number(id);
@@ -192,7 +195,7 @@ export default function InvoiceScreen() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 140 }}>
+      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 140 + bottomInset }}>
         <Text style={{ fontFamily: Fonts.bold, fontSize: 22, color: c.foreground }}>
           {locked ? "Your invoice" : stage === "confirm" ? "Confirm your invoice" : "Invoice for this job"}
         </Text>
@@ -395,7 +398,7 @@ export default function InvoiceScreen() {
             right: 0,
             bottom: 0,
             padding: 16,
-            paddingBottom: 26,
+            paddingBottom: bottomGap,
             backgroundColor: c.card,
             borderTopWidth: 1,
             borderTopColor: c.border,
@@ -446,7 +449,7 @@ export default function InvoiceScreen() {
               borderTopLeftRadius: 20,
               borderTopRightRadius: 20,
               padding: 20,
-              paddingBottom: 34,
+              paddingBottom: Math.max(34, bottomInset + 16),
             }}
           >
             <Text style={{ fontFamily: Fonts.bold, fontSize: 17, color: c.foreground }}>Request an extra</Text>

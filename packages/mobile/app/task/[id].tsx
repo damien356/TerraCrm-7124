@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useBottomGap, useBottomInset } from "@/hooks/use-bottom-gap";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Colors, Fonts, tintFor } from "@/constants/theme";
@@ -60,6 +61,8 @@ function Card({ children }: { children: React.ReactNode }) {
 }
 
 export default function TaskScreen() {
+  const bottomGap = useBottomGap();
+  const bottomInset = useBottomInset();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const task = useTask(Number(id));
@@ -235,7 +238,7 @@ export default function TaskScreen() {
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 140 }}>
+      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 140 + bottomInset }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <View style={{ backgroundColor: tint.fill, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 6 }}>
             <Text style={{ fontFamily: Fonts.bold, fontSize: 11.5, color: tint.edge }}>{t.skillName ?? "Work"}</Text>
@@ -696,7 +699,7 @@ export default function TaskScreen() {
             right: 0,
             bottom: 0,
             padding: 16,
-            paddingBottom: 26,
+            paddingBottom: bottomGap,
             backgroundColor: c.card,
             borderTopWidth: 1,
             borderTopColor: c.border,
@@ -730,7 +733,7 @@ export default function TaskScreen() {
             right: 0,
             bottom: 0,
             padding: 16,
-            paddingBottom: 26,
+            paddingBottom: bottomGap,
             backgroundColor: c.card,
             borderTopWidth: 1,
             borderTopColor: c.border,
@@ -767,7 +770,7 @@ export default function TaskScreen() {
               borderTopLeftRadius: 20,
               borderTopRightRadius: 20,
               padding: 20,
-              paddingBottom: 32,
+              paddingBottom: Math.max(32, bottomInset + 16),
             }}
           >
             <Text style={{ fontFamily: Fonts.bold, fontSize: 19, color: c.foreground }}>

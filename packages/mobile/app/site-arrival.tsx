@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useBottomInset } from "@/hooks/use-bottom-gap";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
@@ -53,6 +54,7 @@ type Outcome =
  * taps Arrived and Left site on the job instead.
  */
 export default function SiteArrivalScreen() {
+  const bottomInset = useBottomInset();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
@@ -100,7 +102,7 @@ export default function SiteArrivalScreen() {
         <Text style={{ fontFamily: Fonts.bold, fontSize: 19, color: c.foreground }}>Arrive and leave by location</Text>
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 16, paddingTop: 0, paddingBottom: 48 }}>
+      <ScrollView contentContainerStyle={{ padding: 16, paddingTop: 0, paddingBottom: 48 + bottomInset }}>
         {!fencesSupported ? (
           <Text style={{ fontFamily: Fonts.sans, fontSize: 14, lineHeight: 20, color: c.mutedForeground }}>
             This is on iPhone only for now. Tap Arrived and Left site on the job instead.

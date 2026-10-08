@@ -5,6 +5,7 @@ import { useColors } from "@/hooks/use-colors";
 import { Fonts } from "@/constants/theme";
 import { useOffers } from "@/queries/field";
 import { useWhoami } from "@/queries/session";
+import { useBottomInset } from "@/hooks/use-bottom-gap";
 
 function OfferBadge({ color }: { color: string }) {
   const offers = useOffers();
@@ -33,6 +34,9 @@ function OfferBadge({ color }: { color: string }) {
 export default function TabLayout() {
   const colors = useColors();
   const who = useWhoami();
+  // Android's back, home and recents buttons sit over the bottom of the app.
+  // Lift the tabs clear of them (and of the iPhone home bar).
+  const bottomInset = useBottomInset();
 
   // One app, two sides. The office tab only exists on an admin login, and the
   // crew tabs only on a login with an installer card behind it. The server
@@ -51,9 +55,9 @@ export default function TabLayout() {
         tabBarStyle: {
           backgroundColor: colors.card,
           borderTopColor: colors.border,
-          height: 60,
+          height: 60 + bottomInset,
           paddingTop: 6,
-          paddingBottom: 6,
+          paddingBottom: 6 + bottomInset,
         },
       }}
     >

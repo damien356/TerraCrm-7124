@@ -1,5 +1,6 @@
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useBottomInset } from "@/hooks/use-bottom-gap";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { Colors, Fonts, tintFor } from "@/constants/theme";
@@ -20,6 +21,7 @@ const GROUP_LABEL: Record<string, string> = {
 };
 
 export default function RateCardScreen() {
+  const bottomInset = useBottomInset();
   const router = useRouter();
   const myRates = useMyRates();
   const rows = myRates.data?.rates ?? [];
@@ -54,7 +56,7 @@ export default function RateCardScreen() {
       {myRates.isLoading ? (
         <ActivityIndicator color={c.primary} style={{ marginTop: 32 }} />
       ) : (
-        <ScrollView contentContainerStyle={{ padding: 16, paddingTop: 0, paddingBottom: 40 }}>
+        <ScrollView contentContainerStyle={{ padding: 16, paddingTop: 0, paddingBottom: 40 + bottomInset }}>
           {myRates.data?.pendingChange ? (
             <View
               style={{
