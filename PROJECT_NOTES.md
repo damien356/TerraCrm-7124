@@ -114,7 +114,7 @@ Plans: `/home/user/plans/swms/editor-brief.md` and `/home/user/plans/swms/librar
 - Flow: everything pre-ticked from the labour, "Same work as last time?", "Wrong work type? Change it", optional site note, "I have read" tick, name, signature, sign and start.
 - Server: two new sections, `removal` (with the asbestos stop-work line) and `sanding_coating` (from library SWMS 09), plus their skill rules. All SWMS office procedures moved from Admin only to Admin or Office.
 - Tested on a scratch copy only: gate, sign, PDF, start, Office access, Field blocked, every live skill mapped.
-- **Published 7 Oct** by Damien: website (`c99a690`) and the OTA to build 7 (1.0.2). Not yet tried on a phone.
+- **Published 7 Oct** by Damien: website (`c99a690`). The OTA did not land: checked 8 Oct, the Expo production branch has no updates at all. See Stage 3 below.
 - **Phone test:** use job #4446 "DEMO job for installer app" (its only task is already complete, so it needs a new task for today). The stored demo.installer@ password no longer signs in on live.
 - Stages 2 and 3 come after callbacks (Damien, 7 Oct). Stage 4 waits for the next store build.
 
@@ -135,7 +135,7 @@ Plan: `/home/user/plans/swms/stage2-plan.md` (approved). Code is on `main` as co
 - **Published 8 Oct.** Checked on the live site: the SWMS library page is in the build and its server calls answer.
 - **Next:** phone app check against the library. Stage 3 is below.
 
-### SWMS Stage 3 (Applied to the database 8 Oct. Code pushed, not yet published)
+### SWMS Stage 3 (Website live 8 Oct, `f9f2fc0`. App OTA not yet on phones)
 
 Plan: `/home/user/plans/swms/stage3-plan.md` (approved and edited by Damien).
 
@@ -160,6 +160,12 @@ Plan: `/home/user/plans/swms/stage3-plan.md` (approved and edited by Damien).
 - Live still runs the Stage 2 code, so nothing changes for users until the code is published.
 - **Publish order:** website first, then the OTA. Phones without the OTA still sign as before. They send no answers, so they raise no red card.
 - **Next:** Damien publishes. Then check the job page and SWMS library on the live site, and mark this published. Phone test on job #4446 once David is on 1.0.2.
+- **Website published 8 Oct** (second try, the first publish left Stage 2 up). Checked on the live site: the new bundle has Email SWMS, Location not shared and the red card text, and `swms/flags`, `clearFlag`, `emailRecord`, `reportCheck` answer 401 (they exist).
+- **OTA problem found 8 Oct:** the Expo production branch (project `b38734e2`) has never had an update. So no OTA has reached phones, Stage 1 included. Build 7 was built 7 Oct 10:37 UTC, before Stage 1 (`c99a690`, 13:06 UTC), so it has no SWMS screen. A phone on build 7 gets "SWMS needed" from the server on a SWMS job and has nowhere to sign. David hit this on 8 Oct.
+- **Fingerprint:** build 7 runtime is `6e69f4a5d02030fc4d9b24d5ff6a1a142bb995b0`. The sandbox gives `3e45523a...`. The only difference is `extra.apiUrl`: build 7 has `https://ops.terraflooring.com.au`, the sandbox has the preview address. An OTA only reaches build 7 if it is published with the live address. After any OTA publish, check `eas update:list --branch production` shows runtime `6e69f4a5...`.
+- **The app publish button is a store build, not an OTA.** Damien pressed publish on the mobile preview 8 Oct. It started EAS build 8 (`58590612`, Android, 1.0.2, production profile) at 04:46 UTC, and still no update on any branch. So app changes reach phones only through a store build, uploaded to Play by Damien. Build 8 has SWMS Stages 1 to 3. The production profile sets `EXPO_PUBLIC_API_URL` to the live site.
+- **Next:** build 8 finishes, Damien uploads the .aab to Play Internal testing, David updates. Then the phone test on #4446.
+- Live jobs with SWMS on (8 Oct): #4159 (id 3937, task 40, David, 5 Oct) and #4446 (id 4224, task 41, David, 10 Oct).
 
 ## 9. Callbacks (Live on the website, published 8 Oct)
 
