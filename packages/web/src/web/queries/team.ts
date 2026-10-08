@@ -30,3 +30,19 @@ export function useUpdatePerson() {
 export function useSetLoginActive() {
   return useMutation(useTeamMutation("setActive"));
 }
+
+export function useAddPerson() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.team.addPerson.mutationOptions({
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: orpc.team.key() });
+        queryClient.invalidateQueries({ queryKey: orpc.installers.key() });
+      },
+    }),
+  );
+}
+
+export function useUnlinkedCards(enabled: boolean) {
+  return useQuery(orpc.team.unlinkedCards.queryOptions({ enabled, staleTime: 5_000 }));
+}

@@ -1,13 +1,21 @@
 import * as React from "react";
-import { HardHat, KeyRound, ShieldCheck, Smartphone, Briefcase } from "lucide-react";
+import { HardHat, KeyRound, ShieldCheck, Smartphone, Briefcase, UserPlus } from "lucide-react";
 import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Select } from "../components/ui/field";
-import { useLogins, useSetAccess, useSetCostAccess, useSetLoginActive, useUpdatePerson } from "../queries/team";
-import { InstallerPanel, NewInstallerModal } from "./installers";
-import { useInstallers } from "../queries/installers";
+import { Field, Input, Select } from "../components/ui/field";
+import { Modal } from "../components/ui/modal";
+import {
+  useAddPerson,
+  useLogins,
+  useSetAccess,
+  useSetCostAccess,
+  useSetLoginActive,
+  useUnlinkedCards,
+  useUpdatePerson,
+} from "../queries/team";
+import { InstallerPanel } from "./installers";
 import { useRevokeVoiceKey, useVoiceKeys } from "../queries/visits";
 
 function when(iso: string | null) {
@@ -36,8 +44,7 @@ export default function TeamPage() {
   const updatePerson = useUpdatePerson();
   const [error, setError] = React.useState<string | null>(null);
   const [openId, setOpenId] = React.useState<number | null>(null);
-  const [newCard, setNewCard] = React.useState(false);
-  const cards = useInstallers(false);
+  const [adding, setAdding] = React.useState(false);
   const [editing, setEditing] = React.useState<number | null>(null);
   const [draft, setDraft] = React.useState({ name: "", phone: "", email: "" });
 
@@ -76,6 +83,12 @@ export default function TeamPage() {
     <Page
       title="People"
       subtitle="One record per person. The access level decides what they are. Set someone to Field crew and their installer card is made for you."
+      actions={
+        <Button onClick={() => setAdding(true)}>
+          <UserPlus className="size-4" />
+          Add person
+        </Button>
+      }
     >
       <Card className="mb-4 p-4 text-sm leading-relaxed text-muted-foreground">
         <p className="mb-2 flex items-center gap-2 font-medium text-foreground">
@@ -98,7 +111,8 @@ export default function TeamPage() {
             dispatched tasks. Enforced on the server.
           </li>
           <li>
-            New sign-ups start as Field crew. "Switch off" only blocks login. It never deletes anything.
+            Add person makes the login and texts the password to their mobile. New sign-ups start as Field crew.
+            "Switch off" only blocks login. It never deletes anything.
           </li>
         </ul>
       </Card>
@@ -233,12 +247,7 @@ export default function TeamPage() {
         </Card>
       )}
 
-      <CardsWithoutLogin
-        cards={(cards.data ?? []).filter((c) => !(people.data ?? []).some((p) => p.installerId === c.id))}
-        onOpen={setOpenId}
-        onAdd={() => setNewCard(true)}
-      />
-      <NewInstallerModal open={newCard} onClose={() => setNewCard(false)} />
+      <AddPersonModal open={adding} onClose={() => setAdding(false)} />
 
       <VoiceKeys />
       {openId !== null ? <InstallerPanel id={openId} onClose={() => setOpenId(null)} /> : null}
@@ -297,40 +306,119 @@ function VoiceKeys() {
   );
 }
 
-/** Installer cards that no login points at, for example subbies who never use the app. */
-function CardsWithoutLogin({
-  cards,
-  onOpen,
-  onAdd,
-}: {
-  cards: { id: number; name: string; mobile: string | null }[];
-  onOpen: (id: number) => void;
-  onAdd: () => void;
-}) {
+/**
+ * Add a person with a login. The password is made on the server and texted to
+ * their mobile, so nobody in the office sees it.
+ */
+function AddPersonModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const add = useAddPerson();
+  const blank = { name: "", email: "", mobile: "", role: "field" as Level, installerId: "" };
+  const [form, setForm] = React.useState(blank);
+  const [error, setError] = React.useState<string | null>(null);
+  const [done, setDone] = React.useState<string | null>(null);
+  const cards = useUnlinkedCards(open && form.role === "field");
+
+  function close() {
+    setForm(blank);
+    setError(null);
+    setDone(null);
+    onClose();
+  }
+
+  function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
+    setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  /* Picking an existing card fills in what it already knows. */
+  function pickCard(id: string) {
+    const card = (cards.data ?? []).find((c) => String(c.id) === id);
+    setForm((f) => ({
+      ...f,
+      installerId: id,
+      name: f.name || card?.name.trim() || "",
+      email: f.email || card?.email || "",
+      mobile: f.mobile || card?.mobile || "",
+    }));
+  }
+
+  async function submit() {
+    setError(null);
+    try {
+      await add.mutateAsync({
+        name: form.name.trim(),
+        email: form.email.trim(),
+        mobile: form.mobile.trim(),
+        role: form.role,
+        installerId: form.role === "field" && form.installerId ? Number(form.installerId) : null,
+      });
+      setDone(`${form.name.trim()} is added. Their password was texted to ${form.mobile.trim()}.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  const ready = form.name.trim() && form.email.trim() && form.mobile.trim();
+
   return (
-    <Card className="mt-4">
-      <CardHeader
-        title="Installer cards without a login"
-        subtitle="Installers who are dispatched from the board but do not use the app."
-        action={<Button size="sm" variant="ghost" onClick={onAdd}>Add installer</Button>}
-      />
-      {cards.length === 0 ? (
-        <Empty>Every installer card has a login.</Empty>
+    <Modal
+      open={open}
+      onClose={close}
+      title="Add person"
+      subtitle="Terra makes their login and texts the password to their mobile."
+      footer={
+        done ? (
+          <Button onClick={close}>Done</Button>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={close}>
+              Cancel
+            </Button>
+            <Button onClick={submit} disabled={!ready || add.isPending}>
+              {add.isPending ? <Spinner className="border-white/40 border-t-white" /> : null}
+              Add and text password
+            </Button>
+          </>
+        )
+      }
+    >
+      {done ? (
+        <p className="text-sm">{done}</p>
       ) : (
-        <div className="divide-y divide-border">
-          {cards.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              onClick={() => onOpen(c.id)}
-              className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left hover:bg-secondary/60"
-            >
-              <span className="text-sm font-medium">{c.name}</span>
-              <span className="text-xs text-muted-foreground">{c.mobile ?? ""}</span>
-            </button>
-          ))}
+        <div className="grid gap-3">
+          <Field label="Access level">
+            <Select value={form.role} onChange={(e) => set("role", e.target.value as Level)}>
+              {LEVELS.map((l) => (
+                <option key={l.value} value={l.value}>
+                  {l.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          {form.role === "field" && (cards.data ?? []).length > 0 ? (
+            <Field label="Installer card" hint="Pick their existing card to keep their jobs and history, or make a new one.">
+              <Select value={form.installerId} onChange={(e) => pickCard(e.target.value)}>
+                <option value="">Make a new card</option>
+                {(cards.data ?? []).map((c) => (
+                  <option key={c.id} value={String(c.id)}>
+                    {c.name.trim()}
+                    {c.mobile ? ` · ${c.mobile}` : ""}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          ) : null}
+          <Field label="Name">
+            <Input value={form.name} onChange={(e) => set("name", e.target.value)} />
+          </Field>
+          <Field label="Email" hint="This is what they sign in with.">
+            <Input type="email" value={form.email} onChange={(e) => set("email", e.target.value)} />
+          </Field>
+          <Field label="Mobile" hint="The password is texted here.">
+            <Input value={form.mobile} onChange={(e) => set("mobile", e.target.value)} placeholder="0412 345 678" />
+          </Field>
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
         </div>
       )}
-    </Card>
+    </Modal>
   );
 }
