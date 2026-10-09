@@ -294,8 +294,8 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
 
   /* --------------------------------------------------------- invoices */
   await d.insert(s.invoices).values([
-    { number: 9701, jobId: job(9210), billToContactId: c("Tom"), status: "sent", subtotal: 1800, gst: 180, total: 1980, dueDate: at(13, 0) },
-    { number: 9700, jobId: job(9218), billToContactId: c("Kerry"), status: "paid", subtotal: 1127.27, gst: 112.73, total: 1240, amountPaid: 1240, paidAt: at(-8, 11) },
+    { number: "IQ9210-2", jobNumber: 9210, seq: 2, kind: "final", label: "Final invoice", jobId: job(9210), billToContactId: c("Tom"), status: "sent", subtotal: 1800, gst: 180, total: 1980, dueDate: at(13, 0) },
+    { number: "IQ9218-1", jobNumber: 9218, seq: 1, kind: "deposit", label: "Deposit", jobId: job(9218), billToContactId: c("Kerry"), status: "paid", subtotal: 1127.27, gst: 112.73, total: 1240, amountPaid: 1240, paidAt: at(-8, 11), paymentMethod: "bank" },
   ]);
 
   await d.insert(s.activityLog).values([

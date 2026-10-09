@@ -11,6 +11,7 @@ import { JobForecastCard, MeasureUpModal } from "../components/costing";
 import { JobCashCard } from "../components/job-cash";
 import { PurchaseOrdersCard } from "../components/purchase-orders";
 import { PaymentTermsCard } from "../components/payment-terms";
+import { ClientInvoicesCard, MaterialSelectionCard } from "../components/client-invoices";
 import { JobConversation } from "../components/conversation";
 import { BookInstallerPanel } from "../components/book-installer";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
@@ -437,6 +438,12 @@ export default function JobDetailPage() {
 
           {/* when the customer's money actually lands */}
           <PaymentTermsCard jobId={j.id} companyName={j.company?.name ?? null} />
+
+          {/* what the client has been billed, and what has come in */}
+          <ClientInvoicesCard jobId={j.id} />
+
+          {/* product and colour per room, from the client */}
+          <MaterialSelectionCard jobId={j.id} />
 
           {/* dispatches */}
           <Card>

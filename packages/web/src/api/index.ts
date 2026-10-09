@@ -50,6 +50,9 @@ import { swms } from "./routes/swms";
 import { swmsLib } from "./routes/swms-lib";
 import { people } from "./routes/people";
 import { callbacks } from "./routes/callbacks";
+import { quoteSend } from "./routes/quoteSend";
+import { clientInvoices } from "./routes/clientInvoices";
+import { publicPages } from "./routes/publicPages";
 import { bootMailAgent } from "./lib/mail-agent";
 import { finishConnect } from "./lib/gmail";
 import { bootReminders } from "./lib/reminders";
@@ -160,6 +163,12 @@ export const router = {
   people,
   /** Return visits linked to the original job, shown as 3981-C1. Rework cost is Admin only. */
   callbacks,
+  /** Email a quote from team@ with the PDF and the no-login link, and the link's view count. */
+  quoteSend,
+  /** IQ invoices to the client: deposit, variations, final. Admin and Office mark paid, Admin voids. */
+  clientInvoices,
+  /** No-login pages for clients: /q/<token> read and sign a quote, /m/<token> choose flooring. Never returns cost. */
+  publicPages,
 };
 
 export type AppRouter = typeof router;

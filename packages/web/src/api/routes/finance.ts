@@ -1,4 +1,5 @@
 import { jobNumberSql } from "../lib/job-ref";
+import { quoteRef } from "../lib/refs";
 import { z } from "zod";
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
@@ -6,6 +7,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
 import {
+  acceptedQuoteDeposits,
   addDays,
   addMonths,
   costDueDate,
@@ -352,13 +354,35 @@ export const finance = {
       const [{ byJob, byCompany, milestones }, deposits] = await Promise.all([loadTermsMaps(), loadDepositMaps()]);
       let companyId = input.companyId ?? null;
       let contactId: number | null = null;
+      // The accepted quote's deposit is the job's deposit (Damien 2026-10-09). It only
+      // changes when a new version of the quote is accepted, never from the terms card.
+      let quoteDeposit: { percent: number; amount: number; paid: boolean; quoteRef: string } | null = null;
       if (input.jobId) {
         const [job] = await db
-          .select({ companyId: schema.jobs.companyId, contactId: schema.jobs.contactId })
+          .select({
+            companyId: schema.jobs.companyId,
+            contactId: schema.jobs.contactId,
+            depositAmount: schema.jobs.depositAmount,
+            depositPaid: schema.jobs.depositPaid,
+          })
           .from(schema.jobs)
           .where(eq(schema.jobs.id, input.jobId));
         companyId = companyId ?? job?.companyId ?? null;
         contactId = job?.contactId ?? null;
+        const [accepted] = await db
+          .select({ number: schema.quotes.number, version: schema.quotes.version, depositPercent: schema.quotes.depositPercent })
+          .from(schema.quotes)
+          .where(and(eq(schema.quotes.jobId, input.jobId), eq(schema.quotes.status, "accepted")))
+          .orderBy(desc(schema.quotes.version), desc(schema.quotes.id))
+          .limit(1);
+        if (job && accepted) {
+          quoteDeposit = {
+            percent: accepted.depositPercent ?? 0,
+            amount: job.depositAmount ?? 0,
+            paid: !!job.depositPaid,
+            quoteRef: quoteRef(accepted.number, accepted.version),
+          };
+        }
       }
       const card = { deposits, contactId };
       const resolved = resolveTerms(companyId, input.jobId ?? null, byJob, byCompany, card);
@@ -370,6 +394,7 @@ export const finance = {
         // Terra's standard for this payer, with the deposit off the card.
         defaults: resolveTerms(companyId, null, new Map(), new Map(), card),
         label: termsLabel(resolved.termsDays, resolved.endOfMonth),
+        quoteDeposit,
       };
     }),
 
@@ -543,7 +568,8 @@ export const finance = {
       terms.endOfMonth,
       terms.observedDaysLate,
     );
-    const deposit = money(jobDeposit(job, terms, job.value ?? 0).amount);
+    const quoteDepositPercent = (await acceptedQuoteDeposits([job.id])).get(job.id) ?? null;
+    const deposit = money(jobDeposit({ ...job, quoteDepositPercent }, terms, job.value ?? 0).amount);
     const outBeforeReceipt = money(
       costs
         .filter((c) => {
@@ -731,7 +757,7 @@ export const finance = {
         .leftJoin(schema.jobs, eq(schema.jobs.id, schema.invoices.jobId))
         .leftJoin(schema.companies, eq(schema.companies.id, schema.invoices.billToCompanyId))
         .leftJoin(schema.contacts, eq(schema.contacts.id, schema.invoices.billToContactId))
-        .orderBy(desc(schema.invoices.number))
+        .orderBy(desc(schema.invoices.id))
         .limit(input.limit);
 
       const shaped = rows.map((r) => {
@@ -742,6 +768,8 @@ export const finance = {
         return {
           id: r.i.id,
           number: r.i.number,
+          kind: r.i.kind,
+          label: r.i.label,
           status: r.i.status,
           total: money(r.i.total ?? 0),
           amountPaid: money(r.i.amountPaid ?? 0),

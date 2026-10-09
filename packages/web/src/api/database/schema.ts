@@ -1339,7 +1339,7 @@ export const quotes = sqliteTable(
     /** The supervisor who asked for this quote. Optional. Only ever someone at the quote's company. */
     supervisorContactId: integer("supervisor_contact_id").references(() => contacts.id, { onDelete: "set null" }),
     siteId: integer("site_id").references(() => sites.id, { onDelete: "set null" }),
-    /** draft · needs_review · sent · accepted · declined · expired */
+    /** draft · needs_review · sent · accepted · declined · expired · replaced (an accepted version a later accepted version replaced) */
     status: text("status").notNull().default("draft"),
     subtotal: real("subtotal").notNull().default(0),
     gst: real("gst").notNull().default(0),
@@ -1548,12 +1548,31 @@ export const voicePhraseProductMatches = sqliteTable(
   (t) => [unique("voice_phrase_product_unique").on(t.phrase, t.productId), index("voice_phrase_idx").on(t.phrase)],
 );
 
+/**
+ * Client invoices. One number per job (spec section 1): IQ188000-1 is the
+ * deposit, -2 the final, -3 and up stage payments and variations. `number`
+ * is the whole ref as text, `jobNumber` + `seq` is what is unique. Xero (when
+ * built) uses `number` as the invoice number, never its own.
+ *
+ * Rebuilt 9 Oct 2026 (section 2) while the table was still empty: `number`
+ * used to be an integer.
+ */
 export const invoices = sqliteTable(
   "invoices",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    number: integer("number").notNull().unique(),
+    /** e.g. "IQ188000-1". */
+    number: text("number").notNull().unique(),
+    /** The job's number at the time, so the ref never moves even if the job is renumbered. */
+    jobNumber: integer("job_number").notNull(),
+    seq: integer("seq").notNull(),
     jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    /** The quote version this bills against. */
+    quoteId: integer("quote_id").references(() => quotes.id, { onDelete: "set null" }),
+    /** deposit · final · stage · variation · other */
+    kind: text("kind").notNull().default("other"),
+    /** What the client reads, e.g. "Deposit 50% on quote Q188000". */
+    label: text("label").notNull().default(""),
     billToType: text("bill_to_type").notNull().default("contact"),
     billToContactId: integer("bill_to_contact_id").references(() => contacts.id, { onDelete: "set null" }),
     billToCompanyId: integer("bill_to_company_id").references(() => companies.id, { onDelete: "set null" }),
@@ -1564,13 +1583,112 @@ export const invoices = sqliteTable(
     total: real("total").notNull().default(0),
     amountPaid: real("amount_paid").notNull().default(0),
     dueDate: integer("due_date", { mode: "timestamp" }),
-    /** Phase 3 — set once pushed to Xero / paid via Stripe. */
+    /** bank · card · cash · other. How the last payment came in. */
+    paymentMethod: text("payment_method"),
+    markedPaidByName: text("marked_paid_by_name"),
+    /** Set once pushed to Xero / paid via Stripe. */
     xeroInvoiceId: text("xero_invoice_id"),
     stripePaymentIntentId: text("stripe_payment_intent_id"),
     paidAt: integer("paid_at", { mode: "timestamp" }),
+    voidedAt: integer("voided_at", { mode: "timestamp" }),
+    voidReason: text("void_reason"),
+    createdByName: text("created_by_name").notNull().default(""),
     ...timestamps,
   },
-  (t) => [index("invoices_job_idx").on(t.jobId)],
+  (t) => [
+    index("invoices_job_idx").on(t.jobId),
+    unique("invoices_job_number_seq_unique").on(t.jobNumber, t.seq),
+  ],
+);
+
+/**
+ * The no-login link a client opens to read and accept one quote version.
+ * One per version. `views` counts opens by anyone not signed in to Terra Ops.
+ */
+export const quoteLinks = sqliteTable(
+  "quote_links",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    quoteId: integer("quote_id")
+      .notNull()
+      .unique()
+      .references(() => quotes.id, { onDelete: "cascade" }),
+    token: text("token").notNull().unique(),
+    views: integer("views").notNull().default(0),
+    firstViewedAt: integer("first_viewed_at", { mode: "timestamp" }),
+    lastViewedAt: integer("last_viewed_at", { mode: "timestamp" }),
+    /** Set once Damien has been pushed about repeat views, so it fires once. */
+    viewPushSentAt: integer("view_push_sent_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+);
+
+/** A client's signed acceptance of one quote version, online or on paper. */
+export const quoteSignatures = sqliteTable(
+  "quote_signatures",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    quoteId: integer("quote_id")
+      .notNull()
+      .references(() => quotes.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    position: text("position").notNull().default(""),
+    email: text("email"),
+    /** Strokes as lib/signature.ts stores them. */
+    signatureJson: text("signature_json").notNull(),
+    /** The Supply Terms version they agreed to. */
+    termsVersion: text("terms_version").notNull().default(""),
+    signedAt: integer("signed_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+    ip: text("ip"),
+    userAgent: text("user_agent"),
+    /** The signed PDF in storage. */
+    pdfKey: text("pdf_key"),
+    ...timestamps,
+  },
+  (t) => [index("quote_signatures_quote_idx").on(t.quoteId)],
+);
+
+/**
+ * The material selection form the decision-maker fills in after accepting:
+ * per room, the product, colour and any notes. No login, opened by link.
+ */
+export const materialSelections = sqliteTable(
+  "material_selections",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    quoteId: integer("quote_id").references(() => quotes.id, { onDelete: "set null" }),
+    token: text("token").notNull().unique(),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    sentTo: text("sent_to"),
+    /** waiting · submitted */
+    status: text("status").notNull().default("waiting"),
+    sentAt: integer("sent_at", { mode: "timestamp" }),
+    submittedAt: integer("submitted_at", { mode: "timestamp" }),
+    submittedName: text("submitted_name"),
+    ...timestamps,
+  },
+  (t) => [index("material_selections_job_idx").on(t.jobId)],
+);
+
+export const materialSelectionItems = sqliteTable(
+  "material_selection_items",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    selectionId: integer("selection_id")
+      .notNull()
+      .references(() => materialSelections.id, { onDelete: "cascade" }),
+    areaId: integer("area_id").references(() => jobAreas.id, { onDelete: "set null" }),
+    room: text("room").notNull().default(""),
+    product: text("product").notNull().default(""),
+    colour: text("colour").notNull().default(""),
+    notes: text("notes").notNull().default(""),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [index("material_selection_items_sel_idx").on(t.selectionId)],
 );
 
 /* ---------------------------------------------------------------------------

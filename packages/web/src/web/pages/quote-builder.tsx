@@ -14,6 +14,8 @@ import { QuotePeopleCard } from "../components/job-people";
 import { QuoteCustomerPanel } from "../components/quote-customer";
 import { QuoteBundlesCard } from "../components/quote-bundles";
 import { QuoteAgentCard } from "../components/quote-agent";
+import { EmailQuoteButton, QuoteLinkCard } from "../components/quote-email";
+import { useQuoteLink } from "../queries/quoteSend";
 import {
   useAcceptQuote,
   useAddQuoteItem,
@@ -39,6 +41,22 @@ const STANDARD_MARKUP = "91.1%";
 
 /** Spec section 6. Shown once a quote is accepted, so the customer can pay the deposit. */
 const BANK = { name: "Arclan Pty Ltd", bsb: "064 844", account: "10102345" };
+
+/** The deposit reference is the deposit invoice (IQ...-1) once there is one, else the quote. */
+function DepositReference({ quoteId, fallback }: { quoteId: number; fallback: string }) {
+  const link = useQuoteLink(quoteId);
+  const inv = link.data?.depositInvoice;
+  return (
+    <>
+      <p className="tabular">Reference: {inv && inv.status !== "void" ? inv.ref : fallback}</p>
+      {inv && inv.status !== "void" ? (
+        <p className="text-xs text-muted-foreground">
+          {inv.status === "paid" ? "Paid." : inv.amountPaid > 0 ? `${money(inv.amountPaid)} received so far.` : "Waiting on payment."}
+        </p>
+      ) : null}
+    </>
+  );
+}
 
 const KINDS = ["supply", "labour", "prep", "removal", "accessory", "other"];
 const UNITS = ["m2", "lm", "each", "hour", "job"];
@@ -533,6 +551,7 @@ export default function QuoteBuilderPage() {
   const convert = useConvertQuote();
 
   const [error, setError] = React.useState<string | null>(null);
+  const [notice, setNotice] = React.useState<string | null>(null);
   const [declining, setDeclining] = React.useState(false);
   const [declineReason, setDeclineReason] = React.useState("");
   const [converting, setConverting] = React.useState(false);
@@ -556,11 +575,12 @@ export default function QuoteBuilderPage() {
   }
 
   const q = quote.data;
-  const locked = q.status === "accepted" || q.status === "declined" || q.status === "expired";
+  const locked = q.status === "accepted" || q.status === "declined" || q.status === "expired" || q.status === "replaced";
   const customer = q.contact ? `${q.contact.firstName} ${q.contact.lastName}` : q.company ? "" : "No customer yet";
 
   async function run(fn: () => Promise<unknown>) {
     setError(null);
+    setNotice(null);
     try {
       await fn();
     } catch (e) {
@@ -616,18 +636,60 @@ export default function QuoteBuilderPage() {
             </Button>
           ) : null}
           {q.status === "draft" ? (
-            <Button variant="outline" onClick={() => run(() => send.mutateAsync({ id: q.id }))} disabled={send.isPending || q.discountNeedsApproval}>
-              <Send className="size-4" />
-              Mark as sent
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                title="It went out some other way. Marks it sent without emailing."
+                onClick={() => run(() => send.mutateAsync({ id: q.id }))}
+                disabled={send.isPending || q.discountNeedsApproval}
+              >
+                <Send className="size-4" />
+                Mark as sent
+              </Button>
+              <EmailQuoteButton
+                quoteId={q.id}
+                disabled={q.discountNeedsApproval || q.items.length === 0}
+                onSent={(m) => {
+                  setError(null);
+                  setNotice(m);
+                }}
+              />
+            </>
           ) : null}
           {q.status === "sent" ? (
             <>
+              <EmailQuoteButton
+                quoteId={q.id}
+                again
+                disabled={q.discountNeedsApproval}
+                onSent={(m) => {
+                  setError(null);
+                  setNotice(m);
+                }}
+              />
               <Button variant="outline" onClick={() => setDeclining(true)}>
                 <X className="size-4" />
                 Declined
               </Button>
-              <Button onClick={() => run(() => accept.mutateAsync({ id: q.id }))} disabled={accept.isPending}>
+              <Button
+                onClick={() =>
+                  run(async () => {
+                    const out = await accept.mutateAsync({ id: q.id });
+                    setNotice(
+                      [
+                        `Accepted.`,
+                        out.replacedRef ? `${out.replacedRef} is now replaced.` : "",
+                        out.invoiceRef ? `Invoice ${out.invoiceRef} raised.` : "",
+                        out.selection ? (out.selection.sent ? `Material selection sent to ${out.selection.to}.` : `Material selection not sent: ${out.selection.reason ?? "no email"}. Send it from the job page.`) : "",
+                        "Order product task added.",
+                      ]
+                        .filter(Boolean)
+                        .join(" "),
+                    );
+                  })
+                }
+                disabled={accept.isPending}
+              >
                 <Check className="size-4" />
                 Accepted
               </Button>
@@ -660,6 +722,19 @@ export default function QuoteBuilderPage() {
       {error ? (
         <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
+        </div>
+      ) : null}
+      {notice ? (
+        <div className="mb-3 flex items-start justify-between gap-3 rounded-md border border-[#3F7D3A]/30 bg-[#3F7D3A]/10 px-3 py-2 text-sm text-[#2E6B4F]">
+          <span>{notice}</span>
+          <button type="button" aria-label="Dismiss" onClick={() => setNotice(null)}>
+            <X className="size-4" />
+          </button>
+        </div>
+      ) : null}
+      {q.status === "replaced" ? (
+        <div className="mb-3 rounded-md border border-border bg-secondary/60 px-3 py-2 text-sm">
+          This version was accepted, then replaced by a newer accepted version. The job value follows the newer one.
         </div>
       ) : null}
 
@@ -754,6 +829,8 @@ export default function QuoteBuilderPage() {
             </div>
           </Card>
 
+          {q.status !== "draft" && q.status !== "needs_review" ? <QuoteLinkCard quoteId={q.id} status={q.status} /> : null}
+
           {q.status === "accepted" && q.deposit > 0 ? (
             <Card>
               <CardHeader title="Deposit due" subtitle="What the customer pays before we order and book in" />
@@ -771,7 +848,7 @@ export default function QuoteBuilderPage() {
                   <p>Account name: {BANK.name}</p>
                   <p className="tabular">BSB: {BANK.bsb}</p>
                   <p className="tabular">Account: {BANK.account}</p>
-                  <p className="tabular">Reference: {q.ref}</p>
+                  <DepositReference quoteId={q.id} fallback={q.ref} />
                 </div>
               </div>
             </Card>
@@ -805,7 +882,7 @@ export default function QuoteBuilderPage() {
           </Card>
           ) : null}
 
-          <QuotePeopleCard quoteId={q.id} locked={q.status === "accepted"} />
+          <QuotePeopleCard quoteId={q.id} locked={q.status === "accepted" || q.status === "replaced"} />
 
           <Card>
             <CardHeader title="Notes on the quote" />

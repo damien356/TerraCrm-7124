@@ -22,7 +22,7 @@ export async function sendAsTeam(mail: OutgoingMail): Promise<{ via: "gmail" | "
     subject: mail.subject,
     text: mail.text,
     html: `<div style="font-family:Arial,sans-serif;font-size:14px;white-space:pre-wrap">${escapeHtml(mail.text)}</div>`,
-    from: MARKETING_FROM,
+    from: mail.fromName ? `${mail.fromName.replace(/[<>"\r\n]/g, "")} <${SEND_FROM}>` : MARKETING_FROM,
     replyTo: SEND_FROM,
     attachments: mail.attachments?.map((a) => ({ filename: a.filename, content: a.content.toString("base64") })),
   });

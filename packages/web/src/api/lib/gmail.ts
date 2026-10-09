@@ -282,6 +282,8 @@ export type OutgoingMail = {
   subject: string;
   text: string;
   attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
+  /** Display name only, e.g. "Damien from Terra". The address is always team@. */
+  fromName?: string;
 };
 
 const b64Header = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.from(s).toString("base64")}?=`);
@@ -293,7 +295,7 @@ export function buildMime(from: string, mail: OutgoingMail) {
   if (!/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(to)) throw new Error(`"${to}" is not a single email address`);
   const boundary = `terra_${Math.random().toString(36).slice(2)}`;
   const lines = [
-    `From: Terra Flooring <${from}>`,
+    `From: ${b64Header(oneLine(mail.fromName || "Terra Flooring").replace(/[<>"]/g, ""))} <${from}>`,
     `To: ${to}`,
     `Subject: ${b64Header(oneLine(mail.subject))}`,
     "MIME-Version: 1.0",

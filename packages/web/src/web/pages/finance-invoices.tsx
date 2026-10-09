@@ -133,8 +133,10 @@ export default function InvoicesPage() {
                     {rows.map((r) => (
                       <tr key={r.id} className="border-b border-border last:border-0 hover:bg-secondary/50">
                         <td className="px-4 py-2.5">
-                          <span className="font-medium">#{r.number}</span>
-                          <p className="text-xs text-muted-foreground">{r.status}</p>
+                          <span className="font-medium">{r.number}</span>
+                          <p className="text-xs text-muted-foreground">
+                            {r.label || r.kind} · {r.status.replace("_", " ")}
+                          </p>
                         </td>
                         <td className="px-4 py-2.5">{r.who || "—"}</td>
                         <td className="px-4 py-2.5 text-xs text-muted-foreground">

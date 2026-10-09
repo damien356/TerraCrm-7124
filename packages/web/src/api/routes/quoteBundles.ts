@@ -12,7 +12,7 @@ import {
   type BundleLine,
 } from "../lib/bundles";
 import { draftBundleWording } from "../agent/bundle-wording";
-import { renderQuotePdf } from "../lib/quotePdf";
+import { renderQuotePdf, type QuotePdfInput } from "../lib/quotePdf";
 import { depositSplit } from "../lib/deposits";
 import { todayISO } from "../lib/pricing";
 import { auDate } from "../lib/invoice-match";
@@ -24,7 +24,7 @@ import { quoteRefOf } from "../lib/quote-number";
  * as the rest of quoting. Nothing here returns cost.
  */
 
-const LOCKED = ["accepted", "declined", "expired"];
+const LOCKED = ["accepted", "declined", "expired", "replaced"];
 
 async function quoteRow(id: number, editable: boolean) {
   const [q] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, id));
@@ -96,7 +96,7 @@ const fullName = (c: { firstName: string; lastName: string } | null | undefined)
   c ? [c.firstName, c.lastName].filter(Boolean).join(" ").trim() : "";
 
 /** Everything the client PDF needs. Bundles only: no line, qty, rate or cost leaves this function. */
-export async function clientPdfFor(quoteId: number) {
+export async function clientPdfFor(quoteId: number, signed?: QuotePdfInput["signed"]) {
   const quote = await quoteRow(quoteId, false);
   const [contact] = quote.contactId
     ? await db.select().from(schema.contacts).where(eq(schema.contacts.id, quote.contactId))
@@ -139,12 +139,14 @@ export async function clientPdfFor(quoteId: number) {
     depositPercent: quote.depositPercent,
     deposit,
     balance,
+    signed: signed ?? null,
   });
   const missing = bundles.filter((b) => !b.wording.trim()).map((b) => b.title);
   const stale = bundles.filter((b) => b.stale).map((b) => b.title);
   return {
     pdf,
-    filename: `Terra Flooring Quote ${ref}.pdf`,
+    filename: signed ? `Terra Flooring Quote ${ref} signed.pdf` : `Terra Flooring Quote ${ref}.pdf`,
+    ref,
     missing,
     stale,
   };

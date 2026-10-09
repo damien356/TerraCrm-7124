@@ -6,6 +6,7 @@ import { Button } from "./ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "./ui/field";
 import { Modal } from "./ui/modal";
 import { useClearTerms, useSetMilestones, useSetTerms, useTerms } from "../queries/finance";
+import { moneyExact } from "../lib/money";
 
 /**
  * PAYMENT TERMS, COMPANY OR JOB.
@@ -82,6 +83,9 @@ export function PaymentTermsCard({
   const d = q.data;
   const t = d?.resolved;
   const level = LEVEL[t?.level ?? "default"]!;
+  // On a job with an accepted quote, the quote's deposit is the deposit. Progress claims keep their stages.
+  const qd = scope === "job" && t?.structure !== "progress_claims" ? (d?.quoteDeposit ?? null) : null;
+  const shownStructure = qd ? (qd.percent > 0 ? "deposit_balance" : "on_completion") : t?.structure;
 
   return (
     <Card>
@@ -120,11 +124,23 @@ export function PaymentTermsCard({
       ) : (
         <>
           <div className="grid gap-3 px-4 py-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Fact label="Structure">{structureLabel(t.structure)}</Fact>
+            <Fact label="Structure">{structureLabel(shownStructure ?? t.structure)}</Fact>
             <Fact label="Deposit">
-              {t.structure === "deposit_balance" && t.depositPercent > 0
-                ? `${t.depositPercent}% up front`
-                : "None"}
+              {qd ? (
+                <>
+                  {qd.percent > 0 ? `${qd.percent}% on quote ${qd.quoteRef}` : `None on quote ${qd.quoteRef}`}
+                  {qd.percent > 0 && qd.amount > 0 ? (
+                    <span className="block text-xs text-muted-foreground">
+                      {moneyExact(qd.amount)}
+                      {qd.paid ? ", paid" : ""}
+                    </span>
+                  ) : null}
+                </>
+              ) : t.structure === "deposit_balance" && t.depositPercent > 0 ? (
+                `${t.depositPercent}% up front`
+              ) : (
+                "None"
+              )}
             </Fact>
             <Fact label="Terms">{daysPhrase(t.termsDays, t.endOfMonth, t.termsFrom)}</Fact>
             <Fact label="Runs late by">
@@ -191,7 +207,7 @@ export function PaymentTermsCard({
                 {scope === "job" ? (companyName ? " on this job or its company" : " on this job") : " yet"}, so
                 the forecast is
                 using Terra's standard for {companyId || companyName ? "a company" : "a direct customer"}:{" "}
-                {structureLabel(t.structure).toLowerCase()}, {daysPhrase(t.termsDays, t.endOfMonth, t.termsFrom)}.
+                {structureLabel(shownStructure ?? t.structure).toLowerCase()}, {daysPhrase(t.termsDays, t.endOfMonth, t.termsFrom)}.
                 Set the real ones and every date in the cashflow moves with them.
               </>
             ) : (
@@ -214,6 +230,7 @@ export function PaymentTermsCard({
           companyId={companyId ?? null}
           jobId={jobId ?? null}
           current={t!}
+          quoteDeposit={qd}
         />
       ) : null}
 
@@ -292,12 +309,15 @@ function TermsModal({
   companyId,
   jobId,
   current,
+  quoteDeposit,
 }: {
   open: boolean;
   onClose: () => void;
   scope: "company" | "job";
   companyId: number | null;
   jobId: number | null;
+  /** Set on a job with an accepted quote. Its deposit is fixed until a new version is accepted. */
+  quoteDeposit?: { percent: number; amount: number; paid: boolean; quoteRef: string } | null;
   current: {
     structure: string;
     depositPercent: number;
@@ -337,7 +357,8 @@ function TermsModal({
         companyId: scope === "company" ? companyId : null,
         jobId: scope === "job" ? jobId : null,
         structure: form.structure,
-        depositPercent: form.structure === "deposit_balance" ? Number(form.depositPercent) || 0 : 0,
+        depositPercent:
+          form.structure !== "deposit_balance" ? 0 : quoteDeposit ? quoteDeposit.percent : Number(form.depositPercent) || 0,
         termsFrom: form.termsFrom,
         termsDays: Number(form.termsDays) || 0,
         endOfMonth: form.endOfMonth,
@@ -386,7 +407,12 @@ function TermsModal({
           </Select>
         </Field>
 
-        {form.structure === "deposit_balance" ? (
+        {quoteDeposit && form.structure !== "progress_claims" ? (
+          <div className="rounded-md bg-muted px-3 py-2 text-sm sm:col-span-2">
+            Deposit: {quoteDeposit.percent > 0 ? `${quoteDeposit.percent}%` : "none"}, set by the accepted quote {quoteDeposit.quoteRef}. It only
+            changes when the client accepts a new version of the quote.
+          </div>
+        ) : form.structure === "deposit_balance" ? (
           <Field label="Deposit %" hint="Same setting as Deposit on new quotes on the company card. Taken on acceptance, before material is ordered.">
             <Input
               type="number"

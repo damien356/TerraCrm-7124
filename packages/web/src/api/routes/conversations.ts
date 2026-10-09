@@ -6,6 +6,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { staffOnly, type Actor } from "../middleware/auth";
 import { parseTags } from "../lib/person-tags";
+import { signGet } from "../lib/s3";
 import { conversationReplyTo, CONVERSATION_FROM, sendEmail } from "../lib/email";
 import { normaliseMobile, sendSms, smsParts, SMS_OPT_OUT } from "../lib/sms";
 import {
@@ -81,9 +82,14 @@ async function readThread(conversationId: number) {
     .orderBy(asc(schema.messages.createdAt));
 
   const ids = rows.map((r) => r.id);
-  const files = ids.length
+  const stored = ids.length
     ? await db.select().from(schema.messageAttachments).where(inArray(schema.messageAttachments.messageId, ids))
     : [];
+  /* Files sit in private storage, so each one gets a short-lived link. A row
+   * with no storage key keeps whatever url it was written with. */
+  const files = await Promise.all(
+    stored.map(async (f) => ({ ...f, url: f.storageKey ? await signGet(f.storageKey) : f.url })),
+  );
   const mentions = ids.length
     ? await db
         .select({

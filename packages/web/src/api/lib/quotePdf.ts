@@ -1,3 +1,4 @@
+import { drawSignature, type Signature } from "./signature";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { SUPPLY_TERMS, SUPPLY_TERMS_TITLE, SUPPLY_TERMS_VERSION } from "./supplyTerms";
 import { TERRA_LOGO_PRINT_PNG_BASE64 } from "./terraLogoPrint";
@@ -41,6 +42,8 @@ export type QuotePdfInput = {
   depositPercent: number;
   deposit: number;
   balance: number;
+  /** Filled in once the client has signed online. Drawn into the acceptance block. */
+  signed?: { name: string; position: string; date: string; signature: Signature } | null;
 };
 
 export const TERRA_PRINT = {
@@ -302,16 +305,20 @@ function acceptance(ctx: Ctx) {
     ctx.y -= 11;
   }
   ctx.y -= 22;
-  const field = (label: string, x: number, w: number) => {
+  const signed = ctx.input.signed ?? null;
+  const field = (label: string, x: number, w: number, value?: string) => {
     text(ctx.page, label, x, ctx.y, ctx.bold, 8.5);
     const lx = x + ctx.bold.widthOfTextAtSize(label, 8.5) + 6;
     ctx.page.drawLine({ start: { x: lx, y: ctx.y - 2 }, end: { x: x + w, y: ctx.y - 2 }, thickness: 0.7, color: INK });
+    if (value) text(ctx.page, value.slice(0, 60), lx + 2, ctx.y + 1, ctx.reg, 9, INK);
+    return lx;
   };
-  field("Name:", M, CW * 0.45);
-  field("Signed:", M + CW * 0.5, CW * 0.5);
+  field("Name:", M, CW * 0.45, signed?.name);
+  const sx = field("Signed:", M + CW * 0.5, CW * 0.5);
+  if (signed) drawSignature(ctx.page, signed.signature, { x: sx + 4, y: ctx.y - 1, w: M + CW - sx - 8, h: 22 });
   ctx.y -= 26;
-  field("Position / Company:", M, CW * 0.45);
-  field("Date:", M + CW * 0.5, CW * 0.5);
+  field("Position / Company:", M, CW * 0.45, signed?.position);
+  field("Date:", M + CW * 0.5, CW * 0.5, signed ? `${signed.date} (signed online)` : undefined);
   ctx.y -= 22;
   for (const l of note) {
     text(ctx.page, l, M, ctx.y, ctx.bold, 8.5, INK);

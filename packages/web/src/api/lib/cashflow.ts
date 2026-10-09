@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { depositDefaultOf } from "./deposits";
@@ -207,20 +207,42 @@ export function resolveTerms(
 
 /**
  * What the customer pays up front on a job. The accepted quote's deposit,
- * copied onto the job when it was made, wins. Otherwise the terms' %.
+ * copied onto the job when it was made, wins. A job with an accepted quote
+ * never falls back to the terms' %: a 0% quote means no deposit (Damien
+ * 2026-10-09). Only a job with no accepted quote uses the terms' %.
  */
 export function jobDeposit(
-  job: { depositAmount: number; depositPaid: boolean },
+  job: { depositAmount: number; depositPaid: boolean; quoteDepositPercent?: number | null },
   terms: ResolvedTerms,
   contract: number,
 ): { amount: number; basis: string } {
   if (job.depositPaid || terms.structure === "progress_claims") return { amount: 0, basis: "" };
   if (job.depositAmount > 0) return { amount: job.depositAmount, basis: "deposit on the accepted quote, taken before material is ordered" };
+  if (job.quoteDepositPercent != null) {
+    if (job.quoteDepositPercent <= 0) return { amount: 0, basis: "" };
+    return {
+      amount: (contract * job.quoteDepositPercent) / 100,
+      basis: `${job.quoteDepositPercent}% deposit on the accepted quote, taken before material is ordered`,
+    };
+  }
   if (terms.structure !== "deposit_balance") return { amount: 0, basis: "" };
   return {
     amount: (contract * (terms.depositPercent ?? 0)) / 100,
     basis: `${terms.depositPercent}% deposit, taken before material is ordered`,
   };
+}
+
+/** Job id to the deposit % on its accepted quote (the newest version if there are several). */
+export async function acceptedQuoteDeposits(jobIds: number[]): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  if (!jobIds.length) return out;
+  const rows = await db
+    .select({ jobId: schema.quotes.jobId, version: schema.quotes.version, depositPercent: schema.quotes.depositPercent })
+    .from(schema.quotes)
+    .where(and(inArray(schema.quotes.jobId, jobIds), eq(schema.quotes.status, "accepted")))
+    .orderBy(asc(schema.quotes.version), asc(schema.quotes.id));
+  for (const r of rows) if (r.jobId != null) out.set(r.jobId, r.depositPercent ?? 0);
+  return out;
 }
 
 export async function loadTermsMaps() {
@@ -343,7 +365,7 @@ export async function rebuildForecast(): Promise<RebuildResult> {
   );
   const liveIds = live.map((r) => r.job.id);
 
-  const [costRows, invoiceRows, taskRows] = await Promise.all([
+  const [costRows, invoiceRows, taskRows, quoteDeposits] = await Promise.all([
     liveIds.length
       ? db
           .select()
@@ -357,7 +379,7 @@ export async function rebuildForecast(): Promise<RebuildResult> {
           .where(
             and(
               inArray(schema.invoices.jobId, liveIds),
-              inArray(schema.invoices.status, ["draft", "sent", "part_paid", "overdue"]),
+              ne(schema.invoices.status, "void"),
             ),
           )
       : Promise.resolve([]),
@@ -371,6 +393,7 @@ export async function rebuildForecast(): Promise<RebuildResult> {
           .where(inArray(schema.jobTasks.jobId, liveIds))
           .groupBy(schema.jobTasks.jobId)
       : Promise.resolve([]),
+    acceptedQuoteDeposits(liveIds),
   ]);
 
   const costsByJob = new Map<number, typeof costRows>();
@@ -412,12 +435,16 @@ export async function rebuildForecast(): Promise<RebuildResult> {
           : `no date set, assuming 3 weeks out`;
 
     /* ---------------------------- money in --------------------------- */
+    /* Billed work comes off the contract whether it is paid or not, so a paid
+     * deposit is never forecast a second time. Only what is still owing on an
+     * invoice becomes an event. */
     const invoiced = invoicesByJob.get(job.id) ?? [];
     let invoicedTotal = 0;
+    const depositBilled = invoiced.some((i) => i.kind === "deposit");
     for (const inv of invoiced) {
+      invoicedTotal += inv.total ?? 0;
       const outstanding = (inv.total ?? 0) - (inv.amountPaid ?? 0);
-      if (outstanding <= 0) continue;
-      invoicedTotal += outstanding;
+      if (outstanding <= 0.005) continue;
       const base = inv.dueDate
         ? iso(inv.dueDate)
         : settleDate(iso(inv.createdAt ?? new Date()), terms.termsDays, terms.endOfMonth);
@@ -441,7 +468,9 @@ export async function rebuildForecast(): Promise<RebuildResult> {
     const contract = Math.max(0, (job.value ?? 0) - invoicedTotal);
     if (contract > 0) {
       const retention = (contract * (terms.retentionPercent ?? 0)) / 100;
-      const { amount: deposit, basis: depositBasis } = jobDeposit(job, terms, contract);
+      const { amount: deposit, basis: depositBasis } = depositBilled
+        ? { amount: 0, basis: "" }
+        : jobDeposit({ ...job, quoteDepositPercent: quoteDeposits.get(job.id) ?? null }, terms, contract);
 
       if (deposit > 0) {
         const when = start ? maxDate(now, addDays(start, -7)) : addDays(now, 7);

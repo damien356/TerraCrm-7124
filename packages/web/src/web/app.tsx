@@ -40,6 +40,8 @@ import TerraAiPage from "./pages/terra-ai";
 import ReferrersPage from "./pages/referrers";
 import DuplicatesPage from "./pages/duplicates";
 import CompanyTypesPage from "./pages/company-types";
+import PublicQuotePage from "./pages/public-quote";
+import PublicSelectionPage from "./pages/public-selection";
 
 // Finish a returning managed sign-in before anything renders. This top-level
 // await resolves before __main.tsx mounts React (app.tsx is its dependency).
@@ -56,49 +58,56 @@ function NotFound() {
 function App() {
   return (
     <Provider>
-      <Layout>
-        <Switch>
-          <Route path="/login" component={LoginPage} />
-          <Route path="/" component={Index} />
-          <Route path="/conversations" component={ConversationsPage} />
-          <Route path="/schedule" component={SchedulePage} />
-          <Route path="/jobs" component={JobsPage} />
-          <Route path="/jobs/:id" component={JobDetailPage} />
-          <Route path="/crew" component={CrewPage} />
-          <Route path="/quotes" component={QuotesPage} />
-          <Route path="/quotes/:id" component={QuoteBuilderPage} />
-          <Route path="/voice-quotes" component={VoiceQuotesPage} />
-          <Route path="/clients" component={ClientsPage} />
-          <Route path="/clients/:id" component={ContactDetailPage} />
-          <Route path="/companies" component={CompaniesPage} />
-          <Route path="/companies/types" component={CompanyTypesPage} />
-          <Route path="/companies/:id" component={CompanyDetailPage} />
-          <Route path="/supervisors" component={SupervisorsPage} />
-          <Route path="/supervisors/:id" component={SupervisorDetailPage} />
-          <Route path="/referrers" component={ReferrersPage} />
-          <Route path="/finance/cashflow" component={CashflowPage} />
-          <Route path="/finance/forecasting" component={ForecastingPage} />
-          <Route path="/finance/invoices" component={InvoicesPage} />
-          <Route path="/finance/subcontractor-invoices" component={SubcontractorInvoicesPage} />
-          <Route path="/finance/expenses" component={ExpensesPage} />
-          <Route path="/finance/suppliers-owed" component={SuppliersOwedPage} />
-          <Route path="/finance/profitability" component={ProfitabilityPage} />
-          <Route path="/finance/callbacks" component={CallbacksReportPage} />
-          <Route path="/marketing/templates" component={TemplatesPage} />
-          <Route path="/marketing/segments" component={SegmentsPage} />
-          <Route path="/terra-ai" component={TerraAiPage} />
-          <Route path="/review/duplicates" component={DuplicatesPage} />
-          <Route path="/review" component={ReviewPage} />
-          <Route path="/installers">{() => <Redirect to="/team" />}</Route>
-          <Route path="/team" component={TeamPage} />
-          <Route path="/suppliers" component={SuppliersPage} />
-          <Route path="/products" component={ProductsPage} />
-          <Route path="/settings" component={SettingsPage} />
-          <Route path="/swms-library" component={SwmsLibraryPage} />
-          <Route path="/safety" component={SafetyPage} />
-          <Route component={NotFound} />
-        </Switch>
-      </Layout>
+      {/* Client pages opened from an email link. Outside Layout, which sends anyone signed out to /login. */}
+      <Switch>
+        <Route path="/q/:token" component={PublicQuotePage} />
+        <Route path="/m/:token" component={PublicSelectionPage} />
+        <Route>
+          <Layout>
+            <Switch>
+              <Route path="/login" component={LoginPage} />
+              <Route path="/" component={Index} />
+              <Route path="/conversations" component={ConversationsPage} />
+              <Route path="/schedule" component={SchedulePage} />
+              <Route path="/jobs" component={JobsPage} />
+              <Route path="/jobs/:id" component={JobDetailPage} />
+              <Route path="/crew" component={CrewPage} />
+              <Route path="/quotes" component={QuotesPage} />
+              <Route path="/quotes/:id" component={QuoteBuilderPage} />
+              <Route path="/voice-quotes" component={VoiceQuotesPage} />
+              <Route path="/clients" component={ClientsPage} />
+              <Route path="/clients/:id" component={ContactDetailPage} />
+              <Route path="/companies" component={CompaniesPage} />
+              <Route path="/companies/types" component={CompanyTypesPage} />
+              <Route path="/companies/:id" component={CompanyDetailPage} />
+              <Route path="/supervisors" component={SupervisorsPage} />
+              <Route path="/supervisors/:id" component={SupervisorDetailPage} />
+              <Route path="/referrers" component={ReferrersPage} />
+              <Route path="/finance/cashflow" component={CashflowPage} />
+              <Route path="/finance/forecasting" component={ForecastingPage} />
+              <Route path="/finance/invoices" component={InvoicesPage} />
+              <Route path="/finance/subcontractor-invoices" component={SubcontractorInvoicesPage} />
+              <Route path="/finance/expenses" component={ExpensesPage} />
+              <Route path="/finance/suppliers-owed" component={SuppliersOwedPage} />
+              <Route path="/finance/profitability" component={ProfitabilityPage} />
+              <Route path="/finance/callbacks" component={CallbacksReportPage} />
+              <Route path="/marketing/templates" component={TemplatesPage} />
+              <Route path="/marketing/segments" component={SegmentsPage} />
+              <Route path="/terra-ai" component={TerraAiPage} />
+              <Route path="/review/duplicates" component={DuplicatesPage} />
+              <Route path="/review" component={ReviewPage} />
+              <Route path="/installers">{() => <Redirect to="/team" />}</Route>
+              <Route path="/team" component={TeamPage} />
+              <Route path="/suppliers" component={SuppliersPage} />
+              <Route path="/products" component={ProductsPage} />
+              <Route path="/settings" component={SettingsPage} />
+              <Route path="/swms-library" component={SwmsLibraryPage} />
+              <Route path="/safety" component={SafetyPage} />
+              <Route component={NotFound} />
+            </Switch>
+          </Layout>
+        </Route>
+      </Switch>
       {/* Do not remove — off by default, activated by parent iframe via postMessage */}
       {import.meta.env.DEV && <AgentFeedback />}
     </Provider>

@@ -1,11 +1,13 @@
 import { assertBillable } from "../lib/callbacks";
-import { nextJobNumber } from "../lib/job-number";
+import { convertQuoteToJob } from "../lib/quote-convert";
+import { acceptQuote } from "../lib/quote-accept";
+import { rebuildForecast } from "../lib/cashflow";
 import { quoteNumberFor, quoteRefById, quoteRefOf } from "../lib/quote-number";
 import { parseQuoteRef, quoteRef } from "../lib/refs";
 import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
 import { assertSupervisor } from "../lib/supervisors";
-import { and, asc, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -19,8 +21,8 @@ import { forgetNames } from "../lib/memo-context";
 import { normaliseMobile } from "../lib/sms";
 import { createContact } from "./contacts";
 import { bundlesFor, copyBundles } from "./quoteBundles";
-import { leadToQuotedOnSend, moveJobForward } from "../lib/job-stage";
-import { addQuotePerson, carryQuotePeopleToJob, copyQuotePeople, personInput } from "../lib/job-people";
+import { leadToQuotedOnSend } from "../lib/job-stage";
+import { addQuotePerson, copyQuotePeople, personInput } from "../lib/job-people";
 
 /**
  * Quotes are for Admin and Office. Field crew must never reach any procedure
@@ -61,7 +63,7 @@ export function discountPercentOf(items: { qty: number; unitPrice: number; listU
 }
 
 /** Append one history row per product line on this quote. Called when the quote is sent. */
-async function recordPriceHistory(quote: typeof schema.quotes.$inferSelect, byName: string) {
+export async function recordPriceHistory(quote: typeof schema.quotes.$inferSelect, byName: string) {
   const lines = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quote.id));
   const already = await db
     .select({ itemId: schema.quotePriceHistory.quoteItemId, unitPrice: schema.quotePriceHistory.unitPrice, unit: schema.quotePriceHistory.unit })
@@ -118,15 +120,15 @@ function round2(n: number) {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
-async function quoteOrThrow(id: number) {
+export async function quoteOrThrow(id: number) {
   const [row] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, id));
   if (!row) throw new ORPCError("NOT_FOUND", { message: "Quote not found" });
   return row;
 }
 
 /** Accepted, declined and expired quotes are history. Change them by making a new version. */
-const LOCKED_STATUSES = ["accepted", "declined", "expired"];
-async function editableQuoteOrThrow(id: number) {
+const LOCKED_STATUSES = ["accepted", "declined", "expired", "replaced"];
+export async function editableQuoteOrThrow(id: number) {
   const quote = await quoteOrThrow(id);
   if (LOCKED_STATUSES.includes(quote.status)) {
     throw new ORPCError("BAD_REQUEST", { message: "This quote is locked. Make a new version to change it." });
@@ -149,7 +151,7 @@ async function assertDiscountAllowed(quote: typeof schema.quotes.$inferSelect, i
 }
 
 /** The checks every path to a customer goes through: Send, Accept and Convert to job. */
-async function assertReadyToGoOut(quote: typeof schema.quotes.$inferSelect, actor: Actor) {
+export async function assertReadyToGoOut(quote: typeof schema.quotes.$inferSelect, actor: Actor) {
   const items = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quote.id));
   await assertDiscountAllowed(quote, items, actor);
 }
@@ -504,8 +506,8 @@ export const quotes = {
 
   remove: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
     const quote = await quoteOrThrow(input.id);
-    if (quote.status === "accepted") {
-      throw new ORPCError("BAD_REQUEST", { message: "An accepted quote can't be deleted — void it instead" });
+    if (quote.status === "accepted" || quote.status === "replaced") {
+      throw new ORPCError("BAD_REQUEST", { message: "An accepted quote can't be deleted. Void it instead." });
     }
     await db.delete(schema.quotes).where(eq(schema.quotes.id, input.id));
     return { ok: true };
@@ -1060,59 +1062,17 @@ export const quotes = {
     .input(z.object({ id: z.number(), note: z.string().optional() }))
     .handler(async ({ input, context }) => {
       const quote = await quoteOrThrow(input.id);
-      if (quote.status === "accepted") throw new ORPCError("BAD_REQUEST", { message: "This quote is already accepted." });
-      if (quote.status === "expired") throw new ORPCError("BAD_REQUEST", { message: "This version has expired. Accept the current version." });
-      await assertBillable(quote.jobId);
       await assertReadyToGoOut(quote, context.actor);
-
-      const [row] = await db
-        .update(schema.quotes)
-        .set({ status: "accepted", acceptedAt: new Date(), updatedAt: new Date() })
-        .where(eq(schema.quotes.id, input.id))
-        .returning();
-
-      // Sibling versions of the same quote number lose.
-      await db
-        .update(schema.quotes)
-        .set({ status: "expired", updatedAt: new Date() })
-        .where(
-          and(
-            eq(schema.quotes.number, quote.number),
-            inArray(schema.quotes.status, ["draft", "sent"]),
-            sql`${schema.quotes.id} != ${quote.id}`,
-          ),
-        );
-
-      // Keep the linked job's value honest with the accepted price, and put
-      // the quote's people on the job.
-      if (quote.jobId) {
-        await db
-          .update(schema.jobs)
-          .set({ value: quote.total, updatedAt: new Date() })
-          .where(eq(schema.jobs.id, quote.jobId));
-        await carryQuotePeopleToJob(quote.id, quote.jobId);
-      }
-
-      await db.insert(schema.activityLog).values({
-        jobId: quote.jobId,
-        contactId: quote.contactId,
-        entityType: "quote",
-        entityId: quote.id,
-        action: "accepted",
-        detail: input.note?.trim() || `Quote ${await quoteRefOf(quote)} accepted, $${quote.total.toFixed(2)}`,
-        actorName: context.actor.name,
-        actorRole: context.actor.role,
-      });
-      if (quote.jobId) {
-        await moveJobForward({
-          jobId: quote.jobId,
-          target: "won",
-          why: `quote ${await quoteRefOf(quote)} accepted`,
-          actor: context.actor,
-        });
-      }
-
-      return row;
+      // The same routine a client signing online goes through (lib/quote-accept.ts).
+      const out = await acceptQuote({ quoteId: quote.id, actor: context.actor, via: "staff", note: input.note });
+      await rebuildForecast().catch((e) => console.error("[cashflow] rebuild after accept failed:", e));
+      return {
+        ...out.quote,
+        jobId: out.jobId,
+        invoiceRef: out.invoice?.number ?? null,
+        replacedRef: out.replaced?.ref ?? null,
+        selection: out.selection,
+      };
     }),
 
   decline: staffOnly
@@ -1120,6 +1080,7 @@ export const quotes = {
     .handler(async ({ input, context }) => {
       const quote = await quoteOrThrow(input.id);
       if (quote.status === "accepted") throw new ORPCError("BAD_REQUEST", { message: "This quote is accepted and locked." });
+      if (quote.status === "replaced") throw new ORPCError("BAD_REQUEST", { message: "This version was replaced by a newer accepted one." });
       const [row] = await db
         .update(schema.quotes)
         .set({ status: "declined", updatedAt: new Date() })
@@ -1234,133 +1195,7 @@ export const quotes = {
         throw new ORPCError("BAD_REQUEST", { message: "This quote is already attached to a job" });
       }
       await assertReadyToGoOut(quote, context.actor);
-
-      const items = await db
-        .select()
-        .from(schema.quoteItems)
-        .where(eq(schema.quoteItems.quoteId, quote.id))
-        .orderBy(asc(schema.quoteItems.sortOrder));
-
-      // The job keeps the quote's number (spec section 1). The quote took it
-      // from the job counter, so no job has it. Old quotes made before that
-      // rule may clash with an old job, and those get a fresh number.
-      const [clash] = await db.select({ id: schema.jobs.id }).from(schema.jobs).where(eq(schema.jobs.number, quote.number));
-      const number = clash ? await nextJobNumber() : quote.number;
-
-      // The job starts where the quote already is: Won if it was accepted,
-      // Quoted if it went out, otherwise the first status (Lead).
-      const startName = quote.status === "accepted" ? "won" : quote.status === "sent" ? "quoted" : null;
-      const [named] = startName
-        ? await db
-            .select({ id: schema.jobStatuses.id })
-            .from(schema.jobStatuses)
-            .where(and(eq(schema.jobStatuses.active, true), sql`lower(trim(${schema.jobStatuses.name})) = ${startName}`))
-            .limit(1)
-        : [];
-      const [status] = named
-        ? [named]
-        : await db
-            .select({ id: schema.jobStatuses.id })
-            .from(schema.jobStatuses)
-            .where(eq(schema.jobStatuses.active, true))
-            .orderBy(asc(schema.jobStatuses.sortOrder))
-            .limit(1);
-
-      const [site] = quote.siteId
-        ? await db.select().from(schema.sites).where(eq(schema.sites.id, quote.siteId))
-        : [undefined];
-
-      const [job] = await db
-        .insert(schema.jobs)
-        .values({
-          number,
-          title: input.title || site?.address || `Quote ${quoteRef(quote.number, quote.version)}`,
-          statusId: status?.id ?? null,
-          siteId: quote.siteId,
-          contactId: quote.contactId,
-          companyId: quote.companyId,
-          // Billing is decided per job, not per person: a company on the quote
-          // means the company pays, otherwise the person does.
-          billToType: quote.companyId ? "company" : "contact",
-          billToContactId: quote.companyId ? null : quote.contactId,
-          billToCompanyId: quote.companyId ?? null,
-          furnitureOnSite: input.furnitureOnSite,
-          accessNotes: site?.accessNotes ?? null,
-          value: quote.total,
-          // The deposit the customer accepted. Drives the forecast and, later, the invoices.
-          depositAmount: depositSplit(quote.total ?? 0, quote.depositPercent ?? 0).deposit,
-        })
-        .returning();
-
-      if (!job) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Job not created" });
-
-      // Customer, supervisor and every job contact on the quote, one row per person.
-      await carryQuotePeopleToJob(quote.id, job.id);
-
-      // Supply lines become materials to order.
-      const supplyLines = items.filter((i) => i.kind === "supply" || i.kind === "accessory");
-      if (supplyLines.length) {
-        await db.insert(schema.jobMaterials).values(
-          supplyLines.map((i) => ({
-            jobId: job.id,
-            productId: i.productId,
-            description: i.description,
-            qty: i.qty,
-            unit: i.unit,
-            status: "to_order",
-          })),
-        );
-      }
-
-      // Work lines become unassigned tasks — one dispatch each.
-      let tasksCreated = 0;
-      if (input.createTasks) {
-        const workLines = items.filter((i) => i.kind === "labour" || i.kind === "prep" || i.kind === "removal");
-        const skills = await db
-          .select()
-          .from(schema.skills)
-          .where(eq(schema.skills.active, true))
-          .orderBy(asc(schema.skills.sortOrder));
-
-        for (const [idx, line] of workLines.entries()) {
-          const haystack = line.description.toLowerCase();
-          const skill =
-            skills.find((s) => haystack.includes(s.name.toLowerCase())) ??
-            skills.find((s) => (line.kind === "removal" ? s.groupName === "demolition" : s.groupName === "prep"));
-
-          const crewSize = input.furnitureOnSite ? 2 : (skill?.defaultCrewSize ?? 1);
-
-          await db.insert(schema.jobTasks).values({
-            jobId: job.id,
-            skillId: skill?.id ?? null,
-            title: line.description,
-            status: "unassigned",
-            areaM2: line.unit === "m2" ? line.qty : null,
-            crewSize,
-            seq: idx + 1,
-          });
-          tasksCreated += 1;
-        }
-      }
-
-      // Every version of the quote now belongs to the job.
-      await db
-        .update(schema.quotes)
-        .set({ jobId: job.id, updatedAt: new Date() })
-        .where(and(eq(schema.quotes.number, quote.number), isNull(schema.quotes.jobId)));
-
-      await db.insert(schema.activityLog).values({
-        jobId: job.id,
-        contactId: quote.contactId,
-        entityType: "quote",
-        entityId: quote.id,
-        action: "converted",
-        detail: `Quote ${quoteRef(quote.number, quote.version)} converted to job ${number}, ${tasksCreated} task(s), ${supplyLines.length} material line(s)`,
-        actorName: context.actor.name,
-        actorRole: context.actor.role,
-      });
-
-      return { job, tasksCreated, materialsCreated: supplyLines.length };
+      return convertQuoteToJob(quote, input, context.actor);
     }),
 
   /** Dashboard/pipeline figures for the quotes screen. */
