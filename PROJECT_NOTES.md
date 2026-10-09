@@ -56,17 +56,14 @@ The rate book Timber section has 24 lines, all "work" items, so all go on quotes
 
 **To confirm with Damien:** is anything missing from his sanding list (for example edging, filling, stain per m2, extra coats)?
 
-## 5. Deposits (Live. QBCC cap added 9 Oct, spec 0.1)
+## 5. Deposits (Live)
 
-Rule (Damien, 6 Oct, cap added 9 Oct):
-1. A company on the quote wins. Its own % if set, otherwise 0% for a builder.
-2. No company: the contact's own %.
-3. Any non-builder quote is capped by the quote total (QBCC): up to $3,300 max 20%. $3,301 to $19,999 max 10%. $20,000 or more max 5%. Card % above the cap is cut to the cap. With no card %, the default is the cap.
-- This only prefills a quote. The % stays editable. A draft whose % is still on the default follows the cap as lines change. A typed % stays put.
-- Over the cap: amber warning on the quote builder (`quotes.get` returns `depositCap` and `depositOverCap`). It warns, it does not block.
-- Not built: the "off-site work over 50%" tick that allows 20% (needs a schema change). Builders have no cap.
-- The cashflow forecast still assumes 50% for residential work (`STANDARD_DEPOSIT_PERCENT`), because it has no quote total.
-- Code: `lib/deposits.ts`.
+Current rule (Damien, 6 Oct):
+1. A company on the quote wins. Its own % if set, otherwise 0% for a builder, 50% for any other company.
+2. No company: the contact's own %, otherwise 50%.
+- This only prefills a new quote. The % stays editable.
+- The cashflow forecast also assumes 50% for residential work.
+- **No QBCC deposit cap, ever.** Damien, 7 Oct: ignore the QLD caps. Damien, 9 Oct, again: "forget the QBCC, don't ask again". No cap, no warning, no off-site tick. Spec 0.1 and the "legal cap" on the section 2 deposit invoice are dropped. The deposit invoice uses the quote's own %. Do not raise QBCC caps with Damien again.
 
 ## 6. Job contacts and roles (Live, published 7 Oct)
 
@@ -350,7 +347,7 @@ Build order: 0 safety fixes, 1 numbering, 2 send quote and online accept and dep
 **2. Send quote, online accept, deposit** (needs 0.1 and the solicitor's T&Cs)
 - Email from team@ via Resend, sender "Damien from Terra", replies to team@. PDF plus a no-login link. Auto Sent and job to Quoted.
 - Client reads T&Cs, signs, pays the deposit by card (Stripe, webhook marks paid) or sees bank details (marked once reconciled).
-- On accept: lock the quote, set job value, job to Won, deposit invoice IQ-1 at the legal cap, send the material selection form to the decision-maker, office task "order product".
+- On accept: lock the quote, set job value, job to Won, deposit invoice IQ-1 at the quote deposit % (no legal cap, see section 5), send the material selection form to the decision-maker, office task "order product".
 - Track link views. Push Damien at 3+ views. Fix message attachments so the PDF is saved on the conversation.
 
 **3. Measure bookings**
@@ -395,7 +392,7 @@ Build order: 0 safety fixes, 1 numbering, 2 send quote and online accept and dep
 - Two pay sources: offers use the old per-skill rate on `installer_skills`, labour cost and the rate card use `labour_rates`.
 - Journeys are homeowner-only by design (two guards plus `lib/trade.ts`). Spec wants healthcare companies and per-job opt-in for builders. No healthcare, insurer or property manager company type exists.
 - The unsubscribe link is built but `/api/unsubscribe/:token` has no route. Must exist before any journey email.
-- Card deposit % can exceed the QBCC cap. Plan: warn on the quote, deposit invoice uses the lower of quote % and cap.
+- ~~Card deposit % can exceed the QBCC cap.~~ Dropped: no QBCC cap (section 5).
 - Once the server backup timer runs on live, it overlaps the sandbox 6-hourly schedule.
 
 **D. Migration:** no existing job number changes. Live counts: 12 tasks, 7 quotes (drafts, no job), 0 invoices, 0 POs, 0 callbacks, 0 journeys, 160 skill ticks. No ServiceM8 ref in 188000 to 260000. Two new statuses are inserts, job status ids stay. Auto statuses forward only, no back-fill. Risk to the 4,225 jobs: low.
@@ -409,7 +406,7 @@ Build order: 0 safety fixes, 1 numbering, 2 send quote and online accept and dep
 ### 18.3 Damien's answers (9 Oct)
 
 1. Pedro: cards 8 "Pedro Silva" and 11 "Pedro Souza" are the same person. Merge them into one card. He is the hourly installer at $47.
-2. QBCC cap warning on every quote that is not for a builder.
+2. ~~QBCC cap warning on every quote that is not for a builder.~~ Reversed later on 9 Oct: forget the QBCC, don't ask again. See section 5.
 3. Follow-ups stay homeowner-only for now. No new company types, no per-job opt-in for builders, insurers or property managers. Healthcare follow-ups wait.
 4. Rooms come from the measure (sales measure or site capture creates `job_areas`). Each quote line picks a room.
 5. A variation after acceptance is a full replacement quote. Job value = the new total.
@@ -418,9 +415,9 @@ Build order: 0 safety fixes, 1 numbering, 2 send quote and online accept and dep
 
 ### 18.4 Section 0 build (9 Oct)
 
-Checked: lint clean, web build, API tsc 0, app tsc 172 (baseline), mobile tsc 0. Scratch test `terra-scratch-tests/section0/t-s0.tmp.ts`: 66 pass. UI checked on a scratch vite.
+Checked: lint clean, web build, API tsc 0, app tsc 172 (baseline), mobile tsc 0. Scratch test `terra-scratch-tests/section0/t-s0.tmp.ts`: 59 pass. UI checked on a scratch vite.
 
-- **0.1 Deposit cap:** see section 5.
+- **0.1 Deposit cap:** built, then taken out the same day on Damien's word. Not shipped. See section 5.
 - **0.2 Accept race:** `routes/offers.ts` `lockTask`. The offer is claimed only while pending or provisional, then the task only while unassigned or offered and not held by someone else. Both are one conditional update each. The loser's offer closes as filled and he sees "already accepted". Holds use the same rule. Withdraw also closes holds.
 - **0.3 Job numbers:** `lib/job-number.ts` `nextJobNumber()`. One upsert on the `settings` row `job_number_last`. The next number is the higher of the counter and the top job number, plus 1. Used by new job, quote convert, callbacks and voice memo jobs. The ServiceM8 import still writes its own numbers, and the counter copes with that. Section 1 (start at 188000) changes the floor.
 - **0.4 Hold timer:** `lib/offer-timer.ts`. Every 60 seconds on the live server: lapsed offers expire (task goes back to unassigned, office gets "Nobody took it") and lapsed holds lock (office gets "Hold confirmed"). `OFFER_TIMER=on|off` overrides.
@@ -430,7 +427,7 @@ Checked: lint clean, web build, API tsc 0, app tsc 172 (baseline), mobile tsc 0.
 - **0.9 Timers on live:** journeys, server backup, mail agent, reminders and offers all use `isLiveServer()` in `lib/runtime.ts`. `diag` is version 6 and lists every timer under `timers`.
 - **0.10 Auto statuses:** `lib/job-stage.ts`. Quote accepted → Won. Every live task booked (installer and date) → Scheduled. First task started → In Progress. Every live task complete → Complete. Forward only. Jobs on Invoiced, Paid, Cancelled or a custom status are never moved. No back-fill. Every move is logged as `status_changed`. Convert starts a job at Won if the quote was accepted, Quoted if it was sent.
 - **0.11 Push test:** waits for the next phone build.
-- **0.12 Logins:** script ready, dry run clean (`terra-scratch-tests/section0/s0-12-apply.tmp.ts`). Profile 15 role to `field`, profile 22 switched off. Card 9 "Dave Kohn" stays active (it has tasks booked 9 and 10 Oct). Waiting on Damien's OK.
+- **0.12 Logins:** done on live 9 Oct after a backup (`backups/terra-live-pre-logins-0-12-2026-10-09.db`) and a dry run. Profile 15 (Damo) role is `field`. Profile 22 (David Walker) is switched off. Card 9 "Dave Kohn" stays active (it has tasks booked 9 and 10 Oct).
 - **0.13 Publish:** Damien publishes. Then `diag` should show version 6 and every timer true.
-- **Live drafts 1005, 1006, 1007** are still at 50%, over the cap. Changing them is a data change and needs an OK.
+- Live drafts 1005, 1006, 1007 stay at 50%.
 

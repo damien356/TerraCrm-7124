@@ -9,7 +9,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
 import { markupOf, markupPctUsed, sellAtMarkup, sellExGstWithMarkup } from "../lib/pricing";
-import { depositCapFor, depositDefaultFor, depositSplit } from "../lib/deposits";
+import { depositDefaultFor, depositSplit } from "../lib/deposits";
 import { liveSellFor } from "../lib/live-sell";
 import { suggestProducts } from "../agent/price";
 import { customerCandidates, SAID_DETAILS_NOTE, spokenForQuote, UNMATCHED_NOTE } from "../lib/quote-customer";
@@ -98,31 +98,9 @@ export async function recalc(quoteId: number) {
   const gst = round2(subtotal * GST_RATE);
   const total = round2(subtotal + gst);
 
-  // A draft whose deposit is still on the default follows the QBCC cap as the
-  // total moves. A % someone typed is left alone.
-  const [before] = await db
-    .select({
-      status: schema.quotes.status,
-      total: schema.quotes.total,
-      depositPercent: schema.quotes.depositPercent,
-      companyId: schema.quotes.companyId,
-      contactId: schema.quotes.contactId,
-    })
-    .from(schema.quotes)
-    .where(eq(schema.quotes.id, quoteId));
-  let depositPercent: number | undefined;
-  if (before && (before.status === "draft" || before.status === "needs_review") && before.total !== total) {
-    const ids = { companyId: before.companyId, contactId: before.contactId };
-    const was = await depositDefaultFor(ids, before.total ?? 0);
-    if (was.cap !== null && before.depositPercent === was.percent) {
-      const now = await depositDefaultFor(ids, total);
-      if (now.percent !== before.depositPercent) depositPercent = now.percent;
-    }
-  }
-
   await db
     .update(schema.quotes)
-    .set({ subtotal, gst, total, ...(depositPercent !== undefined ? { depositPercent } : {}), updatedAt: new Date() })
+    .set({ subtotal, gst, total, updatedAt: new Date() })
     .where(eq(schema.quotes.id, quoteId));
 
   return { subtotal, gst, total };
@@ -317,10 +295,6 @@ export const quotes = {
         ? items.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice) }))
         : items.map((i) => ({ ...i, unitCost: null, markupPercent: null })),
       ...depositSplit(row.quote.total, row.quote.depositPercent),
-      // QBCC cap for this total. Null for a builder, who has no cap.
-      depositCap: row.company?.type === "builder" ? null : depositCapFor(row.quote.total ?? 0),
-      depositOverCap:
-        row.company?.type !== "builder" && (row.quote.depositPercent ?? 0) > depositCapFor(row.quote.total ?? 0),
       activity,
       versions,
       /** What the client sees: titles, wording and totals only. */
@@ -335,7 +309,6 @@ export const quotes = {
   /** The deposit % a new quote for this company or contact starts at, and why. */
   depositDefault: staffOnly
     .input(z.object({ companyId: z.number().nullable().optional(), contactId: z.number().nullable().optional() }))
-    // A new quote has no lines yet, so this is the answer at $0: the 20% cap for non-builders.
     .handler(({ input }) => depositDefaultFor(input)),
 
   create: staffOnly

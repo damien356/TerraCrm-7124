@@ -7,10 +7,8 @@ import { useUpdateContact } from "../queries/contacts";
 /**
  * The deposit % new quotes start at, set on a company or contact card.
  * Mirrors api/lib/deposits.ts: blank on a company means 0% for a builder and
- * the QBCC cap for anyone else, blank on a contact means the QBCC cap. For
- * anyone but a builder the quote never starts above the cap, whatever the
- * card says. A company on the quote always beats the contact. Existing
- * quotes are never changed by this.
+ * 50% for anyone else, blank on a contact means 50%. A company on the quote
+ * always beats the contact. Existing quotes are never changed by this.
  */
 export function DepositDefault({
   kind,
@@ -30,8 +28,9 @@ export function DepositDefault({
   const [error, setError] = React.useState<string | null>(null);
   React.useEffect(() => setDraft(value == null ? "" : String(value)), [value]);
 
-  const isBuilder = kind === "company" && companyType === "builder";
-  const fallbackLabel = isBuilder ? "0%, the builder default" : "the QBCC cap for the quote total";
+  const fallback = kind === "company" ? (companyType === "builder" ? 0 : 50) : 50;
+  const fallbackLabel =
+    kind === "company" ? (companyType === "builder" ? "0%, the builder default" : "50%, the standard") : "50%, the standard";
 
   async function save(next: number | null) {
     setError(null);
@@ -65,7 +64,6 @@ export function DepositDefault({
           <p className="text-sm font-medium">Deposit on new quotes</p>
           <p className="text-xs text-muted-foreground">
             {value == null ? `Not set, so ${fallbackLabel}.` : "Set on this card."}
-            {!isBuilder && value != null ? " Never above the QBCC cap for the quote total." : ""}
             {kind === "contact" ? " A company on the quote wins." : ""}
           </p>
         </div>
@@ -74,7 +72,7 @@ export function DepositDefault({
             aria-label="Deposit % on new quotes"
             className="tabular h-8 w-[64px] text-right"
             inputMode="decimal"
-            placeholder={isBuilder ? "0" : "cap"}
+            placeholder={String(fallback)}
             value={draft}
             disabled={pending}
             onChange={(e) => setDraft(e.target.value)}
@@ -86,7 +84,7 @@ export function DepositDefault({
       </div>
       {value != null ? (
         <Button variant="ghost" className="h-6 self-start px-1.5 text-xs" disabled={pending} onClick={() => save(null)}>
-          Use the default ({isBuilder ? "0%" : "QBCC cap"})
+          Use the default ({fallback}%)
         </Button>
       ) : null}
       {error ? <p className="text-xs font-medium text-destructive">{error}</p> : null}

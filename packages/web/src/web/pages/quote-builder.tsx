@@ -380,8 +380,6 @@ function DepositRows({
   balance,
   locked,
   onError,
-  cap,
-  overCap,
 }: {
   quoteId: number;
   percent: number;
@@ -389,9 +387,6 @@ function DepositRows({
   balance: number;
   locked: boolean;
   onError: (msg: string | null) => void;
-  /** QBCC cap for this total. Null for a builder. */
-  cap: number | null;
-  overCap: boolean;
 }) {
   const update = useUpdateQuote();
   const [draft, setDraft] = React.useState(String(percent));
@@ -430,15 +425,6 @@ function DepositRows({
         <span className="text-muted-foreground">Balance</span>
         <span className="tabular">{money(balance)}</span>
       </div>
-      {overCap && cap !== null ? (
-        <div role="alert" className="rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-xs leading-relaxed">
-          <p className="font-medium">Deposit is over the QBCC cap of {cap}% for this total.</p>
-          <p className="text-muted-foreground">
-            Caps: 20% up to $3,300, 10% from $3,301 to $19,999, 5% from $20,000. More is only allowed when off-site
-            work is over half the contract.
-          </p>
-        </div>
-      ) : null}
     </>
   );
 }
@@ -764,8 +750,6 @@ export default function QuoteBuilderPage() {
                 balance={q.balance}
                 locked={locked}
                 onError={setError}
-                cap={q.depositCap}
-                overCap={q.depositOverCap}
               />
             </div>
           </Card>
