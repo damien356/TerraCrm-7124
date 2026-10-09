@@ -1,6 +1,6 @@
 # Terra Ops: project notes
 
-Last updated: 8 Oct 2026 Brisbane. Checked against the code, GitHub `main` (`8878174` and the notes commit after it), the live site and the live database.
+Last updated: 9 Oct 2026 Brisbane (section 18 added, master spec Step 1). Checked against the code, GitHub `main` (`8878174` and the notes commit after it), the live site and the live database.
 This file replaces `STATE.md` as the source of truth. `STATE.md` (29 Sep) is out of date.
 
 Status words used below:
@@ -310,3 +310,105 @@ Sandbox cleanup on 8 Oct. Everything worth keeping was archived first. Each plac
 - Test screenshots, PDFs and small scripts from 5 to 7 Oct: `/home/user/terra-scratch-tests/evidence/2026-10-07/`.
 - `terra-release/check-b6/b6.aab` (83 MB) is local only. The backup tool skips `.aab` files. Build 7 lives in EAS.
 
+
+---
+
+## 18. Master spec (Damien, 9 Oct) and Step 1 impact check
+
+Status: **Step 1 review done 9 Oct. Nothing built. Waiting for Damien's go-ahead.** Full impact check: `/home/user/terra-impact-check.report/content.md` (sandbox). Original spec: `/home/user/Attachments/terra-master-spec_ZFI9E9.md`.
+
+Standing rule from the spec: before building anything, list what it touches, what it conflicts with, any data to migrate and whether it needs a new phone build. Wait for the go-ahead. Update this file when done.
+
+### 18.1 The spec (decisions are final)
+
+Build order: 0 safety fixes, 1 numbering, 2 send quote and online accept and deposit, 3 measure bookings, 4 tasks by trade and stars and assignment, 5 Pedro hourly savings, 6 follow-up journeys, 7 repairs.
+
+**0. Safety fixes**
+1. Deposit follows the Qld caps by quote total: up to $3,300 max 20%. $3,301 to $19,999 max 10%. $20,000 or more max 5% (20% if off-site work is over 50%). Builders 0%. Warn when over. Needed before quotes are sent from Terra.
+2. Accept race: only one installer can win. Losers see "already taken".
+3. Job number race: two jobs can never get the same number.
+4. Lapsed 2-hour holds settle on a timer. Office is told when a hold locks.
+5. Sign-in origins locked to ops.terraflooring.com.au and the app.
+6. Enforce "installer can see customer name and phone" or remove the false "Enforced on the server" text.
+7. Make Offer expiry hours and GST rate work or remove them. Remove Business name and Broadcast shows pay if unused.
+8. Hide Suppliers owed from Office.
+9. Journeys and server backup timers run on live.
+10. Auto statuses: quote accepted to Won, all tasks booked to Scheduled, first task started to In Progress, all tasks complete to Complete. Manual change still allowed.
+11. Push: test device registration on the next phone build with the new tester.
+12. Damo (floorsbyyou email) replaces David as tester, on his own installer card. Damien adds him to Play Internal testing.
+13. Publish once 0.1 to 0.10 are checked.
+
+**1. Numbering**
+- Old job numbers (218 to 4447) and ServiceM8 refs stay. New jobs start at 188000, start number set by Admin in Settings.
+- Job 188000. Quote Q188000, revisions Q188000-2, -3. Variations after acceptance are a new quote version with their own invoice.
+- Client invoices IQ188000-1 deposit, -2 final, -3 and up for stages. Tasks 188000-A, -B. Repairs R188000-1 (replaces -C1, old ones stay searchable). POs PO188000-1 (old POs keep their numbers).
+- Gaps are fine. Enquiries get a job number straight away. Xero must use Terra's invoice number.
+
+**2. Send quote, online accept, deposit** (needs 0.1 and the solicitor's T&Cs)
+- Email from team@ via Resend, sender "Damien from Terra", replies to team@. PDF plus a no-login link. Auto Sent and job to Quoted.
+- Client reads T&Cs, signs, pays the deposit by card (Stripe, webhook marks paid) or sees bank details (marked once reconciled).
+- On accept: lock the quote, set job value, job to Won, deposit invoice IQ-1 at the legal cap, send the material selection form to the decision-maker, office task "order product".
+- Track link views. Push Damien at 3+ views. Fix message attachments so the PDF is saved on the conversation.
+
+**3. Measure bookings**
+- Sales measure by Damien or Office: on the Schedule as a measure, Office bookable, default 1 hour plus travel, free, one-way push to Damien's Google Calendar, SMS confirm and day-before reminder. Phone Office tab "Start measure" opens voice quote linked to the client and job, plus photos and room and m² entry.
+- Site capture by Pedro (Crew) for insurance and builder jobs: new skill "Site measure", task at Lead stage, pay $0, blue strip and tape-measure look, address and Navigate, access and key, who to call. Checklist with a camera per line: each room with m², photo each room, doorways, subfloor, key location, voice note. "Finish measure and send to office" attaches everything and pushes "ready to quote".
+- New statuses Measure booked (after Lead) and Measured.
+- New enquiry screen: contact, new site address with autocomplete, lead source (required), job type, duplicate check on phone and email, "Book measure". Typing a new address works on contact, job and booking.
+
+**4. Tasks by trade, Crew view, stars, assignment**
+- Two or more trades on a quote split into one task per trade (188000-A carpet, -B vinyl). Office can merge.
+- Hard floors before carpet. Carpet shows "Waiting on hard floor", installer pushed when done. Override per job. Trims default to the hard-floor installer, shown on both. Timber multi-day stages with "stay off floor until" notes. Photos, sign-off and pay per task.
+- Crew room list from `job_areas`, grouped by flooring type, plain words, no prices. Read aloud button, optionally on "On my way". Each installer sees only his task plus who else is on site and when.
+- Stars per skill replace the single star. Untick = never offered. 4 to 5 stars get the first hour, then everyone with the skill for the rest of the 2 hours. 4 to 5 stars lock instantly, others hold. Nobody accepts: push Office. Sub-skills for vinyl, timber, carpet and hybrid. Installers never see stars.
+- Manual assignment always overrides: assign whole job, warn (not block) on missing skill or low stars with an optional reason, per-task "photos each stage" and "Office check", helper with pay per person, temporary star change with an end date, unassign, reassign, swap with pushes, direct assigns need the installer to tap Accept, override log.
+
+**5. Pedro hourly savings**
+- Pedro's skills are Hourly at $47 (Admin only). Quotes always price labour at the per-m² contractor rate.
+- On an install task Terra suggests a fixed task pay = estimated hours x $47. Office can adjust. Paid the fixed amount however long it takes.
+- Pedro sees only the room list and his fixed pay. Never hours, per-m² rates, client price or saving.
+- Per task, Admin only: benchmark cost, actual pay, on-costs (default $50 a day, set on his card), gross saving, true saving. Admin report by job, month, year, installer. Pedro can get prep tasks linked to a main task. Site measures unpaid.
+
+**6. Follow-up sequence** (existing journeys engine, sender "Damien from Terra")
+- Day 0 quote email with About Terra block. Day 1 product email from the stored blurb. Day 3 SMS. Day 7 what happens next. Day 14 call task for Damien. Day 25 expiry reminder. Day 30 Expired plus requote link.
+- Healthcare clients get the full sequence. Off by default for builder, insurance and property manager jobs, with a per-job toggle. Stops on reply, accept, decline or Pause. Unsubscribe and STOP on every message. Days, wording and on/off in Settings. One blurb per product, ChatGPT drafts, Damien approves. Decline needs a one-tap reason. Every message on the job timeline.
+
+**7. Repairs** (extends callbacks)
+- "Create repair" asks which task(s), with trade, installer and date, or "Not sure, inspect first". Inspections by Damien or Office, booked like a sales measure.
+- Original installer pre-selected for the fix, Office can pick anyone. Cause and rework cost stay on the original installer. Fixer is paid. Several tasks can be ticked, at-fault installer or "Shared".
+- Chargeable repairs: quote first, then book, using the R number. Callback report shows repair rate per installer per skill.
+
+### 18.2 Impact check answers (short)
+
+**A. State:** every section part-exists. Not started at all: no-login pages, Stripe, measure bookings, per-skill stars, savings, unsubscribe route.
+
+**C. Main conflicts:**
+- Spec says "database sequence". Live is libSQL, which has none. Plan: a one-row counter updated in one statement, and an "only if still free" update for accepts.
+- All 7 live quotes have no job. Quotes must now be made on a job so they get Q plus the job number. Voice quote must make the job first.
+- Accept today expires every other version and sets job value to one version's total. Variation versions need a rule (question to Damien). A `variations` table (0 rows) also exists.
+- Convert makes one task per quote line. Spec wants one per trade (skills already have trade groups).
+- `tasks.assign` blocks without the skill tick and skips Accept. Spec wants warn and Accept.
+- Single `installers.star_rating` drives instant lock today. Plan: copy each installer's star onto each ticked skill.
+- Two pay sources: offers use the old per-skill rate on `installer_skills`, labour cost and the rate card use `labour_rates`.
+- Journeys are homeowner-only by design (two guards plus `lib/trade.ts`). Spec wants healthcare companies and per-job opt-in for builders. No healthcare, insurer or property manager company type exists.
+- The unsubscribe link is built but `/api/unsubscribe/:token` has no route. Must exist before any journey email.
+- Card deposit % can exceed the QBCC cap. Plan: warn on the quote, deposit invoice uses the lower of quote % and cap.
+- Once the server backup timer runs on live, it overlaps the sandbox 6-hourly schedule.
+
+**D. Migration:** no existing job number changes. Live counts: 12 tasks, 7 quotes (drafts, no job), 0 invoices, 0 POs, 0 callbacks, 0 journeys, 160 skill ticks. No ServiceM8 ref in 188000 to 260000. Two new statuses are inserts, job status ids stay. Auto statuses forward only, no back-fill. Risk to the 4,225 jobs: low.
+
+**E. Phone:** backend changes go out with a website publish. JavaScript-only app screens could go OTA (`expo-updates`, fingerprint runtime), but every app change so far has shipped as a store build. Read aloud (`expo-speech`) and the geofence need a store build.
+
+**F. Crew visibility:** confirmed no client prices, quotes, job value, other installers' rates, margins or costs. Savings and on-costs not built. **Gap:** the Crew rate card (`labour.myRates`) falls back to Terra's standard rate where the installer has no own rate, and task cards send `durationHours` and `payBreakdown`. Fine for per-m² contractors. For hourly installers (Pedro) these must be hidden in section 5.
+
+**G. Blocking questions sent 9 Oct:** which Pedro (card 8 Pedro Silva or card 11 Pedro Souza), QBCC caps for non-homeowners, the journeys homeowner-only guard and client types, the room list source, variation versions, Damo role and David's login. Defaults taken on the rest are listed in the impact check report.
+
+### 18.3 Damien's answers (9 Oct)
+
+1. Pedro: cards 8 "Pedro Silva" and 11 "Pedro Souza" are the same person. Merge them into one card. He is the hourly installer at $47.
+2. QBCC cap warning on every quote that is not for a builder.
+3. Follow-ups stay homeowner-only for now. No new company types, no per-job opt-in for builders, insurers or property managers. Healthcare follow-ups wait.
+4. Rooms come from the measure (sales measure or site capture creates `job_areas`). Each quote line picks a room.
+5. A variation after acceptance is a full replacement quote. Job value = the new total.
+6. Damo's login role goes to Crew (`field`). David Walker's login (profile 22) is switched off. Data change: backup and dry run first.
+7. Go-ahead given for section 0.
