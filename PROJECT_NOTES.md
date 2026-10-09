@@ -315,7 +315,7 @@ Sandbox cleanup on 8 Oct. Everything worth keeping was archived first. Each plac
 
 ## 18. Master spec (Damien, 9 Oct) and Step 1 impact check
 
-Status: **Step 1 review done 9 Oct. Section 0 built 9 Oct (see 18.4), waiting on Damien to publish.** Full impact check: `/home/user/terra-impact-check.report/content.md` (sandbox). Original spec: `/home/user/Attachments/terra-master-spec_ZFI9E9.md`.
+Status: **Step 1 review done 9 Oct. Section 0 published 9 Oct (website, `57d85e0`). diag v6, every timer on. See 18.4.** Full impact check: `/home/user/terra-impact-check.report/content.md` (sandbox). Original spec: `/home/user/Attachments/terra-master-spec_ZFI9E9.md`.
 
 Standing rule from the spec: before building anything, list what it touches, what it conflicts with, any data to migrate and whether it needs a new phone build. Wait for the go-ahead. Update this file when done.
 
@@ -428,6 +428,6 @@ Checked: lint clean, web build, API tsc 0, app tsc 172 (baseline), mobile tsc 0.
 - **0.10 Auto statuses:** `lib/job-stage.ts`. Quote accepted → Won. Every live task booked (installer and date) → Scheduled. First task started → In Progress. Every live task complete → Complete. Forward only. Jobs on Invoiced, Paid, Cancelled or a custom status are never moved. No back-fill. Every move is logged as `status_changed`. Convert starts a job at Won if the quote was accepted, Quoted if it was sent.
 - **0.11 Push test:** waits for the next phone build.
 - **0.12 Logins:** done on live 9 Oct after a backup (`backups/terra-live-pre-logins-0-12-2026-10-09.db`) and a dry run. Profile 15 (Damo) role is `field`. Profile 22 (David Walker) is switched off. Card 9 "Dave Kohn" stays active (it has tasks booked 9 and 10 Oct).
-- **0.13 Publish:** Damien publishes. Then `diag` should show version 6 and every timer true.
+- **0.13 Publish:** done 9 Oct, website only. Live `diag` is version 6 with every timer true. Sign-in from a foreign origin gets 403 on live.
 - Live drafts 1005, 1006, 1007 stay at 50%.
 
