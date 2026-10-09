@@ -29,7 +29,7 @@ export const profiles = sqliteTable("profiles", {
   ...timestamps,
 });
 
-/** Key/value app settings, e.g. installer_can_see_customer_phone. */
+/** Key/value app settings, e.g. business_phone or site_circle_m. */
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),

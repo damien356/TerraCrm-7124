@@ -79,7 +79,7 @@ export default function CompanyTypesPage() {
       <Card>
         <CardHeader
           title={filter === "check" ? "Probably not builders" : "Every active company"}
-          subtitle="A builder starts new quotes at 0% deposit. Any other type starts at 50%, unless the company has its own deposit set."
+          subtitle="A builder starts new quotes at 0% deposit. Any other type follows the QBCC cap for the quote total, unless the company has its own deposit set (still never above the cap)."
         />
         {q.isLoading ? (
           <Loading label="Loading companies…" />

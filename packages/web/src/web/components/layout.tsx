@@ -148,6 +148,7 @@ const ADMIN_ONLY_PATHS = [
   "/finance/expenses",
   "/finance/profitability",
   "/finance/callbacks",
+  "/finance/suppliers-owed",
   "/marketing",
   "/terra-ai",
   "/settings",

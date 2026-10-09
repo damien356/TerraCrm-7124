@@ -41,13 +41,7 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
       ?.id ?? null;
 
   await d.insert(s.settings).values([
-    { key: "business_name", value: "Terra Flooring (demo)" },
     { key: "business_phone", value: "1300 183 772" },
-    { key: "gst_rate", value: "0.10" },
-    { key: "offer_expiry_hours", value: "48" },
-    { key: "broadcast_shows_pay", value: "true" },
-    { key: "installer_can_see_customer_name", value: "always" },
-    { key: "installer_can_see_customer_phone", value: "always" },
   ]);
 
   /* ------------------------------------------------------------- crew */

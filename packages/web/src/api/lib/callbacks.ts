@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
+import { nextJobNumber } from "./job-number";
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { db } from "../database";
@@ -115,8 +116,7 @@ export async function createCallback(input: z.input<typeof createCallbackInput>,
     .from(schema.jobs)
     .where(eq(schema.jobs.parentJobId, original.id));
   const seq = Number(seqRow?.max ?? 0) + 1;
-  const [maxRow] = await db.select({ max: sql<number>`coalesce(max(${schema.jobs.number}), 200)` }).from(schema.jobs);
-  const number = Number(maxRow?.max ?? 200) + 1;
+  const number = await nextJobNumber();
   const displayNumber = `${original.number}-C${seq}`;
 
   const [firstStatus] = await db

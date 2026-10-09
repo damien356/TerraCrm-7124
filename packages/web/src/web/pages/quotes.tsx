@@ -39,13 +39,13 @@ function fmtDate(value: Date | string | null) {
 export function depositHint(source: string | undefined) {
   switch (source) {
     case "company":
-      return "From the company card";
+      return "From the company card, never above the QBCC cap";
     case "company_type":
-      return "Company default: 0% for builders, 50% for others";
+      return "0% for builders. Others follow the QBCC cap for the total";
     case "contact":
-      return "From the contact card";
+      return "From the contact card, never above the QBCC cap";
     case "standard":
-      return "Standard 50%";
+      return "Follows the QBCC cap: 20% up to $3,300, 10% to $19,999, 5% from $20,000";
     default:
       return undefined;
   }

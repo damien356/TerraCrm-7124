@@ -1,4 +1,5 @@
 import { parseCallbackRef } from "../lib/callbacks";
+import { nextJobNumber } from "../lib/job-number";
 import { z } from "zod";
 import { assertSupervisor } from "../lib/supervisors";
 import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
@@ -41,8 +42,7 @@ export async function createJob(input: z.input<typeof createJobInput>, actor: Pi
   const parsed = createJobInput.parse(input);
   const { supervisorContactId, people, ...jobInput } = parsed;
   await assertSupervisor(jobInput.companyId, supervisorContactId);
-  const [maxRow] = await db.select({ max: sql<number>`coalesce(max(${schema.jobs.number}), 200)` }).from(schema.jobs);
-  const number = Number(maxRow?.max ?? 200) + 1;
+  const number = await nextJobNumber();
 
   const [status] = jobInput.statusId
     ? [{ id: jobInput.statusId }]

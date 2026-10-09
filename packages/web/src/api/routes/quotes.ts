@@ -1,4 +1,5 @@
 import { assertBillable } from "../lib/callbacks";
+import { nextJobNumber } from "../lib/job-number";
 import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
 import { assertSupervisor } from "../lib/supervisors";
@@ -8,7 +9,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
 import { markupOf, markupPctUsed, sellAtMarkup, sellExGstWithMarkup } from "../lib/pricing";
-import { depositDefaultFor, depositSplit } from "../lib/deposits";
+import { depositCapFor, depositDefaultFor, depositSplit } from "../lib/deposits";
 import { liveSellFor } from "../lib/live-sell";
 import { suggestProducts } from "../agent/price";
 import { customerCandidates, SAID_DETAILS_NOTE, spokenForQuote, UNMATCHED_NOTE } from "../lib/quote-customer";
@@ -16,7 +17,7 @@ import { forgetNames } from "../lib/memo-context";
 import { normaliseMobile } from "../lib/sms";
 import { createContact } from "./contacts";
 import { bundlesFor, copyBundles } from "./quoteBundles";
-import { leadToQuotedOnSend } from "../lib/job-stage";
+import { leadToQuotedOnSend, moveJobForward } from "../lib/job-stage";
 import { addQuotePerson, carryQuotePeopleToJob, copyQuotePeople, personInput } from "../lib/job-people";
 
 /**
@@ -97,9 +98,31 @@ export async function recalc(quoteId: number) {
   const gst = round2(subtotal * GST_RATE);
   const total = round2(subtotal + gst);
 
+  // A draft whose deposit is still on the default follows the QBCC cap as the
+  // total moves. A % someone typed is left alone.
+  const [before] = await db
+    .select({
+      status: schema.quotes.status,
+      total: schema.quotes.total,
+      depositPercent: schema.quotes.depositPercent,
+      companyId: schema.quotes.companyId,
+      contactId: schema.quotes.contactId,
+    })
+    .from(schema.quotes)
+    .where(eq(schema.quotes.id, quoteId));
+  let depositPercent: number | undefined;
+  if (before && (before.status === "draft" || before.status === "needs_review") && before.total !== total) {
+    const ids = { companyId: before.companyId, contactId: before.contactId };
+    const was = await depositDefaultFor(ids, before.total ?? 0);
+    if (was.cap !== null && before.depositPercent === was.percent) {
+      const now = await depositDefaultFor(ids, total);
+      if (now.percent !== before.depositPercent) depositPercent = now.percent;
+    }
+  }
+
   await db
     .update(schema.quotes)
-    .set({ subtotal, gst, total, updatedAt: new Date() })
+    .set({ subtotal, gst, total, ...(depositPercent !== undefined ? { depositPercent } : {}), updatedAt: new Date() })
     .where(eq(schema.quotes.id, quoteId));
 
   return { subtotal, gst, total };
@@ -294,6 +317,10 @@ export const quotes = {
         ? items.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice) }))
         : items.map((i) => ({ ...i, unitCost: null, markupPercent: null })),
       ...depositSplit(row.quote.total, row.quote.depositPercent),
+      // QBCC cap for this total. Null for a builder, who has no cap.
+      depositCap: row.company?.type === "builder" ? null : depositCapFor(row.quote.total ?? 0),
+      depositOverCap:
+        row.company?.type !== "builder" && (row.quote.depositPercent ?? 0) > depositCapFor(row.quote.total ?? 0),
       activity,
       versions,
       /** What the client sees: titles, wording and totals only. */
@@ -308,6 +335,7 @@ export const quotes = {
   /** The deposit % a new quote for this company or contact starts at, and why. */
   depositDefault: staffOnly
     .input(z.object({ companyId: z.number().nullable().optional(), contactId: z.number().nullable().optional() }))
+    // A new quote has no lines yet, so this is the answer at $0: the 20% cap for non-builders.
     .handler(({ input }) => depositDefaultFor(input)),
 
   create: staffOnly
@@ -1085,6 +1113,14 @@ export const quotes = {
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
+      if (quote.jobId) {
+        await moveJobForward({
+          jobId: quote.jobId,
+          target: "won",
+          why: `quote #${quote.number} accepted`,
+          actor: context.actor,
+        });
+      }
 
       return row;
     }),
@@ -1215,17 +1251,26 @@ export const quotes = {
         .where(eq(schema.quoteItems.quoteId, quote.id))
         .orderBy(asc(schema.quoteItems.sortOrder));
 
-      const [maxRow] = await db
-        .select({ max: sql<number>`coalesce(max(${schema.jobs.number}), 200)` })
-        .from(schema.jobs);
-      const number = Number(maxRow?.max ?? 200) + 1;
+      const number = await nextJobNumber();
 
-      const [status] = await db
-        .select({ id: schema.jobStatuses.id })
-        .from(schema.jobStatuses)
-        .where(eq(schema.jobStatuses.active, true))
-        .orderBy(asc(schema.jobStatuses.sortOrder))
-        .limit(1);
+      // The job starts where the quote already is: Won if it was accepted,
+      // Quoted if it went out, otherwise the first status (Lead).
+      const startName = quote.status === "accepted" ? "won" : quote.status === "sent" ? "quoted" : null;
+      const [named] = startName
+        ? await db
+            .select({ id: schema.jobStatuses.id })
+            .from(schema.jobStatuses)
+            .where(and(eq(schema.jobStatuses.active, true), sql`lower(trim(${schema.jobStatuses.name})) = ${startName}`))
+            .limit(1)
+        : [];
+      const [status] = named
+        ? [named]
+        : await db
+            .select({ id: schema.jobStatuses.id })
+            .from(schema.jobStatuses)
+            .where(eq(schema.jobStatuses.active, true))
+            .orderBy(asc(schema.jobStatuses.sortOrder))
+            .limit(1);
 
       const [site] = quote.siteId
         ? await db.select().from(schema.sites).where(eq(schema.sites.id, quote.siteId))

@@ -1,4 +1,5 @@
 import { jobNumberSql } from "../lib/job-ref";
+import { syncJobForTask } from "../lib/job-stage";
 import { z } from "zod";
 import { and, asc, desc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
@@ -466,6 +467,7 @@ export const field = {
       actorName: installer?.name ?? "Installer",
       actorRole: "installer",
     });
+    await syncJobForTask(input.taskId, { name: installer?.name ?? "Installer", role: "installer" });
     return row;
   }),
 
@@ -558,6 +560,7 @@ export const field = {
           data: { kind: "job", jobId: task.jobId },
         });
       }
+      await syncJobForTask(input.taskId, { name: installer?.name ?? "Installer", role: "installer" });
 
       return row;
     }),

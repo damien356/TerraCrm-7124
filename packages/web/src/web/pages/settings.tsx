@@ -122,7 +122,7 @@ const TABS: Array<{ id: Tab; label: string; blurb: string }> = [
   {
     id: "business",
     label: "Business rules",
-    blurb: "Bank balance the forecast starts from, offer expiry, what installers see, GST, your details.",
+    blurb: "Bank balance the forecast starts from, quote discounts, supervisors, offer rules, site circle, your details.",
   },
   {
     id: "email",
@@ -990,12 +990,6 @@ function NewProductModal({ open, onClose }: { open: boolean; onClose: () => void
 
 /* ---------------------------------------------------------------- business */
 
-const VISIBILITY_OPTIONS = [
-  { value: "always", label: "Always" },
-  { value: "on_accept", label: "Only once they accept" },
-  { value: "never", label: "Never" },
-];
-
 function BusinessTab({ settings }: { settings: Record<string, string> }) {
   const save = useSetSetting();
   const [draft, setDraft] = React.useState<Record<string, string>>(settings);
@@ -1016,7 +1010,6 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
     );
   }
 
-  const flag = (key: string) => draft[key] === "true";
   const tick = (key: string) => (saved === key ? <span className="text-xs text-[var(--success)]">Saved</span> : null);
 
   return (
@@ -1057,75 +1050,16 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
       </Card>
 
       <Card>
-        <CardHeader title="Dispatch rules" subtitle="How offers behave when you send work out." />
-        <div className="space-y-4 px-4 py-4">
-          <Field
-            label="Offer expiry (hours)"
-            hint="An unanswered offer lapses after this and comes back to you on the dashboard."
-          >
-            <div className="flex items-center gap-2">
-              <Input
-                value={draft.offer_expiry_hours ?? "2"}
-                onChange={(e) => setDraft((d) => ({ ...d, offer_expiry_hours: e.target.value }))}
-                onBlur={(e) => commit("offer_expiry_hours", e.target.value)}
-                className="tabular w-24"
-              />
-              {tick("offer_expiry_hours")}
-            </div>
-          </Field>
-          <label htmlFor={`settings_cb7`} className="flex items-start gap-3">
-            <Checkbox id={`settings_cb7`}
-              className="mt-0.5"
-              checked={flag("broadcast_shows_pay")}
-              onChange={(e) => commit("broadcast_shows_pay", String(e.target.checked))}
-            />
-            <span className="text-sm">
-              Show the installer their pay in the offer
-              <span className="block text-xs text-muted-foreground">
-                Off means they accept blind and see the figure after. Your call was on.
-              </span>
-            </span>
-            {tick("broadcast_shows_pay")}
-          </label>
-        </div>
-      </Card>
-
-      <Card>
-        <CardHeader title="What installers can see" subtitle="Enforced on the server, not just hidden in the app." />
-        <div className="space-y-4 px-4 py-4">
-          <Field label="Customer name">
-            <div className="flex items-center gap-2">
-              <Select
-                value={draft.installer_can_see_customer_name ?? "always"}
-                onChange={(e) => commit("installer_can_see_customer_name", e.target.value)}
-              >
-                {VISIBILITY_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </Select>
-              {tick("installer_can_see_customer_name")}
-            </div>
-          </Field>
-          <Field label="Customer phone">
-            <div className="flex items-center gap-2">
-              <Select
-                value={draft.installer_can_see_customer_phone ?? "always"}
-                onChange={(e) => commit("installer_can_see_customer_phone", e.target.value)}
-              >
-                {VISIBILITY_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </Select>
-              {tick("installer_can_see_customer_phone")}
-            </div>
-          </Field>
-          <div className="rounded-md bg-secondary px-3 py-2 text-xs text-muted-foreground">
-            Locked permanently, not a setting: installers never see quotes, invoices, job value, supplier costs,
-            margins, or another installer's tasks and rates.
+        <CardHeader title="Offers and what crew see" subtitle="Fixed rules, not settings." />
+        <div className="space-y-2 px-4 py-4 text-sm text-muted-foreground">
+          <p>An unanswered offer lapses after 2 hours and comes back to you on the dashboard.</p>
+          <p>The installer always sees their pay in the offer.</p>
+          <p>
+            Crew see only the people you tick Show to Crew on each job. A job with nobody ticked shows Crew nobody.
+          </p>
+          <div className="rounded-md bg-secondary px-3 py-2 text-xs">
+            Locked permanently: installers never see quotes, invoices, job value, supplier costs, margins, or another
+            installer's tasks and rates.
           </div>
         </div>
       </Card>
@@ -1166,18 +1100,8 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
       </Card>
 
       <Card>
-        <CardHeader title="Your details" subtitle="Used on quotes and outgoing messages." />
+        <CardHeader title="Your details" subtitle="The office number the crew app rings. GST is fixed at 10%." />
         <div className="grid gap-3 px-4 py-4 sm:grid-cols-2">
-          <Field label="Business name">
-            <div className="flex items-center gap-2">
-              <Input
-                value={draft.business_name ?? ""}
-                onChange={(e) => setDraft((d) => ({ ...d, business_name: e.target.value }))}
-                onBlur={(e) => commit("business_name", e.target.value)}
-              />
-              {tick("business_name")}
-            </div>
-          </Field>
           <Field label="Business phone">
             <div className="flex items-center gap-2">
               <Input
@@ -1186,17 +1110,6 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
                 onBlur={(e) => commit("business_phone", e.target.value)}
               />
               {tick("business_phone")}
-            </div>
-          </Field>
-          <Field label="GST rate" hint="0.10 for 10%">
-            <div className="flex items-center gap-2">
-              <Input
-                value={draft.gst_rate ?? "0.10"}
-                onChange={(e) => setDraft((d) => ({ ...d, gst_rate: e.target.value }))}
-                onBlur={(e) => commit("gst_rate", e.target.value)}
-                className="tabular w-24"
-              />
-              {tick("gst_rate")}
             </div>
           </Field>
         </div>
@@ -1217,6 +1130,8 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
                   "business_phone",
                   "gst_rate",
                   "site_circle_m",
+                  // The job number counter. Never hand-edited here.
+                  "job_number_last",
                 ].includes(k),
             )
             .map((k) => (

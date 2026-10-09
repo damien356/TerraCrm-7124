@@ -235,9 +235,7 @@ export const voice = {
           payload = { body, minutes: mins };
         }
       } else if (kind === "call_contact") {
-        if ((await setting("installer_can_see_customer_phone")) === "never") {
-          return refuse("Terra doesn't share customer numbers with the crew. You can call the office instead.");
-        }
+        // The site contact is only someone the office ticked Show to Crew on the job.
         const c = b!.contact;
         const number = c?.mobile || c?.phone;
         if (!c || !number) return refuse(`There's no number for the site contact on ${sayPlace(b!)}.`);

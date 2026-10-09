@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, asc, desc, eq, inArray, lt, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -7,6 +7,7 @@ import { staffOnly } from "../middleware/auth";
 import { pushToInstaller, pushToOffice } from "../lib/push";
 import { blockedReason } from "../lib/availability";
 import { lockTaskLabour } from "./costing";
+import { syncJobForTask } from "../lib/job-stage";
 import { installerForStaff, taskForStaff } from "../lib/staff-view";
 
 /**
@@ -101,14 +102,30 @@ async function expireStale() {
     const live = await db
       .select({ id: schema.taskOffers.id })
       .from(schema.taskOffers)
-      .where(and(eq(schema.taskOffers.taskId, taskId), eq(schema.taskOffers.status, "pending")));
+      .where(
+        and(eq(schema.taskOffers.taskId, taskId), inArray(schema.taskOffers.status, ["pending", "provisional"])),
+      );
     if (live.length === 0) {
       const [task] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, taskId));
       if (task && task.status === "offered" && !task.assignedInstallerId) {
-        await db
+        // Conditional, so the timer and a list read running together log it once.
+        const moved = await db
           .update(schema.jobTasks)
           .set({ status: "unassigned", updatedAt: new Date() })
-          .where(eq(schema.jobTasks.id, taskId));
+          .where(
+            and(
+              eq(schema.jobTasks.id, taskId),
+              eq(schema.jobTasks.status, "offered"),
+              isNull(schema.jobTasks.assignedInstallerId),
+            ),
+          )
+          .returning({ id: schema.jobTasks.id });
+        if (moved.length === 0) continue;
+        void pushToOffice({
+          title: "Nobody took it",
+          body: `"${task.title}" got no taker within ${OFFER_TTL_HOURS}h. It is back in the queue.`,
+          data: { kind: "task", taskId, jobId: task.jobId },
+        });
         await db.insert(schema.activityLog).values({
           jobId: task.jobId,
           taskId,
@@ -272,8 +289,11 @@ export const offers = {
 
     await db
       .update(schema.taskOffers)
-      .set({ status: "withdrawn", respondedAt: new Date(), updatedAt: new Date() })
-      .where(and(eq(schema.taskOffers.taskId, input.taskId), eq(schema.taskOffers.status, "pending")));
+      .set({ status: "withdrawn", provisionalUntil: null, respondedAt: new Date(), updatedAt: new Date() })
+      // Holds too, or the hold timer would lock a job the office pulled back.
+      .where(
+        and(eq(schema.taskOffers.taskId, input.taskId), inArray(schema.taskOffers.status, ["pending", "provisional"])),
+      );
 
     if (task.status === "offered") {
       await db
@@ -387,10 +407,49 @@ async function lockTask(args: {
 }) {
   const now = new Date();
 
-  await db
+  // The offer must still be open. If the office withdrew it, or it expired a
+  // moment ago, this matches nothing and the accept stops here.
+  const offerClaimed = await db
     .update(schema.taskOffers)
-    .set({ status: "accepted", chosenDate: args.day, respondedAt: now, updatedAt: now })
-    .where(eq(schema.taskOffers.id, args.offerId));
+    .set({ status: "accepted", provisionalUntil: null, chosenDate: args.day, respondedAt: now, updatedAt: now })
+    .where(
+      and(eq(schema.taskOffers.id, args.offerId), inArray(schema.taskOffers.status, ["pending", "provisional"])),
+    )
+    .returning({ id: schema.taskOffers.id });
+  if (offerClaimed.length === 0) {
+    throw new ORPCError("BAD_REQUEST", { message: "This offer is no longer open." });
+  }
+
+  // The lock. One conditional update claims the task: it only lands while the
+  // task is still open and nobody else holds it. Two installers tapping at the
+  // same moment both reach here, but only one update matches. The loser gets
+  // the neutral "already accepted" and their offer closes as filled.
+  const claimed = await db
+    .update(schema.jobTasks)
+    .set({
+      assignedInstallerId: args.installerId,
+      status: "assigned",
+      // The chosen day is the lock. The rest of the window frees up.
+      ...(args.day ? { scheduledDate: args.day } : {}),
+      ...(args.payAmount != null ? { payAmount: args.payAmount } : {}),
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(schema.jobTasks.id, args.taskId),
+        inArray(schema.jobTasks.status, ["unassigned", "offered"]),
+        or(isNull(schema.jobTasks.assignedInstallerId), eq(schema.jobTasks.assignedInstallerId, args.installerId)),
+      ),
+    )
+    .returning({ id: schema.jobTasks.id });
+
+  if (claimed.length === 0) {
+    await db
+      .update(schema.taskOffers)
+      .set({ status: "filled", respondedAt: now, updatedAt: now })
+      .where(eq(schema.taskOffers.id, args.offerId));
+    throw new ORPCError("BAD_REQUEST", { message: ALREADY_TAKEN });
+  }
 
   // Everyone else loses — pending AND anyone sitting on a provisional hold.
   await db
@@ -403,18 +462,6 @@ async function lockTask(args: {
         ne(schema.taskOffers.id, args.offerId),
       ),
     );
-
-  await db
-    .update(schema.jobTasks)
-    .set({
-      assignedInstallerId: args.installerId,
-      status: "assigned",
-      // The chosen day is the lock. The rest of the window frees up.
-      ...(args.day ? { scheduledDate: args.day } : {}),
-      ...(args.payAmount != null ? { payAmount: args.payAmount } : {}),
-      updatedAt: now,
-    })
-    .where(eq(schema.jobTasks.id, args.taskId));
 
   // He won it, so the labour freezes at his card as it reads today.
   await lockTaskLabour({ taskId: args.taskId, installerId: args.installerId });
@@ -438,6 +485,8 @@ async function lockTask(args: {
     body: `${installer?.name ?? "Installer"} has "${args.taskTitle}"${args.day ? ` on ${args.day}` : ""}`,
     data: { kind: "task", taskId: args.taskId, jobId: args.jobId },
   });
+
+  await syncJobForTask(args.taskId, { name: installer?.name ?? "Installer", role: "installer" });
 
   return { ok: true, taskId: args.taskId, scheduledDate: args.day };
 }
@@ -472,16 +521,22 @@ async function settleProvisional() {
         .where(eq(schema.taskOffers.id, row.offer.id));
       continue;
     }
-    await lockTask({
-      offerId: row.offer.id,
-      taskId: row.offer.taskId,
-      jobId: row.task.jobId,
-      taskTitle: row.task.title,
-      installerId: row.offer.installerId,
-      day: row.offer.chosenDate ?? row.task.scheduledDate ?? row.task.scheduledFrom,
-      payAmount: row.offer.payAmount,
-      promotedFromHold: true,
-    });
+    try {
+      await lockTask({
+        offerId: row.offer.id,
+        taskId: row.offer.taskId,
+        jobId: row.task.jobId,
+        taskTitle: row.task.title,
+        installerId: row.offer.installerId,
+        day: row.offer.chosenDate ?? row.task.scheduledDate ?? row.task.scheduledFrom,
+        payAmount: row.offer.payAmount,
+        promotedFromHold: true,
+      });
+    } catch (err) {
+      // Lost the lock to someone else in the same moment. lockTask already
+      // closed this hold as filled. Keep settling the rest.
+      if (!(err instanceof ORPCError)) throw err;
+    }
   }
   return due.length;
 }
@@ -570,7 +625,7 @@ export async function acceptOffer(offerId: number, installerId: number, chosenDa
 
   // Lower tier: 2-hour hold. Task stays "offered" so higher stars still see it.
   const holdUntil = new Date(now.getTime() + PROVISIONAL_HOLD_HOURS * 3600_000);
-  await db
+  const held = await db
     .update(schema.taskOffers)
     .set({
       status: "provisional",
@@ -581,7 +636,12 @@ export async function acceptOffer(offerId: number, installerId: number, chosenDa
       respondedAt: now,
       updatedAt: now,
     })
-    .where(eq(schema.taskOffers.id, offerId));
+    .where(and(eq(schema.taskOffers.id, offerId), eq(schema.taskOffers.status, "pending")))
+    .returning({ id: schema.taskOffers.id });
+  if (held.length === 0) {
+    // Someone else took the task, or the offer closed, while this tap was in flight.
+    throw new ORPCError("BAD_REQUEST", { message: ALREADY_TAKEN });
+  }
 
   await db.insert(schema.activityLog).values({
     jobId: row.task.jobId,
@@ -688,6 +748,17 @@ export async function releaseTask(taskId: number, installerId: number, reason: s
   });
 
   return { ok: true };
+}
+
+/**
+ * The offer timer. Expires offers past their window and settles 2-hour holds
+ * that have run out, so a hold locks on time even when nobody opens the app.
+ * Booted once a minute on the live server, see lib/offer-timer.ts.
+ */
+export async function tickOffers() {
+  const expired = await expireStale();
+  const settled = await settleProvisional();
+  return { expired: expired.length, settled };
 }
 
 export { expireStale, OFFER_TTL_HOURS };

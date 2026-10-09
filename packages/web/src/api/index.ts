@@ -3,6 +3,7 @@ import { createApp } from "./__core/app";
 import { auth } from "./auth";
 import { bootJourneyEngine } from "./lib/journey-boot";
 import { bootOffsiteBackup } from "./lib/offsite-backup-boot";
+import { bootOfferTimer } from "./lib/offer-timer";
 import { ping, diag, diagThrow, diagActor } from "./routes/ping";
 import { settings } from "./routes/settings";
 import { contacts } from "./routes/contacts";
@@ -217,5 +218,7 @@ bootReminders();
 bootMailAgent();
 // Copies the database and every stored file to Supabase every 6 hours. Same gate.
 bootOffsiteBackup();
+// Expires offers and locks lapsed 2-hour holds once a minute. Same gate.
+bootOfferTimer();
 
 export default app;

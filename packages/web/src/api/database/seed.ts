@@ -50,12 +50,6 @@ const STATUSES: Array<[string, string, string]> = [
 ];
 
 const SETTINGS: Array<[string, string]> = [
-  ["installer_can_see_customer_name", "always"],
-  ["installer_can_see_customer_phone", "always"],
-  ["offer_expiry_hours", "2"],
-  ["broadcast_shows_pay", "true"],
-  ["gst_rate", "0.10"],
-  ["business_name", "Terra Flooring"],
   ["business_phone", "0468 366 555"],
 ];
 

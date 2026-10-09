@@ -1,9 +1,10 @@
 import { runOffsiteBackup, sbGetJson, supabaseConfigured, type BackupInfo } from "./offsite-backup";
+import { isLiveServer } from "./runtime";
 
 /* ---------------------------------------------------------------------------
  * Runs the Supabase off-site backup every 6 hours inside the published
  * server, so the copy keeps going even if the sandbox is lost. Same gate as
- * the journey engine: only when the entry script is __server.ts.
+ * the journey engine: isLiveServer() in lib/runtime.ts.
  *
  *   OFFSITE_BACKUP=off   never run
  *   OFFSITE_BACKUP=on    run regardless of the entry script
@@ -15,12 +16,10 @@ import { runOffsiteBackup, sbGetJson, supabaseConfigured, type BackupInfo } from
 const EVERY_MS = 6 * 60 * 60 * 1000;
 const CHECK_MS = 15 * 60 * 1000;
 
-function isPublishedServer() {
-  const argv = (process as unknown as { argv?: string[] }).argv ?? [];
-  return (argv[1] ?? "").endsWith("__server.ts");
-}
-
 let booted = false;
+let ticking = false;
+/** For the deploy check: did this process start the backup timer? */
+export const offsiteBackupTicking = () => ticking;
 let running = false;
 
 async function tick() {
@@ -45,7 +44,8 @@ export function bootOffsiteBackup() {
   const mode = process.env.OFFSITE_BACKUP;
   if (mode === "off") return void console.log("[offsite-backup] disabled by OFFSITE_BACKUP=off");
   if (!supabaseConfigured()) return void console.log("[offsite-backup] idle, Supabase is not set up");
-  if (mode !== "on" && !isPublishedServer()) return void console.log("[offsite-backup] idle, not the published server");
+  if (mode !== "on" && !isLiveServer()) return void console.log("[offsite-backup] idle, not the published server");
+  ticking = true;
   console.log("[offsite-backup] copying to Supabase every 6 hours");
   setTimeout(() => void tick(), 5 * 60 * 1000);
   setInterval(() => void tick(), CHECK_MS);

@@ -8,6 +8,9 @@ import { withUser } from "../middleware/auth";
 import { isLiveServer } from "../lib/runtime";
 import { mailAgentTicking } from "../lib/mail-agent";
 import { remindersTicking } from "../lib/reminders";
+import { journeysTicking } from "../lib/journey-boot";
+import { offsiteBackupTicking } from "../lib/offsite-backup-boot";
+import { offerTimerTicking } from "../lib/offer-timer";
 
 export const ping = base.handler(() => ({ message: `Pong! ${Date.now()}` }));
 
@@ -19,7 +22,7 @@ export const ping = base.handler(() => ({ message: `Pong! ${Date.now()}` }));
 export const diag = base.handler(async () => {
   // Bumped whenever this check changes, so the live answer says which build is
   // actually running rather than leaving us to guess whether a publish landed.
-  const diagVersion = 5;
+  const diagVersion = 6;
 
   const env = {
     databaseUrl: Boolean(process.env.DATABASE_URL),
@@ -73,7 +76,14 @@ export const diag = base.handler(async () => {
   };
 
   // Which background timers this process started. Only the live server should.
-  const timers = { liveServer: isLiveServer(), mailAgent: mailAgentTicking(), reminders: remindersTicking() };
+  const timers = {
+    liveServer: isLiveServer(),
+    mailAgent: mailAgentTicking(),
+    reminders: remindersTicking(),
+    journeys: journeysTicking(),
+    offsiteBackup: offsiteBackupTicking(),
+    offers: offerTimerTicking(),
+  };
 
   return { diagVersion, env, databaseHost, database, steps, timers };
 });

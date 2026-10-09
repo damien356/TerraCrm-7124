@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { syncJobForTask } from "../lib/job-stage";
 import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
@@ -559,6 +560,7 @@ export const tasks = {
         actorRole: context.actor.role,
       });
 
+      await syncJobForTask(input.id, context.actor);
       return { ...row, dates: moved, bookedDays };
     }),
 
@@ -601,8 +603,10 @@ export const tasks = {
       // Any outstanding offers on this task are moot now.
       await db
         .update(schema.taskOffers)
-        .set({ status: "withdrawn", respondedAt: new Date(), updatedAt: new Date() })
-        .where(and(eq(schema.taskOffers.taskId, input.id), eq(schema.taskOffers.status, "pending")));
+        .set({ status: "withdrawn", provisionalUntil: null, respondedAt: new Date(), updatedAt: new Date() })
+        .where(
+          and(eq(schema.taskOffers.taskId, input.id), inArray(schema.taskOffers.status, ["pending", "provisional"])),
+        );
 
       // Lock the labour at his rates, today. A rise next year is next year's job.
       await lockTaskLabour({ taskId: input.id, installerId: input.installerId });
@@ -617,6 +621,7 @@ export const tasks = {
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
+      await syncJobForTask(input.id, context.actor);
 
       return row ? taskForStaff(row, context.actor) : row;
     }),
@@ -930,8 +935,10 @@ export const tasks = {
       // Outstanding offers are moot: it's booked.
       await db
         .update(schema.taskOffers)
-        .set({ status: "withdrawn", respondedAt: new Date(), updatedAt: new Date() })
-        .where(and(eq(schema.taskOffers.taskId, input.taskId), eq(schema.taskOffers.status, "pending")));
+        .set({ status: "withdrawn", provisionalUntil: null, respondedAt: new Date(), updatedAt: new Date() })
+        .where(
+          and(eq(schema.taskOffers.taskId, input.taskId), inArray(schema.taskOffers.status, ["pending", "provisional"])),
+        );
 
       // Lock the labour at today's rates, same as any other assignment.
       await lockTaskLabour({ taskId: input.taskId, installerId: input.installerId });
@@ -948,6 +955,7 @@ export const tasks = {
         actorRole: context.actor.role,
       });
 
+      await syncJobForTask(input.taskId, context.actor);
       return { ...row, dates };
     }),
 
@@ -1187,6 +1195,7 @@ export const tasks = {
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
+      await syncJobForTask(input.id, context.actor);
       return row ? taskForStaff(row, context.actor) : row;
     }),
 

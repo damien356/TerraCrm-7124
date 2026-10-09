@@ -1,4 +1,5 @@
 import { startEngine } from "./journey-engine";
+import { isLiveServer } from "./runtime";
 
 /* ---------------------------------------------------------------------------
  * Booting the journey engine.
@@ -8,27 +9,22 @@ import { startEngine } from "./journey-engine";
  * The API module is also loaded by the Vite dev server, and a sandbox dev
  * server points at the same database as production. An engine ticking there
  * would send real marketing email to real customers off a developer's laptop.
- * So the boot is gated on the process actually being the published server:
- * the entry script is `__server.ts`, which is how pm2 and `bun run start`
- * launch it. Under Vite the entry is the Vite binary, so the gate closes.
+ * So the boot is gated on the process actually being the published server,
+ * using isLiveServer() in lib/runtime.ts. The old check looked for the entry
+ * script `__server.ts`, which live never uses, so the engine never ran.
  *
  * Two env vars override the gate, both read at boot:
  *   MARKETING_ENGINE=off   never tick, even on the published server
  *   MARKETING_ENGINE=on    tick regardless of the entry script
  *
- * `on` exists so the engine can be forced up if the published server is ever
- * launched some other way. Nothing else is needed in the normal case.
+ * `on` exists so the engine can be forced up for a test. Nothing else is
+ * needed in the normal case.
  * ------------------------------------------------------------------------- */
 
-/** Was this process launched as the published web server? */
-function isPublishedServer() {
-  /* Cast because this module is also type-checked against React Native's
-   * narrower `process`, which declares env and nothing else. */
-  const argv = (process as unknown as { argv?: string[] }).argv ?? [];
-  return (argv[1] ?? "").endsWith("__server.ts");
-}
-
 let booted = false;
+let ticking = false;
+/** For the deploy check: did this process start the journey engine? */
+export const journeysTicking = () => ticking;
 
 export function bootJourneyEngine() {
   if (booted) return;
@@ -41,10 +37,11 @@ export function bootJourneyEngine() {
     return;
   }
 
-  if (mode !== "on" && !isPublishedServer()) {
+  if (mode !== "on" && !isLiveServer()) {
     console.log("[journeys] engine idle — not the published server, nothing will be sent");
     return;
   }
 
+  ticking = true;
   startEngine();
 }
