@@ -97,7 +97,7 @@ export default function DashboardPage() {
                       ) : null}
                     </div>
                     <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                      <span>#{t.jobNumber}</span>
+                      <span>{t.ref}</span>
                       {t.startTime ? (
                         <span className="tabular inline-flex items-center gap-1">
                           <Clock className="size-3" />
@@ -143,7 +143,7 @@ export default function DashboardPage() {
                       ) : null}
                     </div>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      #{o.jobNumber} · {o.installerName} · {o.mode === "broadcast" ? "broadcast" : "direct"} ·{" "}
+                      {o.ref} · {o.installerName} · {o.mode === "broadcast" ? "broadcast" : "direct"} ·{" "}
                       <span className="text-[var(--warning)]">{countdown(o.expiresAt)}</span>
                     </p>
                   </Link>
@@ -182,7 +182,7 @@ export default function DashboardPage() {
                   <Link key={t.id} to="/schedule" className="block px-4 py-2.5 transition-colors hover:bg-secondary/60">
                     <p className="truncate text-sm font-medium">{t.title}</p>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      #{t.jobNumber} · {t.scheduledDate ?? "unscheduled"} · {t.skillName ?? "no skill"}
+                      {t.ref} · {t.scheduledDate ?? "unscheduled"} · {t.skillName ?? "no skill"}
                       {t.furnitureOnSite ? " · furniture" : ""}
                       {t.crewSize > 1 ? " · 2 man" : ""}
                     </p>
@@ -204,7 +204,7 @@ export default function DashboardPage() {
                   <div key={t.id} className="px-4 py-2.5">
                     <p className="truncate text-sm font-medium">{t.title}</p>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      #{t.jobNumber} · {t.scheduledDate} · {t.installerName ?? "unassigned"} ·{" "}
+                      {t.ref} · {t.scheduledDate} · {t.installerName ?? "unassigned"} ·{" "}
                       {TASK_STATUS_LABEL[t.status] ?? t.status}
                     </p>
                   </div>

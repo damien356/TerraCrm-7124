@@ -2,6 +2,7 @@ import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { depositDefaultOf } from "./deposits";
+import { quoteRef } from "./refs";
 
 /**
  * THE CASHFLOW ENGINE.
@@ -569,7 +570,7 @@ export async function rebuildForecast(): Promise<RebuildResult> {
       quoteId: quote.id,
       companyId: quote.companyId,
       contactId: quote.contactId,
-      label: `Quote ${quote.number} — not accepted`,
+      label: `Quote ${quoteRef(quote.number, quote.version)}, not accepted`,
       amount: quote.total ?? 0,
       dueDate: settleDate(assumedStart, terms.termsDays, terms.endOfMonth),
       basis: `unaccepted quote, assuming work 3 weeks out then ${termsLabel(terms.termsDays, terms.endOfMonth)}`,

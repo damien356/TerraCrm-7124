@@ -10,6 +10,7 @@ import { transcribeAudio } from "../agent/transcribe";
 import { extractVoiceQuote } from "../agent/extract";
 import { priceExtraction } from "../agent/price";
 import { recalc } from "./quotes";
+import { quoteNumberFor, quoteRefOf } from "../lib/quote-number";
 import { depositDefaultFor } from "../lib/deposits";
 import { markupOf } from "../lib/pricing";
 import { customerCandidates, spokenCustomer, strongMatch } from "../lib/quote-customer";
@@ -155,7 +156,7 @@ export const voiceQuotes = {
         errorMessage: null,
         result: {
           captureId: row.id,
-          quote,
+          quote: { ...quote, ref: await quoteRefOf(quote) },
           transcript: row.transcript ?? "",
           flaggedCount: items.filter((i) => i.flagged).length,
           lineCount: items.length,
@@ -288,10 +289,8 @@ export async function buildQuoteFromTranscript(
   }
 
   const anyFlagged = pricedLines.some((l) => l.flagged);
-  const [maxRow] = await db
-    .select({ max: sql<number>`coalesce(max(${schema.quotes.number}), 1000)` })
-    .from(schema.quotes);
-  const number = Number(maxRow?.max ?? 1000) + 1;
+  // The job's own number, or the next job number when there is no job yet (spec section 1).
+  const { number, version } = await quoteNumberFor(link.jobId);
 
   const validUntil = new Date();
   validUntil.setDate(validUntil.getDate() + 30);
@@ -311,7 +310,7 @@ export async function buildQuoteFromTranscript(
     .insert(schema.quotes)
     .values({
       number,
-      version: 1,
+      version,
       jobId: link.jobId,
       contactId,
       companyId,
@@ -346,6 +345,7 @@ export async function buildQuoteFromTranscript(
   }
 
   const totals = await recalc(quoteRow.id);
+  const ref = await quoteRefOf(quoteRow);
 
   await db.insert(schema.activityLog).values({
     contactId,
@@ -354,14 +354,14 @@ export async function buildQuoteFromTranscript(
     entityId: quoteRow.id,
     action: "created_from_voice",
     detail: anyFlagged
-      ? `Quote #${number} created from a voice recording. Some lines need review before it can be sent.`
-      : `Quote #${number} created from a voice recording.`,
+      ? `Quote ${ref} created from a voice recording. Some lines need review before it can be sent.`
+      : `Quote ${ref} created from a voice recording.`,
     actorName: actor.name,
     actorRole: actor.role,
   });
 
   return {
-    quote: { ...quoteRow, ...totals },
+    quote: { ...quoteRow, ...totals, ref },
     extraction,
     contactId,
     flaggedCount: pricedLines.filter((l) => l.flagged).length,

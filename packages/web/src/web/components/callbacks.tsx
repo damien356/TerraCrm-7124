@@ -18,6 +18,7 @@ import {
   useSetCallbackChargeable,
 } from "../queries/callbacks";
 import { useInstallers } from "../queries/installers";
+import { repairRef } from "../../api/lib/refs";
 
 /**
  * CALLBACKS on the job page. A callback is a normal job linked to the
@@ -39,7 +40,9 @@ const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", curr
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export const jobLabel = (j: { number: number; displayNumber?: string | null }) => `#${j.displayNumber || j.number}`;
+/** "#188000", "R188000-1" for a repair, "#3981-C1" for an old callback. */
+export const jobLabel = (j: { number: number; displayNumber?: string | null }) =>
+  j.displayNumber && /^R\d/.test(j.displayNumber) ? j.displayNumber : `#${j.displayNumber || j.number}`;
 
 /* ------------------------------ pay question ------------------------------ */
 
@@ -135,7 +138,7 @@ export function CreateCallbackModal({
     <Modal
       open={open}
       onClose={onClose}
-      title={`Create callback ${chain.data?.root ? `#${chain.data.root.number}-C${nextSeq}` : ""}`.trim()}
+      title={`Create callback ${chain.data?.root ? repairRef(chain.data.root.number, nextSeq) : ""}`.trim()}
       subtitle={`A return visit on ${rootLabel}. It copies the people and the site, and adds one callback visit. Products, notes and photos stay on the original and show read only.`}
       width="max-w-xl"
       footer={

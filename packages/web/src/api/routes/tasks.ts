@@ -10,6 +10,7 @@ import { daysFromQty } from "../lib/day-estimate";
 import { matchInstaller, parseBookingLine } from "../lib/booking-command";
 import { lockTaskLabour } from "./costing";
 import { installerForStaff, taskForStaff } from "../lib/staff-view";
+import { jobText, taskLetter, taskRef } from "../lib/refs";
 
 /**
  * TASKS ARE THE DISPATCH UNIT — not jobs. One job can be five separate
@@ -253,7 +254,9 @@ export const tasks = {
       const shape = (r: (typeof scheduled)[number] | (typeof unassigned)[number]) => ({
         ...taskForStaff(r.task, context.actor),
         skill: r.skill,
-        jobNumber: r.job.number,
+        jobNumber: jobText(r.job),
+        /** "188000-A": the job and this dispatch's letter (spec section 1). */
+        ref: taskRef(jobText(r.job), r.task.seq),
         jobTitle: r.job.title,
         furnitureOnSite: r.job.furnitureOnSite,
         siteAddress: r.site?.address ?? "",
@@ -325,6 +328,7 @@ export const tasks = {
 
     return {
       ...taskForStaff(row.task, context.actor),
+      ref: taskRef(jobText(row.job), row.task.seq),
       skill: row.skill,
       job: row.job,
       site: row.site,
@@ -673,21 +677,42 @@ export const tasks = {
           .where(eq(schema.jobTasks.id, parsed.taskId));
         if (found) taskRow = found;
         else problems.push(`There is no dispatch ${parsed.taskId}.`);
-      } else if (parsed.jobNumber) {
+      } else if (parsed.jobNumber || parsed.repairRef) {
+        // "188000" or a repair "R188000-1". A repair is found by the number
+        // people see on it, never by its hidden row number.
+        const jobWhere = parsed.repairRef
+          ? sql`lower(${schema.jobs.displayNumber}) = ${parsed.repairRef.toLowerCase()}`
+          : and(eq(schema.jobs.number, Number(parsed.jobNumber)), isNull(schema.jobs.parentJobId));
+        const said = parsed.repairRef ?? parsed.jobNumber!;
         const rows = await db
           .select({ task: schema.jobTasks, job: schema.jobs })
           .from(schema.jobTasks)
           .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
-          .where(and(eq(schema.jobs.number, Number(parsed.jobNumber)), inArray(schema.jobTasks.status, ["unassigned", "offered", "assigned"])))
+          .where(and(jobWhere, inArray(schema.jobTasks.status, ["unassigned", "offered", "assigned"])))
           .orderBy(asc(schema.jobTasks.seq));
-        if (rows.length === 1) taskRow = rows[0]!;
+        const ref = (r: (typeof rows)[number]) => taskRef(jobText(r.job), r.task.seq);
+        if (parsed.taskSeq != null) {
+          // "188000-B" names the task outright.
+          const hit = rows.find((r) => r.task.seq === parsed.taskSeq);
+          if (hit) taskRow = hit;
+          else {
+            const wanted = `${said.toUpperCase()}-${taskLetter(parsed.taskSeq)}`;
+            jobChoices = rows.map((r) => ({ taskId: r.task.id, label: `${ref(r)} ${r.task.title}` }));
+            problems.push(
+              rows.length
+                ? `No open dispatch ${wanted}. Open on that job: ${rows.map(ref).join(", ")}.`
+                : `No open dispatch ${wanted}.`,
+            );
+          }
+        } else if (rows.length === 1) taskRow = rows[0]!;
         else if (rows.length > 1) {
           // Several dispatches on the one job is normal: tile removal, then
-          // prep, then the lay. The line cannot tell them apart, so ask.
+          // prep, then the lay. Without a letter the line cannot tell them
+          // apart, so ask.
           taskRow = null;
-          jobChoices = rows.map((r) => ({ taskId: r.task.id, label: r.task.title }));
-          problems.push(`Job ${parsed.jobNumber} has ${rows.length} dispatches on it. Which one?`);
-        } else problems.push(`No open dispatch on job ${parsed.jobNumber}.`);
+          jobChoices = rows.map((r) => ({ taskId: r.task.id, label: `${ref(r)} ${r.task.title}` }));
+          problems.push(`Job ${said.toUpperCase()} has ${rows.length} dispatches on it. Which one? Type it as ${ref(rows[0]!)}.`);
+        } else problems.push(`No open dispatch on job ${said.toUpperCase()}.`);
       } else if (input.contextTaskId) {
         const [found] = await db
           .select({ task: schema.jobTasks, job: schema.jobs })
@@ -756,7 +781,8 @@ export const tasks = {
           ? {
               id: taskRow.task.id,
               title: taskRow.task.title,
-              jobNumber: taskRow.job.number,
+              jobNumber: jobText(taskRow.job),
+              ref: taskRef(jobText(taskRow.job), taskRow.task.seq),
               areaM2: taskRow.task.areaM2,
               crewSize: taskRow.task.crewSize,
             }

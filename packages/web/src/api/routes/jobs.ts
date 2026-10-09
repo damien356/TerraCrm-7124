@@ -140,7 +140,8 @@ export const jobs = {
       if (input.stage) where.push(eq(schema.jobStatuses.stage, input.stage));
       if (input.search) {
         const q = `%${input.search.toLowerCase()}%`;
-        const asNumber = Number(input.search.replace(/\D/g, ""));
+        // The first run of digits, so "Q188000-2", "188000-A" and "PO188000-1" all find job 188000.
+        const asNumber = Number(input.search.match(/\d+/)?.[0] ?? "");
         const cbRef = parseCallbackRef(input.search);
         where.push(
           or(
@@ -151,9 +152,10 @@ export const jobs = {
             // Old ServiceM8 numbers carry letters, e.g. 611577TF, so they are
             // matched as text rather than parsed.
             like(sql`lower(coalesce(${schema.jobs.externalRef}, ''))`, q),
-            // Callbacks: "3981" also lists 3981-C1, and "3981-C1" or "3981c1" finds it exactly.
+            // Repairs: "188000" also lists R188000-1, and "R188000-1" or "r188000 1" finds
+            // it exactly. Old callbacks the same way: "3981-C1" or "3981c1".
             like(sql`lower(coalesce(${schema.jobs.displayNumber}, ''))`, q),
-            cbRef ? eq(schema.jobs.displayNumber, `${cbRef.parent}-C${cbRef.seq}`) : sql`0`,
+            cbRef ? eq(schema.jobs.displayNumber, cbRef.displayNumber) : sql`0`,
             !cbRef && Number.isFinite(asNumber) && asNumber > 0 ? eq(schema.jobs.number, asNumber) : sql`0`,
           ),
         );

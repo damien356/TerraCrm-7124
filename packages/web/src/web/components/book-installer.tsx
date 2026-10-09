@@ -176,7 +176,7 @@ export function BookInstallerPanel({
       <div className="flex items-start justify-between gap-2 border-b border-border px-4 py-3">
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold">
-            Job #{t.job.displayNumber ?? t.job.number} · {t.title}
+            {t.ref} · {t.title}
           </p>
           <p className="mt-0.5 truncate text-xs text-muted-foreground">
             {t.site?.suburb || "no site"}

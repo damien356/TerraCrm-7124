@@ -945,7 +945,7 @@ function BookingConfirm({ memoId, memo, action: a }: { memoId: number; memo: Mem
           id: memoId,
           actionId: a.id,
           taskId: p.task!.id,
-          label: `${installer} booked on #${p.task!.jobNumber}, ${first}${p.dates.length > 1 ? ` to ${last}` : ""}`,
+          label: `${installer} booked on ${p.task!.ref}, ${first}${p.dates.length > 1 ? ` to ${last}` : ""}`,
         }),
       )
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
@@ -959,7 +959,7 @@ function BookingConfirm({ memoId, memo, action: a }: { memoId: number; memo: Mem
           <p>
             <span className="font-semibold">{p.installer?.name ?? "Who?"}</span>
             <span className="text-muted-foreground"> on </span>
-            <span className="font-medium">{p.task ? `#${p.task.jobNumber} ${p.task.title}` : "which job?"}</span>
+            <span className="font-medium">{p.task ? `${p.task.ref} ${p.task.title}` : "which job?"}</span>
             {p.dates.length ? (
               <span className="text-muted-foreground">
                 , {p.dayChecks[0]?.label}

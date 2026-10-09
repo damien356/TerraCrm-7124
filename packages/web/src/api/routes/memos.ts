@@ -27,6 +27,8 @@ import { buildQuoteFromTranscript } from "./voiceQuotes";
 import { createJob } from "./jobs";
 import { createContact } from "./contacts";
 import { sendConversationMessage } from "./conversations";
+import { jobNumberSql } from "../lib/job-ref";
+import { quoteRef } from "../lib/refs";
 
 /* ---------------------------------------------------------------------------
  * VOICE MEMOS
@@ -310,7 +312,7 @@ async function runOne(captureId: number, m: StoredMemo, a: StoredAction, actor: 
       a.ref = { table: "quotes", id: built.quote.id };
       a.state = "done";
       a.resultLabel =
-        `Quote #${built.quote.number} drafted, ${built.lineCount} line${built.lineCount === 1 ? "" : "s"}` +
+        `Quote ${built.quote.ref} drafted, ${built.lineCount} line${built.lineCount === 1 ? "" : "s"}` +
         (built.flaggedCount ? `, ${built.flaggedCount} to check` : "");
       a.resultHref = `/quotes/${built.quote.id}`;
       await db
@@ -687,11 +689,12 @@ export const memos = {
       const quoteIds = rows.map((r) => r.quoteId).filter((x): x is number => x != null);
       const quotes = quoteIds.length
         ? await db
-            .select({ id: schema.quotes.id, number: schema.quotes.number, status: schema.quotes.status })
+            .select({ id: schema.quotes.id, number: schema.quotes.number, version: schema.quotes.version, status: schema.quotes.status, jobRef: jobNumberSql })
             .from(schema.quotes)
+            .leftJoin(schema.jobs, eq(schema.jobs.id, schema.quotes.jobId))
             .where(inArray(schema.quotes.id, quoteIds))
         : [];
-      const quoteMap = new Map(quotes.map((q) => [q.id, q]));
+      const quoteMap = new Map(quotes.map(({ jobRef, ...q }) => [q.id, { ...q, ref: quoteRef(q.number, q.version, jobRef) }]));
       return rows.map((r) => ({
         ...view(r),
         kind: isMemo(r.extractedJson) ? ("memo" as const) : ("quote" as const),

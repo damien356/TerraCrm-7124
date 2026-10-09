@@ -1,4 +1,4 @@
-import { jobNumberSql } from "../lib/job-ref";
+import { jobNumberSql, taskRefSql } from "../lib/job-ref";
 import { syncJobForTask } from "../lib/job-stage";
 import { z } from "zod";
 import { and, asc, desc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
@@ -48,6 +48,7 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
       skillName: schema.skills.name,
       skillGroup: schema.skills.groupName,
       jobNumber: jobNumberSql,
+      ref: taskRefSql,
       jobTitle: schema.jobs.title,
       furnitureOnSite: schema.jobs.furnitureOnSite,
       jobAccessNotes: schema.jobs.accessNotes,
@@ -228,6 +229,7 @@ export const field = {
         completedAt: schema.jobTasks.completedAt,
         payAmount: schema.jobTasks.payAmount,
         jobNumber: jobNumberSql,
+        ref: taskRefSql,
         siteSuburb: schema.sites.suburb,
         labourBreakdown: schema.jobTasks.labourBreakdown,
       })
@@ -384,6 +386,7 @@ export const field = {
         skillName: schema.skills.name,
         skillGroup: schema.skills.groupName,
         jobNumber: jobNumberSql,
+        ref: taskRefSql,
         furnitureOnSite: schema.jobs.furnitureOnSite,
         // Suburb and property type only. The street address stays out of the
         // payload, not just out of the UI.

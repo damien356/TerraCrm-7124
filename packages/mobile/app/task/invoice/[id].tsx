@@ -200,7 +200,7 @@ export default function InvoiceScreen() {
           {locked ? "Your invoice" : stage === "confirm" ? "Confirm your invoice" : "Invoice for this job"}
         </Text>
         <Text style={{ fontFamily: Fonts.sans, fontSize: 13.5, color: c.mutedForeground, marginTop: 4 }}>
-          Job #{p.job.number} · {p.job.taskTitle}
+          {p.job.ref || `Job #${p.job.number}`} · {p.job.taskTitle}
         </Text>
         {p.job.siteAddress ? (
           <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: c.mutedForeground }}>{p.job.siteAddress}</Text>

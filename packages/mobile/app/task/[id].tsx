@@ -216,7 +216,7 @@ export default function TaskScreen() {
       >
         <Pressable onPress={() => router.back()} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
           <Ionicons name="chevron-back" size={22} color={c.foreground} />
-          <Text style={{ fontFamily: Fonts.medium, fontSize: 15, color: c.foreground }}>Job #{t.jobNumber}</Text>
+          <Text style={{ fontFamily: Fonts.medium, fontSize: 15, color: c.foreground }}>{t.ref || `Job #${t.jobNumber}`}</Text>
         </Pressable>
         <View
           style={{

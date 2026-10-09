@@ -14,6 +14,8 @@ import { longDate, moneyExact } from "../lib/money";
 import {
   useBootstrap,
   useCreateProduct,
+  useJobNumbering,
+  useSetJobNumberStart,
   useCreateSkill,
   useCreateStatus,
   useProducts,
@@ -1049,6 +1051,8 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
         </div>
       </Card>
 
+      <JobNumbersCard />
+
       <Card>
         <CardHeader title="Offers and what crew see" subtitle="Fixed rules, not settings." />
         <div className="space-y-2 px-4 py-4 text-sm text-muted-foreground">
@@ -1255,6 +1259,95 @@ function BackupsTab() {
  * zero is a forecast that lies about the low point. When Xero is connected it
  * takes over the tile on the Cashflow page and this stays as the fallback.
  */
+/**
+ * Spec section 1. One number runs through the job, its quote, its invoices
+ * and its repairs. Admin picks where new numbers start. It has to sit above
+ * every number already used, so two things can never share a number.
+ */
+function JobNumbersCard() {
+  const numbering = useJobNumbering();
+  const save = useSetJobNumberStart();
+  const [start, setStart] = React.useState("");
+  const [saved, setSaved] = React.useState(false);
+
+  React.useEffect(() => {
+    if (numbering.data) setStart(String(numbering.data.start));
+  }, [numbering.data]);
+
+  const n = numbering.data;
+  const parsed = Number(start.replace(/[,\s]/g, ""));
+  const changed = n != null && parsed !== n.start;
+  const tooLow = n != null && changed && Number.isInteger(parsed) && parsed < n.lowestStart;
+  const valid = Number.isInteger(parsed) && parsed > 0 && !tooLow;
+
+  function commit() {
+    if (!valid || !changed) return;
+    save.mutate(
+      { start: parsed },
+      {
+        onSuccess: () => {
+          setSaved(true);
+          window.setTimeout(() => setSaved(false), 2000);
+        },
+      },
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="Job numbers"
+        subtitle="One number per job. Its quote, invoices and repairs carry the same number."
+      />
+      <div className="space-y-4 px-4 py-4">
+        {numbering.isLoading || !n ? (
+          <Loading />
+        ) : (
+          <>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Field label="Start new jobs at" hint={`Has to be above every number already used, so ${n.lowestStart} or more.`}>
+                <Input
+                  value={start}
+                  inputMode="numeric"
+                  onChange={(e) => setStart(e.target.value)}
+                  className="tabular w-36"
+                />
+              </Field>
+              <div>
+                <p className="label-xs mb-1">Next job gets</p>
+                <p className="tabular text-lg font-semibold">{n.next}</p>
+              </div>
+              <div>
+                <p className="label-xs mb-1">Reads as</p>
+                <p className="tabular text-sm text-muted-foreground">
+                  Q{n.next}, {n.next}-A, PO{n.next}-1, R{n.next}-1
+                </p>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Old jobs keep their numbers. A quote made before there is a job takes the next number, and the job made
+              from it keeps it.
+            </p>
+            <div className="flex items-center gap-3">
+              <Button onClick={commit} disabled={!valid || !changed || save.isPending}>
+                {save.isPending ? <Spinner /> : null}
+                Save start number
+              </Button>
+              {tooLow ? (
+                <span className="text-xs text-destructive">
+                  Too low. Numbers up to {n.lowestStart - 1} are already used.
+                </span>
+              ) : null}
+              {saved ? <span className="text-xs text-[var(--success)]">Saved</span> : null}
+              {save.isError ? <span className="text-xs text-destructive">{save.error.message}</span> : null}
+            </div>
+          </>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 function CashPositionCard() {
   const current = useOpeningBalance();
   const save = useSetOpeningBalance();

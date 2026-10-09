@@ -28,6 +28,7 @@ import {
   useUpdateMaterial,
 } from "../queries/jobs";
 import { SupervisorPicker } from "../components/supervisor-picker";
+import { jobText, quoteRef, taskRef } from "../../api/lib/refs";
 import { useCreateTask, useRemoveTask } from "../queries/tasks";
 import { useBootstrap } from "../queries/settings";
 import { JobPeopleCard } from "../components/job-people";
@@ -459,6 +460,7 @@ export default function JobDetailPage() {
                       <span className="mt-1 h-8 w-1 rounded-full" style={{ backgroundColor: tint.edge }} />
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
+                          <span className="tabular text-xs font-semibold text-muted-foreground">{taskRef(jobText(j), t.seq)}</span>
                           <p className="text-sm font-medium">{t.title}</p>
                           <Badge colour={TASK_STATUS_COLOUR[t.status]}>{TASK_STATUS_LABEL[t.status] ?? t.status}</Badge>
                           {t.crewSize > 1 ? (
@@ -623,8 +625,7 @@ export default function JobDetailPage() {
                 {j.quotes.map((q) => (
                   <li key={q.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
                     <Link to={`/quotes/${q.id}`} className="font-medium text-primary hover:underline">
-                      #{q.number}
-                      {q.version > 1 ? `v${q.version}` : ""}
+                      {quoteRef(q.number, q.version, jobText(j))}
                     </Link>
                     <span className="flex items-center gap-2">
                       <Badge>{q.status}</Badge>

@@ -54,7 +54,7 @@ export async function leadToQuotedOnSend(args: {
     entityType: "job",
     entityId: job.id,
     action: "status_changed",
-    detail: `Status → ${quoted.name} (quote #${args.quoteNumber} sent)`,
+    detail: `Status → ${quoted.name} (quote ${args.quoteNumber} sent)`,
     actorName: args.actor.name,
     actorRole: args.actor.role,
   });

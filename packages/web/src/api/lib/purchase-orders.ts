@@ -1,5 +1,5 @@
-import { jobNumberSql } from "./job-ref";
-import { and, asc, eq, inArray, ne } from "drizzle-orm";
+import { poRef } from "./refs";
+import { and, asc, eq, inArray, like, ne } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import {
@@ -260,17 +260,28 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
 
 /* ------------------------------- numbering -------------------------------- */
 
-const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-
-/** Next free letter on the job: 4113-A, then 4113-B. A letter is never reused, a removed draft is kept as cancelled. */
+/**
+ * Next PO on the job: PO188000-1, then PO188000-2 (spec section 1). A number
+ * is never reused, a removed draft is kept as cancelled. A PO on a repair
+ * uses the main job's number and count. Old POs keep their 4113-A numbers.
+ */
 export async function nextPoNumber(jobId: number) {
-  const [job] = await db.select({ number: jobNumberSql }).from(schema.jobs).where(eq(schema.jobs.id, jobId));
+  const [job] = await db
+    .select({ number: schema.jobs.number, parentJobId: schema.jobs.parentJobId })
+    .from(schema.jobs)
+    .where(eq(schema.jobs.id, jobId));
   if (!job) throw new Error("Job not found");
-  const taken = await db.select({ number: schema.purchaseOrders.number }).from(schema.purchaseOrders).where(eq(schema.purchaseOrders.jobId, jobId));
-  const used = taken.map((t) => LETTERS.indexOf(t.number.split("-").pop() ?? "")).filter((i) => i >= 0);
-  const next = used.length ? Math.max(...used) + 1 : 0;
-  if (next >= LETTERS.length) throw new Error("This job already has 26 POs.");
-  return `${job.number}-${LETTERS[next]}`;
+  const [main] = job.parentJobId
+    ? await db.select({ number: schema.jobs.number }).from(schema.jobs).where(eq(schema.jobs.id, job.parentJobId))
+    : [job];
+  const base = (main ?? job).number;
+  const prefix = poRef(base, 0).slice(0, -1); // "PO188000-"
+  const taken = await db
+    .select({ number: schema.purchaseOrders.number })
+    .from(schema.purchaseOrders)
+    .where(like(schema.purchaseOrders.number, `${prefix}%`));
+  const used = taken.map((t) => Number(t.number.slice(prefix.length))).filter((n) => Number.isInteger(n) && n > 0);
+  return poRef(base, used.length ? Math.max(...used) + 1 : 1);
 }
 
 /* ----------------------------- write and commit ---------------------------- */

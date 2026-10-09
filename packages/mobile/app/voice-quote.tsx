@@ -45,7 +45,7 @@ const MAX_SECONDS = 600;
 type Stage = "idle" | "recording" | "recorded" | "uploading" | "processing" | "done";
 
 type Result = {
-  quote: { id: number; number: number; status: string };
+  quote: { id: number; number: number; status: string; ref?: string };
   transcript: string;
   flaggedCount: number;
   lineCount: number;
@@ -290,7 +290,7 @@ export default function VoiceQuoteScreen() {
               />
             </View>
             <Text style={{ fontFamily: Fonts.bold, fontSize: 24, color: c.foreground, marginTop: 12 }}>
-              Quote #{result.quote.number} drafted
+              Quote {result.quote.ref ?? `#${result.quote.number}`} drafted
             </Text>
             <Text
               style={{

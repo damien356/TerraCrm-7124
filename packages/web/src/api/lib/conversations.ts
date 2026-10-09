@@ -14,11 +14,14 @@ import { conversationIdFromAddress } from "./email";
  * ------------------------------------------------------------------------- */
 
 /** The handle that goes in a subject line. Humans read it, code never trusts it. */
-export const jobRef = (number: number) => `Terra #${number}`;
-export const quoteRef = (number: number) => `Terra Q-${number}`;
+export const jobRef = (job: { number: number; displayNumber?: string | null }) => `Terra #${job.displayNumber || job.number}`;
+/** "Terra Q188000". Older threads carry "Terra Q-1042", and both read back the same. */
+export const quoteRef = (number: number) => `Terra Q${number}`;
 
-/** Pull a job or quote number back out of a subject line, if it is still intact. */
-export function refInSubject(subject: string): { job?: number; quote?: number } {
+/** Pull a job, repair or quote number back out of a subject line, if it is still intact. */
+export function refInSubject(subject: string): { job?: number; repair?: string; quote?: number } {
+  const repair = subject.match(/terra\s*#\s*r\s*(\d+)\s*-\s*(\d+)/i);
+  if (repair?.[1] && repair[2]) return { repair: `R${repair[1]}-${repair[2]}` };
   const job = subject.match(/terra\s*#\s*(\d+)/i);
   if (job?.[1]) return { job: Number(job[1]) };
   const quote = subject.match(/terra\s*q-?\s*(\d+)/i);
@@ -78,7 +81,7 @@ export async function ensureForJob(jobId: number) {
         .update(schema.conversations)
         .set({
           jobId,
-          ref: jobRef(job.number),
+          ref: jobRef(job),
           state: "open",
           contactId: adoptable.contactId ?? job.contactId ?? null,
           companyId: adoptable.companyId ?? job.companyId ?? null,
@@ -99,11 +102,11 @@ export async function ensureForJob(jobId: number) {
   const [created] = await db
     .insert(schema.conversations)
     .values({
-      ref: jobRef(job.number),
+      ref: jobRef(job),
       subject: job.title || `Job ${job.number}`,
       jobId,
       quoteId: firstQuote?.id ?? null,
-      originQuoteNumber: firstQuote ? `Q-${firstQuote.number}` : null,
+      originQuoteNumber: firstQuote ? `Q${firstQuote.number}` : null,
       contactId: job.contactId ?? null,
       companyId: job.companyId ?? null,
       state: "open",
@@ -130,9 +133,9 @@ export async function ensureForQuote(quoteId: number) {
     .insert(schema.conversations)
     .values({
       ref: quoteRef(quote.number),
-      subject: `Quote Q-${quote.number}`,
+      subject: `Quote Q${quote.number}`,
       quoteId,
-      originQuoteNumber: `Q-${quote.number}`,
+      originQuoteNumber: `Q${quote.number}`,
       contactId: quote.contactId ?? null,
       companyId: quote.companyId ?? null,
       state: "open",
@@ -334,6 +337,13 @@ export async function matchInboundEmail(input: {
 
   /* 2. The handle in the subject, when it survived the round trip. */
   const ref = refInSubject(input.subject);
+  if (ref.repair) {
+    const [job] = await db.select({ id: schema.jobs.id }).from(schema.jobs).where(eq(schema.jobs.displayNumber, ref.repair)).limit(1);
+    if (job) {
+      const conv = await ensureForJob(job.id);
+      return { conversationId: conv.id, how: "subject" as const };
+    }
+  }
   if (ref.job) {
     const [job] = await db.select({ id: schema.jobs.id }).from(schema.jobs).where(eq(schema.jobs.number, ref.job)).limit(1);
     if (job) {

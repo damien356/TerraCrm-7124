@@ -16,6 +16,7 @@ import { renderQuotePdf } from "../lib/quotePdf";
 import { depositSplit } from "../lib/deposits";
 import { todayISO } from "../lib/pricing";
 import { auDate } from "../lib/invoice-match";
+import { quoteRefOf } from "../lib/quote-number";
 
 /**
  * Client bundles on a quote: the mode, which bundle each line sits in, and
@@ -116,9 +117,11 @@ export async function clientPdfFor(quoteId: number) {
   const isoDay = (d: Date) => todayISO(d);
   const { deposit, balance } = depositSplit(quote.total, quote.depositPercent);
 
+  const ref = await quoteRefOf(quote);
   const pdf = await renderQuotePdf({
     number: quote.number,
     version: quote.version,
+    ref,
     date: auDate(isoDay(quote.sentAt ?? new Date())),
     validUntil: quote.validUntil ? auDate(isoDay(quote.validUntil)) : null,
     to: {
@@ -141,7 +144,7 @@ export async function clientPdfFor(quoteId: number) {
   const stale = bundles.filter((b) => b.stale).map((b) => b.title);
   return {
     pdf,
-    filename: `Terra Flooring Quote ${quote.number}${quote.version > 1 ? ` v${quote.version}` : ""}.pdf`,
+    filename: `Terra Flooring Quote ${ref}.pdf`,
     missing,
     stale,
   };

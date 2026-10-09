@@ -11,6 +11,7 @@ import { liveSellFor } from "../lib/live-sell";
 import { sellExGstWithMarkup, markupOf } from "../lib/pricing";
 import { discountLimit, discountPercentOf } from "../routes/quotes";
 import { bundlesFor } from "../routes/quoteBundles";
+import { quoteRef } from "../lib/refs";
 
 /**
  * The quote agent. It reads the quote, searches the price book and the
@@ -241,7 +242,7 @@ function quoteBrief(state: QuoteState, actor: Pick<Actor, "role">) {
       }${b.wording.trim() ? `\n  Wording: """${b.wording.trim().slice(0, 1200)}"""` : ""}`,
   );
   return [
-    `Quote #${q.number} v${q.version}, status ${q.status}${LOCKED.includes(q.status) ? " (LOCKED, no changes possible)" : ""}.`,
+    `Quote ${quoteRef(q.number, q.version)}, status ${q.status}${LOCKED.includes(q.status) ? " (LOCKED, no changes possible)" : ""}.`,
     `Customer: ${state.customer ?? "none attached"}${q.companyId ? `, company quote, supervisor ${q.supervisorContactId ? "set" : "none (optional)"}` : ""}.`,
     `Subtotal ${money(q.subtotal)} ex GST, total ${money(q.total)} inc GST. Discount off the price book ${state.discountPct}%.`,
     `Client view: ${q.bundleMode}. Sections:`,

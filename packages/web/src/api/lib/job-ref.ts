@@ -12,3 +12,12 @@ export const jobNumberSql = sql<string>`coalesce(${schema.jobs.displayNumber}, c
 export function jobRef(j: { number: number; displayNumber?: string | null }) {
   return j.displayNumber || String(j.number);
 }
+
+/**
+ * "188000-A": the job as people read it, then the dispatch's letter from its
+ * seq (spec section 1). Same letters as taskLetter in refs.ts, up to ZZ.
+ */
+export const taskRefSql = sql<string>`${jobNumberSql} || '-' || case
+  when ${schema.jobTasks.seq} <= 26 then char(64 + max(${schema.jobTasks.seq}, 1))
+  else char(64 + (${schema.jobTasks.seq} - 1) / 26) || char(65 + (${schema.jobTasks.seq} - 1) % 26)
+end`;

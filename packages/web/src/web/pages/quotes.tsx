@@ -259,9 +259,8 @@ export default function QuotesPage() {
                   <tr key={q.id} className="border-b border-border last:border-0 hover:bg-secondary/50">
                     <td className="px-4 py-2.5">
                       <Link to={`/quotes/${q.id}`} className="font-medium text-primary hover:underline">
-                        #{q.number}
+                        {q.ref}
                       </Link>
-                      {q.version > 1 ? <span className="ml-1 text-xs text-muted-foreground">v{q.version}</span> : null}
                     </td>
                     <td className="px-4 py-2.5">
                       {q.contact ? `${q.contact.firstName} ${q.contact.lastName}` : "—"}

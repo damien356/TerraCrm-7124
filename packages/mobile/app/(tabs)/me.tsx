@@ -350,7 +350,7 @@ export default function MeScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={{ fontFamily: Fonts.medium, fontSize: 14, color: c.foreground }}>{j.title}</Text>
                     <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground }}>
-                      #{j.jobNumber} · {j.siteSuburb ?? ""} · {fmtDayLabel(j.scheduledDate)}
+                      {j.ref || `#${j.jobNumber}`} · {j.siteSuburb ?? ""} · {fmtDayLabel(j.scheduledDate)}
                     </Text>
                   </View>
                   <Text style={{ fontFamily: Fonts.bold, fontSize: 14.5, color: c.foreground }}>

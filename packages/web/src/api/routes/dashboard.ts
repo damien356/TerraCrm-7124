@@ -1,4 +1,4 @@
-import { jobNumberSql } from "../lib/job-ref";
+import { jobNumberSql, taskRefSql } from "../lib/job-ref";
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -27,6 +27,7 @@ export const dashboard = {
           installerColour: schema.installers.colour,
           skillName: schema.skills.name,
           jobNumber: jobNumberSql,
+          ref: taskRefSql,
           siteAddress: schema.sites.address,
           siteSuburb: schema.sites.suburb,
         })
@@ -47,6 +48,7 @@ export const dashboard = {
           crewSize: schema.jobTasks.crewSize,
           skillName: schema.skills.name,
           jobNumber: jobNumberSql,
+          ref: taskRefSql,
           siteSuburb: schema.sites.suburb,
           furnitureOnSite: schema.jobs.furnitureOnSite,
         })
@@ -76,6 +78,7 @@ export const dashboard = {
           installerName: schema.installers.name,
           taskTitle: schema.jobTasks.title,
           jobNumber: jobNumberSql,
+          ref: taskRefSql,
         })
         .from(schema.taskOffers)
         .innerJoin(schema.installers, eq(schema.installers.id, schema.taskOffers.installerId))
@@ -94,6 +97,7 @@ export const dashboard = {
           status: schema.jobTasks.status,
           installerName: schema.installers.name,
           jobNumber: jobNumberSql,
+          ref: taskRefSql,
           siteSuburb: schema.sites.suburb,
         })
         .from(schema.jobTasks)

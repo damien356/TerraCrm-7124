@@ -5,6 +5,7 @@ import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
 import { rateBook } from "./labour";
 import { crewOutputPerDay } from "../lib/day-estimate";
+import { jobText, quoteRef, taskRef } from "../lib/refs";
 
 /**
  * JOB COSTING.
@@ -403,6 +404,7 @@ export const costing = {
         return {
           taskId: t.task.id,
           seq: t.task.seq,
+          ref: taskRef(jobText(job), t.task.seq),
           title: t.task.title,
           status: t.task.status,
           skill: t.skill ? { id: t.skill.id, name: t.skill.name } : null,
@@ -479,7 +481,9 @@ export const costing = {
         jobId: job.id,
         number: job.number,
         on,
-        quote: quote ? { id: quote.id, number: quote.number, version: quote.version, status: quote.status } : null,
+        quote: quote
+          ? { id: quote.id, number: quote.number, version: quote.version, status: quote.status, ref: quoteRef(quote.number, quote.version, jobText(job)) }
+          : null,
         revenue,
         materials,
         materialsUnknown,

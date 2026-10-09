@@ -330,7 +330,7 @@ export default function OfficeScreen() {
                     key={t.id}
                     icon={t.status === "complete" ? "checkmark-circle" : "hammer-outline"}
                     title={t.title}
-                    subtitle={`${t.installerName ?? "Nobody assigned"}${t.siteSuburb ? `, ${t.siteSuburb}` : ""}`}
+                    subtitle={`${t.ref ? `${t.ref}, ` : ""}${t.installerName ?? "Nobody assigned"}${t.siteSuburb ? `, ${t.siteSuburb}` : ""}`}
                     right={t.startTime ? fmtTime(t.startTime) : statusLabel(t.status)}
                     tone={!t.installerName ? "bad" : undefined}
                   />
@@ -347,7 +347,7 @@ export default function OfficeScreen() {
                     key={t.id}
                     icon="alert-circle-outline"
                     title={t.title}
-                    subtitle={`${t.skillName ?? "No skill set"}${t.siteSuburb ? `, ${t.siteSuburb}` : ""}`}
+                    subtitle={`${t.ref ? `${t.ref}, ` : ""}${t.skillName ?? "No skill set"}${t.siteSuburb ? `, ${t.siteSuburb}` : ""}`}
                     right={t.scheduledDate ?? "No date"}
                     tone="warn"
                   />
@@ -364,7 +364,7 @@ export default function OfficeScreen() {
                     key={o.id}
                     icon="paper-plane-outline"
                     title={o.taskTitle}
-                    subtitle={`${o.installerName}, ${o.mode === "broadcast" ? "broadcast" : "direct"}`}
+                    subtitle={`${o.ref ? `${o.ref}, ` : ""}${o.installerName}, ${o.mode === "broadcast" ? "broadcast" : "direct"}`}
                     right={o.payAmount ? fmtMoney(o.payAmount) : undefined}
                   />
                 ))
@@ -380,7 +380,7 @@ export default function OfficeScreen() {
                     key={t.id}
                     icon="time-outline"
                     title={t.title}
-                    subtitle={`${t.installerName ?? "Nobody assigned"}, ${statusLabel(t.status)}`}
+                    subtitle={`${t.ref ? `${t.ref}, ` : ""}${t.installerName ?? "Nobody assigned"}, ${statusLabel(t.status)}`}
                     right={t.scheduledDate ?? undefined}
                     tone="bad"
                   />

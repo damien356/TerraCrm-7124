@@ -126,7 +126,7 @@ export function CommandBox({
             <span className="text-sm">
               {p.task ? (
                 <button type="button" onClick={() => onOpenTask(p.task!.id)} className="hover:underline">
-                  #{p.task.jobNumber} {p.task.title}
+                  {p.task.ref} {p.task.title}
                 </button>
               ) : (
                 "Which job?"

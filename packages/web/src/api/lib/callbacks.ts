@@ -1,11 +1,12 @@
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
-import { nextJobNumber } from "./job-number";
+import { repairJobNumber } from "./job-number";
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import type { Actor } from "../middleware/auth";
 import { signMany } from "./s3";
+import { parseRepairRef, quoteRef, repairRef } from "./refs";
 
 /**
  * CALLBACKS. A client rings back after a job is done: a fix, a repair, a
@@ -48,10 +49,15 @@ export const CALLBACK_COST_LABELS: Record<(typeof CALLBACK_COST_KINDS)[number], 
 
 export { jobRef } from "./job-ref";
 
-/** "3981-C2", "3981c2", "#3981 C2" all read as parent 3981, callback 2. */
-export function parseCallbackRef(text: string): { parent: number; seq: number } | null {
-  const m = text.trim().match(/^#?\s*(\d+)\s*-?\s*c\s*(\d+)$/i);
-  return m ? { parent: Number(m[1]), seq: Number(m[2]) } : null;
+/**
+ * "R188000-2", "r188000 2", and the old "3981-C2", "3981c2", "#3981 C2" all
+ * read as parent and repair number. `displayNumber` is how that repair is
+ * stored: R form from section 1 on, C form on the old ones.
+ */
+export function parseCallbackRef(text: string): { parent: number; seq: number; displayNumber: string } | null {
+  const r = parseRepairRef(text);
+  if (!r) return null;
+  return { parent: r.parent, seq: r.seq, displayNumber: r.old ? `${r.parent}-C${r.seq}` : repairRef(r.parent, r.seq) };
 }
 
 /**
@@ -77,7 +83,7 @@ export async function assertBillable(jobId: number | null | undefined) {
     .where(eq(schema.jobs.id, jobId));
   if (job?.parentJobId && job.chargeable === false) {
     throw new ORPCError("BAD_REQUEST", {
-      message: `Callback #${job.displayNumber} is marked not chargeable, so nothing is billed. Change it to chargeable first.`,
+      message: `Callback ${job.displayNumber} is marked not chargeable, so nothing is billed. Change it to chargeable first.`,
     });
   }
 }
@@ -116,8 +122,10 @@ export async function createCallback(input: z.input<typeof createCallbackInput>,
     .from(schema.jobs)
     .where(eq(schema.jobs.parentJobId, original.id));
   const seq = Number(seqRow?.max ?? 0) + 1;
-  const number = await nextJobNumber();
-  const displayNumber = `${original.number}-C${seq}`;
+  // R188000-1 (spec section 1). Old callbacks keep their 3981-C1. The row
+  // number is hidden, so the repair does not use up a job number.
+  const number = repairJobNumber(original.number, seq);
+  const displayNumber = repairRef(original.number, seq);
 
   const [firstStatus] = await db
     .select({ id: schema.jobStatuses.id })
@@ -216,7 +224,7 @@ export async function createCallback(input: z.input<typeof createCallbackInput>,
       entityType: "job",
       entityId: row.id,
       action: "created",
-      detail: `Callback #${displayNumber} created from job #${original.number}. ${causeLabel}, ${v.chargeable ? "chargeable" : "not chargeable"}${isInstallerError ? `, installer ${payInstaller ? "paid" : "not paid"} for the visit` : ""}.`,
+      detail: `Callback ${displayNumber} created from job ${original.number}. ${causeLabel}, ${v.chargeable ? "chargeable" : "not chargeable"}${isInstallerError ? `, installer ${payInstaller ? "paid" : "not paid"} for the visit` : ""}.`,
       actorName: actor.name,
       actorRole: actor.role,
     },
@@ -225,7 +233,7 @@ export async function createCallback(input: z.input<typeof createCallbackInput>,
       entityType: "job",
       entityId: original.id,
       action: "callback_created",
-      detail: `Callback #${displayNumber} opened. ${causeLabel}.${problem ? ` ${problem.slice(0, 200)}` : ""}`,
+      detail: `Callback ${displayNumber} opened. ${causeLabel}.${problem ? ` ${problem.slice(0, 200)}` : ""}`,
       actorName: actor.name,
       actorRole: actor.role,
     },
@@ -362,13 +370,13 @@ export async function setChargeable(jobId: number, chargeable: boolean, actor: P
   if (job.callbackChargeable === chargeable) return job;
   if (!chargeable) {
     const live = await db
-      .select({ number: schema.quotes.number, status: schema.quotes.status })
+      .select({ number: schema.quotes.number, version: schema.quotes.version, status: schema.quotes.status })
       .from(schema.quotes)
       .where(and(eq(schema.quotes.jobId, jobId), inArray(schema.quotes.status, ["sent", "accepted"])));
     if (live.length) {
       const q = live[0]!;
       throw new ORPCError("BAD_REQUEST", {
-        message: `Quote #${q.number} on this callback is ${q.status}. Decline it before marking the callback not chargeable.`,
+        message: `Quote ${quoteRef(q.number, q.version, job.displayNumber)} on this repair is ${q.status}. Decline it before marking the callback not chargeable.`,
       });
     }
   }

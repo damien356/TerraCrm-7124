@@ -52,3 +52,17 @@ export function useUpdateProduct() {
     }),
   );
 }
+
+/** Job numbering: the start Admin set, the next number, the lowest start allowed. */
+export function useJobNumbering() {
+  return useQuery(orpc.settings.jobNumbering.queryOptions({ retry: false }));
+}
+
+export function useSetJobNumberStart() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.settings.setJobNumberStart.mutationOptions({
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: orpc.settings.jobNumbering.key() }),
+    }),
+  );
+}

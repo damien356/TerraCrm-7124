@@ -20,6 +20,8 @@ import { TERRA_LOGO_PRINT_PNG_BASE64 } from "./terraLogoPrint";
 export type QuotePdfInput = {
   number: number;
   version: number;
+  /** As people read it, e.g. Q188000 or Q188000-2 (lib/refs.ts). */
+  ref: string;
   /** Already formatted, e.g. 6/10/2026. */
   date: string;
   validUntil: string | null;
@@ -123,7 +125,7 @@ function newPage(ctx: Ctx, continued: boolean) {
   ctx.page = ctx.doc.addPage([W, H]);
   ctx.y = H - M;
   if (continued) {
-    text(ctx.page, `Quote ${ctx.input.number}${ctx.input.version > 1 ? ` v${ctx.input.version}` : ""} (continued)`, M, ctx.y - 10, ctx.bold, 10);
+    text(ctx.page, `Quote ${ctx.input.ref} (continued)`, M, ctx.y - 10, ctx.bold, 10);
     textRight(ctx.page, TERRA_PRINT.legal, W - M, ctx.y - 10, ctx.reg, 8.5, MUTED);
     ctx.y -= 28;
   }
@@ -158,7 +160,7 @@ function header(ctx: Ctx) {
   // Title, number and the big total on the right.
   const r = W - M;
   textRight(page, "Quote", r, H - M - 18, bold, 24);
-  textRight(page, `No. ${input.number}${input.version > 1 ? ` v${input.version}` : ""}`, r, H - M - 34, reg, 10, MUTED);
+  textRight(page, `No. ${input.ref}`, r, H - M - 34, reg, 10, MUTED);
   textRight(page, "TOTAL (INC GST)", r, H - M - 54, bold, 7.5, LABEL);
   textRight(page, money(input.total), r, H - M - 76, bold, 20);
 
@@ -275,7 +277,7 @@ function payment(ctx: Ctx) {
     ["Account Name", TERRA_PRINT.bank.name],
     ["BSB", TERRA_PRINT.bank.bsb],
     ["Account", TERRA_PRINT.bank.account],
-    ["Reference", `Quote ${input.number}`],
+    ["Reference", input.ref],
   ];
   const cw = (CW - 20) / cols.length;
   cols.forEach(([k, v], i) => {
@@ -367,13 +369,13 @@ function footers(doc: PDFDocument, reg: PDFFont, input: QuotePdfInput) {
   const pages = doc.getPages();
   pages.forEach((p, i) => {
     text(p, `Terra Flooring  |  ABN ${TERRA_PRINT.abn}  |  ${TERRA_PRINT.qbcc}`, M, 22, reg, 7, LABEL);
-    textRight(p, `Quote ${input.number}  |  Page ${i + 1} of ${pages.length}`, W - M, 22, reg, 7, LABEL);
+    textRight(p, `Quote ${input.ref}  |  Page ${i + 1} of ${pages.length}`, W - M, 22, reg, 7, LABEL);
   });
 }
 
 export async function renderQuotePdf(input: QuotePdfInput): Promise<Buffer> {
   const doc = await PDFDocument.create();
-  doc.setTitle(`Terra Flooring quote ${input.number}`);
+  doc.setTitle(`Terra Flooring quote ${input.ref}`);
   doc.setAuthor("Terra Flooring");
   const reg = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);

@@ -419,7 +419,7 @@ Checked: lint clean, web build, API tsc 0, app tsc 172 (baseline), mobile tsc 0.
 
 - **0.1 Deposit cap:** built, then taken out the same day on Damien's word. Not shipped. See section 5.
 - **0.2 Accept race:** `routes/offers.ts` `lockTask`. The offer is claimed only while pending or provisional, then the task only while unassigned or offered and not held by someone else. Both are one conditional update each. The loser's offer closes as filled and he sees "already accepted". Holds use the same rule. Withdraw also closes holds.
-- **0.3 Job numbers:** `lib/job-number.ts` `nextJobNumber()`. One upsert on the `settings` row `job_number_last`. The next number is the higher of the counter and the top job number, plus 1. Used by new job, quote convert, callbacks and voice memo jobs. The ServiceM8 import still writes its own numbers, and the counter copes with that. Section 1 (start at 188000) changes the floor.
+- **0.3 Job numbers:** `lib/job-number.ts` `nextJobNumber()`. One upsert on the `settings` row `job_number_last`. The next number is the higher of the counter and the top job number, plus 1. Used by new job, quote convert, callbacks and voice memo jobs. The ServiceM8 import still writes its own numbers, and the counter copes with that. Section 1 (start at 188000) changes the floor, see 18.5.
 - **0.4 Hold timer:** `lib/offer-timer.ts`. Every 60 seconds on the live server: lapsed offers expire (task goes back to unassigned, office gets "Nobody took it") and lapsed holds lock (office gets "Hold confirmed"). `OFFER_TIMER=on|off` overrides.
 - **0.5 Sign-in origins:** `api/auth.ts`. Live trusts only `WEBSITE_URL`, ops.terraflooring.com.au, terraop-l8jfdfu.runable.site and the app scheme `runable-terraop-l8jfdfu://`. Sandbox and preview servers still trust the asking origin, because their hostnames change. Tested: a foreign site gets 403 on live, the site and the phone app get 200.
 - **0.6 and 0.7 Settings:** the Dispatch rules card and the false "What installers can see" card are gone. One fixed card, "Offers and what crew see", says how it really works. Your details keeps only Business phone. GST is fixed at 10%. The old settings rows stay in the database but nothing reads them, and they are hidden from "Anything else". Voice `call_contact` no longer reads `installer_can_see_customer_phone`.
@@ -429,5 +429,22 @@ Checked: lint clean, web build, API tsc 0, app tsc 172 (baseline), mobile tsc 0.
 - **0.11 Push test:** waits for the next phone build.
 - **0.12 Logins:** done on live 9 Oct after a backup (`backups/terra-live-pre-logins-0-12-2026-10-09.db`) and a dry run. Profile 15 (Damo) role is `field`. Profile 22 (David Walker) is switched off. Card 9 "Dave Kohn" stays active (it has tasks booked 9 and 10 Oct).
 - **0.13 Publish:** done 9 Oct, website only. Live `diag` is version 6 with every timer true. Sign-in from a foreign origin gets 403 on live.
-- Live drafts 1005, 1006, 1007 stay at 50%.
+- Live drafts 1005, 1006, 1007 stayed at 50%. All 7 test quotes (1001 to 1007) were deleted later on 9 Oct, see 18.5.
 
+### 18.5 Section 1 build (9 Oct)
+
+One number per job. The job, its quotes, tasks, repairs (callbacks) and POs all carry it. Client invoices (IQ) come with section 2.
+
+Checked: lint clean, web build, API tsc 0, app tsc 172 (baseline), mobile tsc 0. Scratch test `terra-scratch-tests/section1/t-s1.tmp.ts`: 106 pass, 0 fail, on a copy of the pre-section1 backup. UI checked on a scratch vite (`section1/s1ui.py`).
+
+- **Test quotes deleted on live (9 Oct):** quote ids 2 and 4 to 9 (numbers 1001 to 1007) and their 17 `quote_items`. `voice_quote_captures` 3, 6, 19 and 20 had `quote_id` set to null. Backup `backups/terra-live-pre-section1-quotes-2026-10-09.db`. Script `terra-scratch-tests/section1/s1-del-quotes.tmp.ts`. Live then had 0 quotes, 0 invoices, 0 POs, 0 callbacks, and jobs 218 to 4447.
+- **Refs:** `api/lib/refs.ts` (pure, shared with web). Quote Q188000, then Q188000-2 for the next version. A quote on a repair is QR188000-1. Task 188000-A, 188000-B. Repair R188000-1. PO PO188000-1. Invoice IQ188000-1 (ready for section 2). Also `jobText`, `parseRepairRef` (reads old 3981-C1 too) and `parseQuoteRef`.
+- **Job numbers:** `lib/job-number.ts`. The counter starts at 188000 (`job_number_start`, `job_number_last`). `setJobNumberStart()` refuses a start at or below the highest number used, or above 99,999,999. After publish the first new job on live is 188000.
+- **Repairs:** a repair does not use up a run number. Its job row gets a hidden number `1e12 + parent*1000 + seq` (`repairJobNumber`, `REPAIR_NUMBER_BASE`), left out of the highest-used checks. It shows as R{parent}-{seq}. Search finds R refs and old C refs.
+- **Quotes:** `lib/quote-number.ts` `quoteNumberFor`. A quote on a job takes the job's number, version max+1. A quote with no job takes the next job number, and convert keeps it. Moving a quote to a job with a different number is refused.
+- **POs:** PO{main job}-{n}. A repair uses the parent's number. `poRefsIn` and `strictPoRefsIn` read new and old forms and ignore IQ, R and dates.
+- **Booking line:** `lib/booking-command.ts` reads "188000-B", "r188000-1-a" and "3981-c1". `routes/tasks.ts` picks the task by letter. Unknown letter: "No open dispatch X-Z". No letter on a multi-task job: "Which one? Type it as 188000-A".
+- **Task `ref` in payloads:** tasks board and get, booking command, field (via `taskRefSql` in `lib/job-ref.ts`), dashboard, costing (plus quote `ref`), installer invoices (`job.ref` and email text).
+- **Settings:** Business rules tab has a "Job numbers" card (admin only) with a "Too low" warning. `settings.set` refuses the two job number keys.
+- **Screens:** web job page, schedule, book installer, command box, voice memo, costing, dashboard, quotes list, quote builder (title, bank Reference, versions, convert), contact page, voice quotes. Quote PDF header, footer, title, bank Reference and file name ("Terra Flooring Quote Q188000.pdf").
+- **Phone:** task page, Office, Me, Offers, task invoice and voice quote show refs. They fall back to the old form until the app update lands (OTA or next store build). Backend goes out with a website publish.

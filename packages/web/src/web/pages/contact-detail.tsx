@@ -15,6 +15,7 @@ import { useContact, useLinkCompany, useUnlinkCompany, useUpdateContact } from "
 import { useCompanies } from "../queries/companies";
 import { useClient } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
+import { quoteRef } from "../../api/lib/refs";
 
 const COMPANY_ROLES = ["owner", "manager", "supervisor", "accounts", "property_manager", "purchasing", "other"];
 const roleLabel = (r: string | null) => (r ?? "").replace(/_/g, " ");
@@ -277,8 +278,7 @@ export default function ContactDetailPage() {
                 {contact.data.quotes.map((q) => (
                   <li key={q.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
                     <Link to={`/quotes/${q.id}`} className="font-medium text-primary hover:underline">
-                      #{q.number}
-                      {q.version > 1 ? `v${q.version}` : ""}
+                      {quoteRef(q.number, q.version)}
                     </Link>
                     <span className="flex items-center gap-2">
                       <Badge>{q.status}</Badge>

@@ -1,5 +1,7 @@
 import { assertBillable } from "../lib/callbacks";
 import { nextJobNumber } from "../lib/job-number";
+import { quoteNumberFor, quoteRefById, quoteRefOf } from "../lib/quote-number";
+import { parseQuoteRef, quoteRef } from "../lib/refs";
 import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
 import { assertSupervisor } from "../lib/supervisors";
@@ -191,7 +193,9 @@ export const quotes = {
       if (input.jobId) where.push(eq(schema.quotes.jobId, input.jobId));
       if (input.search) {
         const q = `%${input.search.toLowerCase()}%`;
-        const asNumber = Number(input.search.replace(/\D/g, ""));
+        // "Q188000-2" finds quote 188000. A bare number finds the quote with it.
+        const asQuote = parseQuoteRef(input.search);
+        const asNumber = asQuote ? asQuote.number : Number(input.search.match(/\d+/)?.[0] ?? "");
         where.push(
           or(
             like(sql`lower(coalesce(${schema.sites.address}, ''))`, q),
@@ -222,6 +226,7 @@ export const quotes = {
 
       return rows.map((r) => ({
         ...r.quote,
+        ref: quoteRef(r.quote.number, r.quote.version, r.job?.id ? r.job.number : null),
         contact: r.contact,
         company: r.company,
         site: r.site,
@@ -281,8 +286,10 @@ export const quotes = {
     const needsApproval =
       context.actor.role !== "admin" && discountPercent > limit && discountPercent > row.quote.discountApprovedPercent;
 
+    const jobRefText = row.job?.id ? row.job.number : null;
     return {
       ...row.quote,
+      ref: quoteRef(row.quote.number, row.quote.version, jobRefText),
       discountPercent,
       discountLimit: limit,
       discountNeedsApproval: needsApproval,
@@ -296,7 +303,7 @@ export const quotes = {
         : items.map((i) => ({ ...i, unitCost: null, markupPercent: null })),
       ...depositSplit(row.quote.total, row.quote.depositPercent),
       activity,
-      versions,
+      versions: versions.map((v) => ({ ...v, ref: quoteRef(row.quote.number, v.version, jobRefText) })),
       /** What the client sees: titles, wording and totals only. */
       bundles: bundleView.bundles,
       /** Only for Admin, or Office with the cost switch on. Never expose these through field.ts. */
@@ -347,10 +354,8 @@ export const quotes = {
     .handler(async ({ input, context }) => {
       await assertBillable(input.jobId);
       await assertSupervisor(input.companyId, input.supervisorContactId);
-      const [maxRow] = await db
-        .select({ max: sql<number>`coalesce(max(${schema.quotes.number}), 1000)` })
-        .from(schema.quotes);
-      const number = Number(maxRow?.max ?? 1000) + 1;
+      // The job's own number, or the next job number when there is no job yet.
+      const { number, version } = await quoteNumberFor(input.jobId);
 
       const [settingRow] = await db
         .select()
@@ -366,7 +371,7 @@ export const quotes = {
         .insert(schema.quotes)
         .values({
           number,
-          version: 1,
+          version,
           jobId: input.jobId ?? null,
           contactId: input.contactId ?? null,
           companyId: input.companyId ?? null,
@@ -427,7 +432,7 @@ export const quotes = {
         entityType: "quote",
         entityId: row.id,
         action: "created",
-        detail: `Quote #${number} created`,
+        detail: `Quote ${await quoteRefById(row.id)} created`,
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
@@ -460,6 +465,18 @@ export const quotes = {
       }
       if (current.status === "accepted") {
         throw new ORPCError("BAD_REQUEST", { message: "This quote is accepted and locked. Make a new version to change it." });
+      }
+      // The job and its quote share one number, so a quote cannot be moved to
+      // another job. Make a new quote on that job instead.
+      if (rest.jobId !== undefined && (rest.jobId ?? null) !== current.jobId) {
+        const [target] = rest.jobId
+          ? await db.select({ number: schema.jobs.number }).from(schema.jobs).where(eq(schema.jobs.id, rest.jobId))
+          : [];
+        if (!target || target.number !== current.number) {
+          throw new ORPCError("BAD_REQUEST", {
+            message: "A quote keeps its job's number, so it can't move to another job. Make a new quote on that job.",
+          });
+        }
       }
       const onlyStatus = Object.entries(rest).every(([k, v]) => k === "status" || v === undefined);
       if (LOCKED_STATUSES.includes(current.status) && !onlyStatus) {
@@ -874,7 +891,7 @@ export const quotes = {
         entityType: "quote",
         entityId: quote.id,
         action: "customer_set",
-        detail: `${name} put on quote #${quote.number}${input.create ? " as a new client" : ""}`,
+        detail: `${name} put on quote ${await quoteRefOf(quote)}${input.create ? " as a new client" : ""}`,
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
@@ -1030,11 +1047,11 @@ export const quotes = {
       entityType: "quote",
       entityId: quote.id,
       action: "sent",
-      detail: `Quote #${quote.number} marked as sent`,
+      detail: `Quote ${await quoteRefOf(quote)} marked as sent`,
       actorName: context.actor.name,
       actorRole: context.actor.role,
     });
-    await leadToQuotedOnSend({ jobId: quote.jobId, quoteNumber: quote.number, actor: context.actor });
+    await leadToQuotedOnSend({ jobId: quote.jobId, quoteNumber: await quoteRefOf(quote), actor: context.actor });
 
     return row;
   }),
@@ -1082,7 +1099,7 @@ export const quotes = {
         entityType: "quote",
         entityId: quote.id,
         action: "accepted",
-        detail: input.note?.trim() || `Quote #${quote.number} accepted — $${quote.total.toFixed(2)}`,
+        detail: input.note?.trim() || `Quote ${await quoteRefOf(quote)} accepted, $${quote.total.toFixed(2)}`,
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
@@ -1090,7 +1107,7 @@ export const quotes = {
         await moveJobForward({
           jobId: quote.jobId,
           target: "won",
-          why: `quote #${quote.number} accepted`,
+          why: `quote ${await quoteRefOf(quote)} accepted`,
           actor: context.actor,
         });
       }
@@ -1115,7 +1132,7 @@ export const quotes = {
         entityType: "quote",
         entityId: quote.id,
         action: "declined",
-        detail: `Quote #${quote.number} declined — ${input.reason}`,
+        detail: `Quote ${await quoteRefOf(quote)} declined: ${input.reason}`,
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
@@ -1190,7 +1207,7 @@ export const quotes = {
       entityType: "quote",
       entityId: row.id,
       action: "revised",
-      detail: `Quote #${quote.number} v${row.version} created from v${quote.version}`,
+      detail: `Quote ${await quoteRefOf(row)} created from ${await quoteRefOf(quote)}`,
       actorName: context.actor.name,
       actorRole: context.actor.role,
     });
@@ -1224,7 +1241,11 @@ export const quotes = {
         .where(eq(schema.quoteItems.quoteId, quote.id))
         .orderBy(asc(schema.quoteItems.sortOrder));
 
-      const number = await nextJobNumber();
+      // The job keeps the quote's number (spec section 1). The quote took it
+      // from the job counter, so no job has it. Old quotes made before that
+      // rule may clash with an old job, and those get a fresh number.
+      const [clash] = await db.select({ id: schema.jobs.id }).from(schema.jobs).where(eq(schema.jobs.number, quote.number));
+      const number = clash ? await nextJobNumber() : quote.number;
 
       // The job starts where the quote already is: Won if it was accepted,
       // Quoted if it went out, otherwise the first status (Lead).
@@ -1253,7 +1274,7 @@ export const quotes = {
         .insert(schema.jobs)
         .values({
           number,
-          title: input.title || site?.address || `Quote #${quote.number}`,
+          title: input.title || site?.address || `Quote ${quoteRef(quote.number, quote.version)}`,
           statusId: status?.id ?? null,
           siteId: quote.siteId,
           contactId: quote.contactId,
@@ -1322,10 +1343,11 @@ export const quotes = {
         }
       }
 
+      // Every version of the quote now belongs to the job.
       await db
         .update(schema.quotes)
         .set({ jobId: job.id, updatedAt: new Date() })
-        .where(eq(schema.quotes.id, quote.id));
+        .where(and(eq(schema.quotes.number, quote.number), isNull(schema.quotes.jobId)));
 
       await db.insert(schema.activityLog).values({
         jobId: job.id,
@@ -1333,7 +1355,7 @@ export const quotes = {
         entityType: "quote",
         entityId: quote.id,
         action: "converted",
-        detail: `Quote #${quote.number} converted to job #${number} — ${tasksCreated} task(s), ${supplyLines.length} material line(s)`,
+        detail: `Quote ${quoteRef(quote.number, quote.version)} converted to job ${number}, ${tasksCreated} task(s), ${supplyLines.length} material line(s)`,
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });

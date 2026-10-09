@@ -11,6 +11,8 @@
  * guessed at.
  */
 
+import { parseRepairRef, repairRef, taskSeqFromLetter } from "./refs";
+
 const WEEKDAYS: Record<string, number> = {
   sun: 0,
   sunday: 0,
@@ -106,6 +108,10 @@ export type ParsedCommand = {
   /** Words left over once the numbers and dates are taken out, for name matching. */
   nameWords: string[];
   jobNumber: string | null;
+  /** A repair named on the line: "R188000-1", or old "3981-C1". Matched on the job's shown number. */
+  repairRef: string | null;
+  /** The task's place on the job when the line said "188000-B". 1 is A. */
+  taskSeq: number | null;
   taskId: number | null;
   startDate: string | null;
   /** True when the line named a day rather than the parser falling back. */
@@ -126,6 +132,8 @@ export function parseBookingLine(text: string, today: Date): ParsedCommand {
   const out: ParsedCommand = {
     nameWords: [],
     jobNumber: null,
+    repairRef: null,
+    taskSeq: null,
     taskId: null,
     startDate: null,
     dateGiven: false,
@@ -218,12 +226,29 @@ export function parseBookingLine(text: string, today: Date): ParsedCommand {
       continue;
     }
 
+    // A job and its task letter, "188000-b" (spec section 1), or a repair,
+    // "r188000-1", "r188000-1-a", old "3981-c1". Same first-one-wins rule.
+    const lettered = bare.match(/^(\d{2,})-([a-z]{1,2})$/);
+    const repair = bare.match(/^(r\d+-\d+|\d+-c\d+)(?:-([a-z]{1,2}))?$/);
+    if (lettered || repair) {
+      if (out.jobNumber != null || out.repairRef != null) out.unread.push(token);
+      else if (lettered) {
+        out.jobNumber = lettered[1]!;
+        out.taskSeq = taskSeqFromLetter(lettered[2]!);
+      } else {
+        const r = parseRepairRef(repair![1]!)!;
+        out.repairRef = r.old ? `${r.parent}-C${r.seq}` : repairRef(r.parent, r.seq);
+        out.taskSeq = repair![2] ? taskSeqFromLetter(repair![2]) : null;
+      }
+      continue;
+    }
+
     // A job number, or a task by its own id. The first one wins: a second
     // stray number later in the line is far more likely to be a mangled time
     // than a second job, so it is reported rather than quietly taking over.
     if (/^\d{2,}$/.test(bare)) {
       if (token.startsWith("@")) out.taskId = Number(bare);
-      else if (out.jobNumber == null) out.jobNumber = bare;
+      else if (out.jobNumber == null && out.repairRef == null) out.jobNumber = bare;
       else out.unread.push(token);
       continue;
     }

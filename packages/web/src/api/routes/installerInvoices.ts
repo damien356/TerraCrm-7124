@@ -1,4 +1,5 @@
 import { jobRef } from "../lib/job-ref";
+import { taskRef } from "../lib/refs";
 import { z } from "zod";
 import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
@@ -105,7 +106,7 @@ export const installerInvoices = {
             : !installer.bankBsb || !installer.bankAccountNumber || !installer.bankAccountName
               ? "Add your bank details before submitting an invoice."
               : null,
-      job: { number: jobRef(job), siteAddress: site?.address ?? null, taskTitle: task.title },
+      job: { number: jobRef(job), ref: taskRef(jobRef(job), task.seq), siteAddress: site?.address ?? null, taskTitle: task.title },
       profile: {
         tradingName: installer.tradingName,
         installerName: installer.name,
@@ -243,8 +244,8 @@ export const installerInvoices = {
 
     const attachments = [{ filename: `invoice-${invoiceNumber}.pdf`, content: pdfBuffer.toString("base64") }];
     const subject = `Invoice #${invoiceNumber} from ${installer.tradingName || installer.name}, Job #${jobRef(job)}`;
-    const bodyHtml = `<p>Invoice #${invoiceNumber} for job #${jobRef(job)}, task "${task.title}".</p><p>Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.</p>`;
-    const bodyText = `Invoice #${invoiceNumber} for job #${jobRef(job)}, task "${task.title}". Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.`;
+    const bodyHtml = `<p>Invoice #${invoiceNumber} for job ${jobRef(job)}, task ${taskRef(jobRef(job), task.seq)} "${task.title}".</p><p>Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.</p>`;
+    const bodyText = `Invoice #${invoiceNumber} for job ${jobRef(job)}, task ${taskRef(jobRef(job), task.seq)} "${task.title}". Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.`;
 
     /*
      * Submitting and DELIVERING are two different things. The row and the PDF

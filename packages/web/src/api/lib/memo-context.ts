@@ -2,6 +2,7 @@ import { desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { db, inDemo } from "../database";
 import * as schema from "../database/schema";
 import type { Mentions } from "../agent/memo";
+import { quoteRef } from "../lib/refs";
 
 /* ---------------------------------------------------------------------------
  * What the voice memo router gets to read.
@@ -209,7 +210,7 @@ export async function buildCardContext(link: { jobId: number | null; contactId: 
       ? await db.select().from(schema.quotes).where(eq(schema.quotes.jobId, link.jobId)).limit(6)
       : [];
   if (quotes.length)
-    lines.push(`Quotes: ${quotes.map((q) => `Q-${q.number} ${q.status} ${money(q.total)}`).join("; ")}`);
+    lines.push(`Quotes: ${quotes.map((q) => `${quoteRef(q.number, q.version)} ${q.status} ${money(q.total)}`).join("; ")}`);
 
   if (!link.jobId && contact) {
     const notes = await db

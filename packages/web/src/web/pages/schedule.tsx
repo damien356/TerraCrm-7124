@@ -108,7 +108,7 @@ function TaskBlock({
         {task.crewSize > 1 ? <Users2 className="mt-0.5 size-3 shrink-0 text-[#1C1B1A]/60" /> : null}
       </div>
       <p className="mt-0.5 truncate text-[11px] leading-tight text-[#1C1B1A]/65">
-        #{task.jobNumber} · {task.siteSuburb || task.siteAddress || "no site"}
+        {task.ref} · {task.siteSuburb || task.siteAddress || "no site"}
       </p>
       {!compact ? (
         <div className="mt-1 flex flex-wrap items-center gap-1">
@@ -314,8 +314,8 @@ function RunBar({
         onClick={onOpen}
         title={
           clash
-            ? `Double booked ${run.clashDates.length === 1 ? sayDate(run.clashDates[0]!) : `on ${run.clashDates.length} days`}. ${t.title} · #${t.jobNumber} ${t.jobTitle ?? ""}`
-            : `${t.title} · #${t.jobNumber} ${t.jobTitle ?? ""}`
+            ? `Double booked ${run.clashDates.length === 1 ? sayDate(run.clashDates[0]!) : `on ${run.clashDates.length} days`}. ${t.ref} ${t.title} · ${t.jobTitle ?? ""}`
+            : `${t.ref} ${t.title} · ${t.jobTitle ?? ""}`
         }
         style={{
           position: "absolute",
@@ -348,7 +348,7 @@ function RunBar({
         </div>
         <div className="flex items-center gap-1.5 text-[11px] leading-tight text-[#1C1B1A]/65">
           <span className="truncate">
-            #{t.jobNumber} · {t.siteSuburb || t.siteAddress || "no site"}
+            {t.ref} · {t.siteSuburb || t.siteAddress || "no site"}
           </span>
           {/* One column of bar is too narrow for both, and which day it is beats
               the arrival time when the run is only part visible. */}

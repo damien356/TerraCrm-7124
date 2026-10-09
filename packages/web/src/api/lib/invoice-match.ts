@@ -46,30 +46,42 @@ export function dedupeKey(supplierId: number | null, supplierName: string, numbe
   return `${supplierId ?? `n:${squash(supplierName)}`}|${squash(number)}`;
 }
 
-/** "4113-A", "4113 A", "PO 4113A", "4113/a" all read as 4113-A. */
+/**
+ * PO numbers printed in an order or reference field.
+ *   New (section 1): "PO188000-1", "PO 188000 - 1", "po#188000/1", and a bare
+ *   "188000-1" (6 digits or more, so a date like 2026-10 never reads as one).
+ *   Old: "4113-A", "4113 A", "PO 4113A", "4113/a" all read as 4113-A.
+ * IQ188000-1 (our invoice) and R188000-1 (a repair) are never read as POs.
+ */
 export function poRefsIn(...texts: Array<string | null | undefined>) {
   const out = new Set<string>();
   for (const t of texts) {
     if (!t) continue;
+    for (const m of t.matchAll(/(?<![A-Za-z])po\s*#?\s*(\d{3,9})\s*[-/ ]\s*(\d{1,2})(?![\d])/gi)) out.add(`PO${m[1]}-${Number(m[2])}`);
+    for (const m of t.matchAll(/(?<![\dA-Za-z#-])(\d{6,9})\s*[-/]\s*(\d{1,2})(?![\d])/g)) out.add(`PO${m[1]}-${Number(m[2])}`);
     for (const m of t.matchAll(/(?<![\d])(\d{3,6})\s*[-/ ]?\s*([A-Za-z])(?![A-Za-z])/g)) out.add(`${m[1]}-${m[2]!.toUpperCase()}`);
   }
   return [...out];
 }
 
 /**
- * PO numbers inside product lines. Only the exact form 4113-A counts here,
- * because "240 X 15" on a Hurford's line is a board size, not PO 240-X.
+ * PO numbers inside product lines. Only the exact forms PO188000-1 and the
+ * old 4113-A count here, because "240 X 15" on a Hurford's line is a board
+ * size, not PO 240-X.
  */
 export function strictPoRefsIn(...texts: Array<string | null | undefined>) {
   const out = new Set<string>();
-  for (const t of texts) for (const m of (t ?? "").matchAll(/(?<![\dA-Za-z])(\d{3,6})-([A-Za-z])(?![A-Za-z\d])/g)) out.add(`${m[1]}-${m[2]!.toUpperCase()}`);
+  for (const t of texts) {
+    for (const m of (t ?? "").matchAll(/(?<![A-Za-z\d])po(\d{3,9})-(\d{1,2})(?![\d])/gi)) out.add(`PO${m[1]}-${Number(m[2])}`);
+    for (const m of (t ?? "").matchAll(/(?<![\dA-Za-z])(\d{3,6})-([A-Za-z])(?![A-Za-z\d])/g)) out.add(`${m[1]}-${m[2]!.toUpperCase()}`);
+  }
   return [...out];
 }
 
 /** Bare job numbers, used only when no PO number is printed. */
 function jobNumbersIn(...texts: Array<string | null | undefined>) {
   const out = new Set<number>();
-  for (const t of texts) for (const m of (t ?? "").matchAll(/(?<![\d.$])(\d{4,5})(?![\d.])/g)) out.add(Number(m[1]));
+  for (const t of texts) for (const m of (t ?? "").matchAll(/(?<![\d.$])(\d{4,6})(?![\d.])/g)) out.add(Number(m[1]));
   return [...out];
 }
 

@@ -193,7 +193,7 @@ export default function OffersScreen() {
                   }}
                 >
                   <Text style={{ fontFamily: Fonts.bold, fontSize: 12.5, color: tint.edge }}>
-                    {offer.skillName ?? "Work"} · Job #{offer.jobNumber}
+                    {offer.skillName ?? "Work"} · {offer.ref || `Job #${offer.jobNumber}`}
                   </Text>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
                     <Ionicons name="hourglass-outline" size={13} color={tint.edge} />

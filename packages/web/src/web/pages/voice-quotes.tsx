@@ -111,7 +111,7 @@ function Recorder({ onProcessed }: { onProcessed: (result: unknown) => void }) {
 
 type ProcessResult = {
   captureId: number;
-  quote: { id: number; number: number; status: string };
+  quote: { id: number; number: number; status: string; ref: string };
   transcript: string;
   flaggedCount: number;
   lineCount: number;
@@ -125,7 +125,7 @@ function ResultCard({ result, onDismiss }: { result: ProcessResult; onDismiss: (
       <CardHeader
         title={
           <span className="flex items-center gap-1.5">
-            <CheckCircle2 className="size-4 text-[#3F7D3A]" /> Quote #{result.quote.number} created
+            <CheckCircle2 className="size-4 text-[#3F7D3A]" /> Quote {result.quote.ref} created
           </span>
         }
         subtitle={`${result.lineCount} line${result.lineCount === 1 ? "" : "s"} priced from the recording`}
@@ -259,7 +259,7 @@ function DraftsList() {
                   ) : waiting > 0 ? (
                     <Badge colour="#D08A1E">{waiting} to do</Badge>
                   ) : d.kind === "quote" && d.quote ? (
-                    <span className="text-xs font-medium text-primary">Quote #{d.quote.number}</span>
+                    <span className="text-xs font-medium text-primary">Quote {d.quote.ref}</span>
                   ) : (
                     <CheckCircle2 className="size-4 text-[#3F7D3A]" />
                   )}

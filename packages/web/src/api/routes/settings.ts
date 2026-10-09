@@ -5,6 +5,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, authed } from "../middleware/auth";
 import { groupForSkill } from "./labour";
+import { JOB_NUMBER_KEY, JOB_NUMBER_START_KEY, jobNumbering, setJobNumberStart } from "../lib/job-number";
 
 /**
  * Skills, job statuses and key/value settings are editable DATA, never hardcoded
@@ -133,6 +134,11 @@ export const settings = {
   set: adminOnly
     .input(z.object({ key: z.string().min(1), value: z.string() }))
     .handler(async ({ input }) => {
+      // Job numbers have their own checked setter below. Written here they
+      // could go backwards and hand out a number already in use.
+      if (input.key === JOB_NUMBER_KEY || input.key === JOB_NUMBER_START_KEY) {
+        throw new ORPCError("BAD_REQUEST", { message: "Set job numbers on the Job numbers card." });
+      }
       await db
         .insert(schema.settings)
         .values({ key: input.key, value: input.value, updatedAt: new Date() })
@@ -141,6 +147,20 @@ export const settings = {
           set: { value: input.value, updatedAt: new Date() },
         });
       return { ok: true };
+    }),
+
+  /* --------------------------- job numbers --------------------------- */
+  /** Where numbering starts, the next number out, and the lowest start allowed (spec section 1). */
+  jobNumbering: adminOnly.handler(() => jobNumbering()),
+
+  setJobNumberStart: adminOnly
+    .input(z.object({ start: z.number().int() }))
+    .handler(async ({ input }) => {
+      try {
+        return await setJobNumberStart(input.start);
+      } catch (e) {
+        throw new ORPCError("BAD_REQUEST", { message: e instanceof Error ? e.message : String(e) });
+      }
     }),
 
   /* ---------------------------- products ---------------------------- */

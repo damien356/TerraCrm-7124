@@ -570,7 +570,7 @@ export default function QuoteBuilderPage() {
 
   return (
     <Page
-      title={`Quote #${q.number}${q.version > 1 ? ` · v${q.version}` : ""}`}
+      title={`Quote ${q.ref}`}
       subtitle={
         <span className="flex flex-wrap items-center gap-2">
           <Link to="/quotes" className="inline-flex items-center gap-1 text-primary hover:underline">
@@ -771,7 +771,7 @@ export default function QuoteBuilderPage() {
                   <p>Account name: {BANK.name}</p>
                   <p className="tabular">BSB: {BANK.bsb}</p>
                   <p className="tabular">Account: {BANK.account}</p>
-                  <p className="tabular">Reference: Quote {q.number}</p>
+                  <p className="tabular">Reference: {q.ref}</p>
                 </div>
               </div>
             </Card>
@@ -823,16 +823,16 @@ export default function QuoteBuilderPage() {
 
           {q.versions.length > 1 ? (
             <Card>
-              <CardHeader title="Versions" subtitle={`${q.versions.length} versions of quote #${q.number}`} />
+              <CardHeader title="Versions" subtitle={`${q.versions.length} versions of this quote`} />
               <ul className="divide-y divide-border">
                 {q.versions.map((v) => (
                   <li key={v.id} className="flex items-center justify-between px-4 py-2 text-sm">
                     <span className="flex items-center gap-2">
                       {v.id === q.id ? (
-                        <span className="font-medium">v{v.version} (this one)</span>
+                        <span className="font-medium">{v.ref} (this one)</span>
                       ) : (
                         <Link to={`/quotes/${v.id}`} className="text-primary hover:underline">
-                          v{v.version}
+                          {v.ref}
                         </Link>
                       )}
                       <Badge colour={QUOTE_STATUS_COLOUR[v.status]}>{v.status}</Badge>
@@ -935,7 +935,7 @@ export default function QuoteBuilderPage() {
             <Input
               value={convertForm.title}
               onChange={(e) => setConvertForm((f) => ({ ...f, title: e.target.value }))}
-              placeholder={q.site?.address ?? `Quote #${q.number}`}
+              placeholder={q.site?.address ?? `Quote ${q.ref}`}
             />
           </Field>
           <label htmlFor={`quote_builder_cb1`} className="flex items-start gap-2 text-sm">
