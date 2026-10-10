@@ -27,7 +27,7 @@ export default function JobsPage() {
   return (
     <Page
       title="Jobs"
-      subtitle="Every job is a set of dispatches — tile removal, prep, lay, skirting, silicone."
+      subtitle="Every job is a set of dispatches: tile removal, prep, lay, skirting, silicone."
       actions={
         <Button onClick={() => setModal(true)}>
           <Plus className="size-4" />
@@ -89,14 +89,14 @@ export default function JobsPage() {
                       <p className="truncate">
                         {j.company?.name ??
                           [j.contact?.firstName, j.contact?.lastName].filter(Boolean).join(" ") ??
-                          "—"}
+                          "-"}
                       </p>
                       <p className="text-xs text-muted-foreground">
                         bills {j.billToType === "company" ? "the company" : "the contact"}
                       </p>
                     </td>
                     <td className="px-4 py-2.5">
-                      <p className="max-w-[220px] truncate">{j.site?.address ?? "—"}</p>
+                      <p className="max-w-[220px] truncate">{j.site?.address ?? "-"}</p>
                       <p className="text-xs text-muted-foreground">{j.site?.suburb ?? ""}</p>
                     </td>
                     <td className="px-4 py-2.5">

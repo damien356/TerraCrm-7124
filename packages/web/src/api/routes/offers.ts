@@ -132,7 +132,7 @@ async function expireStale() {
           entityType: "task",
           entityId: taskId,
           action: "offer_expired",
-          detail: `No one accepted "${task.title}" within ${OFFER_TTL_HOURS}h — back in the queue`,
+          detail: `No one accepted "${task.title}" within ${OFFER_TTL_HOURS}h, back in the queue`,
           actorName: "System",
           actorRole: "system",
         });
@@ -190,7 +190,7 @@ export const offers = {
         entityType: "offer",
         entityId: offer!.id,
         action: "offer_sent",
-        detail: `Offered "${task.title}" to ${installer?.name ?? "installer"}${pay ? ` — $${pay}` : ""}`,
+        detail: `Offered "${task.title}" to ${installer?.name ?? "installer"}${pay ? `, $${pay}` : ""}`,
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
@@ -213,7 +213,7 @@ export const offers = {
       if (!task) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
       if (!task.skillId) {
         throw new ORPCError("BAD_REQUEST", {
-          message: "Give the task a skill first — a broadcast goes to everyone ticked for that skill.",
+          message: "Give the task a skill first. A broadcast goes to everyone ticked for that skill.",
         });
       }
 
@@ -266,7 +266,7 @@ export const offers = {
         entityType: "offer",
         entityId: input.taskId,
         action: "broadcast_sent",
-        detail: `Broadcast "${task.title}" to ${created.length} installer${created.length === 1 ? "" : "s"} — first to accept wins`,
+        detail: `Broadcast "${task.title}" to ${created.length} installer${created.length === 1 ? "" : "s"}, first to accept wins`,
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
@@ -474,8 +474,8 @@ async function lockTask(args: {
     entityId: args.offerId,
     action: args.promotedFromHold ? "hold_confirmed" : "offer_accepted",
     detail: args.promotedFromHold
-      ? `${installer?.name ?? "Installer"}'s ${PROVISIONAL_HOLD_HOURS}h hold on "${args.taskTitle}" converted — locked to ${args.day ?? "no date yet"}`
-      : `${installer?.name ?? "Installer"} accepted "${args.taskTitle}"${args.day ? ` — locked to ${args.day}` : ""}`,
+      ? `${installer?.name ?? "Installer"}'s ${PROVISIONAL_HOLD_HOURS}h hold on "${args.taskTitle}" converted, locked to ${args.day ?? "no date yet"}`
+      : `${installer?.name ?? "Installer"} accepted "${args.taskTitle}"${args.day ? `, locked to ${args.day}` : ""}`,
     actorName: installer?.name ?? "Installer",
     actorRole: "installer",
   });
@@ -562,7 +562,7 @@ export async function acceptOffer(offerId: number, installerId: number, chosenDa
   if (!row) throw new ORPCError("NOT_FOUND", { message: "Offer not found" });
 
   if (row.offer.status === "provisional") {
-    throw new ORPCError("BAD_REQUEST", { message: "You're already holding this one — we'll confirm it shortly." });
+    throw new ORPCError("BAD_REQUEST", { message: "You're already holding this one. We'll confirm it shortly." });
   }
   if (row.offer.status === "accepted") {
     return { ok: true, taskId: row.offer.taskId, scheduledDate: row.task.scheduledDate };
@@ -649,7 +649,7 @@ export async function acceptOffer(offerId: number, installerId: number, chosenDa
     entityType: "offer",
     entityId: offerId,
     action: "offer_held",
-    detail: `${installer?.name ?? "Installer"} put a ${PROVISIONAL_HOLD_HOURS}h hold on "${row.task.title}"${day ? ` for ${day}` : ""} — confirms automatically unless someone else takes it`,
+    detail: `${installer?.name ?? "Installer"} put a ${PROVISIONAL_HOLD_HOURS}h hold on "${row.task.title}"${day ? ` for ${day}` : ""}. Confirms automatically unless someone else takes it`,
     actorName: installer?.name ?? "Installer",
     actorRole: "installer",
   });
@@ -698,7 +698,7 @@ export async function declineOffer(offerId: number, installerId: number, reason:
     entityType: "offer",
     entityId: offerId,
     action: "offer_declined",
-    detail: `${installer?.name ?? "Installer"} declined "${row.task.title}" — ${reason}`,
+    detail: `${installer?.name ?? "Installer"} declined "${row.task.title}": ${reason}`,
     actorName: installer?.name ?? "Installer",
     actorRole: "installer",
   });
@@ -736,7 +736,7 @@ export async function releaseTask(taskId: number, installerId: number, reason: s
     entityType: "task",
     entityId: taskId,
     action: "task_released",
-    detail: `${installer?.name ?? "Installer"} handed back "${task.title}" — ${reason}`,
+    detail: `${installer?.name ?? "Installer"} handed back "${task.title}": ${reason}`,
     actorName: installer?.name ?? "Installer",
     actorRole: "installer",
   });

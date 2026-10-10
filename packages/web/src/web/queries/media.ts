@@ -69,6 +69,6 @@ export async function uploadToStorage(file: File, jobId: number, bucket: string)
     contentType: file.type || "application/octet-stream",
   });
   const res = await fetch(url, { method: "PUT", body: file, headers: { "Content-Type": file.type || "application/octet-stream" } });
-  if (!res.ok) throw new Error("That upload didn't go through — try again.");
+  if (!res.ok) throw new Error("That upload didn't go through. Try again.");
   return key;
 }

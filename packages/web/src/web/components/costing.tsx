@@ -16,10 +16,10 @@ import {
 } from "../queries/costing";
 
 const dollars = (n: number | null | undefined) =>
-  n == null ? "—" : n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 2 });
+  n == null ? "-" : n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 2 });
 
 const dollars0 = (n: number | null | undefined) =>
-  n == null ? "—" : n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
+  n == null ? "-" : n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
 
 const unit = (u: string) => UNIT_LABEL[u] ?? u;
 
@@ -240,7 +240,7 @@ export function MeasureUpModal({
                       <td className="py-2 pr-3">
                         <div className="flex items-center gap-2">
                           <span className="tabular text-sm">
-                            {l.rate == null ? "—" : l.unit === "percent" ? `${l.rate}%` : dollars(l.rate)}
+                            {l.rate == null ? "-" : l.unit === "percent" ? `${l.rate}%` : dollars(l.rate)}
                           </span>
                           <SourceBadge source={l.source} />
                         </div>
@@ -411,7 +411,7 @@ export function JobForecastCard({ jobId }: { jobId: number }) {
               />
               <Figure
                 label="Margin"
-                value={f.margin == null ? "—" : `${f.margin}%`}
+                value={f.margin == null ? "-" : `${f.margin}%`}
                 tone={f.margin != null && f.margin >= 30 ? "good" : f.margin != null ? "bad" : undefined}
                 hint={f.days != null ? `about ${f.days} day${f.days === 1 ? "" : "s"} of work` : undefined}
               />
@@ -486,7 +486,7 @@ export function JobForecastCard({ jobId }: { jobId: number }) {
                           <td className="px-3 py-2 font-medium">{c.name}</td>
                           <td className="tabular px-3 py-2 text-right">{dollars0(c.labour)}</td>
                           <td className="tabular px-3 py-2 text-right">{dollars0(c.gp)}</td>
-                          <td className="tabular px-3 py-2 text-right">{c.margin == null ? "—" : `${c.margin}%`}</td>
+                          <td className="tabular px-3 py-2 text-right">{c.margin == null ? "-" : `${c.margin}%`}</td>
                           <td className="px-3 py-2 text-xs text-muted-foreground">
                             {!c.canDoAll ? `not ticked for ${c.missingSkills} skill on this job` : null}
                             {c.canDoAll && c.incomplete ? "some work has no rate on his card" : null}

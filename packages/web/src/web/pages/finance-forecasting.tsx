@@ -112,24 +112,24 @@ export default function ForecastingPage() {
                         <td className="px-4 py-2.5">
                           <span className="font-medium">{b.label}</span>
                           <p className="text-[11px] text-muted-foreground">
-                            {shortDate(b.start)} – {shortDate(b.end)}
+                            {shortDate(b.start)} to {shortDate(b.end)}
                           </p>
                         </td>
                         <td className="tabular px-4 py-2.5 text-right text-[var(--success)]">
-                          {b.inCommitted ? money(b.inCommitted) : "—"}
+                          {b.inCommitted ? money(b.inCommitted) : "-"}
                         </td>
                         <td className="tabular px-4 py-2.5 text-right text-[var(--success)]/70">
-                          {b.inExpected ? money(b.inExpected) : "—"}
+                          {b.inExpected ? money(b.inExpected) : "-"}
                         </td>
                         <td
                           className={`tabular px-4 py-2.5 text-right ${
                             includePipeline ? "text-muted-foreground" : "text-muted-foreground/50 line-through"
                           }`}
                         >
-                          {b.inPipeline ? money(b.inPipeline) : "—"}
+                          {b.inPipeline ? money(b.inPipeline) : "-"}
                         </td>
                         <td className="tabular px-4 py-2.5 text-right text-destructive">
-                          {out ? `-${money(out)}` : "—"}
+                          {out ? `-${money(out)}` : "-"}
                         </td>
                         <td
                           className={`tabular px-4 py-2.5 text-right font-medium ${
@@ -161,7 +161,7 @@ export default function ForecastingPage() {
                       {money(d.totals.inExpected)}
                     </td>
                     <td className="tabular px-4 py-2.5 text-right font-semibold text-muted-foreground">
-                      {d.totals.inPipeline ? money(d.totals.inPipeline) : "—"}
+                      {d.totals.inPipeline ? money(d.totals.inPipeline) : "-"}
                     </td>
                     <td className="tabular px-4 py-2.5 text-right font-semibold text-destructive">
                       {(() => {
@@ -169,7 +169,7 @@ export default function ForecastingPage() {
                           d.totals.outCommitted +
                           d.totals.outExpected +
                           (includePipeline ? d.totals.outPipeline : 0);
-                        return out ? `-${money(out)}` : "—";
+                        return out ? `-${money(out)}` : "-";
                       })()}
                     </td>
                     <td aria-hidden="true" className="px-4 py-2.5" />
@@ -229,7 +229,7 @@ export default function ForecastingPage() {
                   <tbody>
                     {(terms.data ?? []).map((t) => (
                       <tr key={t.id} className="border-b border-border last:border-0 hover:bg-secondary/50">
-                        <td className="px-4 py-2.5 font-medium">{t.companyName || "—"}</td>
+                        <td className="px-4 py-2.5 font-medium">{t.companyName || "-"}</td>
                         <td className="px-4 py-2.5">
                           <Badge>{t.structure.replace(/_/g, " ")}</Badge>
                         </td>
@@ -237,13 +237,13 @@ export default function ForecastingPage() {
                           {t.label} from {t.termsFrom}
                         </td>
                         <td className="tabular px-4 py-2.5 text-right">
-                          {t.depositPercent ? `${t.depositPercent}%` : "—"}
+                          {t.depositPercent ? `${t.depositPercent}%` : "-"}
                         </td>
                         <td className="tabular px-4 py-2.5 text-right">
-                          {t.retentionPercent ? `${t.retentionPercent}%` : "—"}
+                          {t.retentionPercent ? `${t.retentionPercent}%` : "-"}
                         </td>
                         <td className="tabular px-4 py-2.5 text-right">
-                          {t.observedDaysLate ? `${t.observedDaysLate.toFixed(0)} days` : "—"}
+                          {t.observedDaysLate ? `${t.observedDaysLate.toFixed(0)} days` : "-"}
                         </td>
                       </tr>
                     ))}

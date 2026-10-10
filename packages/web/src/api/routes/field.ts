@@ -441,7 +441,7 @@ export const field = {
       const damage = await countMedia(input.taskId, "damage");
       if (damage === 0) {
         throw new ORPCError("BAD_REQUEST", {
-          message: "Walk the site first — add any existing damage, or tick 'nothing found'.",
+          message: "Walk the site first. Add any existing damage, or tick 'nothing found'.",
         });
       }
       await db
@@ -496,7 +496,7 @@ export const field = {
       const have = await countMedia(input.taskId, "completion");
       if (have < need) {
         throw new ORPCError("BAD_REQUEST", {
-          message: `${need} completion photos needed before you can close this one — you've added ${have}.`,
+          message: `${need} completion photos needed before you can close this one. You've added ${have}.`,
         });
       }
 
@@ -522,7 +522,7 @@ export const field = {
         entityType: "task",
         entityId: input.taskId,
         action: "task_complete",
-        detail: `${installer?.name ?? "Installer"} finished "${task.title}"${input.notes ? ` — ${input.notes}` : ""}`,
+        detail: `${installer?.name ?? "Installer"} finished "${task.title}"${input.notes ? `: ${input.notes}` : ""}`,
         actorName: installer?.name ?? "Installer",
         actorRole: "installer",
       });
@@ -553,7 +553,7 @@ export const field = {
           entityType: "job",
           entityId: task.jobId,
           action: "all_tasks_complete",
-          detail: "Every task on this job is finished — ready to invoice",
+          detail: "Every task on this job is finished, ready to invoice",
           actorName: "System",
           actorRole: "system",
         });
@@ -736,7 +736,7 @@ export const field = {
           entityType: "task",
           entityId: task.id,
           action: "site_finding",
-          detail: `${installer?.name ?? "Installer"} flagged something on site${input.caption ? ` — ${input.caption}` : ""}`,
+          detail: `${installer?.name ?? "Installer"} flagged something on site${input.caption ? `: ${input.caption}` : ""}`,
           actorName: installer?.name ?? "Installer",
           actorRole: "installer",
         });
@@ -764,7 +764,7 @@ export const field = {
       entityType: "task",
       entityId: task.id,
       action: "damage_check",
-      detail: `${installer?.name ?? "Installer"} walked the site — no existing damage found`,
+      detail: `${installer?.name ?? "Installer"} walked the site, no existing damage found`,
       actorName: installer?.name ?? "Installer",
       actorRole: "installer",
     });

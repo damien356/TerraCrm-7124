@@ -203,19 +203,19 @@ export default function CompanyDetailPage() {
           <Card>
             <CardHeader title="Account" />
             <div className="grid gap-3 px-4 py-3">
-              <Fact label="Phone">{c.phone ?? "—"}</Fact>
-              <Fact label="Accounts email">{c.email ?? "—"}</Fact>
+              <Fact label="Phone">{c.phone ?? "-"}</Fact>
+              <Fact label="Accounts email">{c.email ?? "-"}</Fact>
               <Fact label="Website">
                 {c.website ? (
                   <a href={c.website} target="_blank" rel="noreferrer" className="text-primary hover:underline">
                     {c.website}
                   </a>
                 ) : (
-                  "—"
+                  "-"
                 )}
               </Fact>
-              <Fact label="ABN">{c.abn ?? "—"}</Fact>
-              <Fact label="Billing address">{c.billingAddress ?? "—"}</Fact>
+              <Fact label="ABN">{c.abn ?? "-"}</Fact>
+              <Fact label="Billing address">{c.billingAddress ?? "-"}</Fact>
               <Fact label="Credit limit">{c.creditLimit ? money(c.creditLimit) : "None set"}</Fact>
               {c.notes ? <Fact label="Notes">{c.notes}</Fact> : null}
             </div>
@@ -309,14 +309,14 @@ export default function CompanyDetailPage() {
                       </Link>
                       <p className="max-w-[260px] truncate text-xs text-muted-foreground">{j.title}</p>
                     </td>
-                    <td className="px-2 py-2.5 text-xs text-muted-foreground">{j.senderName ?? "—"}</td>
+                    <td className="px-2 py-2.5 text-xs text-muted-foreground">{j.senderName ?? "-"}</td>
                     <td className="px-2 py-2.5">
-                      <Badge>{j.status ?? "—"}</Badge>
+                      <Badge>{j.status ?? "-"}</Badge>
                     </td>
                     <td className="tabular px-2 py-2.5 text-right font-medium">{money(j.value)}</td>
                     <td className="tabular px-2 py-2.5 text-right">
                       {j.grossProfit === null ? (
-                        <span className="text-xs text-muted-foreground">—</span>
+                        <span className="text-xs text-muted-foreground">-</span>
                       ) : (
                         money(j.grossProfit)
                       )}

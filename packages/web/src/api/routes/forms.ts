@@ -125,7 +125,7 @@ const VARIATION_FIELDS: Array<{
     label: "Did you talk to the customer about it?",
     type: "select",
     required: true,
-    helpText: "Never quote them a price — just tell them the office will be in touch.",
+    helpText: "Never quote them a price. Just tell them the office will be in touch.",
     options: ["No", "Yes, told them the office will call", "Customer raised it with me"],
   },
 ];

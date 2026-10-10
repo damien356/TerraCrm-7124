@@ -305,7 +305,7 @@ function Composer({ jobId, conversationId }: { jobId: number; conversationId: nu
             "Stays inside Terra. Never sent."
           ) : picked.channel === "sms" ? (
             <>
-              {cost.data ? `${cost.data.parts} SMS part${cost.data.parts === 1 ? "" : "s"}` : "—"}
+              {cost.data ? `${cost.data.parts} SMS part${cost.data.parts === 1 ? "" : "s"}` : "-"}
               {picked.audience === "customer" ? " · opt-out line added" : " · no opt-out, this is crew"}
             </>
           ) : (

@@ -176,7 +176,7 @@ function NewSupplierModal({ open, onClose }: { open: boolean; onClose: () => voi
         <Field label="Short code" hint="Used on price-list imports. Leave blank to use the name.">
           <Input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="terramater" />
         </Field>
-        <Field label="Ships from" hint="Decides the freight charge — e.g. South Australia.">
+        <Field label="Ships from" hint="Decides the freight charge, e.g. South Australia.">
           <Input value={form.shipsFrom} onChange={(e) => setForm({ ...form, shipsFrom: e.target.value })} />
         </Field>
         <Field label="Notes">
@@ -235,7 +235,7 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
       open={open}
       onClose={onClose}
       title="Add a supplier charge"
-      subtitle="Charged per supplier order — not per line on the quote. A supplier can run several of these at once."
+      subtitle="Charged per supplier order, not per line on the quote. A supplier can run several of these at once."
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
@@ -308,7 +308,7 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
             />
           </Field>
         </div>
-        <Field label="When it applies" hint="Plain English — this is what shows next to the tickbox on an order.">
+        <Field label="When it applies" hint="Plain English. This is what shows next to the tickbox on an order.">
           <Input value={form.condition} onChange={(e) => setForm({ ...form, condition: e.target.value })} />
         </Field>
         <Field label="Notes" hint="What their letter or price list actually said.">
@@ -397,7 +397,7 @@ function FreightCard({
           <span>
             {supplier.name} delivers direct to us
             <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
-              Untick it and any delivery charge on their schedule is kept on file but never costed — the carrier
+              Untick it and any delivery charge on their schedule is kept on file but never costed. The carrier
               invoices us for that leg instead, so costing both would bill the same freight twice.
             </span>
           </span>
@@ -744,7 +744,7 @@ function OrderCostCard({
                   <p className="label-xs">On file, deliberately not costed</p>
                   {cost.data.excludedCharges.map((x) => (
                     <p key={x.id} className="text-[11px] text-muted-foreground">
-                      <span className="font-medium text-foreground">{x.name}</span> — {x.reason}
+                      <span className="font-medium text-foreground">{x.name}</span>: {x.reason}
                     </p>
                   ))}
                 </div>
@@ -793,7 +793,7 @@ export default function SuppliersPage() {
   return (
     <Page
       title="Suppliers"
-      subtitle="Cost lists, surcharges and freight — every charge that sits on top of the per-m² rate."
+      subtitle="Cost lists, surcharges and freight: every charge that sits on top of the per-m² rate."
       actions={
         <Button onClick={() => setNewOpen(true)}>
           <Plus /> Add supplier
@@ -851,7 +851,7 @@ export default function SuppliersPage() {
                   }
                 />
                 <div className="grid gap-3 px-4 py-3.5 md:grid-cols-2">
-                  <Field label="Price list dated" hint="The date printed on their list — not the day it was imported.">
+                  <Field label="Price list dated" hint="The date printed on their list, not the day it was imported.">
                     <Input
                       type="date"
                       defaultValue={dateInput(supplier.priceListEffectiveFrom)}

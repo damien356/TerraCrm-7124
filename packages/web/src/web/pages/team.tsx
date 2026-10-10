@@ -20,7 +20,7 @@ import { InstallerPanel } from "./installers";
 import { useRevokeVoiceKey, useVoiceKeys } from "../queries/visits";
 
 function when(iso: string | null) {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const d = new Date(iso);
   const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
   if (days === 0) return "Today";

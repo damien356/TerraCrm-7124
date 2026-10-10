@@ -21,7 +21,7 @@ import {
 import { PRODUCT_CATEGORIES, PRODUCT_CATEGORY_LABELS } from "../../api/lib/product-categories";
 
 const money = (n: number | null | undefined) =>
-  n === null || n === undefined ? "—" : n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
+  n === null || n === undefined ? "-" : n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
 
 const UNIT_LABEL: Record<string, string> = { m2: "m²", lm: "lm", each: "each", roll: "roll" };
 const unit = (u: string) => UNIT_LABEL[u] ?? u;
@@ -187,7 +187,7 @@ function ExtendButton({
           </>
         }
       >
-        <Field label="New end date" hint="Inclusive — the special still applies all of that day.">
+        <Field label="New end date" hint="Inclusive: the special still applies all of that day.">
           <Input type="date" value={newEnd} min={todayISO()} onChange={(e) => setNewEnd(e.target.value)} />
         </Field>
         {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
@@ -249,11 +249,11 @@ function RangeGrid({ onOpen }: { onOpen: (supplierId: number | null, range: stri
               ) : null}
             </div>
             <p className="tabular mt-2.5 text-[15px] font-semibold">
-              {r.sellFrom === r.sellTo ? money(r.sellFrom) : `${money(r.sellFrom)} – ${money(r.sellTo)}`}
+              {r.sellFrom === r.sellTo ? money(r.sellFrom) : `${money(r.sellFrom)} to ${money(r.sellTo)}`}
               <span className="text-xs font-normal text-muted-foreground"> /{unit(r.unit)} sell ex GST</span>
             </p>
             <p className="tabular mt-0.5 text-xs text-muted-foreground">
-              buying at {r.costFrom === r.costTo ? money(r.costFrom) : `${money(r.costFrom)} – ${money(r.costTo)}`}
+              buying at {r.costFrom === r.costTo ? money(r.costFrom) : `${money(r.costFrom)} to ${money(r.costTo)}`}
             </p>
             <p className="mt-1.5 text-xs text-muted-foreground">
               {r.colourCount} {r.colourCount === 1 ? "colour" : "colours"}
@@ -410,7 +410,7 @@ function VariantTable({
                 <Checkbox aria-label={`Pick ${p.colour || "product"}`} checked={picked.has(p.id)} onChange={() => toggle(p.id)} />
               </td>
               <td className="px-4 py-2.5">
-                <p className="font-medium">{p.colour || "—"}</p>
+                <p className="font-medium">{p.colour || "-"}</p>
                 <p className="text-xs text-muted-foreground">
                   {p.range} · {p.supplier}
                 </p>
@@ -424,7 +424,7 @@ function VariantTable({
                 ) : null}
               </td>
               <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                {[p.backing, p.size, p.weight].filter(Boolean).join(" · ") || "—"}
+                {[p.backing, p.size, p.weight].filter(Boolean).join(" · ") || "-"}
                 {p.unitsPerPack ? (
                   <span className="block">
                     {p.unitsPerPack} per carton · {p.packM2} m²
@@ -619,14 +619,14 @@ function RollQuote({
             {q.onVolumeRate ? (
               <Stat
                 label="Volume saving"
-                value={q.volumeSavingTotal ? `-${money(q.volumeSavingTotal)}` : "—"}
+                value={q.volumeSavingTotal ? `-${money(q.volumeSavingTotal)}` : "-"}
                 tone="success"
                 hint={`against ${money(q.rollRateExGst)} a ${unitLabel} at the roll rate`}
               />
             ) : (
               <Stat
                 label="Cut premium"
-                value={q.cutPremiumTotal ? `+${money(q.cutPremiumTotal)}` : "—"}
+                value={q.cutPremiumTotal ? `+${money(q.cutPremiumTotal)}` : "-"}
                 tone={q.cutPremiumTotal ? "warning" : "success"}
                 hint={
                   q.cutPremiumTotal ? `${money(q.cutPremiumPerUnit)} a ${unitLabel} extra` : "no premium on this qty"
@@ -653,7 +653,7 @@ function RollQuote({
 
           {quote.data?.onSpecial ? (
             <p className="text-xs" style={{ color: TONE.good }}>
-              A special is live at {money(quote.data.specialCostExGst)} a {unitLabel} — that lowers the roll rate Terra
+              A special is live at {money(quote.data.specialCostExGst)} a {unitLabel}. That lowers the roll rate Terra
               pays, the cut premium still sits on top, and the sell price above does not move.
             </p>
           ) : null}
@@ -706,7 +706,7 @@ function VariantModal({ id, onClose }: { id: number | null; onClose: () => void 
             />
             <Stat
               label="Extra margin"
-              value={p.onSpecial ? `+${money(p.extraMarginPerUnit)}` : "—"}
+              value={p.onSpecial ? `+${money(p.extraMarginPerUnit)}` : "-"}
               tone={p.onSpecial ? "success" : "default"}
               hint={p.onSpecial ? `per ${unit(p.unit)}, yours to keep` : "nothing running"}
             />

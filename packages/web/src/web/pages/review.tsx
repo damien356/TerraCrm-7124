@@ -22,7 +22,7 @@ const DECISION_LABEL: Record<string, string> = {
 };
 
 const money = (n: number) =>
-  n >= 1000 ? `$${Math.round(n / 1000)}k` : n > 0 ? `$${Math.round(n)}` : "—";
+  n >= 1000 ? `$${Math.round(n / 1000)}k` : n > 0 ? `$${Math.round(n)}` : "-";
 
 /** ServiceM8 clients can carry dozens of sites. Show enough to recognise them. */
 function suburbList(raw: string) {
@@ -32,7 +32,7 @@ function suburbList(raw: string) {
 }
 
 const shortDate = (d: string | Date | null) =>
-  d ? new Date(d).toLocaleDateString("en-AU", { month: "short", year: "numeric" }) : "—";
+  d ? new Date(d).toLocaleDateString("en-AU", { month: "short", year: "numeric" }) : "-";
 
 /** The extra question a business or a block needs before it can be recorded. */
 function DecisionModal({
@@ -196,13 +196,13 @@ export default function ReviewPage() {
       <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
           label="Waiting on you"
-          value={stats.data?.contactsAwaiting ?? "—"}
+          value={stats.data?.contactsAwaiting ?? "-"}
           tone={(stats.data?.contactsAwaiting ?? 0) > 0 ? "warning" : "success"}
           hint="Records with no client type"
         />
         <Stat
           label="Marketable now"
-          value={stats.data?.marketable ?? "—"}
+          value={stats.data?.marketable ?? "-"}
           tone="success"
           hint="Homeowners with a job finished since 2023"
         />
@@ -213,7 +213,7 @@ export default function ReviewPage() {
         />
         <Stat
           label="Imported"
-          value={stats.data ? stats.data.importedJobs.toLocaleString() : "—"}
+          value={stats.data ? stats.data.importedJobs.toLocaleString() : "-"}
           hint={
             stats.data
               ? `${stats.data.importedJobs.toLocaleString()} jobs, ${stats.data.importedContacts.toLocaleString()} people, ${stats.data.importedCompanies} companies`

@@ -61,7 +61,7 @@ Terra Flooring`,
     subject: "Still thinking it over?",
     body: `Hi {{first_name}},
 
-I won't keep chasing — just wanted to leave the door open on your flooring quote.
+I won't keep chasing. Just wanted to leave the door open on your flooring quote.
 
 If the timing isn't right, no problem at all. And if you'd like me to take another look at it, reply any time and I'll pick it straight up.
 
@@ -454,7 +454,7 @@ function Editor({ id, onClose }: { id?: number; onClose: () => void }) {
               <div className="border-b border-border bg-secondary/60 px-3 py-2">
                 <p className="text-[11px] text-muted-foreground">Subject</p>
                 <p className="truncate text-sm font-medium">
-                  {preview.data?.subject || <span className="text-muted-foreground">—</span>}
+                  {preview.data?.subject || <span className="text-muted-foreground">-</span>}
                 </p>
               </div>
               {preview.isPending ? (

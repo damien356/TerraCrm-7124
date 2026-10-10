@@ -380,7 +380,7 @@ function EventTable({
                     {e.dueDate < today ? <p className="text-[11px] text-destructive">overdue</p> : null}
                   </td>
                   <td className="px-4 py-2.5">
-                    <p className="truncate font-medium">{e.who || "—"}</p>
+                    <p className="truncate font-medium">{e.who || "-"}</p>
                     {e.jobNumber ? (
                       <Link to={`/jobs/${e.jobId}`} className="text-[11px] text-primary hover:underline">
                         Job #{e.jobNumber}

@@ -38,7 +38,7 @@ import { useInstallers, useEligible } from "../queries/installers";
 import { useBroadcast, useOffersForTask, useSendDirect, useWithdrawOffers } from "../queries/offers";
 
 const money = (n?: number | null) =>
-  n == null ? "—" : n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
+  n == null ? "-" : n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
@@ -511,7 +511,7 @@ function DispatchPanel({
             </div>
             <div className="flex gap-2">
               <dt className="w-20 shrink-0 text-muted-foreground">Area</dt>
-              <dd className="tabular font-medium">{t.areaM2 ? `${t.areaM2} m²` : "—"}</dd>
+              <dd className="tabular font-medium">{t.areaM2 ? `${t.areaM2} m²` : "-"}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="w-20 shrink-0 text-muted-foreground">Installer</dt>
@@ -593,7 +593,7 @@ function DispatchPanel({
               onClick={() => run(broadcast.mutateAsync({ taskId: t.id, payAmount: pay }))}
             >
               {broadcast.isPending ? <Spinner /> : <Radio className="size-3.5" />}
-              Broadcast — first to accept wins
+              Broadcast: first to accept wins
             </Button>
 
             <div className="mt-2 grid grid-cols-2 gap-2">
@@ -642,7 +642,7 @@ function DispatchPanel({
                     </div>
                     <p className="mt-0.5 text-muted-foreground">
                       {o.offer.mode} · {o.offer.status}
-                      {o.offer.declineReason ? ` — "${o.offer.declineReason}"` : ""}
+                      {o.offer.declineReason ? `: "${o.offer.declineReason}"` : ""}
                     </p>
                   </li>
                 ))}

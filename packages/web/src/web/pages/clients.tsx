@@ -185,7 +185,7 @@ export function NewContactModal({
             value={form.companyId}
             onChange={(v) => set("companyId", v)}
             placeholder="Search companies…"
-            emptyLabel="None — private customer"
+            emptyLabel="None, private customer"
             options={(companies.data ?? []).map((c) => ({
               value: String(c.id),
               label: c.name,
@@ -350,7 +350,7 @@ export default function ClientsPage() {
                       </p>
                     </td>
                     <td className="tabular whitespace-nowrap px-3 py-2.5 text-right font-semibold">
-                      {c.revenue > 0 ? money(c.revenue) : "—"}
+                      {c.revenue > 0 ? money(c.revenue) : "-"}
                     </td>
                     <td className="tabular whitespace-nowrap px-3 py-2.5 text-right">
                       {c.grossProfit === null ? (
@@ -375,7 +375,7 @@ export default function ClientsPage() {
                       ) : null}
                     </td>
                     <td className="tabular whitespace-nowrap px-3 py-2.5 text-right">
-                      {c.avgJobValue > 0 ? money(c.avgJobValue) : "—"}
+                      {c.avgJobValue > 0 ? money(c.avgJobValue) : "-"}
                     </td>
                     <td className="tabular whitespace-nowrap px-3 py-2.5 text-right">
                       {c.outstanding > 0 ? (
@@ -383,7 +383,7 @@ export default function ClientsPage() {
                           {money(c.outstanding)}
                         </span>
                       ) : (
-                        <span className="text-muted-foreground">—</span>
+                        <span className="text-muted-foreground">-</span>
                       )}
                     </td>
                     <td className="tabular whitespace-nowrap px-3 py-2.5 text-right text-muted-foreground">

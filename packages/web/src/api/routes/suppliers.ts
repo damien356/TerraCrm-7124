@@ -360,12 +360,12 @@ export const suppliers = {
 
 function priceListWarning(s: typeof schema.suppliers.$inferSelect): string | null {
   if (s.priceListValidUntil && s.priceListValidUntil.getTime() < Date.now()) {
-    return `${s.name} prices expired ${s.priceListValidUntil.toISOString().slice(0, 10)} — confirm before quoting.`;
+    return `${s.name} prices expired ${s.priceListValidUntil.toISOString().slice(0, 10)}. Confirm before quoting.`;
   }
   if (!s.priceListEffectiveFrom) return `${s.name} has no price-list date recorded.`;
   const months = (Date.now() - s.priceListEffectiveFrom.getTime()) / (1000 * 60 * 60 * 24 * 30.44);
   if (months >= 12) {
-    return `${s.name} prices are dated ${s.priceListEffectiveFrom.toISOString().slice(0, 10)} — over a year old.`;
+    return `${s.name} prices are dated ${s.priceListEffectiveFrom.toISOString().slice(0, 10)}, over a year old.`;
   }
   return null;
 }

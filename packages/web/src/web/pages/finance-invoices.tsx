@@ -138,14 +138,14 @@ export default function InvoicesPage() {
                             {r.label || r.kind} · {r.status.replace("_", " ")}
                           </p>
                         </td>
-                        <td className="px-4 py-2.5">{r.who || "—"}</td>
+                        <td className="px-4 py-2.5">{r.who || "-"}</td>
                         <td className="px-4 py-2.5 text-xs text-muted-foreground">
                           {r.jobId ? (
                             <Link to={`/jobs/${r.jobId}`} className="text-primary hover:underline">
                               #{r.jobNumber}
                             </Link>
                           ) : (
-                            "—"
+                            "-"
                           )}
                         </td>
                         <td className="px-4 py-2.5">
@@ -158,7 +158,7 @@ export default function InvoicesPage() {
                         </td>
                         <td className="tabular px-4 py-2.5 text-right">{money(r.total)}</td>
                         <td className="tabular px-4 py-2.5 text-right text-muted-foreground">
-                          {r.amountPaid > 0 ? money(r.amountPaid) : "—"}
+                          {r.amountPaid > 0 ? money(r.amountPaid) : "-"}
                         </td>
                         <td
                           className={
@@ -167,7 +167,7 @@ export default function InvoicesPage() {
                               : "tabular px-4 py-2.5 text-right font-semibold"
                           }
                         >
-                          {r.settled ? "—" : money(r.outstanding)}
+                          {r.settled ? "-" : money(r.outstanding)}
                         </td>
                       </tr>
                     ))}

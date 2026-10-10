@@ -29,7 +29,7 @@ function minutesAgo(at: Date | string | null | undefined) {
 
 function agoLabel(at: Date | string | null | undefined) {
   const m = minutesAgo(at);
-  if (m === null) return "—";
+  if (m === null) return "-";
   if (m < 1) return "just now";
   if (m === 1) return "1 min ago";
   if (m < 60) return `${m} mins ago`;
@@ -103,7 +103,7 @@ function CrewMap({
       }).addTo(group);
       marker.bindTooltip(
         `<strong>${p.installerName}</strong><br/>${p.taskTitle ?? "On a job"}${
-          p.siteSuburb ? ` — ${p.siteSuburb}` : ""
+          p.siteSuburb ? `, ${p.siteSuburb}` : ""
         }<br/>${agoLabel(p.capturedAt)}`,
         { direction: "top", offset: [0, -14] },
       );
@@ -217,14 +217,14 @@ export default function CrewPage() {
                           <span className="block truncate text-sm font-semibold">{r.installerName}</span>
                           <span className="block truncate text-xs text-muted-foreground">
                             {r.taskTitle}
-                            {r.siteSuburb ? ` — ${r.siteSuburb}` : ""}
+                            {r.siteSuburb ? `, ${r.siteSuburb}` : ""}
                           </span>
                           <span className="mt-0.5 block text-[11px] text-muted-foreground">
                             {r.sharing
                               ? pin
                                 ? `Last seen ${agoLabel(pin.capturedAt)}`
                                 : "Sharing on, waiting for first position"
-                              : "Sharing off — no position"}
+                              : "Sharing off, no position"}
                           </span>
                         </span>
                         {r.sharing ? (
@@ -246,7 +246,7 @@ export default function CrewPage() {
                 <p className="label-xs">Sharing switched off</p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {notSharing.map((r) => r.installerName).join(", ")} {notSharing.length === 1 ? "has" : "have"} a
-                  job running but location sharing turned off. It's their switch, in the app under Me — the office
+                  job running but location sharing turned off. It's their switch, in the app under Me. The office
                   can't turn it on for them.
                 </p>
               </div>

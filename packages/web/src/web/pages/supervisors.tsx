@@ -224,13 +224,13 @@ function TableView({ d }: { d: Data }) {
               {d.rows.map((r) => (
                 <tr key={r.id} className="border-b border-border last:border-0 hover:bg-secondary/50">
                   <td className="px-4 py-2.5"><NameCell r={r} /></td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">{r.companyName ?? "—"}</td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">{r.companyName ?? "-"}</td>
                   <td className="tabular px-4 py-2.5 text-right font-semibold">{money(r.revenue)}</td>
                   {d.canSeeCosts ? <td className="tabular px-4 py-2.5 text-right"><GpCell r={r} /></td> : null}
                   <td className="tabular px-4 py-2.5 text-right">{r.jobs}</td>
                   <td className="tabular px-4 py-2.5 text-right">{r.quotesSent}</td>
                   {d.canSeeCosts ? <td className="tabular px-4 py-2.5 text-right">{r.quotesWon ?? 0}</td> : null}
-                  {d.canSeeCosts ? <td className="tabular px-4 py-2.5 text-right">{r.winRate === null ? "—" : pct(r.winRate)}</td> : null}
+                  {d.canSeeCosts ? <td className="tabular px-4 py-2.5 text-right">{r.winRate === null ? "-" : pct(r.winRate)}</td> : null}
                   <td className="tabular px-4 py-2.5 text-right text-muted-foreground">{histDate(r.lastSent)}</td>
                 </tr>
               ))}
@@ -258,7 +258,7 @@ function CardList({ d }: { d: Data }) {
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span>{r.jobs} jobs</span>
             <span>{r.quotesSent} quotes sent</span>
-            {d.canSeeCosts ? <span>Win rate {r.winRate === null ? "—" : pct(r.winRate)}</span> : null}
+            {d.canSeeCosts ? <span>Win rate {r.winRate === null ? "-" : pct(r.winRate)}</span> : null}
             {d.canSeeCosts ? <span>GP <GpCell r={r} /></span> : null}
             <span>Last {histDate(r.lastSent)}</span>
           </div>

@@ -154,12 +154,12 @@ export function JobCashCard({ jobId }: { jobId: number }) {
             {/* the six figures Damien reads in this order */}
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
               <Fig label="Contract" value={money(s.value)} hint="ex GST" />
-              <Fig label="Material" value={s.materials ? money(s.materials) : "—"} />
-              <Fig label="Installer" value={s.installer ? money(s.installer) : "—"} />
-              <Fig label="Other" value={s.other ? money(s.other) : "—"} />
+              <Fig label="Material" value={s.materials ? money(s.materials) : "-"} />
+              <Fig label="Installer" value={s.installer ? money(s.installer) : "-"} />
+              <Fig label="Other" value={s.other ? money(s.other) : "-"} />
               <Fig
                 label="Expected GP"
-                value={s.hasCosts ? money(s.grossProfit) : "—"}
+                value={s.hasCosts ? money(s.grossProfit) : "-"}
                 hint={
                   s.hasCosts
                     ? s.marginPercent == null
@@ -171,7 +171,7 @@ export function JobCashCard({ jobId }: { jobId: number }) {
               />
               <Fig
                 label="Cash requirement"
-                value={s.hasCosts ? money(s.cashRequirement) : "—"}
+                value={s.hasCosts ? money(s.cashRequirement) : "-"}
                 hint={s.hasCosts ? "Terra's money, before the customer pays" : "nothing to carry yet"}
                 tone={s.cashRequirement > 0 ? "bad" : undefined}
               />

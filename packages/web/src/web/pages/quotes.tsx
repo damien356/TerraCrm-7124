@@ -32,9 +32,9 @@ export const QUOTE_STATUS_COLOUR: Record<string, string> = {
 const STATUSES = ["draft", "needs_review", "sent", "accepted", "declined", "expired", "replaced"];
 
 function fmtDate(value: Date | string | null) {
-  if (!value) return "—";
+  if (!value) return "-";
   const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "—";
+  if (Number.isNaN(d.getTime())) return "-";
   return d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "2-digit" });
 }
 
@@ -128,7 +128,7 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
             value={form.companyId}
             onChange={(v) => setForm((f) => ({ ...f, companyId: v, supervisorContactId: "" }))}
             placeholder="Search companies…"
-            emptyLabel="None — bills the person"
+            emptyLabel="None, bills the person"
             options={(companies.data ?? []).map((c) => ({
               value: String(c.id),
               label: c.name,
@@ -275,10 +275,10 @@ export default function QuotesPage() {
                       </Link>
                     </td>
                     <td className="px-4 py-2.5">
-                      {q.contact ? `${q.contact.firstName} ${q.contact.lastName}` : "—"}
+                      {q.contact ? `${q.contact.firstName} ${q.contact.lastName}` : "-"}
                       {q.company ? <p className="text-xs text-muted-foreground">{q.company.name}</p> : null}
                     </td>
-                    <td className="px-4 py-2.5">{q.site?.address ?? "—"}</td>
+                    <td className="px-4 py-2.5">{q.site?.address ?? "-"}</td>
                     <td className="px-4 py-2.5">
                       <Badge colour={QUOTE_STATUS_COLOUR[q.status]}>{q.status}</Badge>
                     </td>
@@ -288,7 +288,7 @@ export default function QuotesPage() {
                           #{q.job.number}
                         </Link>
                       ) : (
-                        <span className="text-xs text-muted-foreground">—</span>
+                        <span className="text-xs text-muted-foreground">-</span>
                       )}
                     </td>
                     <td className="tabular px-4 py-2.5 text-right">{q.itemCount}</td>

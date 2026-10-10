@@ -212,7 +212,7 @@ export function CashflowChart({
       {hover !== null && buckets[hover] ? (
         <div className="pointer-events-none absolute left-1/2 top-2 z-10 w-[230px] -translate-x-1/2 rounded-lg border border-border bg-popover px-3 py-2 text-xs shadow-xl">
           <p className="font-semibold">
-            {shortDate(buckets[hover]!.start)} – {shortDate(buckets[hover]!.end)}
+            {shortDate(buckets[hover]!.start)} to {shortDate(buckets[hover]!.end)}
           </p>
           <dl className="mt-1.5 space-y-0.5">
             <Row label="In, committed" value={money(buckets[hover]!.inCommitted)} tone="success" />

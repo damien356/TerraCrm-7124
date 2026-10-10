@@ -78,7 +78,7 @@ function AreaManager({ jobId }: { jobId: number }) {
           </span>
         ))}
         {(areas.data ?? []).length === 0 ? (
-          <span className="text-xs text-muted-foreground">No areas yet — add the rooms you're covering.</span>
+          <span className="text-xs text-muted-foreground">No areas yet. Add the rooms you're covering.</span>
         ) : null}
       </div>
       <div className="mt-2.5 flex gap-2">
@@ -157,7 +157,7 @@ export function JobFile({ jobId, isCallback = false }: { jobId: number; isCallba
     <Card>
       <CardHeader
         title="Job file"
-        subtitle="Every photo, video and plan in its own slot — never a loose diary feed."
+        subtitle="Every photo, video and plan in its own slot, never a loose diary feed."
         action={
           <Button size="sm" variant="secondary" onClick={() => setShowArchived((v) => !v)}>
             {showArchived ? "Hide archived" : "Show archived"}

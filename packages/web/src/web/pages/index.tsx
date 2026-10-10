@@ -221,7 +221,7 @@ export default function DashboardPage() {
                   <div key={i.id} className="flex items-center justify-between px-4 py-2.5">
                     <p className="text-sm font-medium">{i.name}</p>
                     <p className="tabular text-xs text-[var(--warning)]">
-                      {i.insuranceExpiry ? new Date(i.insuranceExpiry).toLocaleDateString("en-AU") : "—"}
+                      {i.insuranceExpiry ? new Date(i.insuranceExpiry).toLocaleDateString("en-AU") : "-"}
                     </p>
                   </div>
                 ))}

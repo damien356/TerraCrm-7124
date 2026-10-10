@@ -384,7 +384,7 @@ export const tasks = {
         entityType: "task",
         entityId: row!.id,
         action: "task_created",
-        detail: `${input.title}${crewSize > input.crewSize ? " (crew forced to 2 — furniture on site)" : ""}`,
+        detail: `${input.title}${crewSize > input.crewSize ? " (crew forced to 2, furniture on site)" : ""}`,
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
@@ -421,7 +421,7 @@ export const tasks = {
 
       if (rest.crewSize === 1 && existing.job.furnitureOnSite) {
         throw new ORPCError("BAD_REQUEST", {
-          message: "This job has furniture on site — it needs a 2-man crew.",
+          message: "This job has furniture on site, so it needs a 2-man crew.",
         });
       }
 

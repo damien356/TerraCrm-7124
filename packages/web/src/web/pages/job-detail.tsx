@@ -108,7 +108,7 @@ function NewTaskModal({ jobId, open, onClose, furniture }: { jobId: number; open
       open={open}
       onClose={onClose}
       title="Add a dispatch"
-      subtitle="Each piece of work on the job is its own dispatch — own skill, own crew, own pay."
+      subtitle="Each piece of work on the job is its own dispatch: own skill, own crew, own pay."
       width="max-w-2xl"
       footer={
         <>
@@ -146,7 +146,7 @@ function NewTaskModal({ jobId, open, onClose, furniture }: { jobId: number; open
           </Select>
         </Field>
         <Field label="What it's called on the board">
-          <Input value={form.title} onChange={(e) => set("title", e.target.value)} placeholder="Lift tiles — kitchen" />
+          <Input value={form.title} onChange={(e) => set("title", e.target.value)} placeholder="Lift tiles, kitchen" />
         </Field>
         <Field label="Area (m²)">
           <Input type="number" inputMode="decimal" value={form.areaM2} onChange={(e) => set("areaM2", e.target.value)} />
@@ -161,7 +161,7 @@ function NewTaskModal({ jobId, open, onClose, furniture }: { jobId: number; open
         </Field>
         <Field
           label="Crew size"
-          hint={furniture ? "Locked at 2 — furniture on site." : "2 means either a lead with his own offsider, or two bookings."}
+          hint={furniture ? "Locked at 2. Furniture on site." : "2 means either a lead with his own offsider, or two bookings."}
         >
           <Select value={form.crewSize} onChange={(e) => set("crewSize", e.target.value)} disabled={furniture}>
             <option value="1">1 man</option>
@@ -345,7 +345,7 @@ export default function JobDetailPage() {
   const j = job.data;
   const isCallback = j.parentJobId != null;
   const isAdmin = bootstrap.data?.actor.role === "admin";
-  const customer = j.company?.name ?? [j.contact?.firstName, j.contact?.lastName].filter(Boolean).join(" ") ?? "—";
+  const customer = j.company?.name ?? [j.contact?.firstName, j.contact?.lastName].filter(Boolean).join(" ") ?? "-";
 
   return (
     <Page
@@ -420,7 +420,7 @@ export default function JobDetailPage() {
               </div>
               <div>
                 <p className="label-xs">Site</p>
-                <p className="mt-0.5 text-sm">{j.site?.address ?? "—"}</p>
+                <p className="mt-0.5 text-sm">{j.site?.address ?? "-"}</p>
                 <p className="text-xs text-muted-foreground">{j.site?.suburb ?? ""}</p>
               </div>
               <div>
@@ -437,7 +437,7 @@ export default function JobDetailPage() {
                     checked={j.furnitureOnSite}
                     onChange={(e) => updateJob.mutate({ id: j.id, furnitureOnSite: e.target.checked })}
                   />
-                  {j.furnitureOnSite ? "Yes — 2-man crews" : "No"}
+                  {j.furnitureOnSite ? "Yes, 2-man crews" : "No"}
                 </label>
               </div>
             </div>
@@ -614,7 +614,7 @@ export default function JobDetailPage() {
                 <Input
                   value={material.description}
                   onChange={(e) => setMaterial((m) => ({ ...m, description: e.target.value }))}
-                  placeholder="Belgotex Tuscany — Nomad, 4m broadloom"
+                  placeholder="Belgotex Tuscany in Nomad, 4m broadloom"
                 />
               </Field>
               <Field label="Qty" className="w-20">

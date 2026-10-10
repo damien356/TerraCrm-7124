@@ -196,14 +196,14 @@ export default function ProfitabilityPage() {
                         <td className="tabular px-3 py-2.5 text-right font-semibold">{money(r.revenue)}</td>
                         <td className="tabular px-3 py-2.5 text-right">
                           {r.grossProfit === null ? (
-                            <span className="text-xs text-muted-foreground">—</span>
+                            <span className="text-xs text-muted-foreground">-</span>
                           ) : (
                             money(r.grossProfit)
                           )}
                         </td>
                         <td className="tabular px-3 py-2.5 text-right">
                           {r.marginPercent === null ? (
-                            <span className="text-xs text-muted-foreground">—</span>
+                            <span className="text-xs text-muted-foreground">-</span>
                           ) : (
                             pct(r.marginPercent)
                           )}
@@ -220,26 +220,26 @@ export default function ProfitabilityPage() {
                           {r.outstanding > 0 ? (
                             <span className="font-medium text-[var(--warning)]">{money(r.outstanding)}</span>
                           ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
+                            <span className="text-xs text-muted-foreground">-</span>
                           )}
                         </td>
                         <td className="tabular px-3 py-2.5 text-right">
                           {r.avgDaysToPay === null ? (
-                            <span className="text-xs text-muted-foreground">—</span>
+                            <span className="text-xs text-muted-foreground">-</span>
                           ) : (
                             `${r.avgDaysToPay}d`
                           )}
                         </td>
                         <td className="tabular px-3 py-2.5 text-right">
                           {r.quoteConversion === null ? (
-                            <span className="text-xs text-muted-foreground">—</span>
+                            <span className="text-xs text-muted-foreground">-</span>
                           ) : (
                             pct(r.quoteConversion)
                           )}
                         </td>
                         <td className="tabular px-3 py-2.5 text-right">
                           {r.jobsPerYear === null ? (
-                            <span className="text-xs text-muted-foreground">—</span>
+                            <span className="text-xs text-muted-foreground">-</span>
                           ) : (
                             r.jobsPerYear
                           )}

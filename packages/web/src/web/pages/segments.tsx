@@ -74,7 +74,7 @@ const BLANK: Draft = {
 const STARTERS: { name: string; description: string; rules: Partial<Rules> }[] = [
   {
     name: "Carpet, last 2 years",
-    description: "Recent carpet customers — the people a carpet care or upgrade message is for.",
+    description: "Recent carpet customers, the people a carpet care or upgrade message is for.",
     rules: { products: ["carpet"], completedWithinDays: 730 },
   },
   {
@@ -443,7 +443,7 @@ function Editor({
                 rows={2}
                 value={draft.description}
                 onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
-                placeholder="Recent carpet customers — for a care or upgrade message."
+                placeholder="Recent carpet customers, for a care or upgrade message."
               />
             </Field>
 
@@ -604,7 +604,7 @@ function Editor({
               <div className="flex items-start gap-2 rounded-md border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
                 <HardHat className="mt-0.5 size-3.5 shrink-0" />
                 <span>
-                  A builder segment can't be attached to a journey — only to a one-off send someone
+                  A builder segment can't be attached to a journey, only to a one-off send someone
                   writes and approves.
                 </span>
               </div>
@@ -623,7 +623,7 @@ function Editor({
                       {preview.data.sample.map((m) => (
                         <tr key={m.id} className={m.reachable ? "" : "text-muted-foreground"}>
                           <td className="px-2.5 py-1.5">
-                            <span className="font-medium">{m.name || "—"}</span>
+                            <span className="font-medium">{m.name || "-"}</span>
                             <span className="ml-1.5">{m.suburb}</span>
                           </td>
                           <td className="px-2.5 py-1.5 text-right">
@@ -712,7 +712,7 @@ function AudienceReview({ onClose }: { onClose: () => void }) {
                 <div key={r.id} className="flex flex-wrap items-start justify-between gap-3 px-3 py-2.5">
                   <div className="min-w-0">
                     <p className="text-sm font-medium">
-                      {r.name || "—"}
+                      {r.name || "-"}
                       {r.jobCount > 0 ? (
                         <span className="ml-2 text-xs font-normal text-muted-foreground">
                           {r.jobCount} job{r.jobCount === 1 ? "" : "s"}

@@ -446,7 +446,7 @@ export const jobs = {
           entityType: "job",
           entityId: id,
           action: "furniture_flagged",
-          detail: "Furniture on site — install tasks forced to 2-man crews",
+          detail: "Furniture on site, install tasks forced to 2-man crews",
           actorName: context.actor.name,
           actorRole: context.actor.role,
         });

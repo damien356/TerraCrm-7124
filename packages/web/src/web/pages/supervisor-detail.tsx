@@ -93,7 +93,7 @@ export default function SupervisorDetailPage() {
             />
           ) : null}
           <Stat label="Quotes sent" value={s.quotesSent} hint={costs && s.winRate !== null ? `${s.quotesWon} won, ${pct(s.winRate)} win rate` : undefined} />
-          <Stat label="Live now" value={s.pipelineValue > 0 ? money(s.pipelineValue) : "—"} hint={`Last sent ${histDate(s.lastSent)}`} />
+          <Stat label="Live now" value={s.pipelineValue > 0 ? money(s.pipelineValue) : "-"} hint={`Last sent ${histDate(s.lastSent)}`} />
         </div>
 
         <Card>
@@ -174,8 +174,8 @@ export default function SupervisorDetailPage() {
                         <Link to={`/jobs/${j.id}`} className="font-medium text-primary hover:underline">#{j.displayNumber ?? j.number}</Link>
                         <p className="max-w-[320px] truncate text-xs text-muted-foreground">{j.title}</p>
                       </td>
-                      <td className="px-4 py-2.5 text-xs text-muted-foreground">{j.companyName ?? "—"}</td>
-                      <td className="px-4 py-2.5"><Badge>{j.status || "—"}</Badge></td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">{j.companyName ?? "-"}</td>
+                      <td className="px-4 py-2.5"><Badge>{j.status || "-"}</Badge></td>
                       <td className="tabular px-4 py-2.5 text-right font-medium">{money(j.value)}</td>
                       {costs ? (
                         <td className="tabular px-4 py-2.5 text-right">
@@ -217,7 +217,7 @@ export default function SupervisorDetailPage() {
                       <td className="px-4 py-2.5">
                         <Link to={`/quotes/${qt.id}`} className="font-medium text-primary hover:underline">#{qt.number}</Link>
                       </td>
-                      <td className="px-4 py-2.5 text-xs text-muted-foreground">{qt.companyName ?? "—"}</td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">{qt.companyName ?? "-"}</td>
                       <td className="px-4 py-2.5"><Badge>{qt.status}</Badge></td>
                       <td className="tabular px-4 py-2.5 text-right font-medium">{money(qt.total)}</td>
                       <td className="tabular px-4 py-2.5 text-right text-muted-foreground">{histDate(qt.date)}</td>

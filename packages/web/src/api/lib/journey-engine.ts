@@ -92,7 +92,7 @@ export async function enrol(
   const who = await isHomeowner(contactId);
   if (!who.homeowner) {
     const why = who.decided ? "marked as trade" : `looks like trade: ${who.reasons.join("; ")}`;
-    return { ok: false, reason: `journeys are homeowner-only — ${why}` };
+    return { ok: false, reason: `journeys are homeowner-only: ${why}` };
   }
 
   const consent = await checkConsent(contact, "email");

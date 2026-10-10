@@ -190,7 +190,7 @@ export default function ContactDetailPage() {
           </Card>
 
           <Card>
-            <CardHeader title="Companies" subtitle="Optional wrapper — the person stays one record." />
+            <CardHeader title="Companies" subtitle="Optional wrapper. The person stays one record." />
             {contact.data.companies.length === 0 ? (
               <Empty>Private customer.</Empty>
             ) : (
@@ -255,7 +255,7 @@ export default function ContactDetailPage() {
                         <p className="text-xs text-muted-foreground">{job.title || "Untitled"}</p>
                       </td>
                       <td className="px-4 py-2.5">
-                        <p className="max-w-[200px] truncate">{site?.address ?? "—"}</p>
+                        <p className="max-w-[200px] truncate">{site?.address ?? "-"}</p>
                         <p className="text-xs text-muted-foreground">{roleLabel(role) || "job contact"}</p>
                       </td>
                       <td className="px-4 py-2.5">

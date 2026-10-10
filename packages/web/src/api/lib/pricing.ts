@@ -252,7 +252,7 @@ function priceNote({
   upcoming: PricedProduct["upcoming"];
   extraMargin: number;
 }): string | null {
-  if (product.priceOnApplication) return "Price on application — ring the supplier before quoting this.";
+  if (product.priceOnApplication) return "Price on application. Ring the supplier before quoting this.";
   if (product.costPrice === null) return "No price recorded. Confirm with the supplier before quoting.";
   if (special && special.passOnToCustomer) {
     return `${special.label}: the saving is passed to the customer, sell ${special.discountPct}% lower until ${special.endsOn}.`;
@@ -549,7 +549,7 @@ export function resolveRollCut(product: RollCutProduct, qty: number): RollCutQuo
           ? "No price recorded. Confirm with the supplier before quoting."
           : // Neutral on purpose: a product with NO break is neither a roll nor
             // a pack, and Mitre 10's ply and mouldings are both.
-            "One rate, whatever the quantity — no quantity break on this product.",
+            "One rate, whatever the quantity. No quantity break on this product.",
     };
   }
 
@@ -715,28 +715,28 @@ function rollCutNote(a: {
    * it, so the roll-versus-cut question is already answered and saying
    * anything about it would only bury the number that matters. */
   if (a.onVolumeRate && a.volumeQty !== null && a.volumeRate !== null) {
-    return `Over the ${q(a.volumeQty)} break, so the WHOLE ${q(a.qty)} bills at the volume rate, ${money(a.volumeRate)} ${per} instead of ${money(a.rollRate)} — ${money(a.volumeSaving)} off this line.`;
+    return `Over the ${q(a.volumeQty)} break, so the WHOLE ${q(a.qty)} bills at the volume rate, ${money(a.volumeRate)} ${per} instead of ${money(a.rollRate)}, ${money(a.volumeSaving)} off this line.`;
   }
 
   /** What the order is billing at now, before any volume advice. */
   const head = (() => {
     // No cut rate published: one rate up to the volume break, nothing to choose.
     if (a.cutRate === null) {
-      return `${money(a.rollRate)} ${per} — the standard rate, with no ${shortAdj} premium on this product.`;
+      return `${money(a.rollRate)} ${per}, the standard rate, with no ${shortAdj} premium on this product.`;
     }
     if (a.onRollRate) {
       if (a.remainder === 0) {
-        return `${a.fullRolls} full ${a.fullRolls === 1 ? whole : wholePl} — all ${money(a.rollRate)} ${per} at the ${whole} rate.`;
+        return `${a.fullRolls} full ${a.fullRolls === 1 ? whole : wholePl}, all ${money(a.rollRate)} ${per} at the ${whole} rate.`;
       }
       return `Over a full ${whole} (${a.fullRolls} × ${rollSize} plus ${q(a.remainder)}), so the WHOLE ${q(a.qty)} bills at the ${whole} rate, ${money(a.rollRate)} ${per}. No ${shortAdj} premium on ${leftover}.`;
     }
     const cut = `Under a full ${whole}, so it is ${whole === "pack" ? "loose" : "a cut"}: ${money(a.cutRate)} ${per} instead of ${money(a.rollRate)}, ${money(a.premiumTotal)} more on this line.`;
     if (a.betterAsFullRoll && a.rollM2 !== null) {
       const spare = spareWords(a.betterAsFullRoll.spareQty, a.betterAsFullRoll.spareLm);
-      return `${cut} TAKE THE WHOLE ${whole.toUpperCase()}: ${q(a.rollM2)} costs ${money(a.betterAsFullRoll.costExGst)} against ${money(a.betterAsFullRoll.costExGst + a.betterAsFullRoll.savingExGst)} ${shortAdj} — ${money(a.betterAsFullRoll.savingExGst)} cheaper and ${spare}.`;
+      return `${cut} TAKE THE WHOLE ${whole.toUpperCase()}: ${q(a.rollM2)} costs ${money(a.betterAsFullRoll.costExGst)} against ${money(a.betterAsFullRoll.costExGst + a.betterAsFullRoll.savingExGst)} ${shortAdj}, ${money(a.betterAsFullRoll.savingExGst)} cheaper and ${spare}.`;
     }
     if (a.breakEven !== null) {
-      return `${cut} Still cheaper than a full ${whole} — a ${whole} only pays for itself above ${q(a.breakEven)}.`;
+      return `${cut} Still cheaper than a full ${whole}. A ${whole} only pays for itself above ${q(a.breakEven)}.`;
     }
     return cut;
   })();
@@ -744,7 +744,7 @@ function rollCutNote(a: {
   // Under the volume break, so the advice is about getting to it.
   if (a.betterAtVolume && a.volumeQty !== null && a.volumeRate !== null) {
     const spare = spareWords(a.betterAtVolume.spareQty, a.betterAtVolume.spareLm);
-    return `${head} PUSH IT TO ${q(a.volumeQty)}: that costs ${money(a.betterAtVolume.costExGst)} at ${money(a.volumeRate)} ${per} against ${money(a.betterAtVolume.costExGst + a.betterAtVolume.savingExGst)} for what was asked — ${money(a.betterAtVolume.savingExGst)} cheaper and ${spare}.`;
+    return `${head} PUSH IT TO ${q(a.volumeQty)}: that costs ${money(a.betterAtVolume.costExGst)} at ${money(a.volumeRate)} ${per} against ${money(a.betterAtVolume.costExGst + a.betterAtVolume.savingExGst)} for what was asked, ${money(a.betterAtVolume.savingExGst)} cheaper and ${spare}.`;
   }
   if (a.volumeQty !== null && a.volumeRate !== null) {
     return `${head} Over ${q(a.volumeQty)} the rate drops to ${money(a.volumeRate)} ${per}.`;
@@ -941,7 +941,7 @@ export function resolveSupplierCharges(
     if (!isChargeLive(r, today)) {
       if (r.active !== false && r.autoApply) {
         const window = r.effectiveFrom && r.effectiveFrom > today ? `starts ${r.effectiveFrom}` : `ended ${r.effectiveUntil}`;
-        excluded.push({ id: r.id, name: r.name, reason: `Outside its dates — ${window}.` });
+        excluded.push({ id: r.id, name: r.name, reason: `Outside its dates: ${window}.` });
       }
       continue;
     }
@@ -952,7 +952,7 @@ export function resolveSupplierCharges(
       excluded.push({
         id: r.id,
         name: r.name,
-        reason: "Supplier does not deliver to Terra — freight is invoiced by the carrier instead, so this is not Terra's cost.",
+        reason: "Supplier does not deliver to Terra. Freight is invoiced by the carrier instead, so this is not Terra's cost.",
       });
       continue;
     }
@@ -973,7 +973,7 @@ export function resolveSupplierCharges(
       excluded.push({
         id: r.id,
         name: r.name,
-        reason: `Charged per ${chargeUnitLabel(r.basis)} and this order has none entered — put the ${chargeUnitLabel(r.basis)} count in or it is not being costed.`,
+        reason: `Charged per ${chargeUnitLabel(r.basis)} and this order has none entered. Put the ${chargeUnitLabel(r.basis)} count in or it is not being costed.`,
       });
       continue;
     }
@@ -1064,7 +1064,7 @@ function chargesNote(
   const money = (n: number) => `\u0024${n.toFixed(2)}`;
   if (charges.length === 0) {
     const tail = excluded.length ? ` ${excluded.length} charge${excluded.length === 1 ? "" : "s"} on file did not apply.` : "";
-    return `No supplier charges on this order — ${money(goodsExGst)} ex GST is the material cost.${tail}`;
+    return `No supplier charges on this order. ${money(goodsExGst)} ex GST is the material cost.${tail}`;
   }
   const parts = charges.map((c) => `${c.name} ${money(Math.abs(c.exGst))}${c.isCredit ? " credit" : ""}`);
   // "before transport" is only true while no freight has been billed. Armstrong

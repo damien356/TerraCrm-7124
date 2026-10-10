@@ -149,7 +149,7 @@ export default function ExpensesPage() {
                             <p className="text-xs font-medium text-destructive">overdue</p>
                           ) : null}
                         </td>
-                        <td className="px-4 py-2.5">{r.who || "—"}</td>
+                        <td className="px-4 py-2.5">{r.who || "-"}</td>
                         <td className="px-4 py-2.5">
                           <span className="text-xs text-muted-foreground">
                             {KIND_LABEL[r.kind] ?? r.kind}

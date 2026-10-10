@@ -286,7 +286,7 @@ export default function CompaniesPage() {
                       </p>
                     </td>
                     <td className="tabular whitespace-nowrap px-3 py-2.5 text-right font-semibold">
-                      {c.revenue > 0 ? money(c.revenue) : "—"}
+                      {c.revenue > 0 ? money(c.revenue) : "-"}
                     </td>
                     <td className="tabular whitespace-nowrap px-3 py-2.5 text-right">
                       {c.grossProfit === null ? (
@@ -311,7 +311,7 @@ export default function CompaniesPage() {
                       ) : null}
                     </td>
                     <td className="tabular whitespace-nowrap px-3 py-2.5 text-right">
-                      {c.avgJobValue > 0 ? money(c.avgJobValue) : "—"}
+                      {c.avgJobValue > 0 ? money(c.avgJobValue) : "-"}
                     </td>
                     <td className="tabular whitespace-nowrap px-3 py-2.5 text-right">
                       {c.outstanding > 0 ? (
@@ -319,7 +319,7 @@ export default function CompaniesPage() {
                           {money(c.outstanding)}
                         </span>
                       ) : (
-                        <span className="text-muted-foreground">—</span>
+                        <span className="text-muted-foreground">-</span>
                       )}
                     </td>
                     <td className="tabular whitespace-nowrap px-3 py-2.5 text-right text-muted-foreground">

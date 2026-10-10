@@ -19,13 +19,13 @@ import { useEligible } from "../queries/installers";
 
 /** The windows the office actually gives customers. */
 const WINDOWS = [
-  { label: "7:00am – 11:00am", start: "07:00", end: "11:00" },
-  { label: "8:00am – 12:00pm", start: "08:00", end: "12:00" },
-  { label: "9:00am – 1:00pm", start: "09:00", end: "13:00" },
-  { label: "11:00am – 3:00pm", start: "11:00", end: "15:00" },
-  { label: "12:00pm – 4:00pm", start: "12:00", end: "16:00" },
-  { label: "1:00pm – 5:00pm", start: "13:00", end: "17:00" },
-  { label: "All day, 7:00am – 5:00pm", start: "07:00", end: "17:00" },
+  { label: "7:00am to 11:00am", start: "07:00", end: "11:00" },
+  { label: "8:00am to 12:00pm", start: "08:00", end: "12:00" },
+  { label: "9:00am to 1:00pm", start: "09:00", end: "13:00" },
+  { label: "11:00am to 3:00pm", start: "11:00", end: "15:00" },
+  { label: "12:00pm to 4:00pm", start: "12:00", end: "16:00" },
+  { label: "1:00pm to 5:00pm", start: "13:00", end: "17:00" },
+  { label: "All day, 7:00am to 5:00pm", start: "07:00", end: "17:00" },
 ];
 
 const DURATIONS = [
@@ -35,7 +35,7 @@ const DURATIONS = [
 ];
 
 const money = (n?: number | null) =>
-  n == null ? "—" : n.toLocaleString("en-AU", { style: "currency", currency: "AUD", minimumFractionDigits: 2 });
+  n == null ? "-" : n.toLocaleString("en-AU", { style: "currency", currency: "AUD", minimumFractionDigits: 2 });
 
 const iso = (d: Date) => {
   const c = new Date(d);

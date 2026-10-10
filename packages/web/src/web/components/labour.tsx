@@ -779,7 +779,7 @@ export function RateHistoryModal({
                   </td>
                   <td className="px-3 py-2 tabular-nums">{r.effectiveFrom}</td>
                   <td className="px-3 py-2 tabular-nums">{r.effectiveTo ?? "open"}</td>
-                  <td className="px-3 py-2 text-xs">{r.createdByName ?? "—"}</td>
+                  <td className="px-3 py-2 text-xs">{r.createdByName ?? "-"}</td>
                 </tr>
               ))}
             </tbody>
@@ -900,7 +900,7 @@ export function InstallerRatesTab({ installerId }: { installerId: number }) {
                       }`}
                     >
                       {row.difference == null
-                        ? "—"
+                        ? "-"
                         : `${row.difference > 0 ? "+" : ""}${money(row.difference, row.unit)}`}
                     </div>
 

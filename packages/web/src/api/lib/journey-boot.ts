@@ -38,7 +38,7 @@ export function bootJourneyEngine() {
   }
 
   if (mode !== "on" && !isLiveServer()) {
-    console.log("[journeys] engine idle — not the published server, nothing will be sent");
+    console.log("[journeys] engine idle, not the published server, nothing will be sent");
     return;
   }
 
