@@ -5,6 +5,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, authed } from "../middleware/auth";
 import { groupForSkill } from "./labour";
+import { autoSoldAs, SOLD_AS } from "../lib/flooring-qty";
 import { JOB_NUMBER_KEY, JOB_NUMBER_START_KEY, jobNumbering, setJobNumberStart } from "../lib/job-number";
 
 /**
@@ -182,12 +183,18 @@ export const settings = {
         sku: z.string().nullable().optional(),
         /** Picked from the supplier list. Wins over the free text name, which is copied from it. */
         supplierId: z.number().nullable().optional(),
+        /** Box or Broadloom (item 9). Left out = worked out from category and unit. Null = neither. */
+        soldAs: z.enum(SOLD_AS).nullable().optional(),
       }),
     )
     .handler(async ({ input }) => {
       // variant_key is UNIQUE and defaults to "", so a second hand-made product
       // would collide with the first. Give each one its own key.
-      const values = { ...input, variantKey: `manual|${crypto.randomUUID()}` };
+      const values = {
+        ...input,
+        soldAs: input.soldAs !== undefined ? input.soldAs : autoSoldAs(input),
+        variantKey: `manual|${crypto.randomUUID()}`,
+      };
       if (input.supplierId) {
         const [sup] = await db
           .select({ name: schema.suppliers.name })
@@ -214,6 +221,8 @@ export const settings = {
         sellPrice: z.number().nullable().optional(),
         sku: z.string().nullable().optional(),
         active: z.boolean().optional(),
+        /** Box or Broadloom (item 9). Null = neither. */
+        soldAs: z.enum(SOLD_AS).nullable().optional(),
       }),
     )
     .handler(async ({ input }) => {

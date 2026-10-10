@@ -8,12 +8,12 @@ import { parseQuoteRef, quoteRef } from "../lib/refs";
 import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
 import { assertSupervisor } from "../lib/supervisors";
-import { and, asc, desc, eq, isNull, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
-import { markupOf, markupPctUsed, sellAtMarkup, sellExGstWithMarkup } from "../lib/pricing";
+import { markupOf, markupPctUsed, sellAtMarkup } from "../lib/pricing";
 import { depositDefaultFor, depositSplit } from "../lib/deposits";
 import { liveSellFor } from "../lib/live-sell";
 import { suggestProducts } from "../agent/price";
@@ -24,6 +24,19 @@ import { createContact } from "./contacts";
 import { bundlesFor, copyBundles } from "./quoteBundles";
 import { leadToQuotedOnSend } from "../lib/job-stage";
 import { addJobPerson, addQuotePerson, copyQuotePeople, personInput } from "../lib/job-people";
+import { floorQty, floorTypeOf, isInstallFlag, isOwnFlag, NO_WIDTH_FLAG } from "../lib/flooring-qty";
+import {
+  addLinkedLabour,
+  followLinkedLabour,
+  installFor,
+  lineAreas,
+  nextFlag,
+  nextSortOrder,
+  qtyFlag,
+  qtyForLine,
+  standardLabour,
+  wastageDefaultFor,
+} from "../lib/quote-labour";
 
 /**
  * Quotes are for Admin and Office. Field crew must never reach any procedure
@@ -365,24 +378,42 @@ export async function reviseQuoteRecord(
   if (!row) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Revision not created" });
 
   if (items.length) {
-    await db.insert(schema.quoteItems).values(
-      items.map((i, idx) => ({
-        quoteId: row.id,
-        productId: i.productId,
-        kind: i.kind,
-        lineType: i.lineType,
-        description: i.description,
-        qty: i.qty,
-        unit: i.unit,
-        unitPrice: i.unitPrice,
-        listUnitPrice: i.listUnitPrice,
-        unitCost: i.unitCost,
-        markupPercent: i.markupPercent,
-        total: i.total,
-        floorCategory: i.floorCategory,
-        sortOrder: idx,
-      })),
-    );
+    const copied = await db
+      .insert(schema.quoteItems)
+      .values(
+        items.map((i, idx) => ({
+          quoteId: row.id,
+          productId: i.productId,
+          kind: i.kind,
+          lineType: i.lineType,
+          description: i.description,
+          qty: i.qty,
+          unit: i.unit,
+          unitPrice: i.unitPrice,
+          listUnitPrice: i.listUnitPrice,
+          unitCost: i.unitCost,
+          markupPercent: i.markupPercent,
+          total: i.total,
+          floorCategory: i.floorCategory,
+          sortOrder: idx,
+          measuredM2: i.measuredM2,
+          wastagePct: i.wastagePct,
+          rollWidthM: i.rollWidthM,
+          rateItemId: i.rateItemId,
+        })),
+      )
+      .returning({ id: schema.quoteItems.id, sortOrder: schema.quoteItems.sortOrder });
+    // Item 8: each install stays linked to its own product line on the new version.
+    const newIdAt = new Map(copied.map((c) => [c.sortOrder, c.id]));
+    const newIdFor = new Map(items.map((i, idx) => [i.id, newIdAt.get(idx)]));
+    for (const [idx, i] of items.entries()) {
+      if (i.labourForItemId == null) continue;
+      const self = newIdAt.get(idx);
+      const parent = newIdFor.get(i.labourForItemId);
+      if (self && parent) {
+        await db.update(schema.quoteItems).set({ labourForItemId: parent }).where(eq(schema.quoteItems.id, self));
+      }
+    }
   }
 
   await copyBundles(quote.id, row.id);
@@ -514,6 +545,7 @@ export const quotes = {
 
     const cost = items.reduce((sum, i) => sum + (i.unitCost ?? 0) * (i.qty ?? 0), 0);
     const showCosts = context.actor.canSeeCosts;
+    const areas = await lineAreas(items);
     const limit = await discountLimit();
     const discountPercent = discountPercentOf(items);
     const needsApproval =
@@ -532,8 +564,8 @@ export const quotes = {
       site: row.site,
       job: row.job?.id ? row.job : null,
       items: showCosts
-        ? items.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice) }))
-        : items.map((i) => ({ ...i, unitCost: null, markupPercent: null })),
+        ? items.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice), area: areas[i.id] ?? null }))
+        : items.map((i) => ({ ...i, unitCost: null, markupPercent: null, area: areas[i.id] ?? null })),
       ...depositSplit(row.quote.total, row.quote.depositPercent),
       activity,
       versions: versions.map((v) => ({ ...v, ref: quoteRef(row.quote.number, v.version, jobRefText) })),
@@ -722,28 +754,57 @@ export const quotes = {
       return { item: hideCost(row, context.actor), totals };
     }),
 
-  /** Add a line straight off the price list, carrying sell price and cost across. */
+  /**
+   * Add a line straight off the price list, carrying sell price and cost across.
+   *
+   * Items 8 and 9: a Box or Broadloom product takes the measured m2 and a
+   * wastage % (Settings starts it), and its qty is worked out from them. Its
+   * install labour goes on underneath, linked, unless `labour` is null
+   * (unticked). `labour.itemId` swaps it. Timber, and carpet with no roll
+   * width, have no default: the line is flagged until Damien picks.
+   */
   addProduct: staffOnly
-    .input(z.object({ quoteId: z.number(), productId: z.number(), qty: z.number().default(1) }))
+    .input(
+      z.object({
+        quoteId: z.number(),
+        productId: z.number(),
+        qty: z.number().default(1),
+        measuredM2: z.number().min(0).nullable().optional(),
+        wastagePct: z.number().min(0).max(100).nullable().optional(),
+        rollWidthM: z.number().positive().nullable().optional(),
+        /** Undefined = the default install. Null = unticked. */
+        labour: z.object({ itemId: z.number() }).nullable().optional(),
+      }),
+    )
     .handler(async ({ input, context }) => {
       await editableQuoteOrThrow(input.quoteId);
       const [product] = await db.select().from(schema.products).where(eq(schema.products.id, input.productId));
       if (!product) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
 
-      const [maxRow] = await db
-        .select({ max: sql<number>`coalesce(max(${schema.quoteItems.sortOrder}), -1)` })
-        .from(schema.quoteItems)
-        .where(eq(schema.quoteItems.quoteId, input.quoteId));
-
       const unitPrice = await liveSellFor(product);
       // Reads the way Damien says it out loud: "Andes Peak in Merida", not a
       // string of dashes. This line goes out on the customer's quote.
-      const named = [product.brand, product.range].filter(Boolean).join(" ");
-      const description = product.colour
-        ? named
-          ? `${named} in ${product.colour}`
-          : product.colour
-        : named;
+      const description = productLineName(product);
+
+      const measured = floorTypeOf(product) && input.measuredM2 != null ? input.measuredM2 : null;
+      const wastagePct = measured != null ? (input.wastagePct ?? (await wastageDefaultFor(product))) : null;
+      const rollWidthM = measured != null && !product.widthM ? (input.rollWidthM ?? null) : null;
+      const res = measured != null ? floorQty(product, measured, wastagePct ?? 0, rollWidthM) : null;
+      const qty = res ? res.qty : input.qty;
+
+      // Which install, if any. Only on a measured floor line.
+      let installId: number | null = null;
+      let flag = qtyFlag(res);
+      if (res && input.labour !== null) {
+        if (input.labour) installId = input.labour.itemId;
+        else {
+          const pick = installFor(product, res);
+          if (pick.kind === "item") installId = pick.itemId;
+          else if (pick.kind === "ask") flag = flag ?? pick.reason;
+        }
+      }
+      // Carpet with no width cannot be measured off yet, so its install waits for the width too.
+      if (res?.problem === "no_width") installId = null;
 
       const [row] = await db
         .insert(schema.quoteItems)
@@ -753,18 +814,40 @@ export const quotes = {
           kind: product.category === "labour" ? "labour" : "supply",
           lineType: product.category === "labour" ? "labour" : "material",
           description: description || product.sku || "Product",
-          qty: input.qty,
+          qty,
           unit: product.unit,
           unitPrice,
           unitCost: product.costPrice ?? null,
           markupPercent: markupOf(product.costPrice, unitPrice),
-          total: round2(input.qty * unitPrice),
-          sortOrder: Number(maxRow?.max ?? -1) + 1,
+          total: round2(qty * unitPrice),
+          sortOrder: await nextSortOrder(input.quoteId),
+          measuredM2: measured,
+          wastagePct,
+          rollWidthM,
+          flagged: Boolean(flag),
+          flagReason: flag,
         })
         .returning();
+      if (!row) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Line not added" });
+
+      let labour: typeof row | undefined;
+      let item = row;
+      if (installId != null) {
+        // A missing rate must not leave the product line half added: it is flagged instead.
+        try {
+          labour = await addLinkedLabour(row, product, installId);
+        } catch (e) {
+          const reason = `Install not added. ${e instanceof Error ? e.message : ""}`.trim();
+          [item = row] = await db
+            .update(schema.quoteItems)
+            .set({ flagged: true, flagReason: reason, updatedAt: new Date() })
+            .where(eq(schema.quoteItems.id, row.id))
+            .returning();
+        }
+      }
 
       const totals = await recalc(input.quoteId);
-      return { item: hideCost(row, context.actor), totals };
+      return { item: hideCost(item, context.actor), labour: hideCost(labour, context.actor), qtyNote: res?.note ?? null, totals };
     }),
 
   /**
@@ -788,51 +871,40 @@ export const quotes = {
         installerId: z.number().nullable().default(null),
         /** Overrides the item's own name on the customer-facing line. */
         description: z.string().optional(),
+        /**
+         * Item 8: the product line this is the install for. Links it, puts it
+         * underneath, and works the qty out from that line's measured m2.
+         */
+        forItemId: z.number().optional(),
       }),
     )
     .handler(async ({ input, context }) => {
       await editableQuoteOrThrow(input.quoteId);
 
-      const [item] = await db
-        .select()
-        .from(schema.labourRateItems)
-        .where(eq(schema.labourRateItems.id, input.itemId));
-      if (!item) throw new ORPCError("NOT_FOUND", { message: "That work item is not in the rate book" });
-
-      const on = new Date().toISOString().slice(0, 10);
-      const rates = await db
-        .select()
-        .from(schema.labourRates)
-        .where(and(eq(schema.labourRates.itemId, input.itemId), isNull(schema.labourRates.installerId)));
-      const live = rates
-        .filter((r) => r.effectiveFrom <= on && (!r.effectiveTo || r.effectiveTo >= on))
-        .sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom))[0];
-
-      if (!live) {
-        throw new ORPCError("BAD_REQUEST", {
-          message: `${item.name} has no standard rate yet. Price it in the rate book first, otherwise it quotes at zero.`,
-        });
+      if (input.forItemId != null) {
+        const [productLine] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, input.forItemId));
+        if (!productLine || productLine.quoteId !== input.quoteId || !productLine.productId)
+          throw new ORPCError("BAD_REQUEST", { message: "That product line is not on this quote." });
+        const [product] = await db.select().from(schema.products).where(eq(schema.products.id, productLine.productId));
+        if (!product) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
+        const row = await addLinkedLabour(productLine, product, input.itemId);
+        if (!row) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "The install line did not save." });
+        const totals = await recalc(input.quoteId);
+        const showCost = context.actor.canSeeCosts;
+        return {
+          item: hideCost(row, context.actor),
+          totals,
+          rateItem: { id: input.itemId, name: row.description, unit: row.unit, groupName: "" },
+          cost: showCost ? row.unitCost : null,
+          sell: row.unitPrice,
+          lineCost: null,
+          minApplied: false,
+          minimumCharge: null,
+          installerName: null,
+        };
       }
 
-      const cost = live.amount;
-      /**
-       * The item's own markup if it has one, the standard chain if it does not.
-       * Almost every item is on the chain. Disposal and a tip run are not:
-       * getting rid of the old floor is money passed through, so Damien's rule
-       * is cost plus 15% there and the full chain everywhere else.
-       */
-      const sell = sellExGstWithMarkup(cost, item.markupPercent);
-      // A minimum charge is a floor on the LINE, not on the rate: two stairs
-      // still pays a call out, so the line cannot come in under it.
-      const lineCost = Math.max(round2(input.qty * cost), live.minimumCharge ?? 0);
-      const lineSell = Math.max(
-        round2(input.qty * sell),
-        // The floor is marked up the SAME way as the rate above it. Marking a
-        // minimum on the standard chain while the rate ran at 15% would put the
-        // line above its own arithmetic.
-        live.minimumCharge ? sellExGstWithMarkup(live.minimumCharge, item.markupPercent) : 0,
-      );
-      const minApplied = live.minimumCharge != null && round2(input.qty * cost) < live.minimumCharge;
+      const { item, live, cost, sell, lineCost, lineSell, minApplied } = await standardLabour(input.itemId, input.qty);
 
       let installerName: string | null = null;
       if (input.installerId != null) {
@@ -864,6 +936,7 @@ export const quotes = {
           markupPercent: markupPctUsed(item.markupPercent),
           total: lineSell,
           sortOrder: Number(maxRow?.max ?? -1) + 1,
+          rateItemId: item.id,
         })
         .returning();
 
@@ -899,10 +972,17 @@ export const quotes = {
         flagReason: z.string().nullable().optional(),
         productId: z.number().nullable().optional(),
         lineType: z.enum(["material", "labour"]).optional(),
+        /** Item 9: the measured m2 on a Box or Broadloom line. Qty is worked out from it. */
+        measuredM2: z.number().min(0).nullable().optional(),
+        wastagePct: z.number().min(0).max(100).nullable().optional(),
+        /** Roll width for this line, when the carpet has none in the price book. */
+        rollWidthM: z.number().positive().nullable().optional(),
+        /** Item 8: put the default install on now, if the line has none linked. Used with a width pick. */
+        addInstall: z.boolean().optional(),
       }),
     )
     .handler(async ({ input, context }) => {
-      const { id, ...rest } = input;
+      const { id, addInstall, ...rest } = input;
       const [before] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, id));
       if (!before) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
       const quote = await editableQuoteOrThrow(before.quoteId);
@@ -912,6 +992,32 @@ export const quotes = {
       const setMarkup = context.actor.role === "admin" ? markupIn : undefined;
 
       if (fields.kind !== undefined && fields.lineType === undefined) fields.lineType = lineTypeOf(fields.kind) as "material" | "labour";
+
+      // Item 9. A new area, wastage or width works the qty out again.
+      const areaTouched = fields.measuredM2 !== undefined || fields.wastagePct !== undefined || fields.rollWidthM !== undefined;
+      let product: typeof schema.products.$inferSelect | null = null;
+      let areaRes: ReturnType<typeof qtyForLine> = null;
+      if (areaTouched && before.productId) {
+        [product] = await db.select().from(schema.products).where(eq(schema.products.id, before.productId));
+        product = product ?? null;
+        if (product && floorTypeOf(product)) {
+          const next = {
+            measuredM2: fields.measuredM2 !== undefined ? fields.measuredM2 : before.measuredM2,
+            wastagePct: fields.wastagePct !== undefined ? fields.wastagePct : before.wastagePct,
+            rollWidthM: product.widthM ? null : fields.rollWidthM !== undefined ? fields.rollWidthM : before.rollWidthM,
+          };
+          if (next.measuredM2 != null && next.wastagePct == null) next.wastagePct = await wastageDefaultFor(product);
+          Object.assign(fields, next);
+          areaRes = qtyForLine(product, next);
+          if (areaRes) fields.qty = areaRes.qty;
+          if (fields.flagged === undefined) {
+            const pendingInstall = before.flagged && isOwnFlag(before.flagReason) && !qtyFlag(qtyForLine(product, before)) ? before.flagReason : null;
+            const f = nextFlag(before, qtyFlag(areaRes) ?? pendingInstall);
+            fields.flagged = f.flagged;
+            fields.flagReason = f.flagReason;
+          }
+        }
+      }
       const qty = fields.qty ?? before.qty;
       const cost = fields.unitCost !== undefined ? fields.unitCost : before.unitCost;
       const beforeMarkup = before.markupPercent ?? markupOf(before.unitCost, before.unitPrice);
@@ -971,8 +1077,32 @@ export const quotes = {
           });
       }
 
+      // Item 8. The install lines linked to it follow the new area.
+      let labour: typeof row | undefined;
+      if (areaTouched && product && row) {
+        await followLinkedLabour({ line: before, product }, { line: row, product });
+        if (addInstall && areaRes && !areaRes.problem) {
+          const [already] = await db
+            .select({ id: schema.quoteItems.id })
+            .from(schema.quoteItems)
+            .where(eq(schema.quoteItems.labourForItemId, row.id));
+          const pick = installFor(product, areaRes);
+          if (!already && pick.kind === "item") {
+            try {
+              labour = await addLinkedLabour(row, product, pick.itemId);
+            } catch (e) {
+              await db
+                .update(schema.quoteItems)
+                .set({ flagged: true, flagReason: `Install not added. ${e instanceof Error ? e.message : ""}`.trim() })
+                .where(eq(schema.quoteItems.id, row.id));
+            }
+          } else if (!already && pick.kind === "ask" && (!row.flagged || isOwnFlag(row.flagReason)))
+            await db.update(schema.quoteItems).set({ flagged: true, flagReason: pick.reason }).where(eq(schema.quoteItems.id, row.id));
+        }
+      }
+
       const totals = await recalc(before.quoteId);
-      return { item: hideCost(row, context.actor), totals };
+      return { item: hideCost(row, context.actor), labour: hideCost(labour, context.actor), totals };
     }),
 
   /**
@@ -1083,15 +1213,29 @@ export const quotes = {
       if (!product) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
 
       const unitPrice = await liveSellFor(product);
+      const [oldProduct] = before.productId
+        ? await db.select().from(schema.products).where(eq(schema.products.id, before.productId))
+        : [];
+      // Item 9. A measured line keeps its area and wastage; the new product's
+      // box size or roll width gives the qty.
+      const measured = before.measuredM2 != null && floorTypeOf(product) ? before : null;
+      const areaRes = measured ? qtyForLine(product, { ...measured, rollWidthM: product.widthM ? null : measured.rollWidthM }) : null;
+      const qty = areaRes ? areaRes.qty : before.qty;
       // Compare with the unit he said, not a wrong pick made a moment ago.
       const said = before.flagReason?.match(/^Was ([\d.]+) (\S+), this product sells by/);
       const saidUnit = said?.[2] ?? before.unit;
-      const unitClash = Boolean(product.unit && saidUnit && product.unit !== saidUnit);
+      // A measured line has just been worked out again in the new unit, so there is nothing to check.
+      const unitClash = !areaRes && Boolean(product.unit && saidUnit && product.unit !== saidUnit);
       const flagReason = unitClash
         ? `Was ${said?.[1] ?? before.qty} ${saidUnit}, this product sells by ${product.unit}. Check the quantity.`
         : unitPrice === 0
           ? "That product has no sell price yet. Put the price in."
           : null;
+      // Still waiting on an install pick on the new floor (timber to timber): the flag stays.
+      const newPick = installFor(product, areaRes);
+      const stillWaiting =
+        before.flagged && isInstallFlag(before.flagReason) && newPick.kind === "ask" && !areaRes?.problem ? newPick.reason : null;
+      const ownFlag = qtyFlag(areaRes) ?? stillWaiting;
 
       const [row] = await db
         .update(schema.quoteItems)
@@ -1104,13 +1248,57 @@ export const quotes = {
           listUnitPrice: null,
           unitCost: product.costPrice ?? null,
           markupPercent: markupOf(product.costPrice, unitPrice),
-          total: round2(before.qty * unitPrice),
-          flagged: Boolean(flagReason),
-          flagReason,
+          qty,
+          total: round2(qty * unitPrice),
+          ...(areaRes ? {} : { measuredM2: null, wastagePct: null, rollWidthM: null }),
+          flagged: Boolean(flagReason ?? ownFlag),
+          flagReason: flagReason ?? ownFlag,
           updatedAt: new Date(),
         })
         .where(eq(schema.quoteItems.id, input.id))
         .returning();
+
+      // Item 8. The linked install follows. If it was the old floor's default
+      // and the new floor has a different one, it swaps over too.
+      if (row) {
+        await followLinkedLabour({ line: before, product: oldProduct ?? null }, { line: row, product });
+        const oldPick = oldProduct ? installFor(oldProduct, oldProduct ? qtyForLine(oldProduct, before) : null) : null;
+        if (oldPick?.kind === "item" && newPick.kind === "item" && oldPick.itemId !== newPick.itemId) {
+          const linked = await db
+            .select()
+            .from(schema.quoteItems)
+            .where(and(eq(schema.quoteItems.labourForItemId, row.id), eq(schema.quoteItems.rateItemId, oldPick.itemId)));
+          // Added before the old one goes, so a missing rate leaves the old install in place.
+          for (const l of linked) {
+            try {
+              await addLinkedLabour(row, product, newPick.itemId);
+              await db.delete(schema.quoteItems).where(eq(schema.quoteItems.id, l.id));
+            } catch (e) {
+              await db
+                .update(schema.quoteItems)
+                .set({ flagged: true, flagReason: `Install not swapped. ${e instanceof Error ? e.message : ""}`.trim() })
+                .where(eq(schema.quoteItems.id, row.id));
+            }
+          }
+        }
+        // The old floor was waiting on an install pick (timber, no roll width).
+        // The new one has a clear default, so it goes on now.
+        const waiting = before.flagged && (isInstallFlag(before.flagReason) || before.flagReason === NO_WIDTH_FLAG);
+        if (areaRes && !areaRes.problem && waiting && newPick.kind === "item") {
+          const [already] = await db
+            .select({ id: schema.quoteItems.id })
+            .from(schema.quoteItems)
+            .where(eq(schema.quoteItems.labourForItemId, row.id));
+          if (!already) {
+            await addLinkedLabour(row, product, newPick.itemId).catch((e: unknown) =>
+              db
+                .update(schema.quoteItems)
+                .set({ flagged: true, flagReason: `Install not added. ${e instanceof Error ? e.message : ""}`.trim() })
+                .where(eq(schema.quoteItems.id, row.id)),
+            );
+          }
+        }
+      }
 
       const totals = await recalc(before.quoteId);
 
@@ -1146,9 +1334,14 @@ export const quotes = {
     const [before] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, input.id));
     if (!before) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
     await editableQuoteOrThrow(before.quoteId);
+    // Item 8: the install added with a product line goes with it.
+    const linked = await db
+      .delete(schema.quoteItems)
+      .where(eq(schema.quoteItems.labourForItemId, input.id))
+      .returning({ id: schema.quoteItems.id });
     await db.delete(schema.quoteItems).where(eq(schema.quoteItems.id, input.id));
     const totals = await recalc(before.quoteId);
-    return { totals };
+    return { totals, removedLabour: linked.length };
   }),
 
   /** Drag-reorder the lines on a quote. */

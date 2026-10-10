@@ -7,6 +7,7 @@ import { Combobox } from "./ui/combobox";
 import { useProducts } from "../queries/products";
 import { useRatePicker } from "../queries/labour";
 import { useAddQuoteLabour, useAddQuoteProduct } from "../queries/quotes";
+import { ProductAreaFields, useAreaDraft } from "./floor-area";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
 
@@ -131,14 +132,29 @@ export function ProductPicker({ quoteId }: { quoteId: number }) {
 
   const rows = React.useMemo(() => products.data ?? [], [products.data]);
   const chosen = rows.find((r) => r.id === picked) ?? null;
+  // Items 8 and 9: a Box or Broadloom product is measured, not counted.
+  const area = useAreaDraft(chosen);
+  const rates = useRatePicker({ includeUnpriced: true });
+  const installNames = React.useMemo(
+    () => new Map((rates.data?.rows ?? []).map((r) => [r.itemId, { id: r.itemId, name: r.name, unit: r.unit }])),
+    [rates.data],
+  );
+  const [done, setDone] = React.useState<string | null>(null);
+  const canAdd = picked != null && (!area.active || (area.measured != null && area.measured > 0));
+  // Measuring: the line is what the area works out to, nothing until an area is in.
+  const lineQty = area.active ? (area.result?.qty ?? 0) : Number(qty) || 0;
 
   async function submit() {
-    if (picked == null) return;
+    if (picked == null || !canAdd) return;
     setError(null);
+    setDone(null);
     try {
-      await add.mutateAsync({ quoteId, productId: picked, qty: Number(qty) || 1 });
+      const r = await add.mutateAsync({ quoteId, productId: picked, qty: Number(qty) || 1, ...area.submit() });
+      const bits = [r.qtyNote, r.labour ? `${r.labour.description} added underneath.` : null, r.item?.flagged ? r.item.flagReason : null];
+      setDone(bits.filter(Boolean).join(" ") || null);
       setPicked(null);
       setQty("1");
+      area.reset();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -196,15 +212,19 @@ export function ProductPicker({ quoteId }: { quoteId: number }) {
               .join(" · "),
           }))}
         />
-        <Input
-          className="tabular w-[80px] text-right"
-          aria-label="Quantity"
-          value={qty}
-          onChange={(e) => setQty(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-        />
-        <span className="pb-2 text-xs text-muted-foreground">{chosen ? unitLabel(chosen.unit) : ""}</span>
-        <Button variant="outline" disabled={picked == null || add.isPending} onClick={submit}>
+        {area.active ? null : (
+          <>
+            <Input
+              className="tabular w-[80px] text-right"
+              aria-label="Quantity"
+              value={qty}
+              onChange={(e) => setQty(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+            />
+            <span className="pb-2 text-xs text-muted-foreground">{chosen ? unitLabel(chosen.unit) : ""}</span>
+          </>
+        )}
+        <Button variant="outline" disabled={!canAdd || add.isPending} onClick={submit}>
           {add.isPending ? <Spinner /> : <Plus className="size-4" />}
           Add supply
         </Button>
@@ -216,17 +236,21 @@ export function ProductPicker({ quoteId }: { quoteId: number }) {
         </p>
       ) : null}
 
+      {chosen ? <ProductAreaFields product={chosen} area={area} installNames={installNames} /> : null}
+
       {chosen ? (
         <p className="text-xs text-muted-foreground">
           {chosen.sellExGst != null
             ? `${money(chosen.sellExGst)} a ${unitLabel(chosen.unit)} sell. ${
-                Number(qty) > 0 ? `${money(chosen.sellExGst * (Number(qty) || 0))} on the line.` : ""
+                lineQty > 0 ? `${money(chosen.sellExGst * lineQty)} on the line.`
+                  : ""
               }`
             : "That one has no sell price on it yet, so it would come in at zero."}
           {chosen.onSpecial ? " On special, which is yours to keep, not the customer's." : ""}
         </p>
       ) : null}
 
+      {done && !chosen ? <p className="text-xs text-muted-foreground">{done}</p> : null}
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
     </div>
   );
@@ -280,7 +304,7 @@ export function LabourPicker({ quoteId, category }: { quoteId: number; category?
         qty: qtyNum,
         installerId: installerId ? Number(installerId) : null,
       });
-      const bits = [`${r.rateItem.name} on at ${money(r.item.total)}.`];
+      const bits = [`${r.rateItem.name} on at ${money(r.item?.total ?? 0)}.`];
       if (r.minApplied && r.minimumCharge != null) {
         bits.push(`That is the minimum charge, ${money(r.minimumCharge)} cost, not the metre rate.`);
       }

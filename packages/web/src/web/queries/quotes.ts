@@ -20,16 +20,19 @@ export function useQuoteStats() {
   return useQuery(orpc.quotes.stats.queryOptions({ staleTime: 30_000 }));
 }
 
+/** What a quote change can touch: the quote, its job and the job's tasks. */
+function invalidateQuoteWork(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: orpc.quotes.key() });
+  queryClient.invalidateQueries({ queryKey: orpc.jobs.key() });
+  queryClient.invalidateQueries({ queryKey: orpc.tasks.key() });
+}
+
 function useQuoteMutation(
   name:
     | "create"
     | "update"
     | "remove"
     | "addItem"
-    | "addProduct"
-    | "addLabour"
-    | "updateItem"
-    | "removeItem"
     | "reorderItems"
     | "send"
     | "approveDiscount"
@@ -39,13 +42,7 @@ function useQuoteMutation(
     | "convertToJob",
 ) {
   const queryClient = useQueryClient();
-  return orpc.quotes[name].mutationOptions({
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: orpc.quotes.key() });
-      queryClient.invalidateQueries({ queryKey: orpc.jobs.key() });
-      queryClient.invalidateQueries({ queryKey: orpc.tasks.key() });
-    },
-  });
+  return orpc.quotes[name].mutationOptions({ onSuccess: () => invalidateQuoteWork(queryClient) });
 }
 
 export function useCreateQuote() {
@@ -77,17 +74,21 @@ export function useAddQuoteItem() {
   return useMutation(useQuoteMutation("addItem"));
 }
 export function useAddQuoteProduct() {
-  return useMutation(useQuoteMutation("addProduct"));
+  const queryClient = useQueryClient();
+  return useMutation(orpc.quotes.addProduct.mutationOptions({ onSuccess: () => invalidateQuoteWork(queryClient) }));
 }
 /** A labour line off the rate book. The rate is resolved on the server. */
 export function useAddQuoteLabour() {
-  return useMutation(useQuoteMutation("addLabour"));
+  const queryClient = useQueryClient();
+  return useMutation(orpc.quotes.addLabour.mutationOptions({ onSuccess: () => invalidateQuoteWork(queryClient) }));
 }
 export function useUpdateQuoteItem() {
-  return useMutation(useQuoteMutation("updateItem"));
+  const queryClient = useQueryClient();
+  return useMutation(orpc.quotes.updateItem.mutationOptions({ onSuccess: () => invalidateQuoteWork(queryClient) }));
 }
 export function useRemoveQuoteItem() {
-  return useMutation(useQuoteMutation("removeItem"));
+  const queryClient = useQueryClient();
+  return useMutation(orpc.quotes.removeItem.mutationOptions({ onSuccess: () => invalidateQuoteWork(queryClient) }));
 }
 export function useApproveDiscount() {
   return useMutation(useQuoteMutation("approveDiscount"));

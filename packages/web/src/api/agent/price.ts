@@ -26,6 +26,8 @@ export type PricedLine = {
   flagReason: string | null;
   /** The normalised spoken phrase this line came from, kept for learning. */
   voicePhrase: string | null;
+  /** Labour lines: the rate book item it was priced off. */
+  rateItemId?: number | null;
 };
 
 function normalise(s: string | null | undefined): string {
@@ -438,6 +440,7 @@ async function priceLabourLine(line: Extraction["lines"][number]): Promise<Price
     flagged: cost === null,
     flagReason: cost === null ? `No current rate on file for "${description}". Priced at $0. Set a rate and reprice before sending.` : null,
     voicePhrase: null,
+    rateItemId: item ? itemId : null,
   };
 }
 

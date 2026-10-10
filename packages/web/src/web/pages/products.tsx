@@ -4,7 +4,7 @@ import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading, Stat } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Checkbox, Field, Input } from "../components/ui/field";
+import { Checkbox, Field, Input, Select } from "../components/ui/field";
 import { BulkEditPriceModal, BulkSpecialModal } from "../components/bulk-price";
 import { Modal } from "../components/ui/modal";
 import {
@@ -16,6 +16,7 @@ import {
   useProducts,
   useRollQuote,
   useSpecialsBoard,
+  useSetSoldAs,
 } from "../queries/products";
 
 const money = (n: number | null | undefined) =>
@@ -278,24 +279,55 @@ function RangeGrid({ onOpen }: { onOpen: (supplierId: number | null, range: stri
 
 /* ----------------------------- variant listing ---------------------------- */
 
+type SoldAsFilter = "" | "box" | "broadloom" | "none";
+const SOLD_AS_FILTERS: { value: SoldAsFilter; label: string }[] = [
+  { value: "", label: "Box and broadloom" },
+  { value: "box", label: "Box only" },
+  { value: "broadloom", label: "Broadloom only" },
+  { value: "none", label: "Neither (not tagged)" },
+];
+
+/** Item 9. Box goods round up to full boxes on a quote; broadloom comes off the roll. */
+function SoldAsCell({ id, soldAs }: { id: number; soldAs: string | null }) {
+  const save = useSetSoldAs();
+  return (
+    <Select
+      aria-label="Sold as"
+      className="h-8 w-[112px] text-xs"
+      value={soldAs ?? ""}
+      disabled={save.isPending}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) =>
+        save.mutate({ id, soldAs: e.target.value === "box" || e.target.value === "broadloom" ? e.target.value : null })
+      }
+    >
+      <option value="box">Box</option>
+      <option value="broadloom">Broadloom</option>
+      <option value="">Neither</option>
+    </Select>
+  );
+}
+
 function VariantTable({
   supplierId,
   range,
   search,
   onSpecialOnly,
+  soldAs = "",
   onSelect,
 }: {
   supplierId: number | null;
   range: string;
   search: string;
   onSpecialOnly: boolean;
+  soldAs?: SoldAsFilter;
   onSelect: (id: number) => void;
 }) {
-  const products = useProducts({ supplierId, range, search, onSpecialOnly });
+  const products = useProducts({ supplierId, range, search, onSpecialOnly, soldAs });
   const [picked, setPicked] = React.useState<Set<number>>(new Set());
   const [bulk, setBulk] = React.useState<null | "edit" | "special">(null);
   // A new search is a new list. Never carry ticks over to rows you cannot see.
-  React.useEffect(() => setPicked(new Set()), [supplierId, range, search, onSpecialOnly]);
+  React.useEffect(() => setPicked(new Set()), [supplierId, range, search, onSpecialOnly, soldAs]);
 
   if (products.isLoading) return <Loading label="Pricing…" />;
   const rows = products.data ?? [];
@@ -365,6 +397,9 @@ function VariantTable({
             <th className="label-xs px-4 py-2 text-right">Cost today</th>
             <th className="label-xs px-4 py-2 text-right">Sell ex GST</th>
             <th className="label-xs px-4 py-2">Special</th>
+            <th className="label-xs px-4 py-2" title="Box: rounded up to full boxes on a quote. Broadloom: off the roll.">
+              Sold as
+            </th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
@@ -447,6 +482,9 @@ function VariantTable({
                 ) : (
                   <span className="text-xs text-muted-foreground">standard price</span>
                 )}
+              </td>
+              <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+                <SoldAsCell id={p.id} soldAs={p.soldAs} />
               </td>
             </tr>
             );
@@ -993,6 +1031,7 @@ export default function ProductsPage() {
   const [range, setRange] = React.useState<{ supplierId: number | null; range: string } | null>(null);
   const [search, setSearch] = React.useState("");
   const [onSpecialOnly, setOnSpecialOnly] = React.useState(false);
+  const [soldAs, setSoldAs] = React.useState<SoldAsFilter>("");
   const [selected, setSelected] = React.useState<number | null>(null);
 
   const ranges = useProductRanges();
@@ -1006,7 +1045,7 @@ export default function ProductsPage() {
     };
   }, [ranges.data]);
 
-  const searching = search.trim().length > 1 || onSpecialOnly;
+  const searching = search.trim().length > 1 || onSpecialOnly || soldAs !== "";
 
   return (
     <Page
@@ -1061,6 +1100,18 @@ export default function ProductsPage() {
               <Tag className="size-3.5" />
               On special only
             </Button>
+            <Select
+              aria-label="Sold as filter"
+              className="w-auto"
+              value={soldAs}
+              onChange={(e) => setSoldAs(e.target.value as SoldAsFilter)}
+            >
+              {SOLD_AS_FILTERS.map((f) => (
+                <option key={f.value} value={f.value}>
+                  {f.value === "" ? "Sold as: any" : f.label}
+                </option>
+              ))}
+            </Select>
           </div>
 
           {range && !searching ? (
@@ -1087,13 +1138,20 @@ export default function ProductsPage() {
             <Card>
               <CardHeader
                 title={onSpecialOnly ? "On special" : "Search results"}
-                subtitle={onSpecialOnly ? "Live specials only, cheapest cost first." : "Matching variants."}
+                subtitle={
+                  onSpecialOnly
+                    ? "Live specials only, cheapest cost first."
+                    : soldAs
+                      ? `${SOLD_AS_FILTERS.find((f) => f.value === soldAs)?.label}. First 2000.`
+                      : "Matching variants."
+                }
               />
               <VariantTable
                 supplierId={null}
                 range=""
                 search={search.trim()}
                 onSpecialOnly={onSpecialOnly}
+                soldAs={soldAs}
                 onSelect={setSelected}
               />
             </Card>

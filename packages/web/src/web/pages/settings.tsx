@@ -25,6 +25,7 @@ import {
   useUpdateStatus,
 } from "../queries/settings";
 import { useCreateSupplier, useSuppliers } from "../queries/suppliers";
+import { autoSoldAs, FLOOR_TYPE_LABELS, FLOOR_TYPES, wastageKey } from "../../api/lib/flooring-qty";
 
 const SKILL_GROUPS = Object.keys(SKILL_TINT);
 /**
@@ -109,6 +110,9 @@ const CATEGORIES = [
   "accessory",
 ];
 const UNITS = ["m2", "lm", "each", "roll", "box", "hour"];
+
+/** Item 9. How a product is sold, which decides the wastage and labour sums on a quote. */
+const SOLD_AS_LABEL: Record<string, string> = { box: "Box", broadloom: "Broadloom", "": "Neither" };
 
 type Tab = "skills" | "statuses" | "products" | "labour" | "business" | "email" | "backups";
 
@@ -729,6 +733,7 @@ function ProductsTab() {
                   <th className="th px-4">Colour</th>
                   <th className="th px-4">Category</th>
                   <th className="th px-4">Unit</th>
+                  <th className="th px-4" title="Box: rounded up to full boxes. Broadloom: off the roll.">Sold as</th>
                   <th className="th px-4 text-right">Cost</th>
                   <th className="th px-4 text-right">Sell</th>
                   <th className="th px-4 text-right">Margin</th>
@@ -762,6 +767,7 @@ type ProductRow = {
   sellPrice: number | null;
   sku: string | null;
   active: boolean;
+  soldAs: string | null;
 };
 
 function ProductLine({ product }: { product: ProductRow }) {
@@ -806,6 +812,22 @@ function ProductLine({ product }: { product: ProductRow }) {
           {UNITS.concat(UNITS.includes(product.unit) ? [] : [product.unit]).map((u) => (
             <option key={u} value={u}>
               {u}
+            </option>
+          ))}
+        </Select>
+      </td>
+      <td className="px-4 py-2">
+        <Select
+          aria-label="Sold as"
+          value={product.soldAs ?? ""}
+          onChange={(e) =>
+            update.mutate({ id: product.id, soldAs: e.target.value === "box" || e.target.value === "broadloom" ? e.target.value : null })
+          }
+          className="h-8 w-28"
+        >
+          {Object.entries(SOLD_AS_LABEL).map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
             </option>
           ))}
         </Select>
@@ -870,12 +892,15 @@ function NewProductModal({ open, onClose }: { open: boolean; onClose: () => void
     costPrice: "",
     sellPrice: "",
     sku: "",
+    /** "auto" = worked out from category and unit when saved. */
+    soldAs: "auto",
   });
   const [error, setError] = React.useState<string | null>(null);
 
   function set<K extends keyof typeof form>(key: K, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
   }
+  const autoTag = autoSoldAs({ category: form.category, unit: form.unit });
 
   async function submit() {
     setError(null);
@@ -899,6 +924,9 @@ function NewProductModal({ open, onClose }: { open: boolean; onClose: () => void
         costPrice: form.costPrice.trim() === "" ? null : Number(form.costPrice),
         sellPrice: form.sellPrice.trim() === "" ? null : Number(form.sellPrice),
         sku: form.sku || null,
+        ...(form.soldAs === "auto"
+          ? {}
+          : { soldAs: form.soldAs === "box" || form.soldAs === "broadloom" ? form.soldAs : null }),
       });
       onClose();
     } catch (e) {
@@ -973,6 +1001,18 @@ function NewProductModal({ open, onClose }: { open: boolean; onClose: () => void
                 {u}
               </option>
             ))}
+          </Select>
+        </Field>
+        <Field
+          label="Sold as"
+          hint="Box goods are rounded up to full boxes and labour is on the measured m² only. Broadloom comes off the roll and labour includes the wastage."
+          className="sm:col-span-2"
+        >
+          <Select value={form.soldAs} onChange={(e) => set("soldAs", e.target.value)}>
+            <option value="auto">Work it out ({SOLD_AS_LABEL[autoTag ?? ""]})</option>
+            <option value="box">Box</option>
+            <option value="broadloom">Broadloom</option>
+            <option value="">Neither</option>
           </Select>
         </Field>
         <Field label="Cost price" hint="Never shown to installers or customers">
@@ -1052,6 +1092,42 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
       </Card>
 
       <JobNumbersCard />
+
+      <Card>
+        <CardHeader
+          title="Wastage"
+          subtitle="Where each floor's wastage starts on a quote line. You can change it on every line."
+        />
+        <div className="grid grid-cols-2 gap-3 px-4 py-4">
+          {FLOOR_TYPES.map((t) => {
+            const key = wastageKey(t);
+            return (
+              <Field key={t} label={`${FLOOR_TYPE_LABELS[t]} (%)`}>
+                <div className="flex items-center gap-2">
+                  <Input
+                    aria-label={`${FLOOR_TYPE_LABELS[t]} wastage %`}
+                    inputMode="decimal"
+                    value={draft[key] ?? "0"}
+                    onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
+                    onBlur={(e) => {
+                      const n = Number(e.target.value);
+                      const v = e.target.value.trim() === "" || !Number.isFinite(n) ? "0" : String(Math.min(100, Math.max(0, n)));
+                      if (v !== (settings[key] ?? "0")) commit(key, v);
+                      else setDraft((d) => ({ ...d, [key]: v }));
+                    }}
+                    className="tabular w-20"
+                  />
+                  {tick(key)}
+                </div>
+              </Field>
+            );
+          })}
+          <p className="col-span-2 text-xs text-muted-foreground">
+            Box goods: material is the measured m² plus wastage, rounded up to full boxes. Labour is on the measured m² only.
+            Broadloom: material and labour both include the wastage, and carpet rounds up to the next 0.1 lm.
+          </p>
+        </div>
+      </Card>
 
       <Card>
         <CardHeader title="Offers and what crew see" subtitle="Fixed rules, not settings." />
@@ -1136,7 +1212,7 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
                   "site_circle_m",
                   // The job number counter. Never hand-edited here.
                   "job_number_last",
-                ].includes(k),
+                ].includes(k) && !k.startsWith("wastage_pct_"),
             )
             .map((k) => (
               <div key={k} className="flex items-center gap-3 px-4 py-2.5">

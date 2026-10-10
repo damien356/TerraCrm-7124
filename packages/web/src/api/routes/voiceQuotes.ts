@@ -9,6 +9,7 @@ import { getObject, signGet, voiceAudioKey, signPut } from "../lib/s3";
 import { transcribeAudio } from "../agent/transcribe";
 import { extractVoiceQuote } from "../agent/extract";
 import { priceExtraction } from "../agent/price";
+import { addLinkedLabour, voiceAreas } from "../lib/quote-labour";
 import { recalc } from "./quotes";
 import { quoteNumberFor, quoteRefOf } from "../lib/quote-number";
 import { depositDefaultFor } from "../lib/deposits";
@@ -257,7 +258,8 @@ export async function buildQuoteFromTranscript(
     .from(schema.labourRateItems);
 
   const extraction = await extractVoiceQuote(transcript, labourItems);
-  const pricedLines = await priceExtraction(extraction);
+  // Items 8 and 9: measured m2 plus wastage, and the install where none was said.
+  const pricedLines = await voiceAreas(await priceExtraction(extraction), extraction.lines);
 
   // Who it is for. A strong match (their phone or email, or their full name
   // and nobody close behind) is attached. Anything less is left for Damien:
@@ -323,7 +325,7 @@ export async function buildQuoteFromTranscript(
   if (!quoteRow) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Quote not created" });
 
   if (pricedLines.length) {
-    await db.insert(schema.quoteItems).values(
+    const inserted = await db.insert(schema.quoteItems).values(
       pricedLines.map((l, i) => ({
         quoteId: quoteRow.id,
         productId: l.productId,
@@ -340,8 +342,26 @@ export async function buildQuoteFromTranscript(
         flagged: l.flagged,
         flagReason: l.flagReason,
         voicePhrase: l.voicePhrase,
+        measuredM2: l.measuredM2,
+        wastagePct: l.wastagePct,
+        rateItemId: l.rateItemId ?? null,
       })),
-    );
+    ).returning();
+    const rowAt = new Map(inserted.map((r) => [r.sortOrder, r]));
+    for (const [i, l] of pricedLines.entries()) {
+      const row = rowAt.get(i);
+      if (!row || !l.product || l.install?.kind !== "item") continue;
+      // A missing rate must not lose the whole quote: the line is flagged instead.
+      try {
+        const fresh = (await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, row.id)))[0] ?? row;
+        await addLinkedLabour(fresh, l.product, l.install.itemId);
+      } catch (e) {
+        await db
+          .update(schema.quoteItems)
+          .set({ flagged: true, flagReason: `Install not added. ${e instanceof Error ? e.message : "Add it by hand."}` })
+          .where(eq(schema.quoteItems.id, row.id));
+      }
+    }
   }
 
   const totals = await recalc(quoteRow.id);

@@ -9,6 +9,7 @@ import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { LabourPicker, ProductPicker } from "../components/quote-pickers";
+import { LineAreaStrip, LinkedInstallMark, type LineArea } from "../components/floor-area";
 import { SupervisorPicker } from "../components/supervisor-picker";
 import { JobPeopleCard, QuotePeopleCard } from "../components/job-people";
 import { useJob } from "../queries/jobs";
@@ -86,6 +87,13 @@ type Item = {
   voicePhrase?: string | null;
   productId?: number | null;
   lineType?: string;
+  quoteId: number;
+  /** Items 8 and 9. */
+  measuredM2?: number | null;
+  wastagePct?: number | null;
+  rollWidthM?: number | null;
+  labourForItemId?: number | null;
+  area?: LineArea | null;
 };
 
 /* ---------------------------- change product ---------------------------- */
@@ -219,7 +227,7 @@ function useCostView() {
   return { show: Boolean(actor?.canSeeCosts), edit: actor?.role === "admin" };
 }
 
-function LineRow({ item, locked }: { item: Item; locked: boolean }) {
+function LineRow({ item, locked, onNotice }: { item: Item; locked: boolean; onNotice: (text: string) => void }) {
   const cost = useCostView();
   const update = useUpdateQuoteItem();
   const remove = useRemoveQuoteItem();
@@ -299,6 +307,8 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
           </button>
         ) : null}
         {changing ? <ChangeProduct item={item} onClose={() => setChanging(false)} /> : null}
+        {item.area ? <LineAreaStrip item={item} locked={locked} /> : null}
+        {item.labourForItemId != null ? <LinkedInstallMark /> : null}
       </td>
       <td className="px-2 py-1.5">
         <Input
@@ -377,7 +387,14 @@ function LineRow({ item, locked }: { item: Item; locked: boolean }) {
         {locked ? null : (
           <button
             type="button"
-            onClick={() => remove.mutate({ id: item.id })}
+            onClick={() =>
+              remove.mutateAsync({ id: item.id }).then((r) => {
+                if (r.removedLabour > 0)
+                  onNotice(
+                    `${item.description} deleted, and the install added with it went too (${r.removedLabour} line${r.removedLabour === 1 ? "" : "s"}).`,
+                  );
+              })
+            }
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
             title="Delete line"
           >
@@ -558,6 +575,7 @@ export default function QuoteBuilderPage() {
   const [converting, setConverting] = React.useState(false);
   const [convertForm, setConvertForm] = React.useState({ title: "", furnitureOnSite: false, createTasks: true });
   const [notes, setNotes] = React.useState<string | null>(null);
+  const [lineNotice, setLineNotice] = React.useState<string | null>(null);
 
   if (quote.isLoading) return <Loading label="Opening quote…" />;
   if (!quote.data) {
@@ -786,12 +804,20 @@ export default function QuoteBuilderPage() {
                 </thead>
                 <tbody>
                   {q.items.map((item) => (
-                    <LineRow key={item.id} item={item} locked={locked} />
+                    <LineRow key={item.id} item={item} locked={locked} onNotice={setLineNotice} />
                   ))}
                 </tbody>
               </table>
             </div>
           )}
+          {lineNotice ? (
+            <div className="flex items-center justify-between gap-2 border-t border-border bg-[var(--gold-wash)] px-3 py-2 text-xs">
+              <span>{lineNotice}</span>
+              <button type="button" className="rounded p-0.5 hover:bg-black/5" title="Dismiss" onClick={() => setLineNotice(null)}>
+                <X className="size-3.5" />
+              </button>
+            </div>
+          ) : null}
           {locked ? null : (
             <>
               <ProductPicker quoteId={q.id} />

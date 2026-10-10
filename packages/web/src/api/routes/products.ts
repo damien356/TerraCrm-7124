@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, asc, eq, inArray, like, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -241,6 +241,8 @@ export const products = {
           /** Only variants whose special window contains today. */
           onSpecialOnly: z.boolean().default(false),
           includeInactive: z.boolean().default(false),
+          /** Item 9: box, broadloom, or "none" for untagged. Empty = all. */
+          soldAs: z.enum(["", "box", "broadloom", "none"]).default(""),
           limit: z.number().int().min(1).max(2000).default(500),
         })
         .default({
@@ -250,6 +252,7 @@ export const products = {
           search: "",
           onSpecialOnly: false,
           includeInactive: false,
+          soldAs: "",
           limit: 500,
         }),
     )
@@ -260,6 +263,8 @@ export const products = {
       if (input.supplierId !== null) clauses.push(eq(schema.products.supplierId, input.supplierId));
       if (input.category) clauses.push(eq(schema.products.category, input.category));
       if (input.range) clauses.push(eq(schema.products.range, input.range));
+      if (input.soldAs === "none") clauses.push(isNull(schema.products.soldAs));
+      else if (input.soldAs) clauses.push(eq(schema.products.soldAs, input.soldAs));
       if (input.search) {
         const q = `%${input.search.toLowerCase()}%`;
         clauses.push(

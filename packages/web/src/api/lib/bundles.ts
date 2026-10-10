@@ -23,6 +23,7 @@ import {
 export {
   ALL,
   BUNDLE_MODES,
+  bundleCategoryOf,
   BUNDLE_TITLES,
   CATEGORY_LABELS,
   EXTRAS,
@@ -44,6 +45,8 @@ export type BundleLine = {
   productCategory: string | null;
   /** Set by hand. Wins over everything. */
   floorCategory: string | null;
+  /** Item 8: an install added with a product line goes in that line's bundle. */
+  labourForItemId?: number | null;
   total: number;
   sortOrder?: number;
 };
@@ -51,7 +54,8 @@ export type BundleLine = {
 /** Floor words in a line's own text, most specific first. */
 const KEYWORDS: [RegExp, FloorCategory][] = [
   [/carpet\s*tile/i, "carpet_tile"],
-  [/sheet\s*vinyl|vinyl\s*sheet|\bsheet\b/i, "sheet_goods"],
+  [/plywood|\bply\b|subfloor|particle\s*board|\bsheeting\b/i, "sheet_goods"],
+  [/sheet\s*vinyl|vinyl\s*sheet|\bsheet\b/i, "sheet_vinyl"],
   [/\bhybrid\b/i, "hybrid"],
   [/laminate/i, "laminate"],
   [/\bturf\b|artificial\s*grass|synthetic\s*grass/i, "turf"],
@@ -87,9 +91,12 @@ export function assignCategories(lines: BundleLine[]): Map<number, { key: string
   const out = new Map<number, { key: string; auto: boolean }>();
   const pending: BundleLine[] = [];
 
-  for (const l of lines) {
-    if (l.floorCategory && (LINE_CATEGORIES as readonly string[]).includes(l.floorCategory)) {
-      out.set(l.id, { key: l.floorCategory, auto: false });
+  const handSet = (l: BundleLine) => !!l.floorCategory && (LINE_CATEGORIES as readonly string[]).includes(l.floorCategory);
+  // Installs linked to a product line wait until that line is placed.
+  const linked = lines.filter((l) => l.labourForItemId != null && !handSet(l));
+  const place = (l: BundleLine) => {
+    if (handSet(l)) {
+      out.set(l.id, { key: l.floorCategory!, auto: false });
     } else if (l.kind === "prep" || l.kind === "removal") {
       out.set(l.id, { key: EXTRAS, auto: true });
     } else if (isFloor(l.productCategory)) {
@@ -102,6 +109,14 @@ export function assignCategories(lines: BundleLine[]): Map<number, { key: string
     } else {
       pending.push(l);
     }
+  };
+  for (const l of lines) if (!linked.includes(l)) place(l);
+  // Laminate is laid under the "Hybrid installation" rate, so its words alone
+  // would start a hybrid bundle. It goes with the floor it was added for.
+  for (const l of linked) {
+    const parent = out.get(l.labourForItemId!);
+    if (parent) out.set(l.id, { key: parent.key, auto: true });
+    else place(l);
   }
 
   // Floors on the quote, biggest first, from lines already placed.
@@ -119,7 +134,7 @@ export function assignCategories(lines: BundleLine[]): Map<number, { key: string
     else if (l.productCategory === "underlay") {
       key = floors.includes("carpet")
         ? "carpet"
-        : (floors.find((f) => ["hybrid", "laminate", "timber", "vinyl"].includes(f)) ?? floors[0] ?? null);
+        : (floors.find((f) => ["hybrid", "laminate", "timber", "vinyl", "sheet_vinyl"].includes(f)) ?? floors[0] ?? null);
     } else key = floors[0] ?? null;
     out.set(l.id, { key: key ?? EXTRAS, auto: true });
   }

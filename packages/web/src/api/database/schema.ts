@@ -1091,6 +1091,15 @@ export const products = sqliteTable(
     tier: text("tier").notNull().default(""),
     /** m2 · lm · each · roll — lm for broadloom and sheet vinyl, which are sold by the metre. */
     unit: text("unit").notNull().default("m2"),
+    /**
+     * box       sold in whole boxes: hybrid, laminate, engineered timber, vinyl plank, carpet tiles.
+     *           Quote material = measured m2 + wastage, rounded up to full boxes. Labour = measured m2.
+     * broadloom off a roll: carpet, sheet vinyl, turf. Material = measured m2 + wastage, rounded up
+     *           to the next 0.1 lm of roll width. Labour includes the wastage too.
+     * Null = not a floor sold by area (underlay, trims, plywood, Hurford's per-lm boards).
+     * Item 9, 10 Oct. See api/lib/flooring-qty.ts.
+     */
+    soldAs: text("sold_as"),
 
     /* ------------------------- variant dimensions -------------------------
      * Whatever makes this variant cost a different amount from its siblings.
@@ -1397,6 +1406,24 @@ export const quoteItems = sqliteTable(
     voicePhrase: text("voice_phrase"),
     /** Which client bundle this line sits in when the quote is split. Null = worked out from product category and kind. */
     floorCategory: text("floor_category"),
+    /**
+     * Item 9. The m2 Damien measured, before wastage. Set on a box or broadloom
+     * product line; qty is worked out from it (api/lib/flooring-qty.ts).
+     * Null = qty was typed straight in, as before.
+     */
+    measuredM2: real("measured_m2"),
+    /** Wastage % on this line. Starts at the Settings figure for its floor type. */
+    wastagePct: real("wastage_pct"),
+    /** Roll width for this line only, when the price book has none for the carpet. Damien picks it. */
+    rollWidthM: real("roll_width_m"),
+    /**
+     * Item 8. On an install labour line: the product line it was added with.
+     * Its qty follows that line until someone types over it. The product line
+     * going takes this line with it. No FK on purpose: removeItem deletes it.
+     */
+    labourForItemId: integer("labour_for_item_id"),
+    /** On a labour line: the rate book item it was priced off. Null on older lines. */
+    rateItemId: integer("rate_item_id"),
     ...timestamps,
   },
   (t) => [index("quote_items_quote_idx").on(t.quoteId)],

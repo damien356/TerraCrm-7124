@@ -7,6 +7,7 @@ import { staffOnly } from "../middleware/auth";
 import {
   BUNDLE_MODES,
   BUNDLE_TITLES,
+  bundleCategoryOf,
   buildBundles,
   LINE_CATEGORIES,
   type BundleLine,
@@ -47,12 +48,14 @@ export async function bundleLinesFor(quoteId: number): Promise<BundleLine[]> {
       total: schema.quoteItems.total,
       sortOrder: schema.quoteItems.sortOrder,
       productCategory: schema.products.category,
+      soldAs: schema.products.soldAs,
+      labourForItemId: schema.quoteItems.labourForItemId,
     })
     .from(schema.quoteItems)
     .leftJoin(schema.products, eq(schema.products.id, schema.quoteItems.productId))
     .where(eq(schema.quoteItems.quoteId, quoteId))
     .orderBy(asc(schema.quoteItems.sortOrder), asc(schema.quoteItems.id));
-  return items.map((i) => ({ ...i, productCategory: i.productCategory ?? null }));
+  return items.map(({ soldAs, ...i }) => ({ ...i, productCategory: bundleCategoryOf(i.productCategory, soldAs) }));
 }
 
 /** The bundles for a quote as the client would see them now. */

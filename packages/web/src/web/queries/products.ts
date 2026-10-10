@@ -11,6 +11,8 @@ export function useProducts(input: {
   range?: string;
   search?: string;
   onSpecialOnly?: boolean;
+  /** Item 9: "box", "broadloom", "none" (untagged). Empty = all. */
+  soldAs?: "" | "box" | "broadloom" | "none";
 }) {
   return useQuery(
     orpc.products.list.queryOptions({
@@ -20,6 +22,7 @@ export function useProducts(input: {
         range: input.range ?? "",
         search: input.search ?? "",
         onSpecialOnly: input.onSpecialOnly ?? false,
+        soldAs: input.soldAs ?? "",
         limit: 2000,
       },
       staleTime: 15_000,
@@ -142,6 +145,19 @@ export function useBulkSpecialApply() {
   return useMutation(
     orpc.products.bulkSpecialApply.mutationOptions({
       onSuccess: () => queryClient.invalidateQueries({ queryKey: orpc.products.key() }),
+    }),
+  );
+}
+
+/** Item 9: tag a product Box, Broadloom, or neither. Refreshes the price book and the Settings price list. */
+export function useSetSoldAs() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.settings.productUpdate.mutationOptions({
+      onSuccess: () => {
+        void queryClient.invalidateQueries({ queryKey: orpc.products.key() });
+        void queryClient.invalidateQueries({ queryKey: orpc.settings.products.key() });
+      },
     }),
   );
 }
