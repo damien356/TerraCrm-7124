@@ -48,8 +48,8 @@ export function useUpdateCompany() {
 
 /* --------------------------------- sites --------------------------------- */
 
-export function useSites(input: { search?: string; contactId?: number } = {}) {
-  return useQuery(orpc.sites.list.queryOptions({ input, staleTime: 30_000 }));
+export function useSites(input: { search?: string; contactId?: number } = {}, enabled = true) {
+  return useQuery(orpc.sites.list.queryOptions({ input, enabled, staleTime: 30_000 }));
 }
 
 function useSiteMutation(name: "create" | "update") {

@@ -6,7 +6,7 @@ import * as schema from "../database/schema";
 import { adminOnly, staffOnly } from "../middleware/auth";
 import { addQuotePerson, listQuotePeople, personInput, updateQuotePerson } from "../lib/job-people";
 import { PERSON_TAGS, COMPANY_TYPES, parseTags } from "../lib/person-tags";
-import { duplicateGroups, findMatches, mergeContacts } from "../lib/contact-merge";
+import { duplicateGroups, emailKey, findMatches, mergeContacts, phoneKey } from "../lib/contact-merge";
 import { referrers } from "../lib/referrals";
 
 /**
@@ -20,6 +20,16 @@ async function editableQuote(quoteId: number) {
   if (q.status === "accepted") throw new ORPCError("BAD_REQUEST", { message: "This quote is accepted. Add people on the job instead." });
   return q;
 }
+
+/** "ABC Builders Pty Ltd." and "abc builders" read as the same company. */
+const companyNameKey = (raw: string | null | undefined) => {
+  const k = (raw ?? "")
+    .toLowerCase()
+    .replace(/\b(pty|ltd|limited|p\/l|the|group|co|company|australia|qld)\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  return k.length >= 3 ? k : null;
+};
 
 const SUPERVISOR_ON_QUOTE = "Pick the supervisor in the Supervisor box above. A quote has at most one.";
 
@@ -93,6 +103,41 @@ export const people = {
         suburb: f.contact.suburb,
         reasons: f.reasons,
       }));
+    }),
+
+  /**
+   * "ABC Builders is already in Ops." Asked while a new company is typed on
+   * the New job screen. Matches on phone, email or the name with Pty Ltd and
+   * punctuation taken off.
+   */
+  companyMatches: staffOnly
+    .input(
+      z.object({
+        name: z.string().nullable().optional(),
+        phone: z.string().nullable().optional(),
+        email: z.string().nullable().optional(),
+      }),
+    )
+    .handler(async ({ input }) => {
+      const nk = companyNameKey(input.name);
+      const pk = phoneKey(input.phone);
+      const ek = emailKey(input.email);
+      if (!nk && !pk && !ek) return [];
+      const all = await db
+        .select({ id: schema.companies.id, name: schema.companies.name, phone: schema.companies.phone, email: schema.companies.email, type: schema.companies.type })
+        .from(schema.companies)
+        .where(eq(schema.companies.active, true));
+      const out: Array<{ id: number; name: string; phone: string | null; email: string | null; type: string; reasons: string[] }> = [];
+      for (const c of all) {
+        const reasons: string[] = [];
+        if (pk && phoneKey(c.phone) === pk) reasons.push("phone");
+        if (ek && emailKey(c.email) === ek) reasons.push("email");
+        const theirs = companyNameKey(c.name);
+        if (nk && theirs && (theirs === nk || (nk.length >= 4 && (theirs.startsWith(nk) || nk.startsWith(theirs))))) reasons.push("name");
+        if (reasons.length) out.push({ ...c, reasons });
+      }
+      const score = (r: string[]) => (r.includes("phone") ? 4 : 0) + (r.includes("email") ? 2 : 0) + (r.includes("name") ? 1 : 0);
+      return out.sort((a, b) => score(b.reasons) - score(a.reasons)).slice(0, 5);
     }),
 
   /** Cards that look like the same person, for the review list. */

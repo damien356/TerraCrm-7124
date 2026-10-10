@@ -1,206 +1,18 @@
 import * as React from "react";
 import { Link } from "wouter";
-import { Plus, Search, Sofa } from "lucide-react";
+import { Plus, Search, Sofa, UserX } from "lucide-react";
 import { Page } from "../components/layout";
 import { MemoButton } from "../components/voice-memo";
-import { Card, Empty, Loading, Spinner } from "../components/ui/card";
+import { Card, Empty, Loading } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
-import { Modal } from "../components/ui/modal";
-import { Combobox } from "../components/ui/combobox";
-import { SupervisorPicker } from "../components/supervisor-picker";
-import { useCreateJob, useJobs } from "../queries/jobs";
+import { Input, Select } from "../components/ui/field";
+import { NewJobModal } from "../components/new-job-modal";
+import { useJobs } from "../queries/jobs";
 import { useBootstrap } from "../queries/settings";
-import { ContactPicker } from "../components/contact-picker";
-import { QuotePeopleDraft, draftsToInput, type PersonDraft } from "../components/job-people";
-import { useCompanies, useSites } from "../queries/companies";
 
 const money = (n: number) =>
   n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
-
-export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const bootstrap = useBootstrap();
-  const companies = useCompanies();
-  const sites = useSites();
-  const create = useCreateJob();
-
-  const [form, setForm] = React.useState({
-    title: "",
-    contactId: "",
-    companyId: "",
-    supervisorContactId: "",
-    siteId: "",
-    statusId: "",
-    billToType: "contact" as "contact" | "company",
-    furnitureOnSite: false,
-    value: "",
-    description: "",
-    accessNotes: "",
-    source: "phone",
-  });
-  const [error, setError] = React.useState<string | null>(null);
-  const [people, setPeople] = React.useState<PersonDraft[]>([]);
-
-  function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
-    setForm((f) => ({ ...f, [key]: value }));
-  }
-
-  async function submit() {
-    setError(null);
-    try {
-      await create.mutateAsync({
-        title: form.title,
-        contactId: form.contactId ? Number(form.contactId) : null,
-        companyId: form.companyId ? Number(form.companyId) : null,
-        siteId: form.siteId ? Number(form.siteId) : null,
-        statusId: form.statusId ? Number(form.statusId) : null,
-        billToType: form.companyId ? form.billToType : "contact",
-        billToContactId: form.contactId ? Number(form.contactId) : null,
-        billToCompanyId: form.companyId ? Number(form.companyId) : null,
-        furnitureOnSite: form.furnitureOnSite,
-        value: form.value ? Number(form.value) : 0,
-        description: form.description || null,
-        accessNotes: form.accessNotes || null,
-        source: form.source,
-        supervisorContactId:
-          form.companyId && form.supervisorContactId ? Number(form.supervisorContactId) : null,
-        people: draftsToInput(people),
-      });
-      onClose();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="New job"
-      subtitle="Billing is decided here, per job — not on the person."
-      width="max-w-2xl"
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={submit} disabled={create.isPending}>
-            {create.isPending ? <Spinner className="border-white/40 border-t-white" /> : null}
-            Create job
-          </Button>
-        </>
-      }
-    >
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Job title" className="sm:col-span-2">
-          <Input
-            value={form.title}
-            onChange={(e) => set("title", e.target.value)}
-            placeholder="Carpet through 3 bed + hall"
-          />
-        </Field>
-        <Field label="Contact (the person)">
-          <ContactPicker value={form.contactId} onChange={(v) => set("contactId", v)} emptyLabel="None" />
-        </Field>
-        <Field label="Company (optional)">
-          <Combobox
-            value={form.companyId}
-            onChange={(v) => {
-              // A different builder means a different set of supervisors.
-              setForm((f) => ({ ...f, companyId: v, supervisorContactId: "" }));
-            }}
-            placeholder="Search companies…"
-            emptyLabel="None, private customer"
-            options={(companies.data ?? []).map((c) => ({
-              value: String(c.id),
-              label: c.name,
-            }))}
-          />
-        </Field>
-        <SupervisorPicker
-          companyId={form.companyId ? Number(form.companyId) : null}
-          value={form.supervisorContactId}
-          onChange={(v) => set("supervisorContactId", v)}
-        />
-        <Field label="Site">
-          <Select value={form.siteId} onChange={(e) => set("siteId", e.target.value)}>
-            <option value="">None</option>
-            {(sites.data ?? []).map((s) => (
-              <option key={s.site.id} value={s.site.id}>
-                {s.site.address}, {s.site.suburb}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Status">
-          <Select value={form.statusId} onChange={(e) => set("statusId", e.target.value)}>
-            <option value="">First status</option>
-            {(bootstrap.data?.statuses ?? []).map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Who gets the invoice" hint="Carol's own house bills Carol. Her builder job bills the company.">
-          <Select
-            value={form.billToType}
-            onChange={(e) => set("billToType", e.target.value as "contact" | "company")}
-            disabled={!form.companyId}
-          >
-            <option value="contact">The contact</option>
-            <option value="company">The company</option>
-          </Select>
-        </Field>
-        <Field label="Job value (ex GST)">
-          <Input
-            type="number"
-            inputMode="decimal"
-            value={form.value}
-            onChange={(e) => set("value", e.target.value)}
-            placeholder="0"
-          />
-        </Field>
-        <Field label="Where it came from">
-          <Select value={form.source} onChange={(e) => set("source", e.target.value)}>
-            <option value="phone">Phone</option>
-            <option value="website">Website</option>
-            <option value="repeat">Repeat customer</option>
-            <option value="referral">Referral</option>
-            <option value="builder">Builder</option>
-            <option value="walk_in">Walk in</option>
-            <option value="other">Other</option>
-          </Select>
-        </Field>
-        <label htmlFor={`jobs_cb1`} className="flex items-center gap-2 self-end pb-2 text-sm">
-          <Checkbox id={`jobs_cb1`} checked={form.furnitureOnSite} onChange={(e) => set("furnitureOnSite", e.target.checked)} />
-          Furniture on site (forces a 2-man crew)
-        </label>
-        <Field label="Job notes" className="sm:col-span-2">
-          <Textarea
-            rows={2}
-            value={form.description}
-            onChange={(e) => set("description", e.target.value)}
-            placeholder="What's happening on this job"
-          />
-        </Field>
-        <Field label="Access notes" className="sm:col-span-2">
-          <Textarea
-            rows={2}
-            value={form.accessNotes}
-            onChange={(e) => set("accessNotes", e.target.value)}
-            placeholder="Gate code, parking, dog on site, lift booking…"
-          />
-        </Field>
-        <div className="sm:col-span-2">
-          <QuotePeopleDraft value={people} onChange={setPeople} hint="Owner, tenant, agent, accounts. Tick Site access for anyone the crew should see." />
-        </div>
-      </div>
-      {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
-    </Modal>
-  );
-}
 
 export default function JobsPage() {
   const [search, setSearch] = React.useState("");
@@ -290,6 +102,12 @@ export default function JobsPage() {
                     <td className="px-4 py-2.5">
                       <div className="flex flex-wrap items-center gap-1">
                         <Badge colour={j.status?.colour}>{j.status?.name ?? "No status"}</Badge>
+                        {j.supervisorMissing ? (
+                          <Badge colour="#B7791F">
+                            <UserX className="size-3" />
+                            Supervisor missing
+                          </Badge>
+                        ) : null}
                         {j.furnitureOnSite ? (
                           <Badge colour="#C0603F">
                             <Sofa className="size-3" />

@@ -2,6 +2,7 @@ import { parseCallbackRef } from "../lib/callbacks";
 import { nextJobNumber } from "../lib/job-number";
 import { z } from "zod";
 import { assertSupervisor } from "../lib/supervisors";
+import { checkNewRecords, createNewRecords, newCompanyInput, newContactInput, newSiteInput } from "../lib/job-new-records";
 import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
@@ -12,6 +13,25 @@ import { PERSON_TAGS, legacyRoleToTag, parseTags } from "../lib/person-tags";
 import { installerForStaff, taskForStaff } from "../lib/staff-view";
 
 const tagList = z.array(z.enum(PERSON_TAGS));
+
+/**
+ * "Supervisor missing": a company job made in Ops (not imported from
+ * ServiceM8) with nobody picked as supervisor. The supervisor can be skipped on
+ * the New job screen, and this keeps it in front of the office until it is
+ * filled in. Imported jobs are left out: 1,350 of them have a company and no
+ * supervisor, and nobody is going back to fill those in.
+ */
+const SUPERVISOR_MISSING_SQL = sql<number>`(case when jobs.external_ref is null and jobs.company_id is not null
+  and not exists (select 1 from job_contacts sjc, json_each(sjc.tags) st where sjc.job_id = jobs.id and st.value = 'supervisor')
+  then 1 else 0 end)`;
+
+const NO_SOURCE = "Pick where the job came from. Unknown is fine.";
+
+/** A person on a new job: an existing card by id, or a new one by key. */
+const jobPersonInput = personInput.extend({
+  contactId: z.number().optional(),
+  contactKey: z.string().optional(),
+});
 
 export const createJobInput = z.object({
   title: z.string().default(""),
@@ -33,15 +53,88 @@ export const createJobInput = z.object({
    * it reads back through the same link every other person on the job uses.
    */
   supervisorContactId: z.number().nullable().optional(),
-  /** Anyone else on the job, each with their tags and ticks. */
-  people: z.array(personInput).max(20).optional(),
+  /** Anyone else on the job, each with their tags and ticks. A new person comes by `contactKey`. */
+  people: z.array(jobPersonInput).max(20).optional(),
+
+  /* ---- made on the New job screen, saved here with the job (lib/job-new-records.ts) ---- */
+  /** New people. Referred to by their `key` in contactKey, supervisorKey, billToContactKey and people. */
+  newContacts: z.array(newContactInput).max(25).optional(),
+  /** A new company instead of `companyId`. */
+  newCompany: newCompanyInput.nullable().optional(),
+  /** A new site instead of `siteId`. */
+  newSite: newSiteInput.nullable().optional(),
+  contactKey: z.string().nullable().optional(),
+  supervisorKey: z.string().nullable().optional(),
+  billToContactKey: z.string().nullable().optional(),
+  /**
+   * The picked supervisor is an existing card not yet filed under this
+   * company ("Already in Ops" on the New job screen). File them there as a
+   * supervisor when the job is made.
+   */
+  fileSupervisor: z.boolean().optional(),
 });
 
 /** Shared with voice memos, so a job said out loud lands exactly like one typed in. */
 export async function createJob(input: z.input<typeof createJobInput>, actor: Pick<Actor, "name" | "role">) {
   const parsed = createJobInput.parse(input);
-  const { supervisorContactId, people, ...jobInput } = parsed;
-  await assertSupervisor(jobInput.companyId, supervisorContactId);
+  const {
+    supervisorContactId: pickedSupervisor,
+    people: rawPeople,
+    newContacts = [],
+    newCompany,
+    newSite,
+    contactKey,
+    supervisorKey,
+    billToContactKey,
+    fileSupervisor,
+    ...jobInput
+  } = parsed;
+
+  // Everything the screen made is checked before anything is written.
+  for (const p of rawPeople ?? []) {
+    if (!p.contactId && !p.contactKey) throw new ORPCError("BAD_REQUEST", { message: "A job contact is missing who they are." });
+  }
+  const usedKeys = [contactKey, supervisorKey, billToContactKey, ...(rawPeople ?? []).map((p) => p.contactKey)].filter(
+    (k): k is string => !!k,
+  );
+  checkNewRecords({ newContacts, newCompany, companyId: jobInput.companyId, newSite, siteId: jobInput.siteId, usedKeys });
+  if (supervisorKey) {
+    const sup = newContacts.find((c) => c.key === supervisorKey);
+    if (!sup?.mobile) throw new ORPCError("BAD_REQUEST", { message: "A new supervisor needs a mobile." });
+    if (!jobInput.companyId && !newCompany) throw new ORPCError("BAD_REQUEST", { message: "Pick or make the company before adding its supervisor." });
+  }
+  if (fileSupervisor && pickedSupervisor) {
+    if (!jobInput.companyId && !newCompany) throw new ORPCError("BAD_REQUEST", { message: "Pick or make the company before adding its supervisor." });
+    const [c] = await db.select({ id: schema.contacts.id }).from(schema.contacts).where(eq(schema.contacts.id, pickedSupervisor));
+    if (!c) throw new ORPCError("BAD_REQUEST", { message: "That supervisor's card is gone. Pick them again." });
+  } else {
+    await assertSupervisor(jobInput.companyId, pickedSupervisor);
+  }
+
+  const made = await createNewRecords({
+    newContacts: newContacts.map((c) => (c.key === supervisorKey ? { ...c, atCompany: true, companyRole: "supervisor" } : c)),
+    newCompany,
+    companyId: jobInput.companyId,
+    newSite,
+    ownerContact: { id: jobInput.contactId, key: contactKey },
+    actor,
+  });
+  const idOf = (id: number | null | undefined, key: string | null | undefined) =>
+    key ? (made.contactIds.get(key) ?? null) : (id ?? null);
+  jobInput.companyId = made.companyId;
+  if (newCompany) jobInput.billToCompanyId = made.companyId;
+  if (made.siteId) jobInput.siteId = made.siteId;
+  jobInput.contactId = idOf(jobInput.contactId, contactKey);
+  jobInput.billToContactId = idOf(jobInput.billToContactId, billToContactKey);
+  const supervisorContactId = idOf(pickedSupervisor, supervisorKey);
+  if (fileSupervisor && pickedSupervisor && made.companyId) {
+    await db
+      .insert(schema.companyContacts)
+      .values({ companyId: made.companyId, contactId: pickedSupervisor, role: "supervisor" })
+      .onConflictDoNothing();
+  }
+  const people = (rawPeople ?? []).map(({ contactKey: k, contactId: id, ...rest }) => ({ ...rest, contactId: idOf(id, k)! }));
+
   const number = await nextJobNumber();
 
   const [status] = jobInput.statusId
@@ -97,6 +190,25 @@ export async function createJob(input: z.input<typeof createJobInput>, actor: Pi
       if (p.tags.includes("supervisor")) continue; // the supervisor comes only through supervisorContactId
       await addJobPerson(row.id, p.contactId, p);
     }
+  }
+
+  // Whoever gets the invoice is on the job too. Someone not already on it is tagged Accounts.
+  const billTo = row?.billToType === "contact" ? row.billToContactId : null;
+  if (row && billTo) {
+    const onJob = [jobInput.contactId, supervisorContactId, ...people.map((p) => p.contactId)].includes(billTo);
+    if (!onJob) await addJobPerson(row.id, billTo, { tags: ["accounts"], receivesEmail: true });
+  }
+
+  if (row && made.made.length) {
+    await db.insert(schema.activityLog).values({
+      jobId: row.id,
+      entityType: "job",
+      entityId: row.id,
+      action: "records_created",
+      detail: `Made on the New job screen: ${made.made.join(", ")}`,
+      actorName: actor.name,
+      actorRole: actor.role,
+    });
   }
 
   await db.insert(schema.activityLog).values({
@@ -171,6 +283,7 @@ export const jobs = {
           taskCount: sql<number>`(select count(*) from job_tasks t where t.job_id = jobs.id)`,
           doneCount: sql<number>`(select count(*) from job_tasks t where t.job_id = jobs.id and t.status = 'complete')`,
           unassignedCount: sql<number>`(select count(*) from job_tasks t where t.job_id = jobs.id and t.status = 'unassigned')`,
+          supervisorMissing: SUPERVISOR_MISSING_SQL,
         })
         .from(schema.jobs)
         .leftJoin(schema.jobStatuses, eq(schema.jobStatuses.id, schema.jobs.statusId))
@@ -190,6 +303,7 @@ export const jobs = {
         taskCount: Number(r.taskCount ?? 0),
         doneCount: Number(r.doneCount ?? 0),
         unassignedCount: Number(r.unassignedCount ?? 0),
+        supervisorMissing: Number(r.supervisorMissing ?? 0) === 1,
       }));
     }),
 
@@ -259,6 +373,11 @@ export const jobs = {
       })),
       /** True when nobody on the job holds a tag yet (old ServiceM8 jobs). The job page asks to tag people. */
       needsPeopleTagged: people.every((p) => parseTags(p.link.tags).length === 0),
+      /** Made in Ops for a company, and nobody picked as supervisor yet. See SUPERVISOR_MISSING_SQL. */
+      supervisorMissing:
+        row.job.externalRef == null &&
+        row.job.companyId != null &&
+        !people.some((p) => parseTags(p.link.tags).includes("supervisor")),
       tasks: tasks.map((t) => ({
         ...taskForStaff(t.task, context.actor),
         skill: t.skill,
@@ -274,7 +393,8 @@ export const jobs = {
   }),
 
   create: staffOnly
-    .input(createJobInput)
+    // Typed in on the New job screen, where the lead source has to be picked ("Unknown" is fine).
+    .input(createJobInput.extend({ source: z.string({ error: NO_SOURCE }).trim().min(1, NO_SOURCE) }))
     .handler(({ input, context }) => createJob(input, context.actor)),
 
   update: staffOnly

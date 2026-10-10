@@ -6,6 +6,8 @@ import { Button } from "./ui/button";
 import { Checkbox, Field, Input } from "./ui/field";
 import { Modal } from "./ui/modal";
 import { ContactPicker } from "./contact-picker";
+import { NewContactFields, blankContact, contactName, contactPayload, contactProblem, type NewContactDraft } from "./new-records";
+import { useCreateContact } from "../queries/contacts";
 import { PERSON_TAGS, PERSON_TAG_SHORT, type PersonTag } from "../../api/lib/person-tags";
 import {
   useJobPersonAdd,
@@ -32,7 +34,12 @@ const errText = (e: unknown) => (e instanceof Error ? e.message : String(e ?? ""
 const PICKABLE: PersonTag[] = PERSON_TAGS.filter((t) => t !== "supervisor");
 
 export interface PersonDraft {
+  /** 0 for a new person who is only saved with the job (see `newContact`). */
   contactId: number;
+  /** A new person's handle until they have an id. Set with `newContact`. */
+  contactKey?: string;
+  /** A person typed in on the New job screen, saved when the job is made. */
+  newContact?: NewContactDraft;
   name: string;
   tags: PersonTag[];
   canApproveQuote: boolean;
@@ -144,45 +151,101 @@ function FlagBoxes({ value, onChange: emit, idPrefix, compact }: { value: Flags;
   );
 }
 
-/** Pick a person, their tags, ticks and note. Used by the job page, the quote builder and New quote. */
+/**
+ * Pick a person, or type a new one, plus their tags, ticks and note, in one
+ * step. Used by the job page, the quote builder, New quote and New job.
+ *
+ * A new person is a normal full Clients card. With `deferNew` (New job) the
+ * card is only held in the form and saved with the job, so Cancel leaves
+ * nothing behind. Otherwise it is saved when Add is pressed.
+ */
 export function AddPersonModal({
   open,
   onClose,
   onAdd,
   title = "Add job contact",
   pending,
+  deferNew = false,
+  company = null,
+  initialTags = [],
 }: {
   open: boolean;
   onClose: () => void;
   onAdd: (draft: PersonDraft) => Promise<void> | void;
   title?: string;
   pending?: boolean;
+  deferNew?: boolean;
+  /** The job's company. A new person can be filed there. `id` is null while the company is new too. */
+  company?: { id: number | null; name: string } | null;
+  /** Tags already ticked when it opens, e.g. Accounts for "who gets the invoice". */
+  initialTags?: PersonTag[];
 }) {
+  const createContact = useCreateContact();
+  const [mode, setMode] = React.useState<"pick" | "new">("pick");
   const [contactId, setContactId] = React.useState("");
   const [name, setName] = React.useState("");
+  const [person, setPerson] = React.useState<NewContactDraft>(() => blankContact());
   const [draft, setDraft] = React.useState(blankDraft);
   const [error, setError] = React.useState<string | null>(null);
+  const tagKey = initialTags.join(",");
 
   React.useEffect(() => {
     if (open) {
+      setMode("pick");
       setContactId("");
       setName("");
-      setDraft(blankDraft());
+      setPerson(blankContact());
+      setDraft({ ...blankDraft(), tags: tagKey ? (tagKey.split(",") as PersonTag[]) : [] });
       setError(null);
     }
-  }, [open]);
+  }, [open, tagKey]);
 
   async function submit() {
     setError(null);
-    if (!contactId) return setError("Pick the person first.");
+    if (mode === "pick" && !contactId) return setError("Pick the person, or press New person to type them in.");
+    if (mode === "new") {
+      const problem = contactProblem(person);
+      if (problem) return setError(problem);
+    }
     if (draft.tags.length === 0) return setError("Pick at least one tag, so we know who they are on this job.");
+    const base = { ...draft, whenToContact: draft.whenToContact.trim() };
     try {
-      await onAdd({ ...draft, contactId: Number(contactId), name: name || "Contact", whenToContact: draft.whenToContact.trim() });
+      if (mode === "pick") {
+        await onAdd({ ...base, contactId: Number(contactId), name: name || "Contact" });
+      } else if (deferNew) {
+        await onAdd({ ...base, contactId: 0, contactKey: person.key, newContact: person, name: contactName(person) });
+      } else {
+        const p = contactPayload(person);
+        const atCo = !!(person.atCompany && company?.id);
+        const created = await createContact.mutateAsync({
+          firstName: p.firstName,
+          lastName: p.lastName,
+          mobile: p.mobile,
+          phone: p.phone,
+          email: p.email,
+          address: p.address,
+          suburb: p.suburb,
+          postcode: p.postcode,
+          notes: p.notes,
+          source: p.source,
+          marketingOptIn: p.marketingOptIn,
+          companyId: atCo ? company!.id : null,
+          companyRole: atCo ? p.companyRole : "other",
+        });
+        if (!created) throw new Error("The new person could not be saved. Try again.");
+        // From here a retry re-uses this card instead of making a second one.
+        setMode("pick");
+        setContactId(String(created.id));
+        setName(contactName(person));
+        await onAdd({ ...base, contactId: created.id, name: contactName(person) });
+      }
       onClose();
     } catch (e) {
       setError(errText(e));
     }
   }
+
+  const busy = pending || createContact.isPending;
 
   return (
     <Modal
@@ -195,17 +258,53 @@ export function AddPersonModal({
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={pending}>
-            {pending ? <Spinner className="border-white/40 border-t-white" /> : null}
+          <Button onClick={submit} disabled={busy}>
+            {busy ? <Spinner className="border-white/40 border-t-white" /> : null}
             Add
           </Button>
         </>
       }
     >
       <div className="grid gap-4">
-        <Field label="Person" hint="Not in Ops yet? Add them under Clients first, then pick them here.">
-          <ContactPicker value={contactId} onChange={setContactId} onPicked={setName} emptyLabel="Pick a contact" />
-        </Field>
+        {mode === "pick" ? (
+          <Field label="Person">
+            <div className="space-y-1.5">
+              <ContactPicker value={contactId} onChange={setContactId} onPicked={setName} selectedLabel={name} emptyLabel="Pick a contact" />
+              <button
+                type="button"
+                onClick={() => {
+                  setMode("new");
+                  setError(null);
+                }}
+                className="inline-flex items-center gap-1.5 text-[13px] font-medium text-primary hover:underline"
+              >
+                <UserPlus className="size-3.5" /> Not in Ops yet? New person
+              </button>
+            </div>
+          </Field>
+        ) : (
+          <div className="space-y-2 rounded-lg border border-border bg-secondary/40 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[13px] font-semibold">New person</p>
+              <button type="button" onClick={() => setMode("pick")} className="text-[13px] font-medium text-primary hover:underline">
+                Pick from Ops instead
+              </button>
+            </div>
+            <NewContactFields
+              value={person}
+              onChange={setPerson}
+              companyName={company?.name ?? null}
+              onUseExisting={(m) => {
+                setMode("pick");
+                setContactId(String(m.id));
+                setName(m.name || "Contact");
+              }}
+            />
+            <p className="text-xs text-muted-foreground">
+              {deferNew ? "Saved as a normal client card when the job is made." : "Saved as a normal client card when you press Add."}
+            </p>
+          </div>
+        )}
         <Field label="Who are they on this job?">
           <TagChips
             value={draft.tags}
@@ -393,8 +492,11 @@ export function JobPeopleCard({
   people,
   needsPeopleTagged,
   canRemove,
+  company = null,
 }: {
   jobId: number;
+  /** The job's company. A new person typed in can be filed there. */
+  company?: { id: number; name: string } | null;
   people: Array<{ link: JobPersonLink; contact: { id: number; firstName: string; lastName: string; mobile: string | null }; actedForCompanyName: string | null }>;
   needsPeopleTagged: boolean;
   canRemove: boolean;
@@ -465,6 +567,7 @@ export function JobPeopleCard({
         open={open}
         onClose={() => setOpen(false)}
         pending={add.isPending}
+        company={company}
         onAdd={async (d) => {
           await add.mutateAsync({
             jobId,
@@ -490,12 +593,24 @@ export function QuotePeopleDraft({
   value,
   onChange,
   hint = "Owner, tenant, agent, accounts. They move onto the job when it is accepted.",
+  deferNew = false,
+  company = null,
+  addTags,
+  onAddClosed,
 }: {
   value: PersonDraft[];
   onChange: (next: PersonDraft[]) => void;
   hint?: string;
+  /** New people stay in the form and are saved with it (New job). */
+  deferNew?: boolean;
+  company?: { id: number | null; name: string } | null;
+  /** Opens the Add popup from outside with these tags ticked (Who gets the invoice). */
+  addTags?: PersonTag[] | null;
+  onAddClosed?: (added: PersonDraft | null) => void;
 }) {
-  const [open, setOpen] = React.useState(false);
+  const [ownOpen, setOpen] = React.useState(false);
+  const open = ownOpen || !!addTags;
+  const added = React.useRef<PersonDraft | null>(null);
   return (
     <div className="rounded-lg border border-border">
       <div className="flex items-center justify-between gap-2 px-3 py-2">
@@ -511,9 +626,12 @@ export function QuotePeopleDraft({
       {value.length ? (
         <ul className="divide-y divide-border border-t border-border">
           {value.map((p) => (
-            <li key={p.contactId} className="flex items-start justify-between gap-2 px-3 py-2 text-sm">
+            <li key={draftId(p)} className="flex items-start justify-between gap-2 px-3 py-2 text-sm">
               <div className="min-w-0">
-                <p className="font-medium">{p.name}</p>
+                <p className="font-medium">
+                  {p.name}
+                  {p.newContact ? <span className="ml-1.5 rounded-full bg-secondary px-1.5 py-0.5 text-[10px] font-semibold">New</span> : null}
+                </p>
                 <p className="text-xs text-muted-foreground">
                   {[
                     p.tags.map((t) => PERSON_TAG_SHORT[t]).join(", "),
@@ -527,7 +645,7 @@ export function QuotePeopleDraft({
               <button
                 type="button"
                 aria-label={`Take ${p.name} off`}
-                onClick={() => onChange(value.filter((x) => x.contactId !== p.contactId))}
+                onClick={() => onChange(value.filter((x) => draftId(x) !== draftId(p)))}
                 className="text-muted-foreground hover:text-destructive"
               >
                 <Trash2 className="size-3.5" />
@@ -538,10 +656,18 @@ export function QuotePeopleDraft({
       ) : null}
       <AddPersonModal
         open={open}
-        onClose={() => setOpen(false)}
+        deferNew={deferNew}
+        company={company}
+        initialTags={addTags ?? []}
+        onClose={() => {
+          setOpen(false);
+          onAddClosed?.(added.current);
+          added.current = null;
+        }}
         onAdd={(d) => {
-          const others = value.filter((x) => x.contactId !== d.contactId);
-          const had = value.find((x) => x.contactId === d.contactId);
+          added.current = d;
+          const others = value.filter((x) => draftId(x) !== draftId(d));
+          const had = value.find((x) => draftId(x) === draftId(d));
           const merged = had
             ? {
                 ...d,
@@ -634,7 +760,23 @@ export function QuotePeopleCard({ quoteId, locked }: { quoteId: number; locked: 
   );
 }
 
-/** Draft list to the API shape (New quote, New job). */
+/** One draft row: a new person by key, else the card id. */
+export const draftId = (p: Pick<PersonDraft, "contactId" | "contactKey">) => (p.contactKey ? `k:${p.contactKey}` : `c:${p.contactId}`);
+
+/** New job: existing cards go by id, new people by key (their card travels in newContacts). */
+export const jobDraftsToInput = (list: PersonDraft[]) =>
+  list.map((p) => ({
+    ...(p.contactKey ? { contactKey: p.contactKey } : { contactId: p.contactId }),
+    tags: p.tags,
+    canApproveQuote: p.canApproveQuote,
+    onSiteContact: p.onSiteContact,
+    receivesSms: p.receivesSms,
+    receivesEmail: p.receivesEmail,
+    showToCrew: p.showToCrew,
+    whenToContact: p.whenToContact || null,
+  }));
+
+/** Draft list to the API shape (New quote). */
 export const draftsToInput = (list: PersonDraft[]) =>
   list.map((p) => ({
     contactId: p.contactId,

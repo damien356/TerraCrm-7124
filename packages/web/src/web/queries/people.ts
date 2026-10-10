@@ -79,3 +79,14 @@ export function useCompanyTypes() {
 export function useReferrers(range: { from?: string | null; to?: string | null }) {
   return useQuery(orpc.people.referrers.queryOptions({ input: range, staleTime: 30_000 }));
 }
+
+/** Companies that already have this name, phone or email. Asked while a new company is typed. */
+export function useCompanyMatches(input: { name?: string | null; phone?: string | null; email?: string | null }, enabled = true) {
+  const has =
+    (input.name ?? "").trim().length >= 3 ||
+    (input.phone ?? "").replace(/\D/g, "").length >= 8 ||
+    (input.email ?? "").includes("@");
+  return useQuery(
+    orpc.people.companyMatches.queryOptions({ input, enabled: enabled && has, staleTime: 30_000, placeholderData: (prev) => prev }),
+  );
+}

@@ -22,17 +22,19 @@ export const createContactInput = z.object({
   /** Optionally file them under a company straight away. */
   companyId: z.number().nullable().optional(),
   companyRole: z.string().default("other"),
+  /** Their job title at that company, e.g. "Site supervisor". */
+  companyJobTitle: z.string().nullable().optional(),
 });
 
 /** Shared with voice memos, which offer a new client straight out of a recording. */
 export async function createContact(input: z.input<typeof createContactInput>, actor: Pick<Actor, "name" | "role">) {
   const parsed = createContactInput.parse(input);
-  const { companyId, companyRole, ...values } = parsed;
+  const { companyId, companyRole, companyJobTitle, ...values } = parsed;
   const [row] = await db.insert(schema.contacts).values(values).returning();
   if (companyId && row) {
     await db
       .insert(schema.companyContacts)
-      .values({ companyId, contactId: row.id, role: companyRole })
+      .values({ companyId, contactId: row.id, role: companyRole, jobTitle: companyJobTitle?.trim() || null })
       .onConflictDoNothing();
   }
   await db.insert(schema.activityLog).values({

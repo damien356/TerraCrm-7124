@@ -49,6 +49,7 @@ import { mail } from "./routes/mail";
 import { swms } from "./routes/swms";
 import { swmsLib } from "./routes/swms-lib";
 import { people } from "./routes/people";
+import { places } from "./routes/places";
 import { callbacks } from "./routes/callbacks";
 import { quoteSend } from "./routes/quoteSend";
 import { clientInvoices } from "./routes/clientInvoices";
@@ -161,6 +162,8 @@ export const router = {
   mail,
   /** Job and quote people, duplicate cards, company retype, and referral value. */
   people,
+  /** Address suggestions for a new site. The Google key stays on the server. */
+  places,
   /** Return visits linked to the original job, shown as 3981-C1. Rework cost is Admin only. */
   callbacks,
   /** Email a quote from team@ with the PDF and the no-login link, and the link's view count. */

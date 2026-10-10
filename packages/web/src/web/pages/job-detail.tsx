@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link, useParams, useSearch } from "wouter";
-import { ArrowLeft, LifeBuoy, MessagesSquare, Plus, Sofa, Trash2, Users } from "lucide-react";
+import { AlertTriangle, ArrowLeft, LifeBuoy, MessagesSquare, Plus, Sofa, Trash2, Users } from "lucide-react";
 import { Page } from "../components/layout";
 import { MemoButton } from "../components/voice-memo";
 import { JobFile } from "../components/job-file";
@@ -204,10 +204,13 @@ function SupervisorCard({
   jobId,
   companyId,
   current,
+  missing,
 }: {
   jobId: number;
   companyId: number | null;
   current: { contactId: number; name: string } | null;
+  /** Made in Ops for a company and nobody picked yet. */
+  missing: boolean;
 }) {
   const setSupervisor = useSetJobSupervisor();
   const currentId = current?.contactId ?? null;
@@ -274,6 +277,14 @@ function SupervisorCard({
           <Link to={`/supervisors/${current.contactId}`} className="text-sm font-medium text-primary hover:underline">
             {current.name}
           </Link>
+        ) : missing ? (
+          <div className="flex items-start gap-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-sm">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+            <div>
+              <p className="font-medium">Supervisor missing</p>
+              <p className="text-xs text-muted-foreground">Nobody from the builder is recorded. Press Add to fill it in.</p>
+            </div>
+          </div>
         ) : (
           <p className="text-[13px] text-muted-foreground">
             {companyId
@@ -527,6 +538,7 @@ export default function JobDetailPage() {
                   }
                 : null;
             })()}
+            missing={j.supervisorMissing}
           />
 
           {/* people on the job */}
@@ -535,6 +547,7 @@ export default function JobDetailPage() {
             people={j.contacts}
             needsPeopleTagged={j.needsPeopleTagged}
             canRemove={bootstrap.data?.actor.role === "admin"}
+            company={j.company ? { id: j.company.id, name: j.company.name } : null}
           />
 
           {/* materials */}

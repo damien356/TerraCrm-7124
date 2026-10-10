@@ -25,8 +25,11 @@ export function ContactPicker({
   disabled,
   className,
   onPicked,
+  selectedLabel,
 }: {
   value: string;
+  /** Name for a value set from outside (an "Already in Ops" pick). */
+  selectedLabel?: string;
   onChange: (value: string) => void;
   /** The picked person's name, for lists that show who was picked before saving. */
   onPicked?: (label: string) => void;
@@ -59,7 +62,7 @@ export function ContactPicker({
       }}
       options={options}
       onQueryChange={setQuery}
-      selectedLabel={pickedLabel}
+      selectedLabel={selectedLabel || pickedLabel}
       loading={found.isFetching || query !== debounced}
       idleHint="Type a name, mobile or email"
       placeholder={placeholder}
