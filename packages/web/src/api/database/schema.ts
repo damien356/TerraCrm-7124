@@ -1085,7 +1085,7 @@ export const products = sqliteTable(
     brand: text("brand").notNull().default(""),
     range: text("range").notNull().default(""),
     colour: text("colour").notNull().default(""),
-    /** carpet · carpet_tile · vinyl · hybrid · laminate · timber · underlay · accessory · labour */
+    /** See api/lib/product-categories.ts. Timber is engineered_timber and solid_timber since 11 Oct. */
     category: text("category").notNull().default("carpet"),
     /** The supplier's own grade band where it has one, e.g. Belgotex PREMIUM / WOOL. */
     tier: text("tier").notNull().default(""),

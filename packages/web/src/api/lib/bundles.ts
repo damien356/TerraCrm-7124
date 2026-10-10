@@ -59,7 +59,9 @@ const KEYWORDS: [RegExp, FloorCategory][] = [
   [/\bhybrid\b/i, "hybrid"],
   [/laminate/i, "laminate"],
   [/\bturf\b|artificial\s*grass|synthetic\s*grass/i, "turf"],
-  [/timber|engineered|\boak\b|parquet|herringbone|chevron|sanding|\bsand\b|polish|floorboard/i, "timber"],
+  [/outdoor\s*carpet/i, "outdoor_carpet"],
+  [/solid\s*timber|parquet|floorboard/i, "solid_timber"],
+  [/timber|engineered|\boak\b|herringbone|chevron|sanding|\bsand\b|polish/i, "engineered_timber"],
   [/\bvinyl\b|\blvt\b|\bspc\b|\bplank\b/i, "vinyl"],
   [/carpet|broadloom/i, "carpet"],
 ];
@@ -119,6 +121,16 @@ export function assignCategories(lines: BundleLine[]): Map<number, { key: string
     else place(l);
   }
 
+  // Timber words only say timber, not which kind. "Floor sanding" on a quote
+  // with solid boards goes with the solid timber, not a bundle of its own.
+  const productFloors = new Set(lines.map((l) => l.productCategory).filter(isFloor));
+  const sibling: Record<string, string> = { engineered_timber: "solid_timber", solid_timber: "engineered_timber" };
+  for (const l of lines) {
+    const got = out.get(l.id);
+    if (!got?.auto || !sibling[got.key] || productFloors.has(got.key as FloorCategory)) continue;
+    if (productFloors.has(sibling[got.key] as FloorCategory)) out.set(l.id, { key: sibling[got.key], auto: true });
+  }
+
   // Floors on the quote, biggest first, from lines already placed.
   const size = new Map<string, number>();
   for (const l of lines) {
@@ -134,7 +146,9 @@ export function assignCategories(lines: BundleLine[]): Map<number, { key: string
     else if (l.productCategory === "underlay") {
       key = floors.includes("carpet")
         ? "carpet"
-        : (floors.find((f) => ["hybrid", "laminate", "timber", "vinyl", "sheet_vinyl"].includes(f)) ?? floors[0] ?? null);
+        : (floors.find((f) => ["hybrid", "laminate", "engineered_timber", "solid_timber", "vinyl", "sheet_vinyl"].includes(f)) ??
+          floors[0] ??
+          null);
     } else key = floors[0] ?? null;
     out.set(l.id, { key: key ?? EXTRAS, auto: true });
   }

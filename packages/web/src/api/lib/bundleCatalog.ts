@@ -5,12 +5,14 @@
 
 export const FLOOR_CATEGORIES = [
   "carpet",
+  "outdoor_carpet",
   "carpet_tile",
   "vinyl",
   "sheet_vinyl",
   "hybrid",
   "laminate",
-  "timber",
+  "engineered_timber",
+  "solid_timber",
   "turf",
   "sheet_goods",
 ] as const;
@@ -32,6 +34,10 @@ export const BUNDLE_TITLES: Record<string, string> = {
   sheet_vinyl: "Sheet vinyl supply and installation",
   hybrid: "Hybrid flooring supply and installation",
   laminate: "Laminate flooring supply and installation",
+  outdoor_carpet: "Outdoor carpet supply and installation",
+  engineered_timber: "Engineered timber flooring supply and installation",
+  solid_timber: "Solid timber flooring supply and installation",
+  /** Old single timber bundle, before the split (11 Oct). Kept so an old saved bundle still has a title. */
   timber: "Timber flooring supply and installation",
   turf: "Artificial turf supply and installation",
   /** Plywood and other subfloor sheets. The price book calls these sheet_goods. */
@@ -47,7 +53,9 @@ export const CATEGORY_LABELS: Record<string, string> = {
   sheet_vinyl: "Sheet vinyl",
   hybrid: "Hybrid",
   laminate: "Laminate",
-  timber: "Timber",
+  outdoor_carpet: "Outdoor carpet",
+  engineered_timber: "Engineered timber",
+  solid_timber: "Solid timber",
   turf: "Turf",
   sheet_goods: "Plywood / subfloor",
   [EXTRAS]: "Prep, removal and other",
@@ -60,5 +68,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
 export function bundleCategoryOf(category: string | null | undefined, soldAs: string | null | undefined): string | null {
   if (!category) return null;
   if (category === "vinyl" && soldAs === "broadloom") return "sheet_vinyl";
+  // The old single timber category reads as engineered, same as flooring-qty.ts.
+  if (category === "timber") return "engineered_timber";
   return category;
 }

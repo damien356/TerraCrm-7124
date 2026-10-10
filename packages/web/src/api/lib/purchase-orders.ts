@@ -86,7 +86,9 @@ export type PricedPo = {
 };
 
 const isHurfords = (name: string) => /hurford/i.test(name);
-const isSolid = (p: { tier: string; category: string } | undefined) => Boolean(p && p.category === "timber" && /solid/i.test(p.tier));
+/** Solid timber (item 10, 11 Oct), or the old single timber category marked solid. */
+const isSolid = (p: { tier: string; category: string } | undefined) =>
+  Boolean(p && (p.category === "solid_timber" || (p.category === "timber" && /solid/i.test(p.tier))));
 
 async function specialsFor(ids: number[]) {
   const map = new Map<number, SpecialRow[]>();

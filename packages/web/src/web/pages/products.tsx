@@ -18,6 +18,7 @@ import {
   useSpecialsBoard,
   useSetSoldAs,
 } from "../queries/products";
+import { PRODUCT_CATEGORIES, PRODUCT_CATEGORY_LABELS } from "../../api/lib/product-categories";
 
 const money = (n: number | null | undefined) =>
   n === null || n === undefined ? "—" : n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
@@ -25,19 +26,8 @@ const money = (n: number | null | undefined) =>
 const UNIT_LABEL: Record<string, string> = { m2: "m²", lm: "lm", each: "each", roll: "roll" };
 const unit = (u: string) => UNIT_LABEL[u] ?? u;
 
-const CATEGORY_LABEL: Record<string, string> = {
-  carpet: "Broadloom carpet",
-  carpet_tile: "Carpet tile",
-  vinyl: "Vinyl",
-  hybrid: "Hybrid",
-  laminate: "Laminate",
-  timber: "Timber",
-  underlay: "Underlay",
-  turf: "Synthetic turf",
-  /** Plywood. Not a floor covering — the substrate that goes under one. */
-  sheet_goods: "Sheet goods",
-  accessory: "Accessory",
-};
+/** One list for the whole app, so the tabs and the editor never drift (item 10, 11 Oct). */
+const CATEGORY_LABEL = PRODUCT_CATEGORY_LABELS;
 
 const TONE = { danger: "#B4342A", warn: "#D08A1E", good: "#3F7D3A", info: "#4A7FA5" };
 
@@ -214,7 +204,12 @@ function RangeGrid({ onOpen }: { onOpen: (supplierId: number | null, range: stri
 
   if (ranges.isLoading) return <Loading label="Loading the price book…" />;
   const rows = (ranges.data ?? []).filter((r) => !category || r.category === category);
-  const categories = [...new Set((ranges.data ?? []).map((r) => r.category))];
+  // In the price book's own order, so Engineered and Solid timber sit side by side.
+  const order = (c: string) => {
+    const i = (PRODUCT_CATEGORIES as readonly string[]).indexOf(c);
+    return i < 0 ? 99 : i;
+  };
+  const categories = [...new Set((ranges.data ?? []).map((r) => r.category))].sort((a, b) => order(a) - order(b));
 
   if (!rows.length) return <Empty>No ranges in the price book yet.</Empty>;
 

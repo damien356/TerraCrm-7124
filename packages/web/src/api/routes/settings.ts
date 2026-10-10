@@ -6,6 +6,7 @@ import * as schema from "../database/schema";
 import { adminOnly, authed } from "../middleware/auth";
 import { groupForSkill } from "./labour";
 import { autoSoldAs, SOLD_AS } from "../lib/flooring-qty";
+import { carpetWidthByRule } from "../lib/product-categories";
 import { JOB_NUMBER_KEY, JOB_NUMBER_START_KEY, jobNumbering, setJobNumberStart } from "../lib/job-number";
 
 /**
@@ -193,6 +194,8 @@ export const settings = {
       const values = {
         ...input,
         soldAs: input.soldAs !== undefined ? input.soldAs : autoSoldAs(input),
+        // Item 1 (11 Oct): a new broadloom carpet gets its roll width by rule.
+        widthM: carpetWidthByRule(input),
         variantKey: `manual|${crypto.randomUUID()}`,
       };
       if (input.supplierId) {
@@ -227,9 +230,14 @@ export const settings = {
     )
     .handler(async ({ input }) => {
       const { id, ...rest } = input;
+      // Item 1 (11 Oct): a product moved into broadloom carpet with no roll width gets one by rule.
+      const [before] = await db.select().from(schema.products).where(eq(schema.products.id, id));
+      if (!before) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
+      const after = { ...before, ...rest };
+      const widthM = before.widthM == null ? carpetWidthByRule(after) : null;
       const [row] = await db
         .update(schema.products)
-        .set({ ...rest, updatedAt: new Date() })
+        .set({ ...rest, ...(widthM != null ? { widthM } : {}), updatedAt: new Date() })
         .where(eq(schema.products.id, id))
         .returning();
       return row;

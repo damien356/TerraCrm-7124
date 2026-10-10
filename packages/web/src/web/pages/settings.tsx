@@ -28,6 +28,7 @@ import {
 } from "../queries/settings";
 import { useCreateSupplier, useSuppliers } from "../queries/suppliers";
 import { autoSoldAs, FLOOR_TYPE_LABELS, FLOOR_TYPES, wastageKey } from "../../api/lib/flooring-qty";
+import { categoryLabel, PRODUCT_CATEGORIES } from "../../api/lib/product-categories";
 
 const SKILL_GROUPS = Object.keys(SKILL_TINT);
 /**
@@ -93,24 +94,13 @@ function StageGuide() {
   );
 }
 /**
- * The category values actually in the price book. Kept in step with
- * CATEGORY_LABEL in pages/products.tsx — this list had drifted and offered
+ * The category values actually in the price book, off api/lib/product-categories.ts
+ * so it cannot drift from the Price list tabs again. The old list had drifted and offered
  * "lvt" and "sundry", which nothing uses, while missing "accessory" and
  * "sheet_goods", which 700+ rows do. Editing a product off a wrong list is how
  * a line quietly disappears out of every filter that matters.
  */
-const CATEGORIES = [
-  "carpet",
-  "carpet_tile",
-  "vinyl",
-  "hybrid",
-  "laminate",
-  "timber",
-  "underlay",
-  "turf",
-  "sheet_goods",
-  "accessory",
-];
+const CATEGORIES: string[] = [...PRODUCT_CATEGORIES];
 const UNITS = ["m2", "lm", "each", "roll", "box", "hour"];
 
 /** Item 9. How a product is sold, which decides the wastage and labour sums on a quote. */
@@ -800,7 +790,7 @@ function ProductLine({ product }: { product: ProductRow }) {
         >
           {CATEGORIES.concat(CATEGORIES.includes(product.category) ? [] : [product.category]).map((c) => (
             <option key={c} value={c}>
-              {c.replace(/_/g, " ")}
+              {categoryLabel(c)}
             </option>
           ))}
         </Select>
@@ -991,7 +981,7 @@ function NewProductModal({ open, onClose }: { open: boolean; onClose: () => void
           <Select value={form.category} onChange={(e) => set("category", e.target.value)}>
             {CATEGORIES.map((c) => (
               <option key={c} value={c}>
-                {c.replace(/_/g, " ")}
+                {categoryLabel(c)}
               </option>
             ))}
           </Select>

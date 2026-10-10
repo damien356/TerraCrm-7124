@@ -25,9 +25,22 @@ export const extractionLineSchema = z.object({
   spokenDescription: z.string().nullable().describe("What Damien actually said for this line, verbatim-ish. Material lines only."),
   unit: z.enum(["m2", "lm", "each"]).nullable().describe("Material lines only."),
   category: z
-    .enum(["carpet", "carpet_tile", "vinyl", "hybrid", "laminate", "timber", "underlay", "accessory", "unknown"])
+    .enum([
+      "carpet",
+      "outdoor_carpet",
+      "carpet_tile",
+      "vinyl",
+      "hybrid",
+      "laminate",
+      "engineered_timber",
+      "solid_timber",
+      "timber",
+      "underlay",
+      "accessory",
+      "unknown",
+    ])
     .nullable()
-    .describe("Material lines only."),
+    .describe("Material lines only. timber = timber where he did not say engineered or solid."),
   supplierHint: z.string().nullable().describe("Supplier name if mentioned, e.g. 'Godfrey Hirst'. Material lines only."),
   brandHint: z.string().nullable().describe("Material lines only."),
   rangeHint: z.string().nullable().describe("Product range/collection name if mentioned. Material lines only."),

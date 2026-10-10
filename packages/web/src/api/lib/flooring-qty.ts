@@ -12,8 +12,13 @@
  *  - Broadloom (carpet, sheet vinyl, turf): material = measured + wastage,
  *    rounded UP to the next 0.1 lm of the roll width. Labour includes the
  *    wastage too: the same lm (or m2) as the material.
- *  - Carpet with no roll width, and the timber install type: flag and ask.
- *    Never guess.
+ *  - Carpet with no roll width, and the engineered timber install type: flag
+ *    and ask. Never guess.
+ *
+ * Fix list 11 Oct, item 10: timber is two floors now. Engineered timber
+ * (floating or direct stick, so ask) and solid timber (one install in the rate
+ * book, secret nail and stick, so it goes on by default). Outdoor carpet is
+ * broadloom with its own wastage and no install in the rate book.
  */
 
 export type SoldAs = "box" | "broadloom";
@@ -21,24 +26,28 @@ export const SOLD_AS = ["box", "broadloom"] as const;
 
 export const FLOOR_TYPES = [
   "carpet",
+  "outdoor_carpet",
   "carpet_tile",
   "vinyl_plank",
   "sheet_vinyl",
   "hybrid",
   "laminate",
-  "timber",
+  "engineered_timber",
+  "solid_timber",
   "turf",
 ] as const;
 export type FloorType = (typeof FLOOR_TYPES)[number];
 
 export const FLOOR_TYPE_LABELS: Record<FloorType, string> = {
   carpet: "Carpet",
+  outdoor_carpet: "Outdoor carpet",
   carpet_tile: "Carpet tiles",
   vinyl_plank: "Vinyl plank",
   sheet_vinyl: "Sheet vinyl",
   hybrid: "Hybrid",
   laminate: "Laminate",
-  timber: "Timber",
+  engineered_timber: "Engineered timber",
+  solid_timber: "Solid timber",
   turf: "Turf",
 };
 
@@ -67,8 +76,10 @@ export type ProductShape = {
  * database/sql/2026-10-10-wastage-labour.sql, used for new products.
  */
 export function autoSoldAs(p: ProductShape): SoldAs | null {
-  if (p.category === "carpet" || p.category === "turf") return "broadloom";
-  if (["carpet_tile", "hybrid", "laminate", "timber"].includes(p.category)) return p.unit === "m2" ? "box" : null;
+  if (["carpet", "outdoor_carpet", "turf"].includes(p.category)) return "broadloom";
+  if (["carpet_tile", "hybrid", "laminate", "timber", "engineered_timber", "solid_timber"].includes(p.category)) {
+    return p.unit === "m2" ? "box" : null;
+  }
   if (p.category === "vinyl") {
     if (p.unitsPerPack != null || p.packM2Printed != null) return "box";
     if (p.widthM != null || p.rollM2 != null) return "broadloom";
@@ -87,13 +98,19 @@ export function floorTypeOf(p: ProductShape): FloorType | null {
   switch (p.category) {
     case "carpet":
       return "carpet";
+    case "outdoor_carpet":
+      return "outdoor_carpet";
     case "carpet_tile":
       return "carpet_tile";
+    /** The old single category. Nothing on file uses it after the split; it reads as engineered. */
+    case "timber":
+      return "engineered_timber";
     case "vinyl":
       return tag === "broadloom" ? "sheet_vinyl" : "vinyl_plank";
     case "hybrid":
     case "laminate":
-    case "timber":
+    case "engineered_timber":
+    case "solid_timber":
     case "turf":
       return p.category;
     default:
@@ -118,16 +135,19 @@ const fmt = (n: number) => String(r2(n));
 
 export const NO_WIDTH_FLAG = "No roll width in the price book. Pick 3.66 m or 4.0 m on the line.";
 export const NO_BOX_FLAG = "No box size in the price book, so this is not rounded to full boxes. Check the quantity.";
-export const TIMBER_FLAG = "Pick the timber install: floating, direct stick, or secret nail. Or untick it.";
+export const TIMBER_FLAG = "Pick the engineered timber install: floating or direct stick. Or untick it.";
+/** The wording before the split (11 Oct). Lines already flagged with it still clear the same way. */
+const OLD_TIMBER_FLAG = "Pick the timber install: floating, direct stick, or secret nail. Or untick it.";
 const ODD_WIDTH = "No carpet install for a ";
+const isTimberFlag = (reason: string) => reason === TIMBER_FLAG || reason === OLD_TIMBER_FLAG;
 /** Flags this file sets, so they can be cleared once the gap is filled. */
 export function isOwnFlag(reason: string | null | undefined): boolean {
   if (!reason) return false;
-  return reason === NO_WIDTH_FLAG || reason === NO_BOX_FLAG || reason === TIMBER_FLAG || reason.startsWith(ODD_WIDTH);
+  return reason === NO_WIDTH_FLAG || reason === NO_BOX_FLAG || isTimberFlag(reason) || reason.startsWith(ODD_WIDTH);
 }
 /** The flags that are about the install, cleared once one is added or ticked off. */
 export function isInstallFlag(reason: string | null | undefined): boolean {
-  return !!reason && (reason === TIMBER_FLAG || reason.startsWith(ODD_WIDTH));
+  return !!reason && (isTimberFlag(reason) || reason.startsWith(ODD_WIDTH));
 }
 
 export type QtyResult = {
@@ -212,12 +232,16 @@ export function labourQtyFor(res: QtyResult, unit: string): number | null {
  */
 export const INSTALL_ITEMS: Record<FloorType, number[]> = {
   carpet: [1, 2, 5],
+  outdoor_carpet: [],
   carpet_tile: [4],
   vinyl_plank: [17, 18],
   sheet_vinyl: [19],
   hybrid: [15, 16],
   laminate: [15, 16],
-  timber: [37, 38, 39],
+  /** 37 floating, 38 direct stick inc glue. */
+  engineered_timber: [37, 38],
+  /** 39 solid timber, secret nail and stick. */
+  solid_timber: [39],
   turf: [],
 };
 
@@ -246,8 +270,10 @@ export function defaultInstall(t: FloorType | null, widthM: number | null): Inst
     case "hybrid":
     case "laminate":
       return { kind: "item", itemId: 15 };
-    case "timber":
+    case "engineered_timber":
       return { kind: "ask", reason: TIMBER_FLAG };
+    case "solid_timber":
+      return { kind: "item", itemId: 39 };
     default:
       return { kind: "none" };
   }

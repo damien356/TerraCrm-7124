@@ -12,6 +12,7 @@ import { sellExGstWithMarkup, markupOf } from "../lib/pricing";
 import { discountLimit, discountPercentOf } from "../routes/quotes";
 import { bundlesFor } from "../routes/quoteBundles";
 import { quoteRef } from "../lib/refs";
+import { categoriesForHint, categoryMatchesHint } from "../lib/product-categories";
 
 /**
  * The quote agent. It reads the quote, searches the price book and the
@@ -270,7 +271,11 @@ export async function searchProducts(query: string, actor: Pick<Actor, "role">, 
   const rows = await db
     .select()
     .from(schema.products)
-    .where(!q.length && category ? and(eq(schema.products.active, true), eq(schema.products.category, category)) : eq(schema.products.active, true));
+    .where(
+      !q.length && category
+        ? and(eq(schema.products.active, true), inArray(schema.products.category, categoriesForHint(category)))
+        : eq(schema.products.active, true),
+    );
   const scored = rows
     .map((p) => {
       const range = words(p.range);
@@ -286,7 +291,7 @@ export async function searchProducts(query: string, actor: Pick<Actor, "role">, 
         if (who.includes(w)) score += 1.5;
         if (cat.includes(w) || cat.some((c) => c.startsWith(w))) score += 1;
       }
-      if (score > 0 && category && p.category === category) score += 1;
+      if (score > 0 && category && categoryMatchesHint(category, p.category)) score += 1;
       return { p, score };
     })
     .filter((x) => x.score > 0 || (!q.length && category))
@@ -416,7 +421,9 @@ export async function runQuoteAgent(opts: {
         category: z
           .string()
           .optional()
-          .describe("Optional. Ranks this category first: carpet, carpet_tile, hybrid, laminate, vinyl, sheet_goods, timber, turf, underlay, accessory."),
+          .describe(
+            "Optional. Ranks this category first: carpet, outdoor_carpet, carpet_tile, hybrid, laminate, vinyl, sheet_goods, engineered_timber, solid_timber, turf, underlay, accessory. Use timber for either kind of timber.",
+          ),
       }),
       execute: async ({ query, category }) => {
         const found = await searchProducts(query, actor, category ?? null);

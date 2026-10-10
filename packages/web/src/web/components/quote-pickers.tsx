@@ -60,11 +60,13 @@ const GROUP_LABEL: Record<string, string> = {
  */
 const PRODUCT_CATEGORIES = [
   { name: "carpet", label: "Carpet" },
+  { name: "outdoor_carpet", label: "Outdoor carpet" },
   { name: "carpet_tile", label: "Carpet tile" },
   { name: "vinyl", label: "Vinyl" },
   { name: "hybrid", label: "Hybrid" },
   { name: "laminate", label: "Laminate" },
-  { name: "timber", label: "Timber" },
+  { name: "engineered_timber", label: "Engineered timber" },
+  { name: "solid_timber", label: "Solid timber" },
   { name: "underlay", label: "Underlay" },
   { name: "accessory", label: "Accessories" },
 ];

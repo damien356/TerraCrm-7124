@@ -1,10 +1,11 @@
-import { and, eq, or, like, desc, sql } from "drizzle-orm";
+import { and, eq, inArray, or, like, desc, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { sellExGst } from "../lib/pricing";
 import { liveSellFor } from "../lib/live-sell";
 import { rateBook } from "../routes/labour";
 import type { Extraction } from "./extract";
+import { categoriesForHint, categoryMatchesHint } from "../lib/product-categories";
 
 /**
  * Pass 2: turn a structured `Extraction` (see `extract.ts`) into priced
@@ -83,7 +84,7 @@ function scoreProduct(
   }
   if (weight === 0) return 0;
   let total = score / weight;
-  if (hints.category && hints.category !== "unknown" && p.category !== hints.category) {
+  if (hints.category && hints.category !== "unknown" && !categoryMatchesHint(hints.category, p.category)) {
     total *= 0.3; // category mismatch drags a match down hard, never wins outright
   }
   return total;
@@ -117,7 +118,7 @@ async function findBestProduct(hints: {
     // only, then score every product in it. Categories are small enough
     // (a few hundred each) for this to be cheap.
     candidates = hints.category && hints.category !== "unknown"
-      ? await db.select().from(schema.products).where(eq(schema.products.category, hints.category))
+      ? await db.select().from(schema.products).where(inArray(schema.products.category, categoriesForHint(hints.category)))
       : [];
   } else {
     const clauses = patterns.map((w) =>
@@ -367,7 +368,7 @@ async function priceMaterialLine(line: Extraction["lines"][number]): Promise<Pri
     const words = line.spokenDescription?.trim();
     const named = titleCase(words && words.length <= 60 ? words : asSaid);
     // Only point at the closest product when it is the same sort of thing.
-    const sameKind = !line.category || line.category === "unknown" || product.category === line.category;
+    const sameKind = !line.category || line.category === "unknown" || categoryMatchesHint(line.category, product.category);
     return {
       productId: null,
       kind: "supply",
