@@ -7,6 +7,7 @@ import { Field, Input, Select, Textarea } from "./ui/field";
 import { Modal } from "./ui/modal";
 import { moneyExact } from "../lib/money";
 import { useQuoteEmailDraft, useQuoteLink, useSendQuoteEmail } from "../queries/quoteSend";
+import { needsScope, SCOPE_FILL } from "../../api/lib/quote-email-template";
 
 /**
  * Email quote (spec 2.1): from team@ as "Damien from Terra", PDF attached,
@@ -48,12 +49,28 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
   const d = draft.data;
   const toValue = to ?? d?.to ?? "";
   const picked = d?.recipients.find((r) => r.email === toValue);
+  const subjectValue = subject ?? d?.subject ?? "";
+  const bodyValue = body ?? d?.body ?? "";
+  const unfilled = !!d && needsScope(subjectValue, bodyValue);
+
+  // Opens with the fill-in spot selected, so typing replaces it.
+  const bodyRef = React.useRef<HTMLTextAreaElement>(null);
+  const selected = React.useRef(false);
+  React.useEffect(() => {
+    const el = bodyRef.current;
+    if (!d || !el || selected.current) return;
+    const at = el.value.indexOf(SCOPE_FILL);
+    if (at < 0) return;
+    selected.current = true;
+    el.focus();
+    el.setSelectionRange(at, at + SCOPE_FILL.length);
+  }, [d]);
 
   async function onSend() {
     if (!d) return;
     setError(null);
     try {
-      const out = await send.mutateAsync({ quoteId, to: toValue.trim(), subject: subject ?? d.subject, body: body ?? d.body });
+      const out = await send.mutateAsync({ quoteId, to: toValue.trim(), subject: subjectValue, body: bodyValue });
       onSent?.(`Quote ${d.ref} emailed to ${out.to}${out.via === "relay" ? " (sent through the backup mailer, team@ is not connected)" : ""}.`);
       onClose();
     } catch (e) {
@@ -73,7 +90,7 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={onSend} disabled={!d || send.isPending || !toValue.trim()}>
+          <Button onClick={onSend} disabled={!d || send.isPending || !toValue.trim() || unfilled}>
             {send.isPending ? <Spinner /> : <Mail className="size-4" />}
             Send
           </Button>
@@ -108,11 +125,22 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
             </Field>
           ) : null}
           <Field label="Subject">
-            <Input value={subject ?? d.subject} onChange={(e) => setSubject(e.target.value)} />
+            <Input value={subjectValue} onChange={(e) => setSubject(e.target.value)} />
           </Field>
           <Field label="Message">
-            <Textarea rows={14} value={body ?? d.body} onChange={(e) => setBody(e.target.value)} className="font-[inherit] text-[13px] leading-relaxed" />
+            <Textarea
+              ref={bodyRef}
+              rows={14}
+              value={bodyValue}
+              onChange={(e) => setBody(e.target.value)}
+              className="font-[inherit] text-[13px] leading-relaxed"
+            />
           </Field>
+          {unfilled ? (
+            <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              Type what the quote is for in place of {SCOPE_FILL}, for example "carpet to 3 bedrooms and lounge". Send stays off until it is filled in.
+            </p>
+          ) : null}
           <p className="text-xs text-muted-foreground">
             The quote link is added at the bottom if you take it out: {d.url}
           </p>

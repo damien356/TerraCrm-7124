@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { clientPdfFor } from "../routes/quoteBundles";
@@ -10,6 +10,17 @@ import { linkForQuote, quoteUrl } from "./quote-links";
 import { SENDER_NAME } from "./material-selection";
 import { TERRA_PRINT } from "./quotePdf";
 import { putObject } from "./s3";
+import {
+  DEFAULT_QUOTE_EMAIL_BODY,
+  DEFAULT_QUOTE_EMAIL_SUBJECT,
+  fillQuoteTemplate,
+  longDate,
+  needsScope,
+  QUOTE_EMAIL_BODY_KEY,
+  QUOTE_EMAIL_SUBJECT_KEY,
+  SCOPE_FILL,
+  type QuoteEmailValues,
+} from "./quote-email-template";
 
 const bad = (message: string) => new ORPCError("BAD_REQUEST", { message });
 
@@ -76,36 +87,35 @@ export async function quoteRecipients(quote: Quote) {
   return out;
 }
 
-/** The email the dialog opens with. The office can change any of it. */
-export async function quoteEmailDraft(quote: Quote, ref: string) {
+async function templates() {
+  const rows = await db.select().from(schema.settings).where(inArray(schema.settings.key, [QUOTE_EMAIL_SUBJECT_KEY, QUOTE_EMAIL_BODY_KEY]));
+  const get = (k: string) => rows.find((r) => r.key === k)?.value?.trim() || "";
+  return { subject: get(QUOTE_EMAIL_SUBJECT_KEY) || DEFAULT_QUOTE_EMAIL_SUBJECT, body: get(QUOTE_EMAIL_BODY_KEY) || DEFAULT_QUOTE_EMAIL_BODY };
+}
+
+/** The email the dialog opens with, from the Settings wording. The office can change any of it. */
+export async function quoteEmailDraft(quote: Quote, _ref: string) {
   const recipients = await quoteRecipients(quote);
   const first = recipients[0]?.name.split(" ")[0] || "there";
   const link = await linkForQuote(quote.id);
+  const url = quoteUrl(link.token);
   const { deposit } = depositSplit(quote.total, quote.depositPercent);
-  const body = [
-    `Hi ${first},`,
-    "",
-    `Thanks for the chance to quote. Your quote ${ref} for ${money(quote.total)} including GST is attached.`,
-    "",
-    "You can also read it, and accept it online, here:",
-    quoteUrl(link.token),
-    "",
-    quote.depositPercent > 0
-      ? `To lock in your job we take a ${quote.depositPercent}% deposit (${money(deposit)}) when you accept.`
-      : "There is no deposit to pay on this quote.",
-    "",
-    "Any questions, just reply to this email or give me a call.",
-    "",
-    "Kind regards,",
-    "Damien",
-    "Terra Flooring",
-  ].join("\n");
+  const values: QuoteEmailValues = {
+    first_name: first,
+    quote_number: String(quote.number),
+    scope: SCOPE_FILL,
+    link: url,
+    total: money(quote.total),
+    deposit: quote.depositPercent > 0 && deposit > 0 ? money(deposit) : "",
+    valid_until: longDate(quote.validUntil),
+  };
+  const t = await templates();
   return {
     recipients,
     to: recipients[0]?.email ?? "",
-    subject: `Your Terra Flooring quote ${ref}`,
-    body,
-    url: quoteUrl(link.token),
+    subject: fillQuoteTemplate(t.subject, values).replace(/\s*\n\s*/g, " "),
+    body: fillQuoteTemplate(t.body, values),
+    url,
   };
 }
 
@@ -132,13 +142,14 @@ const stamp = () => new Date().toISOString().replace(/[:.]/g, "-");
 export async function sendQuoteEmail(args: { quote: Quote; to: string; subject: string; body: string; byName: string; byProfileId?: number | null }) {
   const to = args.to.trim();
   if (!EMAIL_RE.test(to)) throw bad(`"${to}" is not an email address.`);
+  if (needsScope(args.subject, args.body)) throw bad(`Type what the quote is for in place of ${SCOPE_FILL} before sending.`);
   const { pdf, filename, ref } = await clientPdfFor(args.quote.id);
   const link = await linkForQuote(args.quote.id);
   const url = quoteUrl(link.token);
-  const body = args.body.includes(url) ? args.body : `${args.body.trimEnd()}\n\nRead and accept your quote online:\n${url}`;
+  const body = args.body.includes(url) ? args.body : `${args.body.trimEnd()}\n\nView and accept your quote online: ${url}`;
 
   const conv = await ensureForQuote(args.quote.id);
-  const subject = subjectWithRef(args.subject.trim() || `Your Terra Flooring quote ${ref}`, conv.ref);
+  const subject = subjectWithRef(args.subject.trim() || `Your Terra Flooring quote #${args.quote.number}`, conv.ref);
   const out = await sendAsTeam({
     to,
     subject,

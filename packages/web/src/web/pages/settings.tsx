@@ -9,6 +9,8 @@ import { Modal } from "../components/ui/modal";
 import { downloadText, useDatasets, useExportCsv, useExportSnapshot } from "../queries/backups";
 import { LabourRatesTab, RATE_UNITS, UNIT_LABEL } from "../components/labour";
 import { EmailAgentCard } from "../components/email-agent";
+import { QuoteEmailCard } from "../components/quote-email-settings";
+import { QUOTE_EMAIL_BODY_KEY, QUOTE_EMAIL_SUBJECT_KEY } from "../../api/lib/quote-email-template";
 import { useOpeningBalance, useSetOpeningBalance } from "../queries/finance";
 import { longDate, moneyExact } from "../lib/money";
 import {
@@ -1093,6 +1095,8 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
 
       <JobNumbersCard />
 
+      <QuoteEmailCard settings={settings} />
+
       <Card>
         <CardHeader
           title="Wastage"
@@ -1212,6 +1216,9 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
                   "site_circle_m",
                   // The job number counter. Never hand-edited here.
                   "job_number_last",
+                  // Edited on the Quote email card.
+                  QUOTE_EMAIL_SUBJECT_KEY,
+                  QUOTE_EMAIL_BODY_KEY,
                 ].includes(k) && !k.startsWith("wastage_pct_"),
             )
             .map((k) => (
