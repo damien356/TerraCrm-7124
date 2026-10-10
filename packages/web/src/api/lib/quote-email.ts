@@ -183,7 +183,7 @@ export async function sendSignedCopy(args: {
   ref: string;
   signerName: string;
   signerEmail: string | null;
-  deposit: { ref: string; total: number } | null;
+  deposit: { ref: string; total: number; payUrl?: string | null } | null;
 }) {
   const key = `quotes/${args.quote.number}/${args.quote.id}/signed-${stamp()}.pdf`;
   const conv = await ensureForQuote(args.quote.id);
@@ -195,8 +195,10 @@ export async function sendSignedCopy(args: {
     "",
   ];
   if (args.deposit) {
+    lines.push(`Your deposit invoice is ${args.deposit.ref} for ${money(args.deposit.total)}.`, "");
+    if (args.deposit.payUrl) lines.push("Pay by card online:", args.deposit.payUrl, "", `Or pay by bank transfer and use ${args.deposit.ref} as the reference:`);
+    else lines.push(`Please pay by bank transfer and use ${args.deposit.ref} as the reference:`);
     lines.push(
-      `Your deposit invoice is ${args.deposit.ref} for ${money(args.deposit.total)}. Please pay by bank transfer and use ${args.deposit.ref} as the reference:`,
       `Account name: ${TERRA_PRINT.bank.name}`,
       `BSB: ${TERRA_PRINT.bank.bsb}`,
       `Account: ${TERRA_PRINT.bank.account}`,

@@ -19,11 +19,14 @@ import { TERRA_PRINT } from "../lib/quotePdf";
 import { jobText } from "../lib/refs";
 import { checkSignature, signatureInput, tidySignature } from "../lib/signature";
 import { SUPPLY_TERMS, SUPPLY_TERMS_TITLE, SUPPLY_TERMS_VERSION } from "../lib/supplyTerms";
+import { cardPaymentsOn, checkoutForInvoice, confirmSession, invoiceIdFromToken, owingOn, payUrl } from "../lib/stripe";
+import { INVOICE_KIND_LABEL } from "../lib/client-invoices";
 
 /* ---------------------------------------------------------------------------
  * The two pages a client opens without a login (spec section 2):
  *   /q/<token>  read the quote, the Supply Terms, sign and accept
  *   /m/<token>  the material selection form after accepting
+ *   /pay/<token> pay one client invoice by card (Stripe), or see it is paid
  *
  * The token is the only key. Nothing here ever returns a cost, a markup, a
  * line quantity or a line price: the client sees bundles and totals, the
@@ -118,7 +121,17 @@ async function latestSignature(quoteId: number) {
 
 async function depositFor(quoteId: number) {
   const inv = await depositInvoiceFor(quoteId);
-  return inv ? { ref: inv.number, total: inv.total, paid: inv.status === "paid", owing: Math.max(0, Math.round((inv.total - inv.amountPaid) * 100) / 100) } : null;
+  if (!inv) return null;
+  const owing = owingOn(inv);
+  return { ref: inv.number, total: inv.total, paid: inv.status === "paid", owing, payUrl: cardPaymentsOn() && owing > 0 ? payUrl(inv.id) : null };
+}
+
+/** A company is on the quote, or the job it sits on bills a company. */
+async function billedToCompany(quote: Quote) {
+  if (quote.companyId) return true;
+  if (!quote.jobId) return false;
+  const [job] = await db.select({ t: schema.jobs.billToType, c: schema.jobs.billToCompanyId }).from(schema.jobs).where(eq(schema.jobs.id, quote.jobId));
+  return job?.t === "company";
 }
 
 const quotePage = {
@@ -156,6 +169,9 @@ const quotePage = {
       balance,
       terms: { version: SUPPLY_TERMS_VERSION, title: SUPPLY_TERMS_TITLE, items: SUPPLY_TERMS },
       bank: bank(),
+      cardPayments: cardPaymentsOn(),
+      /** Position / Company on the accept form is only for a quote billed to a company (item 7). */
+      billedToCompany: await billedToCompany(quote),
       signature: await latestSignature(quote.id),
       depositInvoice: await depositFor(quote.id),
       newerUrl: state === "replaced" ? await newerVersionUrl(quote) : null,
@@ -232,7 +248,10 @@ const quotePage = {
         actorRole: "customer",
       });
 
-      const deposit = out.invoice?.kind === "deposit" ? { ref: out.invoice.number, total: out.invoice.total } : null;
+      const deposit =
+        out.invoice?.kind === "deposit"
+          ? { ref: out.invoice.number, total: out.invoice.total, payUrl: cardPaymentsOn() ? payUrl(out.invoice.id) : null }
+          : null;
       // The accept stands even if the signed copy fails. It is logged for the office to resend.
       if (sig) {
         try {
@@ -321,4 +340,70 @@ async function selectionByToken(token: string) {
   return sel;
 }
 
-export const publicPages = { quote: quotePage, selection: selectionPage };
+/* ------------------------------ pay by card ------------------------------ */
+
+async function invoiceForPayToken(token: string) {
+  const id = invoiceIdFromToken(token);
+  if (!id) throw notFound();
+  const [inv] = await db.select().from(schema.invoices).where(eq(schema.invoices.id, id));
+  if (!inv) throw notFound();
+  return inv;
+}
+
+async function payState(inv: typeof schema.invoices.$inferSelect) {
+  const [job] = inv.jobId ? await db.select().from(schema.jobs).where(eq(schema.jobs.id, inv.jobId)) : [];
+  const [contact] = inv.billToContactId ? await db.select().from(schema.contacts).where(eq(schema.contacts.id, inv.billToContactId)) : [];
+  const [company] = inv.billToCompanyId ? await db.select().from(schema.companies).where(eq(schema.companies.id, inv.billToCompanyId)) : [];
+  const [site] = job?.siteId ? await db.select().from(schema.sites).where(eq(schema.sites.id, job.siteId)) : [];
+  const owing = owingOn(inv);
+  return {
+    ref: inv.number,
+    kindLabel: INVOICE_KIND_LABEL[inv.kind] ?? "Invoice",
+    label: inv.label,
+    status: inv.status,
+    total: inv.total,
+    gst: inv.gst,
+    amountPaid: inv.amountPaid,
+    owing,
+    paidAt: inv.paidAt,
+    paidByCard: inv.paymentMethod === "card",
+    to: fullName(contact) || company?.name || "",
+    jobRef: job ? jobText(job) : "",
+    siteAddress: site ? [site.address, site.suburb].filter(Boolean).join(", ") : null,
+    cardPayments: cardPaymentsOn() && owing > 0,
+    bank: bank(),
+  };
+}
+
+const payPage = {
+  get: withUser.input(z.object({ token: z.string().min(1).max(80) })).handler(async ({ input }) => {
+    return payState(await invoiceForPayToken(input.token));
+  }),
+
+  /** Open a Stripe page for what is owing now. The browser goes there. */
+  checkout: withUser.input(z.object({ token: z.string().min(1).max(80) })).handler(async ({ input }) => {
+    const inv = await invoiceForPayToken(input.token);
+    if (!cardPaymentsOn()) throw bad("Card payments are not available right now. Please pay by bank transfer.");
+    try {
+      const out = await checkoutForInvoice(inv.id, { returnTo: `${payUrl(inv.id)}` });
+      return { url: out.url };
+    } catch (e) {
+      throw bad(String((e as Error)?.message ?? e).replace(/^Stripe: /, "Card payment could not start: "));
+    }
+  }),
+
+  /** Back from Stripe. The server asks Stripe whether it was paid, then shows the result. */
+  confirm: withUser
+    .input(z.object({ token: z.string().min(1).max(80), sessionId: z.string().min(10).max(250) }))
+    .handler(async ({ input }) => {
+      const inv = await invoiceForPayToken(input.token);
+      const out = await confirmSession(input.sessionId, inv.id).catch((e) => ({ ok: false as const, reason: String((e as Error)?.message ?? e) }));
+      if (out.ok && out.state !== "already_counted") {
+        await rebuildForecast().catch((e) => console.error("[cashflow] rebuild after card payment failed:", e));
+      }
+      const [fresh] = await db.select().from(schema.invoices).where(eq(schema.invoices.id, inv.id));
+      return { result: out.ok ? out.state : "not_confirmed", ...(await payState(fresh ?? inv)) };
+    }),
+};
+
+export const publicPages = { quote: quotePage, selection: selectionPage, pay: payPage };

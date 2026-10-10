@@ -34,3 +34,13 @@ export function useSendSelection() {
   const onSuccess = useRefresh();
   return useMutation(orpc.clientInvoices.sendSelection.mutationOptions({ onSuccess }));
 }
+
+/** Email the invoice with its Pay by card link and the bank details. */
+export function useEmailInvoice() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.clientInvoices.email.mutationOptions({
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: orpc.conversations.key() }),
+    }),
+  );
+}

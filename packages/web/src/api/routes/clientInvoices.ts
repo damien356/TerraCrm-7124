@@ -8,11 +8,14 @@ import { rebuildForecast } from "../lib/cashflow";
 import { invoicesForJob, markInvoicePaid, PAYMENT_METHODS, shapeInvoice, voidInvoice } from "../lib/client-invoices";
 import { createSelection, selectionForJob, sendSelection } from "../lib/material-selection";
 import { EMAIL_RE } from "../lib/quote-email";
+import { sendInvoiceEmail } from "../lib/invoice-email";
+import { cardPaymentsOn, payUrl } from "../lib/stripe";
 
 /* ---------------------------------------------------------------------------
  * The job page's money-in card and material selection card (spec section 2).
  * Admin and Office mark a client invoice paid. Only Admin voids one.
- * Until Stripe is connected every payment is marked here by hand.
+ * Card payments through Stripe mark themselves paid (lib/stripe.ts). Bank,
+ * cash and anything else are still marked here by hand.
  * ------------------------------------------------------------------------- */
 
 const rebuild = () => rebuildForecast().catch((e) => console.error("[cashflow] rebuild after invoice change failed:", e));
@@ -36,8 +39,10 @@ export const clientInvoices = {
     const rows = await invoicesForJob(input.jobId);
     const live = rows.filter((r) => r.status !== "void");
     const round2 = (n: number) => Math.round(n * 100) / 100;
+    const card = cardPaymentsOn();
     return {
-      invoices: rows,
+      invoices: rows.map((r) => ({ ...r, payUrl: card && r.outstanding > 0 ? payUrl(r.id) : null })),
+      cardPayments: card,
       billed: round2(live.reduce((s, r) => s + r.total, 0)),
       received: round2(live.reduce((s, r) => s + r.amountPaid, 0)),
       owing: round2(live.reduce((s, r) => s + r.outstanding, 0)),
@@ -70,6 +75,13 @@ export const clientInvoices = {
       });
       await rebuild();
       return shapeInvoice(row);
+    }),
+
+  /** Email the invoice to the client with its Pay by card link and the bank details. */
+  email: staffOnly
+    .input(z.object({ id: z.number(), to: z.string().trim().max(200).nullish() }))
+    .handler(async ({ input, context }) => {
+      return sendInvoiceEmail({ invoiceId: input.id, to: input.to ?? null, byName: context.actor.name, actorRole: context.actor.role });
     }),
 
   void: adminOnly

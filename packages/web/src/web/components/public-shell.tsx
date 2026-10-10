@@ -1,7 +1,7 @@
 import * as React from "react";
 
 /**
- * The frame around the no-login client pages (/q and /m). No sidebar, no
+ * The frame around the no-login client pages (/q, /m and /pay). No sidebar, no
  * sign-in, nothing from the office. Charcoal bar with the logo, stone page.
  */
 export function PublicShell({ children }: { children: React.ReactNode }) {

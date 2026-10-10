@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useParams } from "wouter";
-import { Check, Download, FileText } from "lucide-react";
+import { Check, CreditCard, Download, FileText } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input } from "../components/ui/field";
 import { Spinner } from "../components/ui/card";
@@ -12,7 +12,9 @@ import { useAcceptQuoteOnline, usePublicQuote, usePublicQuotePdf } from "../quer
 /**
  * /q/<token>: the client reads the quote, the Supply Terms, signs and
  * accepts. No login. Bundles and totals only, the same as the PDF.
- * Card payment comes later (Stripe). For now the deposit is bank transfer.
+ * The deposit can be paid by card (Stripe, through /pay/<token>, no
+ * surcharge) or by bank transfer. Position / Company is only asked for when
+ * the quote is billed to a company.
  */
 
 type Bank = { name: string; bsb: string; account: string };
@@ -37,6 +39,21 @@ function BankDetails({ bank, reference, amount }: { bank: Bank; reference: strin
           </>
         ) : null}
       </dl>
+    </div>
+  );
+}
+
+function PayByCard({ url, amount }: { url: string; amount: number }) {
+  return (
+    <div className="mb-3 flex flex-col items-center gap-1">
+      <a
+        href={url}
+        className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--gold)] px-5 text-sm font-semibold text-white shadow-sm hover:brightness-95"
+      >
+        <CreditCard className="size-4" />
+        Pay {moneyExact(amount)} by card
+      </a>
+      <p className="text-xs text-muted-foreground">Secure payment through Stripe. No card surcharge.</p>
     </div>
   );
 }
@@ -106,7 +123,7 @@ export default function PublicQuotePage() {
       await accept.mutateAsync({
         token,
         name: name.trim(),
-        position: position.trim(),
+        position: q.billedToCompany ? position.trim() : "",
         email: (email ?? q.to?.email ?? "").trim() || null,
         agreed: true,
         signature,
@@ -148,6 +165,7 @@ export default function PublicQuotePage() {
                 Your deposit invoice is <span className="font-semibold">{done.deposit.ref}</span> for{" "}
                 <span className="font-semibold">{moneyExact(done.deposit.total)}</span>. We order your flooring once it lands.
               </p>
+              {done.deposit.payUrl ? <PayByCard url={done.deposit.payUrl} amount={done.deposit.total} /> : null}
               <BankDetails bank={done.bank} reference={done.deposit.ref} amount={done.deposit.total} />
             </div>
           ) : null}
@@ -182,6 +200,7 @@ export default function PublicQuotePage() {
               <p className="mb-2 text-center text-sm">
                 Deposit {q.depositInvoice.ref}: {moneyExact(q.depositInvoice.owing)} still to pay.
               </p>
+              {q.depositInvoice.payUrl ? <PayByCard url={q.depositInvoice.payUrl} amount={q.depositInvoice.owing} /> : null}
               <BankDetails bank={q.bank} reference={q.depositInvoice.ref} amount={q.depositInvoice.owing} />
             </div>
           ) : q.depositInvoice?.paid ? (
@@ -328,13 +347,15 @@ export default function PublicQuotePage() {
       {canSign ? (
         <PublicCard title="Accept this quote">
           <div className="flex flex-col gap-3">
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className={`grid gap-3 ${q.billedToCompany ? "sm:grid-cols-2" : ""}`}>
               <Field label="Your full name">
                 <Input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" disabled={q.preview} />
               </Field>
-              <Field label="Position or company (optional)">
-                <Input value={position} onChange={(e) => setPosition(e.target.value)} autoComplete="organization" disabled={q.preview} />
-              </Field>
+              {q.billedToCompany ? (
+                <Field label="Position / Company">
+                  <Input value={position} onChange={(e) => setPosition(e.target.value)} autoComplete="organization" disabled={q.preview} />
+                </Field>
+              ) : null}
             </div>
             <Field label="Email for your signed copy">
               <Input
@@ -362,7 +383,9 @@ export default function PublicQuotePage() {
               Accept quote
             </Button>
             {q.depositPercent > 0 ? (
-              <p className="text-xs text-muted-foreground">After you accept you will see our bank details to pay the deposit.</p>
+              <p className="text-xs text-muted-foreground">
+                After you accept you can pay the deposit {q.cardPayments ? "by card or by bank transfer" : "by bank transfer"}.
+              </p>
             ) : null}
           </div>
         </PublicCard>

@@ -1,10 +1,17 @@
 /**
- * Terra Flooring Supply Terms and Conditions, version of 6 Oct 2026, as
- * supplied by Damien (terra-docs/overleaf-terms-2026-10-06.pdf). Printed
- * "overleaf" on every client quote. Do not edit the wording here without a new
- * signed off copy from Damien. h = section heading, p = clause, i = list item.
+ * Terra Flooring Supply Terms and Conditions, as supplied by Damien
+ * (terra-docs/overleaf-terms-2026-10-06.pdf). Printed "overleaf" on every
+ * client quote. Do not edit the wording here without a new signed off copy
+ * from Damien. h = section heading, p = clause, i = list item.
+ *
+ * Versions (a signature stores the version it agreed to):
+ *   2026-10-06  as supplied. Clause 4.3 read: "Accepted payment methods are
+ *               bank transfer, cash and credit card. Card payments incur a
+ *               surcharge of 1.5%, which does not exceed the Supplier's cost
+ *               of accepting the card."
+ *   2026-10-11  Damien's fix list item 6: no card surcharge. Only 4.3 changed.
  */
-export const SUPPLY_TERMS_VERSION = "2026-10-06";
+export const SUPPLY_TERMS_VERSION = "2026-10-11";
 export const SUPPLY_TERMS_TITLE = "Terra Flooring Supply Terms and Conditions";
 export const SUPPLY_TERMS: { t: "h" | "p" | "i"; x: string }[] = [
  {
@@ -145,7 +152,7 @@ export const SUPPLY_TERMS: { t: "h" | "p" | "i"; x: string }[] = [
  },
  {
   "t": "p",
-  "x": "4.3 Accepted payment methods are bank transfer, cash and credit card. Card payments incur a surcharge of 1.5%, which does not exceed the Supplier's cost of accepting the card."
+  "x": "4.3 Accepted payment methods are bank transfer, cash and credit card. No surcharge applies to card payments."
  },
  {
   "t": "p",

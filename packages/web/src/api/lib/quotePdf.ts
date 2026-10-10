@@ -1,5 +1,5 @@
 import { drawSignature, type Signature } from "./signature";
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
+import { PDFArray, PDFDocument, PDFName, PDFString, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { SUPPLY_TERMS, SUPPLY_TERMS_TITLE, SUPPLY_TERMS_VERSION } from "./supplyTerms";
 import { TERRA_LOGO_PRINT_PNG_BASE64 } from "./terraLogoPrint";
 
@@ -42,6 +42,13 @@ export type QuotePdfInput = {
   depositPercent: number;
   deposit: number;
   balance: number;
+  /**
+   * The Pay by card link (item 6): the deposit's /pay link once accepted,
+   * else the quote's online link, where the client accepts then pays.
+   */
+  cardPay?: { url: string; note: string } | null;
+  /** "Position / Company" on the acceptance block, only when billed to a company (item 7). */
+  showPosition?: boolean;
   /** Filled in once the client has signed online. Drawn into the acceptance block. */
   signed?: { name: string; position: string; date: string; signature: Signature } | null;
 };
@@ -288,7 +295,46 @@ function payment(ctx: Ctx) {
     text(ctx.page, v, M + 10 + i * cw, y - 12, ctx.bold, 10);
   });
   y -= 30;
-  text(ctx.page, "Prices are in Australian dollars. Card payments incur a 1.5% surcharge.", M + 10, y, ctx.reg, 8, MUTED);
+  text(ctx.page, "Prices are in Australian dollars.", M + 10, y, ctx.reg, 8, MUTED);
+  ctx.y = top - h - 6;
+  if (input.cardPay) cardPayBox(ctx, input.cardPay);
+}
+
+/** A clickable link on the page. pdf-lib draws no annotations itself. */
+function linkArea(ctx: Ctx, x: number, y: number, w: number, h: number, url: string) {
+  const annot = ctx.doc.context.obj({
+    Type: "Annot",
+    Subtype: "Link",
+    Rect: [x, y, x + w, y + h],
+    Border: [0, 0, 0],
+    A: { Type: "Action", S: "URI", URI: PDFString.of(url) },
+  });
+  const ref = ctx.doc.context.register(annot);
+  const annots = ctx.page.node.lookup(PDFName.of("Annots"));
+  if (annots instanceof PDFArray) annots.push(ref);
+  else ctx.page.node.set(PDFName.of("Annots"), ctx.doc.context.obj([ref]));
+}
+
+/** PAY BY CARD: a gold button and the link written out, both clickable. */
+function cardPayBox(ctx: Ctx, pay: { url: string; note: string }) {
+  need(ctx, 52);
+  const top = ctx.y;
+  const h = 44;
+  ctx.page.drawRectangle({ x: M, y: top - h + 12, width: CW, height: h, color: FILL });
+  text(ctx.page, "PAY BY CARD", M + 10, top, ctx.bold, 7.5, LABEL);
+  const bw = 104;
+  const by = top - 26;
+  ctx.page.drawRectangle({ x: M + 10, y: by, width: bw, height: 18, color: GOLD });
+  const label = "Pay by card";
+  text(ctx.page, label, M + 10 + (bw - ctx.bold.widthOfTextAtSize(label, 9.5)) / 2, by + 5.5, ctx.bold, 9.5, rgb(1, 1, 1));
+  linkArea(ctx, M + 10, by, bw, 18, pay.url);
+  const tx = M + 10 + bw + 12;
+  const tw = CW - (tx - M) - 10;
+  const note = wrap(pay.note, ctx.reg, 8, tw)[0] ?? "";
+  text(ctx.page, note, tx, by + 10, ctx.reg, 8, MUTED);
+  const shown = pay.url.replace(/^https?:\/\//, "");
+  text(ctx.page, shown, tx, by, ctx.reg, 7.5, GOLD);
+  linkArea(ctx, tx, by - 2, Math.min(tw, ctx.reg.widthOfTextAtSize(clean(shown), 7.5)), 10, pay.url);
   ctx.y = top - h - 6;
 }
 
@@ -317,8 +363,8 @@ function acceptance(ctx: Ctx) {
   const sx = field("Signed:", M + CW * 0.5, CW * 0.5);
   if (signed) drawSignature(ctx.page, signed.signature, { x: sx + 4, y: ctx.y - 1, w: M + CW - sx - 8, h: 22 });
   ctx.y -= 26;
-  field("Position / Company:", M, CW * 0.45, signed?.position);
-  field("Date:", M + CW * 0.5, CW * 0.5, signed ? `${signed.date} (signed online)` : undefined);
+  if (ctx.input.showPosition !== false) field("Position / Company:", M, CW * 0.45, signed?.position);
+  field("Date:", ctx.input.showPosition !== false ? M + CW * 0.5 : M, ctx.input.showPosition !== false ? CW * 0.5 : CW * 0.45, signed ? `${signed.date} (signed online)` : undefined);
   ctx.y -= 22;
   for (const l of note) {
     text(ctx.page, l, M, ctx.y, ctx.bold, 8.5, INK);

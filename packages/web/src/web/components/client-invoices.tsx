@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Ban, CheckCircle2, ExternalLink, Send } from "lucide-react";
+import { Ban, CheckCircle2, Copy, ExternalLink, Mail, Send } from "lucide-react";
 import { Card, CardHeader, Empty, Loading, Spinner } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -10,6 +10,7 @@ import { moneyExact } from "../lib/money";
 import { useBootstrap } from "../queries/settings";
 import {
   useClientInvoices,
+  useEmailInvoice,
   useMarkInvoicePaid,
   useMaterialSelection,
   useSendSelection,
@@ -19,10 +20,59 @@ import {
 /**
  * THE MONEY-IN SIDE OF A JOB (spec section 2).
  *
- * Every client invoice on the job, numbered off the job (IQ...). Until Stripe
- * is connected, money is marked received here by hand: Admin and Office can
- * mark paid, only Admin can void, and nothing with money on it can be voided.
+ * Every client invoice on the job, numbered off the job (IQ...). A card
+ * payment through the invoice's Pay by card link marks itself paid (Stripe).
+ * Bank transfers and cash are marked here by hand: Admin and Office can mark
+ * paid, only Admin can void, and nothing with money on it can be voided.
  */
+
+function EmailInvoiceModal({ invoice, onClose }: { invoice: Invoice | null; onClose: () => void }) {
+  const send = useEmailInvoice();
+  const [to, setTo] = React.useState("");
+  const [error, setError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    setTo("");
+    setError(null);
+    send.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoice?.id]);
+  if (!invoice) return null;
+  return (
+    <Modal open={!!invoice} onClose={onClose} title={`Email ${invoice.ref} to the client`}>
+      <div className="flex flex-col gap-3">
+        <p className="text-sm text-muted-foreground">
+          Sends {moneyExact(invoice.outstanding)} owing with the Pay by card link and our bank details, from team@. Logged on the job's thread.
+        </p>
+        <Field label="Send to (leave empty for the client's email on file)">
+          <Input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="client@example.com" />
+        </Field>
+        {error ? <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p> : null}
+        {send.data ? <p className="text-sm text-[var(--success)]">Sent to {send.data.to}.</p> : null}
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={onClose}>
+            {send.data ? "Close" : "Cancel"}
+          </Button>
+          {!send.data ? (
+            <Button
+              disabled={send.isPending}
+              onClick={async () => {
+                setError(null);
+                try {
+                  await send.mutateAsync({ id: invoice.id, to: to.trim() || null });
+                } catch (e) {
+                  setError(errorText(e));
+                }
+              }}
+            >
+              {send.isPending ? <Spinner /> : <Send className="size-3.5" />}
+              Send
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    </Modal>
+  );
+}
 
 const STATUS_META: Record<string, { label: string; colour: string }> = {
   draft: { label: "Draft", colour: "#7A736D" },
@@ -195,6 +245,8 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
   const data = useClientInvoices(jobId);
   const [paying, setPaying] = React.useState<Invoice | null>(null);
   const [voiding, setVoiding] = React.useState<Invoice | null>(null);
+  const [emailing, setEmailing] = React.useState<Invoice | null>(null);
+  const [copied, setCopied] = React.useState<number | null>(null);
 
   const rows = data.data?.invoices ?? [];
 
@@ -202,7 +254,11 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
     <Card>
       <CardHeader
         title="Client invoices"
-        subtitle="What the client has been billed, and what has come in. Mark payments here until card payments are connected."
+        subtitle={
+          data.data?.cardPayments
+            ? "What the client has been billed, and what has come in. Card payments mark themselves paid. Mark bank transfers here."
+            : "What the client has been billed, and what has come in. Mark payments here."
+        }
       />
       {data.isLoading ? (
         <Loading />
@@ -261,7 +317,26 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
                     ) : null}
                   </div>
                   {open ? (
-                    <div className="flex shrink-0 gap-1.5">
+                    <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+                      {r.payUrl ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          title="Copy the Pay by card link"
+                          onClick={async () => {
+                            await navigator.clipboard.writeText(r.payUrl ?? "");
+                            setCopied(r.id);
+                            setTimeout(() => setCopied(null), 2000);
+                          }}
+                        >
+                          <Copy className="size-3.5" />
+                          {copied === r.id ? "Copied" : "Pay link"}
+                        </Button>
+                      ) : null}
+                      <Button size="sm" variant="outline" onClick={() => setEmailing(r)}>
+                        <Mail className="size-3.5" />
+                        Email
+                      </Button>
                       <Button size="sm" onClick={() => setPaying(r)}>
                         <CheckCircle2 className="size-3.5" />
                         Mark paid
@@ -281,6 +356,7 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
         </>
       )}
       <MarkPaidModal invoice={paying} onClose={() => setPaying(null)} />
+      <EmailInvoiceModal invoice={emailing} onClose={() => setEmailing(null)} />
       {isAdmin ? <VoidModal invoice={voiding} onClose={() => setVoiding(null)} /> : null}
     </Card>
   );

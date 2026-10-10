@@ -4,6 +4,8 @@ import { auth } from "./auth";
 import { bootJourneyEngine } from "./lib/journey-boot";
 import { bootOffsiteBackup } from "./lib/offsite-backup-boot";
 import { bootOfferTimer } from "./lib/offer-timer";
+import { handleWebhook as handleStripeWebhook } from "./lib/stripe";
+import { rebuildForecast } from "./lib/cashflow";
 import { ping, diag, diagThrow, diagActor } from "./routes/ping";
 import { settings } from "./routes/settings";
 import { contacts } from "./routes/contacts";
@@ -201,6 +203,22 @@ app.post("/api/webhooks/clicksend/inbound/:secret", async (c) => {
   } catch (e) {
     console.error("[sms-inbound] failed", e);
     /* A 500 makes ClickSend retry, which is what we want for a hiccup. */
+    return c.json({ ok: false }, 500);
+  }
+});
+
+// Stripe tells us a card payment went through (fix list item 6). Signed with the webhook secret.
+// A 500 makes Stripe retry later, which is what we want for a hiccup.
+app.post("/api/webhooks/stripe", async (c) => {
+  const raw = await c.req.text();
+  try {
+    const out = await handleStripeWebhook(raw, c.req.header("stripe-signature"));
+    if (out.status === 200 && "result" in out.body) {
+      await rebuildForecast().catch((e) => console.error("[cashflow] rebuild after card payment failed:", e));
+    }
+    return c.json(out.body, out.status);
+  } catch (e) {
+    console.error("[stripe] webhook failed", e);
     return c.json({ ok: false }, 500);
   }
 });

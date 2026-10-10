@@ -36,3 +36,19 @@ export function useSubmitSelection() {
     }),
   );
 }
+
+/* Pay by card (/pay/<token>). The page reads the invoice, Stripe takes the card. */
+export function usePublicPay(token: string) {
+  return useQuery(orpc.publicPages.pay.get.queryOptions({ input: { token }, refetchOnWindowFocus: false, retry: false }));
+}
+
+export const useStartCardPayment = () => useMutation(orpc.publicPages.pay.checkout.mutationOptions());
+
+export function useConfirmCardPayment() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.publicPages.pay.confirm.mutationOptions({
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: orpc.publicPages.pay.key() }),
+    }),
+  );
+}

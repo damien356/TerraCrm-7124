@@ -42,6 +42,7 @@ import DuplicatesPage from "./pages/duplicates";
 import CompanyTypesPage from "./pages/company-types";
 import PublicQuotePage from "./pages/public-quote";
 import PublicSelectionPage from "./pages/public-selection";
+import PublicPayPage from "./pages/public-pay";
 
 // Finish a returning managed sign-in before anything renders. This top-level
 // await resolves before __main.tsx mounts React (app.tsx is its dependency).
@@ -62,6 +63,7 @@ function App() {
       <Switch>
         <Route path="/q/:token" component={PublicQuotePage} />
         <Route path="/m/:token" component={PublicSelectionPage} />
+        <Route path="/pay/:token" component={PublicPayPage} />
         <Route>
           <Layout>
             <Switch>

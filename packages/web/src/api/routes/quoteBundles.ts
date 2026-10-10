@@ -18,6 +18,9 @@ import { depositSplit } from "../lib/deposits";
 import { todayISO } from "../lib/pricing";
 import { auDate } from "../lib/invoice-match";
 import { quoteRefOf } from "../lib/quote-number";
+import { depositInvoiceFor } from "../lib/client-invoices";
+import { linkForQuote, quoteUrl } from "../lib/quote-links";
+import { cardPaymentsOn, owingOn, payUrl } from "../lib/stripe";
 
 /**
  * Client bundles on a quote: the mode, which bundle each line sits in, and
@@ -99,6 +102,23 @@ const fullName = (c: { firstName: string; lastName: string } | null | undefined)
   c ? [c.firstName, c.lastName].filter(Boolean).join(" ").trim() : "";
 
 /** Everything the client PDF needs. Bundles only: no line, qty, rate or cost leaves this function. */
+/** Pay by card on the PDF: the deposit's pay link once accepted, else the quote's online link. */
+async function cardPayForPdf(quote: typeof schema.quotes.$inferSelect) {
+  if (!cardPaymentsOn() || !(quote.depositPercent > 0)) return null;
+  const dep = await depositInvoiceFor(quote.id);
+  if (dep && owingOn(dep) > 0) return { url: payUrl(dep.id), note: `Pay deposit ${dep.number} online. No card surcharge.` };
+  if (dep) return null;
+  if (quote.status === "accepted") return null;
+  const link = await linkForQuote(quote.id);
+  return { url: quoteUrl(link.token), note: "Accept online, then pay your deposit by card. No card surcharge." };
+}
+
+async function jobBillsCompany(jobId: number | null) {
+  if (!jobId) return false;
+  const [job] = await db.select({ t: schema.jobs.billToType }).from(schema.jobs).where(eq(schema.jobs.id, jobId));
+  return job?.t === "company";
+}
+
 export async function clientPdfFor(quoteId: number, signed?: QuotePdfInput["signed"]) {
   const quote = await quoteRow(quoteId, false);
   const [contact] = quote.contactId
@@ -142,6 +162,8 @@ export async function clientPdfFor(quoteId: number, signed?: QuotePdfInput["sign
     depositPercent: quote.depositPercent,
     deposit,
     balance,
+    cardPay: await cardPayForPdf(quote),
+    showPosition: Boolean(company) || (await jobBillsCompany(quote.jobId)) || Boolean(signed?.position?.trim()),
     signed: signed ?? null,
   });
   const missing = bundles.filter((b) => !b.wording.trim()).map((b) => b.title);
