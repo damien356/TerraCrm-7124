@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { depositSplit } from "./deposits";
+import { insertDispatchForLines } from "./dispatch-build";
 import { carryQuotePeopleToJob } from "./job-people";
 import { nextJobNumber } from "./job-number";
 import { quoteRef } from "./refs";
@@ -11,9 +12,9 @@ import { quoteRef } from "./refs";
  *
  *   createJobForQuote   the job on its own. New quote uses it, so a quote
  *                       has its job (and its one list of people) from the start.
- *   buildWorkFromQuote  labour, prep and removal lines become unassigned
- *                       tasks (the dispatch unit), supply and accessory
- *                       lines become materials to order.
+ *   buildWorkFromQuote  labour, prep and removal lines become one unassigned
+ *                       dispatch (lib/dispatch-build.ts), supply and
+ *                       accessory lines become materials to order.
  *   convertQuoteToJob   both. The Convert to job button, and an accept on an
  *                       old quote that has no job yet.
  *
@@ -37,32 +38,11 @@ export async function quoteLines(quoteId: number) {
 
 export type QuoteLine = typeof schema.quoteItems.$inferSelect;
 
-/** One unassigned task for a work line. The skill is guessed from the wording. */
-export async function insertTaskForLine(jobId: number, line: QuoteLine, seq: number, furnitureOnSite: boolean) {
-  const skills = await db.select().from(schema.skills).where(eq(schema.skills.active, true)).orderBy(asc(schema.skills.sortOrder));
-  const haystack = line.description.toLowerCase();
-  const skill =
-    skills.find((s) => haystack.includes(s.name.toLowerCase())) ??
-    skills.find((s) => (line.kind === "removal" ? s.groupName === "demolition" : s.groupName === "prep"));
-  const crewSize = furnitureOnSite ? 2 : (skill?.defaultCrewSize ?? 1);
-  const [row] = await db
-    .insert(schema.jobTasks)
-    .values({
-      jobId,
-      skillId: skill?.id ?? null,
-      title: line.description,
-      status: "unassigned",
-      areaM2: line.unit === "m2" ? line.qty : null,
-      crewSize,
-      seq,
-    })
-    .returning();
-  return row!;
-}
-
 /**
- * Work lines become unassigned tasks (one dispatch each) and supply lines
- * become materials to order, on a job that has none from this quote yet.
+ * The work lines become ONE unassigned dispatch (fix list item 13: uplift,
+ * disposal and prep go in with the install, Split by trade is a button) and
+ * supply lines become materials to order, on a job that has none from this
+ * quote yet.
  */
 export async function buildWorkFromQuote(quoteId: number, jobId: number, opts: { createTasks?: boolean; furnitureOnSite?: boolean } = {}) {
   const { work, supply } = await quoteLines(quoteId);
@@ -87,9 +67,9 @@ export async function buildWorkFromQuote(quoteId: number, jobId: number, opts: {
     // Tasks already on the job (a measure, say) keep their places at the front.
     const [top] = await db.select({ max: sql<number>`coalesce(max(${schema.jobTasks.seq}), 0)` }).from(schema.jobTasks).where(eq(schema.jobTasks.jobId, jobId));
     const start = Number(top?.max ?? 0);
-    for (const [idx, line] of work.entries()) {
-      await insertTaskForLine(jobId, line, start + idx + 1, furnitureOnSite);
-      tasksCreated += 1;
+    if (work.length) {
+      await insertDispatchForLines(jobId, work, supply, start + 1, furnitureOnSite, quoteId);
+      tasksCreated = 1;
     }
   }
   return { tasksCreated, materialsCreated: supply.length };

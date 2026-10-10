@@ -1,18 +1,23 @@
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { insertTaskForLine, quoteLines, type QuoteLine } from "./quote-convert";
+import { quoteLines, type QuoteLine } from "./quote-convert";
+import { addLabour, insertDispatchForLines, labourQtys, quoteDispatchIds, rateItemsFor, SIDE_GROUPS, taskLock, withFreeTextNote } from "./dispatch-build";
 
 /* ---------------------------------------------------------------------------
  * A later version of a quote is accepted on a job that already has the
  * dispatches and materials of an earlier one (item 7, Damien 10 Oct).
  *
- * Each dispatch and material is matched to the earlier version's line it was
- * made from (by its wording, or the product for a material). Then, line by line:
+ * The job has one dispatch per quote (item 13, 11 Oct), the quote's work as
+ * labour lines on it, unless the office split it by trade. Each work line is
+ * matched to the dispatch holding its rate item, and each material to the
+ * earlier line it was made from (by the product, or its wording). Then:
  *
  *   same line, new numbers   free ones are updated, the rest are flagged
- *   line gone                free ones are cancelled or removed, the rest flagged
- *   new line                 a new dispatch or material is made
+ *   line gone                taken off a free dispatch (a dispatch left with
+ *                            nothing is cancelled), or flagged
+ *   new line                 added to the quote's free dispatch, or a new
+ *                            dispatch when that one is already with crew
  *
  * Free means nobody else has it yet:
  *   a dispatch that is unassigned, with no offer out and no day booked
@@ -53,31 +58,7 @@ export async function workBaseQuoteId(quoteNumber: number, jobId: number): Promi
   return row?.id ?? null;
 }
 
-type Task = typeof schema.jobTasks.$inferSelect;
 type Material = typeof schema.jobMaterials.$inferSelect;
-
-/** Why a dispatch cannot be touched, or null when it is free. */
-async function taskLock(task: Task): Promise<string | null> {
-  if (task.status === "offered") return "offered to crew";
-  if (task.status === "assigned") return "booked";
-  if (task.status === "in_progress") return "started";
-  if (task.status === "complete") return "done";
-  if (task.status !== "unassigned") return task.status;
-  if (task.assignedInstallerId) return "booked";
-  const [offer] = await db
-    .select({ id: schema.taskOffers.id })
-    .from(schema.taskOffers)
-    .where(and(eq(schema.taskOffers.taskId, task.id), inArray(schema.taskOffers.status, ["pending", "provisional"])))
-    .limit(1);
-  if (offer) return "offered to crew";
-  const [day] = await db
-    .select({ id: schema.taskDays.id })
-    .from(schema.taskDays)
-    .where(and(eq(schema.taskDays.taskId, task.id), eq(schema.taskDays.status, "booked")))
-    .limit(1);
-  if (day) return "booked";
-  return null;
-}
 
 /** Why a material cannot be touched, or null when it is free. */
 async function materialLock(m: Material): Promise<string | null> {
@@ -105,6 +86,185 @@ function pairUp<R>(lines: QuoteLine[], rows: R[], keyOfLine: (l: QuoteLine) => s
   });
 }
 
+type Task = typeof schema.jobTasks.$inferSelect;
+
+/**
+ * The dispatch half of a version swap. The quote's own dispatches (made from
+ * it, or split off one) are found by their log mark, and each work line by
+ * the dispatch holding its rate item, so a split by trade still finds its
+ * lines. Jobs made before item 13 (a dispatch per line) are matched by
+ * wording, as they were.
+ */
+async function reworkDispatches(jobId: number, beforeWork: QuoteLine[], afterWork: QuoteLine[], furniture: boolean, afterSupply: QuoteLine[], quoteId: number, out: Rework) {
+  const now = new Date();
+  const tasks = await db
+    .select()
+    .from(schema.jobTasks)
+    .where(and(eq(schema.jobTasks.jobId, jobId), ne(schema.jobTasks.status, "cancelled")))
+    .orderBy(schema.jobTasks.seq, schema.jobTasks.id);
+  const marked = await quoteDispatchIds(jobId);
+  const quoteTasks = tasks.filter((t) => marked.has(t.id));
+  const [top] = await db.select({ max: sql<number>`coalesce(max(${schema.jobTasks.seq}), 0)` }).from(schema.jobTasks).where(eq(schema.jobTasks.jobId, jobId));
+  let seq = Number(top?.max ?? 0);
+
+  /* Jobs from before item 13: a dispatch per line, matched by wording. */
+  const legacy = pairUp(beforeWork, tasks, (l) => key(l.description), (t) => key(t.title));
+  if (!quoteTasks.length && legacy.some((p) => p.row)) {
+    const left = [...legacy];
+    const fresh: QuoteLine[] = [];
+    for (const line of afterWork) {
+      const i = left.findIndex((p) => key(p.line.description) === key(line.description));
+      const task = i >= 0 ? (left.splice(i, 1)[0]?.row ?? null) : null;
+      if (!task) {
+        fresh.push(line);
+        continue;
+      }
+      const area = line.unit === "m2" ? line.qty : null;
+      if (same(task.areaM2, area)) continue;
+      const lock = await taskLock(task);
+      if (lock) {
+        out.flags.push(`Dispatch "${task.title}" is ${lock}. The new quote changes it from ${qtyText(task.areaM2, "m2")} to ${qtyText(area, "m2")}. Not changed.`);
+      } else {
+        await db.update(schema.jobTasks).set({ areaM2: area, updatedAt: now }).where(eq(schema.jobTasks.id, task.id));
+        out.changes.push(`Dispatch "${task.title}" updated from ${qtyText(task.areaM2, "m2")} to ${qtyText(area, "m2")}.`);
+        out.tasksUpdated += 1;
+      }
+    }
+    if (fresh.length) {
+      const made = await insertDispatchForLines(jobId, fresh, afterSupply, ++seq, furniture, quoteId, false);
+      out.tasksAdded += 1;
+      out.changes.push(`Dispatch "${made.title}" added for ${fresh.map((l) => l.description).join(", ")}.`);
+    }
+    for (const p of left) {
+      const task = p.row;
+      if (!task) continue;
+      const lock = await taskLock(task);
+      if (lock) {
+        out.flags.push(`Dispatch "${task.title}" is not on the new quote but is ${lock}. Left as it is.`);
+      } else {
+        await db.update(schema.jobTasks).set({ status: "cancelled", updatedAt: now }).where(eq(schema.jobTasks.id, task.id));
+        out.changes.push(`Dispatch "${task.title}" cancelled, it is not on the new quote.`);
+        out.tasksCancelled += 1;
+      }
+    }
+    return;
+  }
+
+  if (beforeWork.length && !quoteTasks.length) {
+    if (afterWork.length) out.flags.push("No dispatches were made from the earlier version, so none were made for this one. Add them on the job if they are needed.");
+    return;
+  }
+
+  const ids = quoteTasks.map((t) => t.id);
+  const lines = ids.length ? await db.select().from(schema.taskLabourLines).where(inArray(schema.taskLabourLines.taskId, ids)) : [];
+  const beforeQ = labourQtys(beforeWork);
+  const afterQ = labourQtys(afterWork);
+  const holderOf = (itemId: number) => {
+    const line = lines.find((l) => l.itemId === itemId);
+    return line ? { line, task: quoteTasks.find((t) => t.id === line.taskId)! } : null;
+  };
+  const items = await rateItemsFor([...beforeQ.keys(), ...afterQ.keys()]);
+  const name = (id: number) => items.get(id)?.name ?? `Rate item ${id}`;
+  const unitOf = (id: number) => items.get(id)?.unit ?? null;
+  const locks = new Map<number, string | null>();
+  const lockOf = async (t: Task) => {
+    if (!locks.has(t.id)) locks.set(t.id, await taskLock(t));
+    return locks.get(t.id) ?? null;
+  };
+  const touched = new Set<number>();
+  const emptied = new Set<number>();
+  const toAdd = new Map<number, number>();
+
+  for (const itemId of new Set([...beforeQ.keys(), ...afterQ.keys()])) {
+    const was = beforeQ.get(itemId) ?? 0;
+    const next = afterQ.get(itemId) ?? 0;
+    if (same(was, next)) continue;
+    const held = holderOf(itemId);
+    if (!held) {
+      if (next > 0) toAdd.set(itemId, next);
+      continue;
+    }
+    const lock = await lockOf(held.task);
+    if (lock) {
+      out.flags.push(
+        next > 0
+          ? `Dispatch "${held.task.title}" is ${lock}. The new quote changes ${name(itemId)} from ${qtyText(was, unitOf(itemId))} to ${qtyText(next, unitOf(itemId))}. Not changed.`
+          : `Dispatch "${held.task.title}" is ${lock}. ${name(itemId)} is not on the new quote. Left as it is.`,
+      );
+      continue;
+    }
+    // The floor area follows an install line priced by the m².
+    const item = items.get(itemId);
+    if (item?.unit === "m2" && item.kind === "work" && !SIDE_GROUPS.has(item.groupName) && held.task.areaM2 != null) {
+      const area = Math.max(0, Math.round((held.task.areaM2 + next - was) * 100) / 100);
+      await db.update(schema.jobTasks).set({ areaM2: area || null, updatedAt: now }).where(eq(schema.jobTasks.id, held.task.id));
+    }
+    if (next > 0) {
+      await db.update(schema.taskLabourLines).set({ qty: Math.round(next * 1000) / 1000, updatedAt: now }).where(eq(schema.taskLabourLines.id, held.line.id));
+      out.changes.push(`Dispatch "${held.task.title}": ${name(itemId)} from ${qtyText(was, unitOf(itemId))} to ${qtyText(next, unitOf(itemId))}.`);
+    } else {
+      await db.delete(schema.taskLabourLines).where(eq(schema.taskLabourLines.id, held.line.id));
+      out.changes.push(`Dispatch "${held.task.title}": ${name(itemId)} taken off, it is not on the new quote.`);
+      lines.splice(lines.indexOf(held.line), 1);
+      if (!lines.some((l) => l.taskId === held.task.id)) emptied.add(held.task.id);
+    }
+    touched.add(held.task.id);
+  }
+
+  // The quote's free dispatch takes new lines, the install one first.
+  let home: Task | null = null;
+  const byInstall = [...quoteTasks].sort((a, b) => Number(lines.some((l) => l.taskId === b.id && !SIDE_GROUPS.has(items.get(l.itemId)?.groupName ?? "other"))) - Number(lines.some((l) => l.taskId === a.id && !SIDE_GROUPS.has(items.get(l.itemId)?.groupName ?? "other"))));
+  for (const t of byInstall) if (!(await lockOf(t)) && !emptied.has(t.id)) { home = t; break; }
+
+  // Work lines with no rate item are written in the dispatch notes.
+  const loose = (ls: QuoteLine[]) => ls.filter((l) => !l.rateItemId).map((l) => `${key(l.description)}|${num(l.qty)}|${l.unit}`).sort().join("\n");
+  const looseChanged = loose(beforeWork) !== loose(afterWork);
+  const afterLoose = afterWork.filter((l) => !l.rateItemId);
+
+  // A dispatch left with only notes still holds the lines with no rate item,
+  // when it is the one carrying them or they changed and need a home.
+  if (!home && afterLoose.length) {
+    const kept = byInstall.find((t) => emptied.has(t.id) && (looseChanged || (t.description ?? "").includes("Also on the quote: ")));
+    if (kept) {
+      home = kept;
+      emptied.delete(kept.id);
+    }
+  }
+
+  if (!home && (toAdd.size || (looseChanged && afterLoose.length))) {
+    const fresh = afterWork.filter((l) => (l.rateItemId != null && toAdd.has(l.rateItemId)) || (looseChanged && !l.rateItemId));
+    const made = await insertDispatchForLines(jobId, fresh, afterSupply, ++seq, furniture, quoteId);
+    out.tasksAdded += 1;
+    out.changes.push(`Dispatch "${made.title}" added for ${fresh.map((l) => l.description).join(", ")}.`);
+    if (quoteTasks.length) out.flags.push(`The new quote adds work (${fresh.map((l) => l.description).join(", ")}). The job's dispatch is already with crew, so a new dispatch "${made.title}" was made for it.`);
+  } else if (home) {
+    if (toAdd.size) {
+      await addLabour(home.id, toAdd);
+      touched.add(home.id);
+      out.changes.push(`Dispatch "${home.title}": ${[...toAdd.keys()].map(name).join(", ")} added.`);
+    }
+    if (looseChanged) {
+      const description = withFreeTextNote(home.description, afterWork);
+      if (description !== home.description) {
+        await db.update(schema.jobTasks).set({ description, updatedAt: now }).where(eq(schema.jobTasks.id, home.id));
+        out.changes.push(`Dispatch "${home.title}": notes updated with the work lines that have no rate book item.`);
+        touched.add(home.id);
+      }
+    }
+  } else if (looseChanged) {
+    out.flags.push("Work lines with no rate book item changed on the new quote, and the job's dispatch is already with crew. Check its notes by hand.");
+  }
+
+  for (const id of emptied) {
+    const task = quoteTasks.find((t) => t.id === id)!;
+    await db.update(schema.jobTasks).set({ status: "cancelled", updatedAt: now }).where(eq(schema.jobTasks.id, id));
+    out.changes.push(`Dispatch "${task.title}" cancelled, nothing on it is on the new quote.`);
+    out.tasksCancelled += 1;
+    touched.delete(id);
+  }
+  out.tasksUpdated += touched.size;
+}
+
 export interface Rework {
   /** What Ops changed, for the job log and the office task. */
   changes: string[];
@@ -128,61 +288,7 @@ export async function reworkJobForVersion(args: { jobId: number; fromQuoteId: nu
   const furniture = job?.furnitureOnSite ?? false;
 
   /* -------------------------------- dispatches ------------------------------- */
-  const tasks = await db
-    .select()
-    .from(schema.jobTasks)
-    .where(and(eq(schema.jobTasks.jobId, args.jobId), ne(schema.jobTasks.status, "cancelled")))
-    .orderBy(schema.jobTasks.seq, schema.jobTasks.id);
-  const taskPairs = pairUp(before.work, tasks, (l) => key(l.description), (t) => key(t.title));
-  const tasksWereMade = before.work.length === 0 || taskPairs.some((p) => p.row);
-  if (!tasksWereMade) {
-    if (after.work.length) out.flags.push("No dispatches were made from the earlier version, so none were made for this one. Add them on the job if they are needed.");
-  } else {
-    const [top] = await db
-      .select({ max: sql<number>`coalesce(max(${schema.jobTasks.seq}), 0)` })
-      .from(schema.jobTasks)
-      .where(eq(schema.jobTasks.jobId, args.jobId));
-    let seq = Number(top?.max ?? 0);
-    const left = [...taskPairs];
-    for (const line of after.work) {
-      const i = left.findIndex((p) => key(p.line.description) === key(line.description));
-      const pair = i >= 0 ? left.splice(i, 1)[0] : undefined;
-      const task = pair?.row ?? null;
-      if (task) {
-        const area = line.unit === "m2" ? line.qty : null;
-        if (same(task.areaM2, area)) continue;
-        const lock = await taskLock(task);
-        if (lock) {
-          out.flags.push(`Dispatch "${task.title}" is ${lock}. The new quote changes it from ${qtyText(task.areaM2, "m2")} to ${qtyText(area, "m2")}. Not changed.`);
-        } else {
-          await db.update(schema.jobTasks).set({ areaM2: area, updatedAt: now }).where(eq(schema.jobTasks.id, task.id));
-          out.changes.push(`Dispatch "${task.title}" updated from ${qtyText(task.areaM2, "m2")} to ${qtyText(area, "m2")}.`);
-          out.tasksUpdated += 1;
-        }
-        continue;
-      }
-      await insertTaskForLine(args.jobId, line, ++seq, furniture);
-      out.tasksAdded += 1;
-      if (pair) {
-        out.changes.push(`Dispatch "${line.description}" made.`);
-        out.flags.push(`Made a new dispatch for "${line.description}". The one from the earlier version was not found (renamed or removed by hand?). Check the job for doubles.`);
-      } else {
-        out.changes.push(`Dispatch "${line.description}" added.`);
-      }
-    }
-    for (const p of left) {
-      const task = p.row;
-      if (!task) continue;
-      const lock = await taskLock(task);
-      if (lock) {
-        out.flags.push(`Dispatch "${task.title}" is not on the new quote but is ${lock}. Left as it is.`);
-      } else {
-        await db.update(schema.jobTasks).set({ status: "cancelled", updatedAt: now }).where(eq(schema.jobTasks.id, task.id));
-        out.changes.push(`Dispatch "${task.title}" cancelled, it is not on the new quote.`);
-        out.tasksCancelled += 1;
-      }
-    }
-  }
+  await reworkDispatches(args.jobId, before.work, after.work, furniture, after.supply, args.toQuoteId, out);
 
   /* -------------------------------- materials -------------------------------- */
   const mats = await db.select().from(schema.jobMaterials).where(eq(schema.jobMaterials.jobId, args.jobId)).orderBy(schema.jobMaterials.id);
@@ -258,10 +364,21 @@ export async function doublesBeforeBuild(quoteId: number, jobId: number): Promis
     .where(eq(schema.jobMaterials.jobId, jobId));
   const matKey = (productId: number | null, description: string) => (productId ? `p:${productId}` : `d:${key(description)}`);
   const out: string[] = [];
+  const handLines = tasks.length
+    ? await db
+        .select({ itemId: schema.taskLabourLines.itemId, title: schema.jobTasks.title })
+        .from(schema.taskLabourLines)
+        .innerJoin(schema.jobTasks, eq(schema.jobTasks.id, schema.taskLabourLines.taskId))
+        .where(and(eq(schema.jobTasks.jobId, jobId), ne(schema.jobTasks.status, "cancelled")))
+    : [];
+  const said = new Set<string>();
   for (const line of lines.work) {
-    if (tasks.some((t) => key(t.title) === key(line.description))) {
-      out.push(`Dispatch "${line.description}" was already on the job, and the quote made another. Cancel one of them.`);
-    }
+    const byLine = line.rateItemId ? handLines.find((h) => h.itemId === line.rateItemId) : undefined;
+    const byTitle = tasks.find((t) => key(t.title) === key(line.description));
+    const title = byLine?.title ?? byTitle?.title;
+    if (!title || said.has(title)) continue;
+    said.add(title);
+    out.push(`Dispatch "${title}" was already on the job with work that is on the quote, and the quote made its own dispatch too. Merge them or cancel one.`);
   }
   for (const line of lines.supply) {
     if (mats.some((m) => matKey(m.productId, m.description) === matKey(line.productId, line.description))) {

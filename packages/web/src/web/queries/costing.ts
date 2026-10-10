@@ -36,6 +36,8 @@ function useCostingMutation(name: "setLine" | "removeLine" | "freeze" | "unfreez
       queryClient.invalidateQueries({ queryKey: orpc.costing.key() });
       // Freezing writes the labour onto the task, so the job card is stale too.
       queryClient.invalidateQueries({ queryKey: orpc.jobs.key() });
+      // The work lines under each dispatch on the job page.
+      queryClient.invalidateQueries({ queryKey: orpc.dispatches.key() });
     },
   });
 }

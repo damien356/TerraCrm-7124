@@ -14,6 +14,7 @@ import { installers } from "./routes/installers";
 import { availability } from "./routes/availability";
 import { jobs } from "./routes/jobs";
 import { tasks } from "./routes/tasks";
+import { dispatches } from "./routes/dispatches";
 import { offers } from "./routes/offers";
 import { quotes } from "./routes/quotes";
 import { quoteBundles } from "./routes/quoteBundles";
@@ -79,6 +80,8 @@ export const router = {
   availability,
   jobs,
   tasks,
+  /** Split by trade and Merge on the job page. */
+  dispatches,
   offers,
   quotes,
   quoteBundles,

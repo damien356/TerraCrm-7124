@@ -34,6 +34,8 @@ import { jobText, quoteRef, taskRef } from "../../api/lib/refs";
 import { useCreateTask, useRemoveTask } from "../queries/tasks";
 import { useBootstrap } from "../queries/settings";
 import { JobPeopleCard } from "../components/job-people";
+import { DispatchWork, MergeDispatchesModal, SplitDispatchModal } from "../components/dispatch-split";
+import { useJobDispatchLines } from "../queries/dispatches";
 import {
   CallbackBanner,
   CallbacksListCard,
@@ -309,6 +311,7 @@ export default function JobDetailPage() {
   const removeMaterial = useRemoveMaterial();
   const addNote = useAddJobNote();
   const removeTask = useRemoveTask();
+  const work = useJobDispatchLines(Number.isFinite(id) ? id : 0);
 
   // The inbox deep-links straight at the thread: /jobs/12?tab=conversation.
   const searchString = useSearch();
@@ -318,6 +321,8 @@ export default function JobDetailPage() {
   const [callbackModal, setCallbackModal] = React.useState(false);
   const [measuring, setMeasuring] = React.useState<{ id: number; title: string } | null>(null);
   const [booking, setBooking] = React.useState<number | null>(null);
+  const [splitting, setSplitting] = React.useState<number | null>(null);
+  const [merging, setMerging] = React.useState(false);
   const [note, setNote] = React.useState("");
   const [material, setMaterial] = React.useState({ description: "", qty: "", unit: "m2" });
 
@@ -462,15 +467,22 @@ export default function JobDetailPage() {
           <Card>
             <CardHeader
               title="Dispatches"
-              subtitle="Tasks are what gets assigned — not the job."
+              subtitle="What gets sent to crew. One per job, split by trade when two crews do the work."
               action={
-                <span className="text-xs text-muted-foreground">
-                  {j.tasks.filter((t) => t.status === "complete").length}/{j.tasks.length} done
-                </span>
+                <div className="flex items-center gap-3">
+                  {j.tasks.filter((t) => t.status !== "cancelled").length > 1 ? (
+                    <button type="button" onClick={() => setMerging(true)} className="text-xs font-medium text-primary hover:underline">
+                      Merge
+                    </button>
+                  ) : null}
+                  <span className="text-xs text-muted-foreground">
+                    {j.tasks.filter((t) => t.status === "complete").length}/{j.tasks.length} done
+                  </span>
+                </div>
               }
             />
             {j.tasks.length === 0 ? (
-              <Empty>No dispatches yet. Add the first one — tile removal, prep, lay, skirting…</Empty>
+              <Empty>No dispatches yet. Accepting the quote makes one, or add one by hand.</Empty>
             ) : (
               <ul className="divide-y divide-border">
                 {j.tasks.map((t) => {
@@ -495,6 +507,7 @@ export default function JobDetailPage() {
                           {t.areaM2 ? ` · ${t.areaM2}m²` : ""} ·{" "}
                           {t.installer ? `on ${t.installer.name}` : "nobody on it"}
                         </p>
+                        <DispatchWork lines={work.data?.find((d) => d.id === t.id)?.lines} />
                       </div>
                       <div className="flex items-center gap-2">
                         <button
@@ -504,6 +517,15 @@ export default function JobDetailPage() {
                         >
                           Measure up
                         </button>
+                        {(work.data?.find((d) => d.id === t.id)?.lines.length ?? 0) > 1 && !work.data?.find((d) => d.id === t.id)?.lock ? (
+                          <button
+                            type="button"
+                            onClick={() => setSplitting(t.id)}
+                            className="text-xs font-medium text-primary hover:underline"
+                          >
+                            Split by trade
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => setBooking(t.id)}
@@ -721,6 +743,8 @@ export default function JobDetailPage() {
 
       <CreateCallbackModal job={j} open={callbackModal} onClose={() => setCallbackModal(false)} />
       <NewTaskModal jobId={j.id} open={taskModal} onClose={() => setTaskModal(false)} furniture={j.furnitureOnSite} />
+      <SplitDispatchModal jobId={j.id} jobRef={jobText(j)} taskId={splitting} open={splitting !== null} onClose={() => setSplitting(null)} />
+      <MergeDispatchesModal jobId={j.id} jobRef={jobText(j)} open={merging} onClose={() => setMerging(false)} />
       <MeasureUpModal
         taskId={measuring?.id ?? null}
         title={measuring?.title ?? ""}
