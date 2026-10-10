@@ -1,9 +1,9 @@
 import { createAuthClient } from "better-auth/react";
 import { managedAuthExpoClient } from "@runablehq/managed-auth/native";
 import { expoClient } from "@better-auth/expo/client";
-import * as SecureStore from "expo-secure-store";
 import Constants from "expo-constants";
 import { Platform } from "react-native";
+import { clearSavedLogin, safeGet, safeSet } from "./crash-guard";
 
 // Platform-managed identity: never edit `expo.extra` or `expo.scheme` in app.json.
 const extra = (Constants.expoConfig?.extra ?? {}) as {
@@ -33,6 +33,31 @@ function setWebSessionToken(token: string | null) {
   else localStorage.removeItem(WEB_TOKEN_KEY);
 }
 
+/** Runable managed sign-in token, kept where the plugin keeps it, never throwing. */
+const MANAGED_TOKEN_KEY = "runable.managed-auth.token";
+let managedToken: string | undefined;
+const safeTokenStore = {
+  getToken: () => (managedToken ??= safeGet(MANAGED_TOKEN_KEY) ?? ""),
+  setToken: (token: string) => {
+    managedToken = token;
+    safeSet(MANAGED_TOKEN_KEY, token);
+  },
+  clearToken: () => {
+    managedToken = "";
+    safeSet(MANAGED_TOKEN_KEY, "");
+  },
+};
+
+/**
+ * Wipe the login off this phone without asking the server. For the recovery
+ * screen and a session the server no longer knows. The next session check
+ * comes back signed out.
+ */
+export function forgetLoginOnPhone() {
+  clearSavedLogin();
+  managedToken = "";
+}
+
 export const authClient = createAuthClient({
   baseURL: process.env.EXPO_PUBLIC_API_URL ?? extra.apiUrl,
   basePath: "/api/auth",
@@ -52,14 +77,20 @@ export const authClient = createAuthClient({
     managedAuthExpoClient({
       applicationId: extra.applicationId as string,
       issuer: extra.runableAuthIssuer as string,
+      // Same keychain slot the plugin uses by default, read through the startup
+      // guard so a value the phone cannot read signs out instead of crashing.
+      storage: Platform.OS === "web" ? undefined : safeTokenStore,
     }),
     // Native only: an email sign-in comes back as a Set-Cookie, and this keeps
     // it in the keychain instead, handing it back through authClient.getCookie().
     expoClient({
       scheme: Constants.expoConfig?.scheme as string,
+      // Read through the startup guard (lib/crash-guard.ts). This used to call
+      // SecureStore straight, at load, so one unreadable value closed the app
+      // on every launch until it was reinstalled.
       storage: {
-        getItem: (key) => SecureStore.getItem(key),
-        setItem: (key, value) => SecureStore.setItem(key, value),
+        getItem: (key) => safeGet(key),
+        setItem: (key, value) => safeSet(key, value),
       },
     }),
   ],

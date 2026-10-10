@@ -1,7 +1,17 @@
 // System-managed layout — extend in place, never rewrite from scratch.
 // Keep the provider chain intact: ErrorBoundary → OneDollarStats → SafeArea → QueryClient.
 // To switch navigation, replace only the <Slot /> line with <Stack /> or <Tabs />.
-import { useEffect, useRef } from "react";
+// First, before the sign-in client reads anything saved on the phone.
+import {
+  forgetSignedIn,
+  hasSavedLogin,
+  markReady,
+  queueProblem,
+  rememberSignedIn,
+  setLoginNote,
+  wasSignedIn,
+} from "../lib/crash-guard";
+import { useEffect, useRef, useState } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -17,6 +27,8 @@ import { ErrorBoundary } from "../components/__ErrorBoundary";
 import { OneDollarStatsProvider } from "../lib/__analytics";
 import { isWeb, startWebSafeArea } from "../lib/__web-safe-area";
 import { authClient } from "../lib/auth";
+import { sendProblems } from "../lib/crash-report";
+import { CannotReachScreen, StartupBoundary } from "../components/startup-screens";
 import {
   clearBadge,
   configureNotificationHandler,
@@ -52,11 +64,50 @@ function Navigation() {
   const onLogin = segments[0] === "login";
   const inCallback = segments[0] === "auth";
 
+  // No answer from the server (no signal, or Terra is down) while a login is
+  // saved on the phone. That is not a sign-out: say so and offer Try again.
+  const sessionError = session.error as { status?: number; message?: string } | null;
+  const unreachable =
+    !session.isPending &&
+    !session.data &&
+    !!sessionError &&
+    (!sessionError.status || sessionError.status >= 500) &&
+    hasSavedLogin();
+
+  // The first screen is up: later crashes get the recovery screen, not a close.
   useEffect(() => {
-    if (session.isPending || inCallback) return;
+    markReady();
+  }, []);
+
+  // Send any problems this phone kept, now and each time it comes back to the front.
+  useEffect(() => {
+    void sendProblems();
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") void sendProblems();
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Remember a signed-in phone, so a login that later runs out can say so on Sign in.
+  useEffect(() => {
+    if (session.isPending || unreachable) return;
+    if (session.data) {
+      rememberSignedIn();
+      void sendProblems();
+      return;
+    }
+    if (!sessionError && wasSignedIn()) {
+      setLoginNote("expired");
+      queueProblem({ kind: "session_expired", message: "Saved login was no longer valid, sent to Sign in." });
+      forgetSignedIn();
+    }
+  }, [session.isPending, session.data, sessionError, unreachable]);
+
+  useEffect(() => {
+    if (session.isPending || inCallback || unreachable) return;
     if (!session.data && !onLogin) router.replace("/login");
     if (session.data && onLogin) router.replace("/");
-  }, [session.isPending, session.data, onLogin, inCallback, router]);
+  }, [session.isPending, session.data, onLogin, inCallback, unreachable, router]);
 
   // An office login with no installer card behind it has no crew screens to
   // show, so it opens on the Office tab instead of an empty Today.
@@ -111,6 +162,15 @@ function Navigation() {
     });
   }, [router]);
 
+  if (unreachable) {
+    return (
+      <CannotReachScreen
+        onRetry={() => session.refetch()}
+        detail={sessionError?.message ? `${sessionError.status ? `${sessionError.status} ` : ""}${sessionError.message}` : null}
+      />
+    );
+  }
+
   if (session.isPending) {
     return (
       <View
@@ -141,11 +201,21 @@ function Navigation() {
 }
 
 export default function RootLayout() {
-  const [fontsLoaded] = useFonts({
+  const [fontsLoaded, fontError] = useFonts({
     Poppins_400Regular,
     Poppins_500Medium,
     Poppins_600SemiBold,
   });
+  // Fonts that never load (a bad update, a full phone) must not leave a
+  // spinner up forever. After a few seconds go on with the phone's own font.
+  const [fontWaitOver, setFontWaitOver] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setFontWaitOver(true), 4000);
+    return () => clearTimeout(t);
+  }, []);
+  useEffect(() => {
+    if (fontError) queueProblem({ kind: "error", message: `Fonts did not load. ${fontError.message}` });
+  }, [fontError]);
 
   useEffect(() => {
     if (isWeb) startWebSafeArea();
@@ -156,7 +226,7 @@ export default function RootLayout() {
     void authClient.managedAuth.handleRedirect();
   }, []);
 
-  if (!fontsLoaded) {
+  if (!fontsLoaded && !fontError && !fontWaitOver) {
     return (
       <View
         style={{
@@ -184,7 +254,10 @@ export default function RootLayout() {
         <SafeAreaProvider>
           <QueryClientProvider client={queryClient}>
             <StatusBar style="auto" />
-            <Navigation />
+            {/* Terra's own "hit a problem" screen, with Try again and Sign out. */}
+            <StartupBoundary queryClient={queryClient}>
+              <Navigation />
+            </StartupBoundary>
           </QueryClientProvider>
         </SafeAreaProvider>
       </OneDollarStatsProvider>

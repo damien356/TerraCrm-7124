@@ -1,5 +1,5 @@
 import * as React from "react";
-import { HardHat, KeyRound, ShieldCheck, Smartphone, Briefcase, UserPlus } from "lucide-react";
+import { HardHat, KeyRound, ShieldCheck, Smartphone, Briefcase, UserPlus, TriangleAlert } from "lucide-react";
 import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -9,6 +9,7 @@ import { Modal } from "../components/ui/modal";
 import {
   useAddPerson,
   useLogins,
+  usePhoneProblems,
   useSetAccess,
   useSetCostAccess,
   useSetLoginActive,
@@ -250,6 +251,7 @@ export default function TeamPage() {
       <AddPersonModal open={adding} onClose={() => setAdding(false)} />
 
       <VoiceKeys />
+      <PhoneProblems />
       {openId !== null ? <InstallerPanel id={openId} onClose={() => setOpenId(null)} /> : null}
     </Page>
   );
@@ -300,6 +302,91 @@ function VoiceKeys() {
               {k.installerName} · {k.deviceName || "iPhone"} · turned off {when(new Date(k.revokedAt!).toISOString()).toLowerCase()}
             </div>
           ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+const PROBLEM_LABEL: Record<string, string> = {
+  fatal: "App closed",
+  error: "Error",
+  screen: "Screen broke",
+  storage_reset: "Saved login unreadable",
+  safe_start: "Safe start",
+  emergency_launch: "Update failed to start",
+  session_expired: "Login expired",
+};
+
+const SERIOUS = new Set(["fatal", "screen", "safe_start", "emergency_launch"]);
+
+function stamp(v: string | Date | null) {
+  if (!v) return "";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+}
+
+/**
+ * Crash reports from the Terra app. Each phone keeps what went wrong (even
+ * when it closed) and sends it the next time it is open with signal.
+ */
+function PhoneProblems() {
+  const problems = usePhoneProblems();
+  const [open, setOpen] = React.useState<number | null>(null);
+  const [all, setAll] = React.useState(false);
+  const rows = problems.data ?? [];
+  const shown = all ? rows : rows.slice(0, 8);
+
+  return (
+    <Card className="mt-4">
+      <CardHeader
+        title="Phone problems"
+        subtitle="What the Terra app has sent in: crashes, screens that broke, logins a phone could not read. Newest first."
+        action={<TriangleAlert className="size-4 text-muted-foreground" />}
+      />
+      {problems.isPending ? (
+        <Loading label="Loading reports…" />
+      ) : problems.isError ? (
+        <Empty>Couldn't load the reports. {problems.error.message}</Empty>
+      ) : rows.length === 0 ? (
+        <Empty>Nothing sent in. Phones report here on their own when something goes wrong.</Empty>
+      ) : (
+        <div className="divide-y divide-border">
+          {shown.map((r) => (
+            <div key={r.id} className="px-4 py-2.5">
+              <button
+                type="button"
+                className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 text-left"
+                onClick={() => setOpen(open === r.id ? null : r.id)}
+              >
+                <Badge colour={SERIOUS.has(r.kind) ? "#C2410C" : null}>{PROBLEM_LABEL[r.kind] ?? r.kind}</Badge>
+                <span className="min-w-0 flex-1 truncate text-sm">{r.message}</span>
+                <span className="text-xs text-muted-foreground">
+                  {r.who} · {stamp(r.happenedAt ?? r.receivedAt)}
+                </span>
+              </button>
+              {open === r.id ? (
+                <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                  <p className="break-words text-foreground">{r.message}</p>
+                  <p>{r.phone}</p>
+                  <p>Received {stamp(r.receivedAt)}</p>
+                  {r.stack ? (
+                    <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-2 font-mono text-[11px]">
+                      {r.stack}
+                    </pre>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ))}
+          {rows.length > shown.length ? (
+            <div className="px-4 py-2">
+              <Button variant="ghost" onClick={() => setAll(true)}>
+                Show {rows.length - shown.length} more
+              </Button>
+            </div>
+          ) : null}
         </div>
       )}
     </Card>

@@ -29,6 +29,7 @@ import {
   useUpdateMaterial,
 } from "../queries/jobs";
 import { SupervisorPicker } from "../components/supervisor-picker";
+import { CreateQuoteButton } from "../components/create-quote";
 import { jobText, quoteRef, taskRef } from "../../api/lib/refs";
 import { useCreateTask, useRemoveTask } from "../queries/tasks";
 import { useBootstrap } from "../queries/settings";
@@ -368,6 +369,7 @@ export default function JobDetailPage() {
             ))}
           </Select>
           <MemoButton jobId={j.id} />
+          <CreateQuoteButton jobId={j.id} />
           <Button variant="outline" onClick={() => setCallbackModal(true)}>
             <LifeBuoy className="size-4" />
             Create callback
@@ -637,9 +639,9 @@ export default function JobDetailPage() {
           {isCallback && isAdmin ? <ReworkCostCard jobId={j.id} /> : null}
 
           <Card>
-            <CardHeader title="Quotes" />
+            <CardHeader title="Quotes" action={<CreateQuoteButton jobId={j.id} size="sm" />} />
             {j.quotes.length === 0 ? (
-              <Empty>No quote on this job.</Empty>
+              <Empty>No quote on this job yet. Create quote makes {quoteRef(j.number, 1, jobText(j))}.</Empty>
             ) : (
               <ul className="divide-y divide-border">
                 {j.quotes.map((q) => (

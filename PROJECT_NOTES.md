@@ -481,3 +481,28 @@ Checked: lint clean, web build, API tsc 0, app tsc 172 (baseline), mobile tsc 0.
 - **Web:** `components/new-job-modal.tsx` (replaces the old modal in `pages/jobs.tsx`), `components/new-records.tsx` (new contact, company and site fields, match offers), `components/supervisor-picker.tsx` (`SupervisorPicker` on the job page, quotes and quote builder now uses the full supervisor form and saves at once; `SupervisorDraftPicker` for New job). "Who gets the invoice" lists the contact, company, supervisor, people on the draft, and "Someone else (add them)", which opens Add person with Accounts ticked.
 - **Add person:** the People popup has "Not in Ops yet? New person", so a person can be made and added in one step. The old "add them under Clients first" hint is gone.
 - **Next:** item 6, then 7, then 8 + 9 + bundle labels. Each needs Damien's OK on its touch list first.
+
+### 18.8 Create quote on the job page, later-version hold, phone crash guard (10 Oct)
+
+Checked: lint clean, web build, API tsc 0, app tsc 172 (baseline), mobile tsc 0. Scratch tests: `item6/t-i6.tmp.ts` 72 pass, `crash/t-crash.tmp.ts` 27 pass (server reports), `crash/guard.tmp.ts` 51 pass over three runs (the phone guard with the phone modules faked). UI checked on a scratch vite (`crash/teamui.py`).
+
+**Item 6: Create quote from the job page.** No database change. No phone build.
+
+Scratch test `terra-scratch-tests/item6/t-i6.tmp.ts`: 72 pass, 0 fail. UI checked on a scratch vite (`item6/i6ui.py` office, `item6/i6pub.py` client link).
+
+- **Create quote:** two buttons on the job page (header and Quotes card) open `components/create-quote.tsx`. It offers the open draft first, otherwise Copy the latest version (lines, bundles and people as the next version) or Blank. The deposit box says where its number came from: copied from the version and the card, the company default, or "Typed for this quote only". The popup is portalled to the page body, because the dark job header made its fields white on white.
+- **API:** `lib/quote-for-job.ts` (`createForJob`, built on `createQuoteRecord` and `reviseQuoteRecord`), route in `routes/quotes.ts`, query in `web/queries/quotes.ts`. The job's start date and people carry over (`jobStart`).
+- **Later-version hold:** `laterVersionHold` in `lib/quote-accept.ts`. While a job has an accepted quote, a later version cannot be accepted until item 7 (replacing tasks and materials) is built. It is enforced inside `acceptQuote`, so online, office and builder all hit it. The client sees "This quote is being updated" with no Accept button. Staff see why. The builder's Accepted button is off with "Can't be accepted yet".
+
+**Phone crash guard (Damien's Android report: black screen, then it closes, and only a reinstall fixes it).** Ships as an over-the-air update. No database change.
+
+- **Cause found:** the sign-in clients read the saved login from the phone's secure storage while the app was still loading, with nothing catching a failure. If Android can no longer unlock that saved value (it can lose the key it was locked with, for example after a restore or an OS update), the read throws on every launch, before any error screen exists. A reinstall wipes the storage, which is why that was the only fix.
+- **`lib/crash-guard.ts`** (imported first in `app/_layout.tsx`): every read of the saved login goes through `safeGet`, which never throws. An unreadable value is wiped and the phone lands on Sign in. A crash before the first screen is counted; after two in a row the saved login is wiped before anything loads (`safe_start`). It also notes when an update failed and the phone fell back to its built-in copy (`emergency_launch`). Problems are kept on the phone in a ring of 10 slots (each under 2 KB) so a crash cannot lose them.
+- **`components/startup-screens.tsx`:** "Terra hit a problem" with Try again and "Sign out and start fresh" (catches screen errors and fatal errors once the app is up, instead of closing). "Can't reach Terra" with Try again, shown when the server does not answer and a login is saved, instead of throwing the person out to Sign in.
+- **Sign in** (`app/login.tsx`) explains itself: "Your login expired. Sign in again." or "Terra had trouble reading your saved login on this phone, so it signed you out. Sign in again." A sign-out the person chose (Me tab) shows nothing.
+- **Fonts:** the first spinner gives up after 4 seconds and carries on with the phone's own font.
+- **Crash reports:** `lib/crash-report.ts` sends kept problems on start and each time the app comes to the front. Server `devices.reportProblem` (works signed out, max 10 per call, 120 per hour across all phones) stores them in `activity_log` as `entity_type = app_problem`. `devices.problems` (Admin) lists them. Web: People page, "Phone problems" card, newest first (8 shown, "Show more" for the last 50), click a row for the phone, app version, update id and stack. The dashboard's recent activity leaves them out.
+- **Not Sentry, for now:** Sentry needs a native library, a store rebuild and its own account. The in-app reports cover the same ground for this crash. It can be added on the next phone build.
+- **Next phone build:** set `android.allowBackup` to false in `app.json`, so Android does not restore an old saved login onto a new phone (a likely trigger for the unreadable value). Not done here: native change.
+
+**iPhone build failing at "Prepare credentials"** (distribution certificate password): the repo does not supply the certificate. It is made by the publish pipeline, so it is for Runable support, not a code change.

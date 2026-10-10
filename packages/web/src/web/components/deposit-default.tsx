@@ -91,3 +91,19 @@ export function DepositDefault({
     </div>
   );
 }
+
+/** The line under a Deposit % box saying where the % came from. New quote and Create quote on the job page. */
+export function depositHint(source: string | undefined) {
+  switch (source) {
+    case "company":
+      return "From the company card";
+    case "company_type":
+      return "Company default: 0% for builders, 50% for others";
+    case "contact":
+      return "From the contact card";
+    case "standard":
+      return "Standard 50%";
+    default:
+      return undefined;
+  }
+}

@@ -51,6 +51,22 @@ function useQuoteMutation(
 export function useCreateQuote() {
   return useMutation(useQuoteMutation("create"));
 }
+/** Create quote on the job page: what it can offer (open draft, copy latest, blank). */
+export function useQuoteJobStart(jobId: number, enabled: boolean) {
+  return useQuery(orpc.quotes.jobStart.queryOptions({ input: { jobId }, enabled, staleTime: 0 }));
+}
+export function useCreateQuoteForJob() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.quotes.createForJob.mutationOptions({
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: orpc.quotes.key() });
+        queryClient.invalidateQueries({ queryKey: orpc.jobs.key() });
+        queryClient.invalidateQueries({ queryKey: orpc.tasks.key() });
+      },
+    }),
+  );
+}
 export function useUpdateQuote() {
   return useMutation(useQuoteMutation("update"));
 }

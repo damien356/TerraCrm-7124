@@ -10,6 +10,7 @@ import { Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { Combobox } from "../components/ui/combobox";
 import { QuotePeopleDraft, draftsToInput, type PersonDraft } from "../components/job-people";
+import { depositHint } from "../components/deposit-default";
 import { useCreateQuote, useDepositDefault, useQuoteStats, useQuotes } from "../queries/quotes";
 import { ContactPicker } from "../components/contact-picker";
 import { useCompanies, useSites } from "../queries/companies";
@@ -34,22 +35,6 @@ function fmtDate(value: Date | string | null) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "2-digit" });
-}
-
-/** Why the deposit box says what it says. */
-export function depositHint(source: string | undefined) {
-  switch (source) {
-    case "company":
-      return "From the company card";
-    case "company_type":
-      return "Company default: 0% for builders, 50% for others";
-    case "contact":
-      return "From the contact card";
-    case "standard":
-      return "Standard 50%";
-    default:
-      return undefined;
-  }
 }
 
 export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () => void }) {

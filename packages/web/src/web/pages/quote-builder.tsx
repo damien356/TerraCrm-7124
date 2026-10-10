@@ -688,7 +688,8 @@ export default function QuoteBuilderPage() {
                     );
                   })
                 }
-                disabled={accept.isPending}
+                disabled={accept.isPending || !!q.acceptHold}
+                title={q.acceptHold ?? undefined}
               >
                 <Check className="size-4" />
                 Accepted
@@ -730,6 +731,11 @@ export default function QuoteBuilderPage() {
           <button type="button" aria-label="Dismiss" onClick={() => setNotice(null)}>
             <X className="size-4" />
           </button>
+        </div>
+      ) : null}
+      {q.acceptHold ? (
+        <div role="note" className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <b>Can't be accepted yet.</b> {q.acceptHold}
         </div>
       ) : null}
       {q.status === "replaced" ? (

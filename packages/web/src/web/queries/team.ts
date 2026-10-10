@@ -46,3 +46,8 @@ export function useAddPerson() {
 export function useUnlinkedCards(enabled: boolean) {
   return useQuery(orpc.team.unlinkedCards.queryOptions({ enabled, staleTime: 5_000 }));
 }
+
+/** What the phones have sent in: crashes, broken screens, logins they could not read. */
+export function usePhoneProblems(limit = 50) {
+  return useQuery(orpc.devices.problems.queryOptions({ input: { limit }, staleTime: 30_000 }));
+}

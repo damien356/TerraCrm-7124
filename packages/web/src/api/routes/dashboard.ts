@@ -1,5 +1,5 @@
 import { jobNumberSql, taskRefSql } from "../lib/job-ref";
-import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { staffOnly } from "../middleware/auth";
@@ -143,6 +143,8 @@ export const dashboard = {
       db
         .select()
         .from(schema.activityLog)
+        // Phone crash reports have their own list under Team.
+        .where(ne(schema.activityLog.entityType, "app_problem"))
         .orderBy(desc(schema.activityLog.createdAt))
         .limit(15),
     ]);

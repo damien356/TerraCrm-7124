@@ -1,6 +1,7 @@
 import { assertBillable } from "../lib/callbacks";
 import { convertQuoteToJob } from "../lib/quote-convert";
-import { acceptQuote } from "../lib/quote-accept";
+import { acceptQuote, laterVersionHold } from "../lib/quote-accept";
+import { latestQuoteOnJob, quoteDefaultsForJob, quoteStartForJob } from "../lib/quote-for-job";
 import { rebuildForecast } from "../lib/cashflow";
 import { quoteNumberFor, quoteRefById, quoteRefOf } from "../lib/quote-number";
 import { parseQuoteRef, quoteRef } from "../lib/refs";
@@ -173,6 +174,205 @@ function hideCost<T extends { unitCost: number | null; markupPercent: number | n
   return row && !actor.canSeeCosts ? { ...row, unitCost: null, markupPercent: null } : row;
 }
 
+export const createQuoteInput = z.object({
+  jobId: z.number().nullable().optional(),
+  contactId: z.number().nullable().optional(),
+  companyId: z.number().nullable().optional(),
+  /** Required when companyId is set. */
+  supervisorContactId: z.number().nullable().optional(),
+  /** Job contacts beyond the customer and supervisor. Carried onto the job on accept. */
+  people: z.array(personInput).max(20).default([]),
+  siteId: z.number().nullable().optional(),
+  /** Left out, it comes off the company or contact card (lib/deposits.ts). */
+  depositPercent: z.number().min(0).max(100).optional(),
+  validDays: z.number().int().min(1).max(365).default(30),
+  notes: z.string().nullable().optional(),
+  terms: z.string().nullable().optional(),
+  items: z
+    .array(
+      z.object({
+        productId: z.number().nullable().optional(),
+        kind: z.string().default("supply"),
+        description: z.string().min(1),
+        qty: z.number().default(1),
+        unit: z.string().default("m2"),
+        unitPrice: z.number().default(0),
+        unitCost: z.number().nullable().optional(),
+        flagged: z.boolean().default(false),
+        flagReason: z.string().nullable().optional(),
+      }),
+    )
+    .default([]),
+});
+
+/** Make a draft quote. New quote on the Quotes page and Create quote on the job page both come here. */
+export async function createQuoteRecord(input: z.infer<typeof createQuoteInput>, actor: Actor) {
+  await assertBillable(input.jobId);
+  await assertSupervisor(input.companyId, input.supervisorContactId);
+  // The job's own number, or the next job number when there is no job yet.
+  const { number, version } = await quoteNumberFor(input.jobId);
+
+  const [settingRow] = await db
+    .select()
+    .from(schema.settings)
+    .where(eq(schema.settings.key, "quote_terms"));
+
+  const validUntil = new Date();
+  validUntil.setDate(validUntil.getDate() + input.validDays);
+  const depositPercent =
+    input.depositPercent ?? (await depositDefaultFor({ companyId: input.companyId, contactId: input.contactId })).percent;
+
+  const [row] = await db
+    .insert(schema.quotes)
+    .values({
+      number,
+      version,
+      jobId: input.jobId ?? null,
+      contactId: input.contactId ?? null,
+      companyId: input.companyId ?? null,
+      supervisorContactId: input.companyId ? (input.supervisorContactId ?? null) : null,
+      siteId: input.siteId ?? null,
+      status: "draft",
+      depositPercent,
+      validUntil,
+      notes: input.notes ?? null,
+      terms: input.terms ?? settingRow?.value ?? null,
+    })
+    .returning();
+
+  if (!row) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Quote not created" });
+
+  if (input.items.length) {
+    // A price book product typed in at a lower price is still a discount off the price book.
+    const listPrices = await Promise.all(
+      input.items.map(async (item) => {
+        if (item.productId == null) return null;
+        const [product] = await db.select().from(schema.products).where(eq(schema.products.id, item.productId));
+        if (!product) return null;
+        const sell = await liveSellFor(product);
+        return sell !== item.unitPrice ? sell : null;
+      }),
+    );
+    await db.insert(schema.quoteItems).values(
+      input.items.map((item, i) => ({
+        quoteId: row.id,
+        productId: item.productId ?? null,
+        kind: item.kind,
+        lineType: lineTypeOf(item.kind),
+        description: item.description,
+        qty: item.qty,
+        unit: item.unit,
+        unitPrice: item.unitPrice,
+        listUnitPrice: listPrices[i] ?? null,
+        unitCost: actor.role === "admin" ? (item.unitCost ?? null) : null,
+        markupPercent: actor.role === "admin" ? markupOf(item.unitCost, item.unitPrice) : null,
+        total: round2(item.qty * item.unitPrice),
+        sortOrder: i,
+        flagged: item.flagged,
+        flagReason: item.flagReason ?? null,
+      })),
+    );
+  }
+
+  for (const p of input.people) {
+    if (p.tags.includes("supervisor")) continue; // the supervisor comes only through supervisorContactId
+    await addQuotePerson(row.id, p.contactId, p);
+  }
+
+  const totals = await recalc(row.id);
+
+  await db.insert(schema.activityLog).values({
+    jobId: input.jobId ?? null,
+    contactId: input.contactId ?? null,
+    entityType: "quote",
+    entityId: row.id,
+    action: "created",
+    detail: `Quote ${await quoteRefById(row.id)} created`,
+    actorName: actor.name,
+    actorRole: actor.role,
+  });
+
+  return { ...row, ...totals };
+}
+
+/** The next version of a quote, lines, bundles and people copied. The deposit can be set for the new version. */
+export async function reviseQuoteRecord(
+  quote: typeof schema.quotes.$inferSelect,
+  actor: Actor,
+  opts: { depositPercent?: number } = {},
+) {
+  await assertBillable(quote.jobId);
+  const items = await db
+    .select()
+    .from(schema.quoteItems)
+    .where(eq(schema.quoteItems.quoteId, quote.id))
+    .orderBy(asc(schema.quoteItems.sortOrder));
+
+  const [maxRow] = await db
+    .select({ max: sql<number>`coalesce(max(${schema.quotes.version}), 1)` })
+    .from(schema.quotes)
+    .where(eq(schema.quotes.number, quote.number));
+
+  const [row] = await db
+    .insert(schema.quotes)
+    .values({
+      number: quote.number,
+      version: Number(maxRow?.max ?? 1) + 1,
+      jobId: quote.jobId,
+      contactId: quote.contactId,
+      companyId: quote.companyId,
+      supervisorContactId: quote.supervisorContactId,
+      siteId: quote.siteId,
+      status: "draft",
+      depositPercent: opts.depositPercent ?? quote.depositPercent,
+      validUntil: quote.validUntil,
+      notes: quote.notes,
+      terms: quote.terms,
+      bundleMode: quote.bundleMode,
+    })
+    .returning();
+
+  if (!row) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Revision not created" });
+
+  if (items.length) {
+    await db.insert(schema.quoteItems).values(
+      items.map((i, idx) => ({
+        quoteId: row.id,
+        productId: i.productId,
+        kind: i.kind,
+        lineType: i.lineType,
+        description: i.description,
+        qty: i.qty,
+        unit: i.unit,
+        unitPrice: i.unitPrice,
+        listUnitPrice: i.listUnitPrice,
+        unitCost: i.unitCost,
+        markupPercent: i.markupPercent,
+        total: i.total,
+        floorCategory: i.floorCategory,
+        sortOrder: idx,
+      })),
+    );
+  }
+
+  await copyBundles(quote.id, row.id);
+  await copyQuotePeople(quote.id, row.id);
+  const totals = await recalc(row.id);
+
+  await db.insert(schema.activityLog).values({
+    jobId: quote.jobId,
+    contactId: quote.contactId,
+    entityType: "quote",
+    entityId: row.id,
+    action: "revised",
+    detail: `Quote ${await quoteRefOf(row)} created from ${await quoteRefOf(quote)}`,
+    actorName: actor.name,
+    actorRole: actor.role,
+  });
+
+  return { ...row, ...totals };
+}
+
 export const quotes = {
   list: staffOnly
     .input(
@@ -295,6 +495,10 @@ export const quotes = {
       discountPercent,
       discountLimit: limit,
       discountNeedsApproval: needsApproval,
+      /** Why this later version cannot be accepted yet, or null. See laterVersionHold. */
+      acceptHold: ["draft", "needs_review", "sent"].includes(row.quote.status)
+        ? ((await laterVersionHold(row.quote))?.staff ?? null)
+        : null,
       costsHidden: !showCosts,
       contact: row.contact,
       company: row.company,
@@ -321,125 +525,40 @@ export const quotes = {
     .handler(({ input }) => depositDefaultFor(input)),
 
   create: staffOnly
+    .input(createQuoteInput)
+    .handler(({ input, context }) => createQuoteRecord(input, context.actor)),
+
+  /** What Create quote on the job page offers: open the draft, copy the latest, or start blank. */
+  jobStart: staffOnly.input(z.object({ jobId: z.number() })).handler(({ input }) => quoteStartForJob(input.jobId)),
+
+  /** Create quote on the job page. Takes the job's number and people. */
+  createForJob: staffOnly
     .input(
       z.object({
-        jobId: z.number().nullable().optional(),
-        contactId: z.number().nullable().optional(),
-        companyId: z.number().nullable().optional(),
-        /** Required when companyId is set. */
-        supervisorContactId: z.number().nullable().optional(),
-        /** Job contacts beyond the customer and supervisor. Carried onto the job on accept. */
-        people: z.array(personInput).max(20).default([]),
-        siteId: z.number().nullable().optional(),
-        /** Left out, it comes off the company or contact card (lib/deposits.ts). */
+        jobId: z.number(),
+        from: z.enum(["blank", "copy"]),
+        /** Left out: the card default for a blank one, the copied version's for a copy. */
         depositPercent: z.number().min(0).max(100).optional(),
-        validDays: z.number().int().min(1).max(365).default(30),
-        notes: z.string().nullable().optional(),
-        terms: z.string().nullable().optional(),
-        items: z
-          .array(
-            z.object({
-              productId: z.number().nullable().optional(),
-              kind: z.string().default("supply"),
-              description: z.string().min(1),
-              qty: z.number().default(1),
-              unit: z.string().default("m2"),
-              unitPrice: z.number().default(0),
-              unitCost: z.number().nullable().optional(),
-              flagged: z.boolean().default(false),
-              flagReason: z.string().nullable().optional(),
-            }),
-          )
-          .default([]),
       }),
     )
     .handler(async ({ input, context }) => {
-      await assertBillable(input.jobId);
-      await assertSupervisor(input.companyId, input.supervisorContactId);
-      // The job's own number, or the next job number when there is no job yet.
-      const { number, version } = await quoteNumberFor(input.jobId);
-
-      const [settingRow] = await db
-        .select()
-        .from(schema.settings)
-        .where(eq(schema.settings.key, "quote_terms"));
-
-      const validUntil = new Date();
-      validUntil.setDate(validUntil.getDate() + input.validDays);
-      const depositPercent =
-        input.depositPercent ?? (await depositDefaultFor({ companyId: input.companyId, contactId: input.contactId })).percent;
-
-      const [row] = await db
-        .insert(schema.quotes)
-        .values({
-          number,
-          version,
-          jobId: input.jobId ?? null,
-          contactId: input.contactId ?? null,
-          companyId: input.companyId ?? null,
-          supervisorContactId: input.companyId ? (input.supervisorContactId ?? null) : null,
-          siteId: input.siteId ?? null,
-          status: "draft",
-          depositPercent,
-          validUntil,
-          notes: input.notes ?? null,
-          terms: input.terms ?? settingRow?.value ?? null,
-        })
-        .returning();
-
-      if (!row) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Quote not created" });
-
-      if (input.items.length) {
-        // A price book product typed in at a lower price is still a discount off the price book.
-        const listPrices = await Promise.all(
-          input.items.map(async (item) => {
-            if (item.productId == null) return null;
-            const [product] = await db.select().from(schema.products).where(eq(schema.products.id, item.productId));
-            if (!product) return null;
-            const sell = await liveSellFor(product);
-            return sell !== item.unitPrice ? sell : null;
-          }),
-        );
-        await db.insert(schema.quoteItems).values(
-          input.items.map((item, i) => ({
-            quoteId: row.id,
-            productId: item.productId ?? null,
-            kind: item.kind,
-            lineType: lineTypeOf(item.kind),
-            description: item.description,
-            qty: item.qty,
-            unit: item.unit,
-            unitPrice: item.unitPrice,
-            listUnitPrice: listPrices[i] ?? null,
-            unitCost: context.actor.role === "admin" ? (item.unitCost ?? null) : null,
-            markupPercent: context.actor.role === "admin" ? markupOf(item.unitCost, item.unitPrice) : null,
-            total: round2(item.qty * item.unitPrice),
-            sortOrder: i,
-            flagged: item.flagged,
-            flagReason: item.flagReason ?? null,
-          })),
-        );
+      if (input.from === "copy") {
+        const latest = await latestQuoteOnJob(input.jobId);
+        if (!latest) throw new ORPCError("BAD_REQUEST", { message: "There is no quote on this job to copy yet. Start a blank one." });
+        return reviseQuoteRecord(latest, context.actor, { depositPercent: input.depositPercent });
       }
-
-      for (const p of input.people) {
-        if (p.tags.includes("supervisor")) continue; // the supervisor comes only through supervisorContactId
-        await addQuotePerson(row.id, p.contactId, p);
-      }
-
-      const totals = await recalc(row.id);
-
-      await db.insert(schema.activityLog).values({
-        jobId: input.jobId ?? null,
-        contactId: input.contactId ?? null,
-        entityType: "quote",
-        entityId: row.id,
-        action: "created",
-        detail: `Quote ${await quoteRefById(row.id)} created`,
-        actorName: context.actor.name,
-        actorRole: context.actor.role,
-      });
-
-      return { ...row, ...totals };
+      const d = await quoteDefaultsForJob(input.jobId);
+      return createQuoteRecord(
+        createQuoteInput.parse({
+          jobId: input.jobId,
+          contactId: d.contactId,
+          companyId: d.companyId,
+          supervisorContactId: d.supervisorContactId,
+          siteId: d.siteId,
+          depositPercent: input.depositPercent,
+        }),
+        context.actor,
+      );
     }),
 
   update: staffOnly
@@ -1102,79 +1221,9 @@ export const quotes = {
     }),
 
   /** Copy a quote into a new version so the original stays as sent history. */
-  revise: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
-    const quote = await quoteOrThrow(input.id);
-    await assertBillable(quote.jobId);
-    const items = await db
-      .select()
-      .from(schema.quoteItems)
-      .where(eq(schema.quoteItems.quoteId, quote.id))
-      .orderBy(asc(schema.quoteItems.sortOrder));
-
-    const [maxRow] = await db
-      .select({ max: sql<number>`coalesce(max(${schema.quotes.version}), 1)` })
-      .from(schema.quotes)
-      .where(eq(schema.quotes.number, quote.number));
-
-    const [row] = await db
-      .insert(schema.quotes)
-      .values({
-        number: quote.number,
-        version: Number(maxRow?.max ?? 1) + 1,
-        jobId: quote.jobId,
-        contactId: quote.contactId,
-        companyId: quote.companyId,
-        supervisorContactId: quote.supervisorContactId,
-        siteId: quote.siteId,
-        status: "draft",
-        depositPercent: quote.depositPercent,
-        validUntil: quote.validUntil,
-        notes: quote.notes,
-        terms: quote.terms,
-        bundleMode: quote.bundleMode,
-      })
-      .returning();
-
-    if (!row) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Revision not created" });
-
-    if (items.length) {
-      await db.insert(schema.quoteItems).values(
-        items.map((i, idx) => ({
-          quoteId: row.id,
-          productId: i.productId,
-          kind: i.kind,
-          lineType: i.lineType,
-          description: i.description,
-          qty: i.qty,
-          unit: i.unit,
-          unitPrice: i.unitPrice,
-          listUnitPrice: i.listUnitPrice,
-          unitCost: i.unitCost,
-          markupPercent: i.markupPercent,
-          total: i.total,
-          floorCategory: i.floorCategory,
-          sortOrder: idx,
-        })),
-      );
-    }
-
-    await copyBundles(quote.id, row.id);
-    await copyQuotePeople(quote.id, row.id);
-    const totals = await recalc(row.id);
-
-    await db.insert(schema.activityLog).values({
-      jobId: quote.jobId,
-      contactId: quote.contactId,
-      entityType: "quote",
-      entityId: row.id,
-      action: "revised",
-      detail: `Quote ${await quoteRefOf(row)} created from ${await quoteRefOf(quote)}`,
-      actorName: context.actor.name,
-      actorRole: context.actor.role,
-    });
-
-    return { ...row, ...totals };
-  }),
+  revise: staffOnly
+    .input(z.object({ id: z.number() }))
+    .handler(async ({ input, context }) => reviseQuoteRecord(await quoteOrThrow(input.id), context.actor)),
 
   /**
    * Turn an accepted quote into a job. Labour/prep/removal lines become

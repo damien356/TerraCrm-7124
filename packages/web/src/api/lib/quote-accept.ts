@@ -30,6 +30,34 @@ const bad = (message: string) => new ORPCError("BAD_REQUEST", { message });
 
 export type AcceptActor = { name: string; role: string };
 
+/**
+ * Hold on a later version (Damien 10 Oct). Accepting a quote that is already on
+ * a job does not yet rebuild the job's dispatches and materials (item 7 fixes
+ * that). Until then a later version cannot be accepted once the job has any
+ * dispatches or materials from an earlier one. Returns null when it can go.
+ */
+export async function laterVersionHold(quote: { id: number; number: number; jobId: number | null }) {
+  if (!quote.jobId) return null;
+  const [r] = await db.all<{ earlier: number; tasks: number; materials: number }>(sql`
+    select
+      (select count(*) from quotes where number = ${quote.number} and id != ${quote.id}) as earlier,
+      (select count(*) from job_tasks where job_id = ${quote.jobId} and status != 'cancelled') as tasks,
+      (select count(*) from job_materials where job_id = ${quote.jobId}) as materials`);
+  if (!Number(r?.earlier) || (!Number(r?.tasks) && !Number(r?.materials))) return null;
+  const tasks = Number(r?.tasks);
+  const materials = Number(r?.materials);
+  const what = [tasks ? `${tasks} dispatch${tasks === 1 ? "" : "es"}` : "", materials ? `${materials} material${materials === 1 ? "" : "s"}` : ""]
+    .filter(Boolean)
+    .join(" and ");
+  return {
+    staff:
+      `This version cannot be accepted yet. The job already has ${what} from an earlier version, ` +
+      `and Ops cannot swap them over to a new version until the version update is in. ` +
+      `Until then, change the job's dispatches and materials by hand and keep the accepted version as it is.`,
+    client: "We need to update this quote before it can be accepted. Reply to our email or give us a call and we will sort it for you.",
+  };
+}
+
 export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; via: "staff" | "online"; note?: string | null }) {
   const [quote] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, args.quoteId));
   if (!quote) throw new ORPCError("NOT_FOUND", { message: "Quote not found" });
@@ -42,6 +70,8 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     throw bad("This quote has passed its valid until date. Reply to our email and we will update it for you.");
   }
   await assertBillable(quote.jobId);
+  const hold = await laterVersionHold(quote);
+  if (hold) throw bad(args.via === "online" ? hold.client : hold.staff);
 
   // Lock it, only if nobody else got there first.
   const now = new Date();

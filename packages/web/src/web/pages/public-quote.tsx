@@ -205,6 +205,7 @@ export default function PublicQuotePage() {
           )}
         </PublicMessage>
       ) : null}
+      {q.state === "held" ? <PublicMessage title="This quote is being updated">{q.heldMessage}</PublicMessage> : null}
       {q.state === "declined" ? (
         <PublicMessage title="This quote was declined">If you have changed your mind, reply to our email and we will send you a fresh one.</PublicMessage>
       ) : null}

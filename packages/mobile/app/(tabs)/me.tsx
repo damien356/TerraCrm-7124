@@ -6,6 +6,7 @@ import { useRouter } from "expo-router";
 import { Colors, Fonts, tintFor } from "@/constants/theme";
 import { authClient } from "@/lib/auth";
 import { releaseCrewPhone } from "@/lib/crew-phone";
+import { forgetSignedIn } from "@/lib/crash-guard";
 import { crewLabel, daysUntil, fmtDateTime, fmtDayLabel, fmtMoney } from "@/lib/format";
 import { useHistory, useMe, useSetLocationConsent } from "@/queries/field";
 import { HandsFreeCard } from "@/components/hands-free-card";
@@ -361,7 +362,10 @@ export default function MeScreen() {
             )}
 
             <Pressable
-              onPress={() => void releaseCrewPhone().finally(() => void authClient.signOut())}
+              onPress={() => {
+                forgetSignedIn();
+                void releaseCrewPhone().finally(() => void authClient.signOut());
+              }}
               style={({ pressed }) => ({
                 marginTop: 28,
                 borderWidth: 1,

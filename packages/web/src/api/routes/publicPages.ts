@@ -11,7 +11,7 @@ import { depositSplit } from "../lib/deposits";
 import { auDate } from "../lib/invoice-match";
 import { selectionForJob, submitSelection } from "../lib/material-selection";
 import { todayISO } from "../lib/pricing";
-import { acceptQuote } from "../lib/quote-accept";
+import { acceptQuote, laterVersionHold } from "../lib/quote-accept";
 import { EMAIL_RE, sendSignedCopy } from "../lib/quote-email";
 import { linkByToken, linkForQuote, quoteUrl, recordQuoteView } from "../lib/quote-links";
 import { quoteRefOf } from "../lib/quote-number";
@@ -93,7 +93,8 @@ async function newerVersionUrl(quote: Quote) {
   return quoteUrl((await linkForQuote(newer.id)).token);
 }
 
-type PageState = "open" | "accepted" | "declined" | "replaced" | "past_valid" | "not_ready";
+/** "held": a later version that cannot be accepted yet (laterVersionHold). */
+type PageState = "open" | "accepted" | "declined" | "replaced" | "past_valid" | "not_ready" | "held";
 
 function stateOf(quote: Quote): PageState {
   if (NOT_READY.includes(quote.status)) return "not_ready";
@@ -134,12 +135,14 @@ const quotePage = {
     // Re-read: the view may have been the last thing to touch it.
     [quote] = (await db.select().from(schema.quotes).where(eq(schema.quotes.id, quote.id))) as [Quote];
 
+    const hold = state === "open" ? await laterVersionHold(quote) : null;
     const ref = await quoteRefOf(quote);
     const to = await addressedTo(quote);
     const { bundles } = await bundlesFor(quote);
     const { deposit, balance } = depositSplit(quote.total, quote.depositPercent);
     return {
-      state,
+      state: hold ? ("held" as const) : state,
+      heldMessage: hold ? (staff ? hold.staff : hold.client) : null,
       /** Admin or Office looking at a quote that has not gone out yet. */
       preview: staff && state === "not_ready",
       ref,

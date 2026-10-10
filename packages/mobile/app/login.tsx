@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -14,9 +14,16 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { authClient } from "@/lib/auth";
 import { siteUrl } from "@/lib/api";
+import { clearLoginNote, peekLoginNote, type LoginNote } from "@/lib/crash-guard";
 import { Colors, Fonts } from "@/constants/theme";
 
 const c = Colors.light;
+
+/** Why the person is looking at Sign in, when it was not their choice. */
+const NOTE_TEXT: Record<LoginNote, string> = {
+  expired: "Your login expired. Sign in again.",
+  reset: "Terra had trouble reading your saved login on this phone, so it signed you out. Sign in again.",
+};
 
 /**
  * A sign-in that throws (rather than coming back with res.error) used to say
@@ -48,6 +55,8 @@ export default function LoginScreen() {
   const [busy, setBusy] = useState<null | "email" | "google">(null);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [note] = useState(() => peekLoginNote());
+  useEffect(() => clearLoginNote(), []);
 
   async function signInWithEmail() {
     setError(null);
@@ -106,6 +115,23 @@ export default function LoginScreen() {
               Your work for the day, your offers, and your pay. Nothing else.
             </Text>
           </View>
+
+          {note ? (
+            <View
+              style={{
+                borderRadius: 10,
+                borderWidth: 1,
+                borderColor: "rgba(188,149,88,0.45)",
+                backgroundColor: "rgba(188,149,88,0.12)",
+                padding: 12,
+                marginBottom: 20,
+              }}
+            >
+              <Text style={{ fontFamily: Fonts.sans, fontSize: 14, color: "#FFFFFF", lineHeight: 20 }}>
+                {NOTE_TEXT[note]}
+              </Text>
+            </View>
+          ) : null}
 
           <Text
             style={{
