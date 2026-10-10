@@ -18,6 +18,8 @@ async function editableQuote(quoteId: number) {
   const [q] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, quoteId));
   if (!q) throw new ORPCError("NOT_FOUND", { message: "Quote not found" });
   if (q.status === "accepted") throw new ORPCError("BAD_REQUEST", { message: "This quote is accepted. Add people on the job instead." });
+  // One list (item 7): a quote on a job uses the job's people.
+  if (q.jobId) throw new ORPCError("BAD_REQUEST", { message: "This quote is on a job, so its people are the job's people. Add them on the job's list." });
   return q;
 }
 

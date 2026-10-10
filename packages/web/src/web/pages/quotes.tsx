@@ -10,6 +10,7 @@ import { Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { Combobox } from "../components/ui/combobox";
 import { QuotePeopleDraft, draftsToInput, type PersonDraft } from "../components/job-people";
+import { LEAD_SOURCES } from "../components/new-job-modal";
 import { depositHint } from "../components/deposit-default";
 import { useCreateQuote, useDepositDefault, useQuoteStats, useQuotes } from "../queries/quotes";
 import { ContactPicker } from "../components/contact-picker";
@@ -50,6 +51,8 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
     depositPercent: "",
     validDays: "30",
     notes: "",
+    /** Where the job came from. Required, same as New job. */
+    source: "",
   });
   const [people, setPeople] = React.useState<PersonDraft[]>([]);
   const [error, setError] = React.useState<string | null>(null);
@@ -66,6 +69,10 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
 
   async function submit() {
     setError(null);
+    if (!form.source) {
+      setError("Pick where the job came from. Unknown is fine.");
+      return;
+    }
     try {
       const quote = await create.mutateAsync({
         contactId: form.contactId ? Number(form.contactId) : null,
@@ -79,6 +86,9 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
         // Beyond the customer and supervisor. Merged onto one row per person on the job.
         people: draftsToInput(people),
         items: [],
+        // The job is made now, at Lead, with the same number and one list of people.
+        makeJob: true,
+        source: form.source,
       });
       onClose();
       if (quote?.id) navigate(`/quotes/${quote.id}`);
@@ -92,7 +102,7 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
       open={open}
       onClose={onClose}
       title="New quote"
-      subtitle="Pick who it's for, then build the lines. A company on the quote means the company gets billed."
+      subtitle="Pick who it's for, then build the lines. This also makes the job at Lead, with the same number. A company on the quote means the company gets billed."
       width="max-w-xl"
       footer={
         <>
@@ -157,11 +167,27 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
         <Field label="Valid for (days)">
           <Input type="number" value={form.validDays} onChange={(e) => set("validDays", e.target.value)} />
         </Field>
+        <Field label="Where it came from (required)">
+          <Select id="newquote_source" value={form.source} onChange={(e) => set("source", e.target.value)} aria-invalid={!form.source && !!error}>
+            <option value="" disabled>
+              Pick one…
+            </option>
+            {LEAD_SOURCES.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </Select>
+        </Field>
         <Field label="Notes for the customer" className="sm:col-span-2">
           <Textarea rows={2} value={form.notes} onChange={(e) => set("notes", e.target.value)} />
         </Field>
         <div className="sm:col-span-2">
-          <QuotePeopleDraft value={people} onChange={setPeople} />
+          <QuotePeopleDraft
+            value={people}
+            onChange={setPeople}
+            hint="Owner, tenant, agent, accounts. They go on the job's list of people, which the quote uses too."
+          />
         </div>
       </div>
       {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
@@ -180,7 +206,7 @@ export default function QuotesPage() {
   return (
     <Page
       title="Quotes"
-      subtitle="Price it, send it, and when it's accepted it turns into a job with the dispatches already listed."
+      subtitle="Price it and send it. Every quote sits on a job, and when it's accepted the dispatches and materials are listed on that job."
       actions={
         <Button onClick={() => setModal(true)}>
           <Plus className="size-4" />

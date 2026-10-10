@@ -1,6 +1,6 @@
 import { assertBillable } from "../lib/callbacks";
-import { convertQuoteToJob } from "../lib/quote-convert";
-import { acceptQuote, laterVersionHold } from "../lib/quote-accept";
+import { convertQuoteToJob, createJobForQuote, fillJobFromQuote } from "../lib/quote-convert";
+import { acceptQuote } from "../lib/quote-accept";
 import { latestQuoteOnJob, quoteDefaultsForJob, quoteStartForJob } from "../lib/quote-for-job";
 import { rebuildForecast } from "../lib/cashflow";
 import { quoteNumberFor, quoteRefById, quoteRefOf } from "../lib/quote-number";
@@ -23,7 +23,7 @@ import { normaliseMobile } from "../lib/sms";
 import { createContact } from "./contacts";
 import { bundlesFor, copyBundles } from "./quoteBundles";
 import { leadToQuotedOnSend } from "../lib/job-stage";
-import { addQuotePerson, copyQuotePeople, personInput } from "../lib/job-people";
+import { addJobPerson, addQuotePerson, copyQuotePeople, personInput } from "../lib/job-people";
 
 /**
  * Quotes are for Admin and Office. Field crew must never reach any procedure
@@ -180,8 +180,15 @@ export const createQuoteInput = z.object({
   companyId: z.number().nullable().optional(),
   /** Required when companyId is set. */
   supervisorContactId: z.number().nullable().optional(),
-  /** Job contacts beyond the customer and supervisor. Carried onto the job on accept. */
+  /** Job contacts beyond the customer and supervisor. They go on the job's list of people. */
   people: z.array(personInput).max(20).default([]),
+  /**
+   * New quote on the Quotes page (item 7): make the job in the same step, so
+   * the quote and the job share one number and one list of people.
+   */
+  makeJob: z.boolean().default(false),
+  /** Where the job came from. Required with makeJob, same as New job. */
+  source: z.string().trim().optional(),
   siteId: z.number().nullable().optional(),
   /** Left out, it comes off the company or contact card (lib/deposits.ts). */
   depositPercent: z.number().min(0).max(100).optional(),
@@ -207,6 +214,9 @@ export const createQuoteInput = z.object({
 
 /** Make a draft quote. New quote on the Quotes page and Create quote on the job page both come here. */
 export async function createQuoteRecord(input: z.infer<typeof createQuoteInput>, actor: Actor) {
+  if (input.makeJob && !input.jobId && !input.source) {
+    throw new ORPCError("BAD_REQUEST", { message: "Pick where the job came from. Unknown is fine." });
+  }
   await assertBillable(input.jobId);
   await assertSupervisor(input.companyId, input.supervisorContactId);
   // The job's own number, or the next job number when there is no job yet.
@@ -276,13 +286,33 @@ export async function createQuoteRecord(input: z.infer<typeof createQuoteInput>,
 
   for (const p of input.people) {
     if (p.tags.includes("supervisor")) continue; // the supervisor comes only through supervisorContactId
-    await addQuotePerson(row.id, p.contactId, p);
+    // A quote on a job keeps its people on the job: one list, not two.
+    if (input.jobId) await addJobPerson(input.jobId, p.contactId, p);
+    else await addQuotePerson(row.id, p.contactId, p);
   }
 
   const totals = await recalc(row.id);
 
+  // New quote: the job is made now, at Lead, with the quote's number and people.
+  let jobId = input.jobId ?? null;
+  if (input.makeJob && !jobId) {
+    const [fresh] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, row.id));
+    const { job } = await createJobForQuote(fresh ?? row, { source: input.source });
+    jobId = job.id;
+    await db.insert(schema.activityLog).values({
+      jobId,
+      contactId: input.contactId ?? null,
+      entityType: "job",
+      entityId: jobId,
+      action: "created",
+      detail: `Job made with quote ${await quoteRefById(row.id)}`,
+      actorName: actor.name,
+      actorRole: actor.role,
+    });
+  }
+
   await db.insert(schema.activityLog).values({
-    jobId: input.jobId ?? null,
+    jobId,
     contactId: input.contactId ?? null,
     entityType: "quote",
     entityId: row.id,
@@ -292,7 +322,7 @@ export async function createQuoteRecord(input: z.infer<typeof createQuoteInput>,
     actorRole: actor.role,
   });
 
-  return { ...row, ...totals };
+  return { ...row, jobId, ...totals };
 }
 
 /** The next version of a quote, lines, bundles and people copied. The deposit can be set for the new version. */
@@ -356,7 +386,8 @@ export async function reviseQuoteRecord(
   }
 
   await copyBundles(quote.id, row.id);
-  await copyQuotePeople(quote.id, row.id);
+  // A quote on a job reads the job's people, so there is nothing to copy.
+  if (!quote.jobId) await copyQuotePeople(quote.id, row.id);
   const totals = await recalc(row.id);
 
   await db.insert(schema.activityLog).values({
@@ -495,10 +526,6 @@ export const quotes = {
       discountPercent,
       discountLimit: limit,
       discountNeedsApproval: needsApproval,
-      /** Why this later version cannot be accepted yet, or null. See laterVersionHold. */
-      acceptHold: ["draft", "needs_review", "sent"].includes(row.quote.status)
-        ? ((await laterVersionHold(row.quote))?.staff ?? null)
-        : null,
       costsHidden: !showCosts,
       contact: row.contact,
       company: row.company,
@@ -620,6 +647,9 @@ export const quotes = {
         .set({ ...rest, updatedAt: new Date() })
         .where(eq(schema.quotes.id, id))
         .returning();
+      // A job made with the quote takes the customer, company and site it is missing.
+      const touchesJob = rest.contactId !== undefined || rest.companyId !== undefined || rest.supervisorContactId !== undefined || rest.siteId !== undefined;
+      if (row?.jobId && touchesJob) await fillJobFromQuote(row.id);
       return row;
     }),
 
@@ -1005,6 +1035,7 @@ export const quotes = {
         .update(schema.voiceQuoteCaptures)
         .set({ contactId: contact.id, updatedAt: new Date() })
         .where(eq(schema.voiceQuoteCaptures.quoteId, input.id));
+      if (quote.jobId) await fillJobFromQuote(quote.id);
       const name = `${contact.firstName} ${contact.lastName}`.trim();
       await db.insert(schema.activityLog).values({
         contactId: contact.id,
@@ -1191,6 +1222,9 @@ export const quotes = {
         invoiceRef: out.invoice?.number ?? null,
         replacedRef: out.replaced?.ref ?? null,
         selection: out.selection,
+        /** Dispatches and materials a later version could not swap over on its own. */
+        toSort: out.rework?.flags.length ?? 0,
+        workChanges: out.rework?.changes.length ?? 0,
       };
     }),
 

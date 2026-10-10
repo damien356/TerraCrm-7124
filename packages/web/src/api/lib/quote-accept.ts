@@ -9,8 +9,9 @@ import { carryQuotePeopleToJob } from "./job-people";
 import { moveJobForward } from "./job-stage";
 import { createSelection, sendSelection } from "./material-selection";
 import { pushToOffice } from "./push";
-import { convertQuoteToJob } from "./quote-convert";
+import { buildWorkFromQuote, convertQuoteToJob } from "./quote-convert";
 import { quoteRefOf } from "./quote-number";
+import { doublesBeforeBuild, reworkJobForVersion, reworkSummary, workBaseQuoteId, type Rework } from "./quote-rework";
 import { jobText } from "./refs";
 
 /* ---------------------------------------------------------------------------
@@ -22,6 +23,10 @@ import { jobText } from "./refs";
  *   replaced), deposit invoice IQ{n}-1 at the quote's deposit %, or for a
  *   replacement a variation for the difference when it comes to more, the
  *   material selection form to the decision-maker, and an Order product task.
+ *
+ *   Dispatches and materials (item 7): made from the lines the first time a
+ *   version is accepted on the job. A later version swaps over the free ones
+ *   (lib/quote-rework.ts) and flags the rest to the office.
  * ------------------------------------------------------------------------- */
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -29,34 +34,6 @@ const money = (n: number) => `$${n.toLocaleString("en-AU", { minimumFractionDigi
 const bad = (message: string) => new ORPCError("BAD_REQUEST", { message });
 
 export type AcceptActor = { name: string; role: string };
-
-/**
- * Hold on a later version (Damien 10 Oct). Accepting a quote that is already on
- * a job does not yet rebuild the job's dispatches and materials (item 7 fixes
- * that). Until then a later version cannot be accepted once the job has any
- * dispatches or materials from an earlier one. Returns null when it can go.
- */
-export async function laterVersionHold(quote: { id: number; number: number; jobId: number | null }) {
-  if (!quote.jobId) return null;
-  const [r] = await db.all<{ earlier: number; tasks: number; materials: number }>(sql`
-    select
-      (select count(*) from quotes where number = ${quote.number} and id != ${quote.id}) as earlier,
-      (select count(*) from job_tasks where job_id = ${quote.jobId} and status != 'cancelled') as tasks,
-      (select count(*) from job_materials where job_id = ${quote.jobId}) as materials`);
-  if (!Number(r?.earlier) || (!Number(r?.tasks) && !Number(r?.materials))) return null;
-  const tasks = Number(r?.tasks);
-  const materials = Number(r?.materials);
-  const what = [tasks ? `${tasks} dispatch${tasks === 1 ? "" : "es"}` : "", materials ? `${materials} material${materials === 1 ? "" : "s"}` : ""]
-    .filter(Boolean)
-    .join(" and ");
-  return {
-    staff:
-      `This version cannot be accepted yet. The job already has ${what} from an earlier version, ` +
-      `and Ops cannot swap them over to a new version until the version update is in. ` +
-      `Until then, change the job's dispatches and materials by hand and keep the accepted version as it is.`,
-    client: "We need to update this quote before it can be accepted. Reply to our email or give us a call and we will sort it for you.",
-  };
-}
 
 export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; via: "staff" | "online"; note?: string | null }) {
   const [quote] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, args.quoteId));
@@ -70,8 +47,6 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     throw bad("This quote has passed its valid until date. Reply to our email and we will update it for you.");
   }
   await assertBillable(quote.jobId);
-  const hold = await laterVersionHold(quote);
-  if (hold) throw bad(args.via === "online" ? hold.client : hold.staff);
 
   // Lock it, only if nobody else got there first.
   const now = new Date();
@@ -171,6 +146,45 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     }
   }
 
+  // Dispatches and materials. A new job already has them (convertQuoteToJob).
+  let rework: Rework | null = null;
+  let built: { tasksCreated: number; materialsCreated: number } | null = null;
+  if (!converted) {
+    const base = await workBaseQuoteId(locked.number, jobId);
+    if (base == null) {
+      const doubles = await doublesBeforeBuild(locked.id, jobId);
+      built = await buildWorkFromQuote(locked.id, jobId);
+      if (doubles.length) {
+        rework = { changes: [], flags: doubles, tasksAdded: 0, tasksUpdated: 0, tasksCancelled: 0, materialsAdded: 0, materialsUpdated: 0, materialsRemoved: 0 };
+      }
+      await db.insert(schema.activityLog).values({
+        jobId,
+        contactId: locked.contactId,
+        entityType: "quote",
+        entityId: locked.id,
+        action: "work_made",
+        detail: [
+          `Made from quote ${ref}: ${built.tasksCreated} dispatch${built.tasksCreated === 1 ? "" : "es"}, ${built.materialsCreated} material${built.materialsCreated === 1 ? "" : "s"} to order`,
+          ...doubles.map((f) => `To sort: ${f}`),
+        ].join("\n"),
+        actorName: args.actor.name,
+        actorRole: args.actor.role,
+      });
+    } else if (base !== locked.id) {
+      rework = await reworkJobForVersion({ jobId, fromQuoteId: base, toQuoteId: locked.id });
+      await db.insert(schema.activityLog).values({
+        jobId,
+        contactId: locked.contactId,
+        entityType: "quote",
+        entityId: locked.id,
+        action: "work_swapped",
+        detail: [`Dispatches and materials moved to quote ${ref}: ${reworkSummary(rework)}.`, ...rework.changes, ...rework.flags.map((f) => `To sort: ${f}`)].join("\n"),
+        actorName: args.actor.name,
+        actorRole: args.actor.role,
+      });
+    }
+  }
+
   // Material selection and the Order product task, on the first accept.
   const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, jobId));
   const jobRef = job ? jobText(job) : String(jobId);
@@ -189,6 +203,8 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     invoice?.kind === "variation" ? `Variation ${invoice.number} raised for ${money(invoice.total)}.` : "",
     selection && !selection.sent ? `Material selection email did not go: ${selection.reason ?? "unknown"}. Send it from the job page.` : "",
     selection?.sent ? `Material selection sent to ${selection.to}.` : "",
+    rework?.changes.length ? `Ops changed:\n${rework.changes.map((c) => `- ${c}`).join("\n")}` : "",
+    rework?.flags.length ? `To sort by hand (crew have not been told):\n${rework.flags.map((f) => `- ${f}`).join("\n")}` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -196,11 +212,26 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     .insert(schema.officeTasks)
     .values({
       jobId,
-      title: prev ? `Check product order, job ${jobRef}` : `Order product, job ${jobRef}`,
+      title: rework?.flags.length
+        ? `Sort ${rework.flags.length} thing${rework.flags.length === 1 ? "" : "s"} on job ${jobRef}, quote ${ref}`
+        : prev
+          ? `Check product order, job ${jobRef}`
+          : `Order product, job ${jobRef}`,
       detail: taskDetail,
       createdByName: args.actor.name,
     })
     .returning();
+
+  // Anything Ops would not change on its own goes to the office straight away.
+  if (rework?.flags.length) {
+    const shown = rework.flags.slice(0, 4);
+    const more = rework.flags.length - shown.length;
+    await pushToOffice({
+      title: `Job ${jobRef}: ${rework.flags.length} thing${rework.flags.length === 1 ? "" : "s"} to sort after quote ${ref}`,
+      body: [...shown, more > 0 ? `And ${more} more on the job.` : ""].filter(Boolean).join("\n"),
+      data: { kind: "job", jobId },
+    }).catch((e) => console.error("[quote-accept] flag push failed:", e));
+  }
 
   if (args.via === "online") {
     await pushToOffice({
@@ -211,5 +242,16 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
   }
 
   const [fresh] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, locked.id));
-  return { quote: fresh ?? locked, ref, jobId, converted, replaced: prev ? { id: prev.id, ref: prevRef } : null, invoice, selection, taskId: task?.id ?? null };
+  return {
+    quote: fresh ?? locked,
+    ref,
+    jobId,
+    converted,
+    replaced: prev ? { id: prev.id, ref: prevRef } : null,
+    invoice,
+    selection,
+    taskId: task?.id ?? null,
+    work: built,
+    rework,
+  };
 }

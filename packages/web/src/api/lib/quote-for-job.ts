@@ -5,7 +5,6 @@ import * as schema from "../database/schema";
 import { depositDefaultFor } from "./deposits";
 import { hasTagSql } from "./job-people";
 import { jobNumberSql } from "./job-ref";
-import { laterVersionHold } from "./quote-accept";
 import { quoteRef } from "./refs";
 
 /* ---------------------------------------------------------------------------
@@ -75,8 +74,6 @@ export async function quoteStartForJob(jobId: number) {
   const draft = quotes.find((q) => OPEN_STATUSES.includes(q.status)) ?? null;
   const cardDeposit = await depositDefaultFor({ companyId: d.companyId, contactId: d.contactId });
   const notChargeable = d.job.parentJobId != null && d.job.chargeable === false;
-  // A new version is an earlier quote plus one, so test as if it already existed.
-  const hold = latest ? await laterVersionHold({ id: -1, number: d.job.number, jobId }) : null;
   return {
     nextRef: quoteRef(d.job.number, (latest?.version ?? 0) + 1, d.job.ref),
     latest: latest ? { id: latest.id, ref: refOf(latest), status: latest.status, depositPercent: latest.depositPercent, total: latest.total } : null,
@@ -87,7 +84,6 @@ export async function quoteStartForJob(jobId: number) {
     blocked: notChargeable
       ? `Callback ${d.job.displayNumber ?? d.job.ref} is marked not chargeable, so nothing is billed. Change it to chargeable first.`
       : null,
-    holdMessage: hold?.staff ?? null,
   };
 }
 

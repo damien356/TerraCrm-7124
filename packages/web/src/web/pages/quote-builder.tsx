@@ -10,7 +10,8 @@ import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field
 import { Modal } from "../components/ui/modal";
 import { LabourPicker, ProductPicker } from "../components/quote-pickers";
 import { SupervisorPicker } from "../components/supervisor-picker";
-import { QuotePeopleCard } from "../components/job-people";
+import { JobPeopleCard, QuotePeopleCard } from "../components/job-people";
+import { useJob } from "../queries/jobs";
 import { QuoteCustomerPanel } from "../components/quote-customer";
 import { QuoteBundlesCard } from "../components/quote-bundles";
 import { QuoteAgentCard } from "../components/quote-agent";
@@ -681,15 +682,17 @@ export default function QuoteBuilderPage() {
                         out.replacedRef ? `${out.replacedRef} is now replaced.` : "",
                         out.invoiceRef ? `Invoice ${out.invoiceRef} raised.` : "",
                         out.selection ? (out.selection.sent ? `Material selection sent to ${out.selection.to}.` : `Material selection not sent: ${out.selection.reason ?? "no email"}. Send it from the job page.`) : "",
-                        "Order product task added.",
+                        out.workChanges ? `${out.workChanges} dispatch and material change${out.workChanges === 1 ? "" : "s"} made from this version.` : "",
+                        out.toSort
+                          ? `${out.toSort} thing${out.toSort === 1 ? "" : "s"} to sort by hand. The office has a task and a notification listing them. Crew have not been told.`
+                          : "Order product task added.",
                       ]
                         .filter(Boolean)
                         .join(" "),
                     );
                   })
                 }
-                disabled={accept.isPending || !!q.acceptHold}
-                title={q.acceptHold ?? undefined}
+                disabled={accept.isPending}
               >
                 <Check className="size-4" />
                 Accepted
@@ -731,11 +734,6 @@ export default function QuoteBuilderPage() {
           <button type="button" aria-label="Dismiss" onClick={() => setNotice(null)}>
             <X className="size-4" />
           </button>
-        </div>
-      ) : null}
-      {q.acceptHold ? (
-        <div role="note" className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          <b>Can't be accepted yet.</b> {q.acceptHold}
         </div>
       ) : null}
       {q.status === "replaced" ? (
@@ -888,7 +886,11 @@ export default function QuoteBuilderPage() {
           </Card>
           ) : null}
 
-          <QuotePeopleCard quoteId={q.id} locked={q.status === "accepted" || q.status === "replaced"} />
+          {q.job ? (
+            <QuoteJobPeople jobId={q.job.id} canRemove={actor?.role === "admin"} />
+          ) : (
+            <QuotePeopleCard quoteId={q.id} locked={q.status === "accepted" || q.status === "replaced"} />
+          )}
 
           <Card>
             <CardHeader title="Notes on the quote" />
@@ -1050,5 +1052,29 @@ export default function QuoteBuilderPage() {
         </div>
       </Modal>
     </Page>
+  );
+}
+
+/** A quote on a job shares the job's people (item 7): one list, edited here or on the job. */
+function QuoteJobPeople({ jobId, canRemove }: { jobId: number; canRemove: boolean }) {
+  const job = useJob(jobId);
+  const j = job.data;
+  if (!j) {
+    return (
+      <Card>
+        <CardHeader title="People on this job" />
+        <div className="flex justify-center py-4">{job.isError ? <p className="text-xs text-muted-foreground">Could not load the job's people.</p> : <Spinner />}</div>
+      </Card>
+    );
+  }
+  return (
+    <JobPeopleCard
+      jobId={j.id}
+      people={j.contacts}
+      needsPeopleTagged={j.needsPeopleTagged}
+      canRemove={canRemove}
+      company={j.company ? { id: j.company.id, name: j.company.name } : null}
+      subtitle="The quote and the job share this list. A change here shows on the job too."
+    />
   );
 }

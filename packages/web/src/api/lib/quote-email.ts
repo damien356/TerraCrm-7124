@@ -49,6 +49,17 @@ export async function quoteRecipients(quote: Quote) {
     const [c] = await db.select().from(schema.contacts).where(eq(schema.contacts.id, quote.contactId));
     add(c, "Customer");
   }
+  // A quote on a job reads the job's list (item 7). Only people ticked for
+  // email or as a decision-maker get it, so a tenant there for access does not.
+  if (quote.jobId) {
+    const onJob = await db
+      .select({ contact: schema.contacts, link: schema.jobContacts })
+      .from(schema.jobContacts)
+      .innerJoin(schema.contacts, eq(schema.contacts.id, schema.jobContacts.contactId))
+      .where(eq(schema.jobContacts.jobId, quote.jobId))
+      .orderBy(schema.jobContacts.id);
+    for (const p of onJob) if (p.link.receivesEmail || p.link.canApproveQuote) add(p.contact, "On the job");
+  }
   const people = await db
     .select({ contact: schema.contacts })
     .from(schema.quoteContacts)

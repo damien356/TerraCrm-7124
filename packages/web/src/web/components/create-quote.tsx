@@ -1,7 +1,7 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { useLocation } from "wouter";
-import { AlertTriangle, FileText } from "lucide-react";
+import { FileText } from "lucide-react";
 import { Button } from "./ui/button";
 import { Spinner } from "./ui/card";
 import { Field, Input } from "./ui/field";
@@ -163,12 +163,6 @@ function CreateQuoteModal({ jobId, onClose }: { jobId: number; onClose: () => vo
             {s.billsCompany && !s.hasSupervisor ? " No supervisor on the job yet. You can add one on the quote." : ""}
           </p>
 
-          {s.holdMessage ? (
-            <div role="note" className="flex gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-              <span>{s.holdMessage}</span>
-            </div>
-          ) : null}
         </div>
       ) : null}
     </Modal>

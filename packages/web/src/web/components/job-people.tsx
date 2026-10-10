@@ -493,8 +493,10 @@ export function JobPeopleCard({
   needsPeopleTagged,
   canRemove,
   company = null,
+  subtitle = "Tags, ticks and the note are for this job only.",
 }: {
   jobId: number;
+  subtitle?: string;
   /** The job's company. A new person typed in can be filed there. */
   company?: { id: number; name: string } | null;
   people: Array<{ link: JobPersonLink; contact: { id: number; firstName: string; lastName: string; mobile: string | null }; actedForCompanyName: string | null }>;
@@ -523,7 +525,7 @@ export function JobPeopleCard({
     <Card>
       <CardHeader
         title="People on this job"
-        subtitle="Tags, ticks and the note are for this job only."
+        subtitle={subtitle}
         action={
           <Button variant="secondary" onClick={() => setOpen(true)}>
             <Plus className="size-3.5" />
