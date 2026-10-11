@@ -11,37 +11,41 @@ export function useSupplier(id: number | null) {
   );
 }
 
-function useSupplierMutation(
-  name: "create" | "update" | "setFuelSurcharge" | "feeCreate" | "feeUpdate" | "feeDelete",
-) {
+function useInvalidateSuppliers() {
   const queryClient = useQueryClient();
-  return orpc.suppliers[name].mutationOptions({
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: orpc.suppliers.key() }),
-  });
+  return () => queryClient.invalidateQueries({ queryKey: orpc.suppliers.key() });
 }
 
+// One hook per procedure so each mutation keeps its own input type. A shared
+// helper keyed by a union of names typed every input as the supplier update.
 export function useCreateSupplier() {
-  return useMutation(useSupplierMutation("create"));
+  const onSuccess = useInvalidateSuppliers();
+  return useMutation(orpc.suppliers.create.mutationOptions({ onSuccess }));
 }
 export function useUpdateSupplier() {
-  return useMutation(useSupplierMutation("update"));
+  const onSuccess = useInvalidateSuppliers();
+  return useMutation(orpc.suppliers.update.mutationOptions({ onSuccess }));
 }
 /**
  * LEGACY. Only writes the superseded percentage columns on the supplier row.
- * A fuel surcharge is a charge rule now — use `useCreateSupplierFee` with
+ * A fuel surcharge is a charge rule now. Use `useCreateSupplierFee` with
  * kind "fuel", so it can be charged per lineal metre or per m2 as well.
  */
 export function useSetFuelSurcharge() {
-  return useMutation(useSupplierMutation("setFuelSurcharge"));
+  const onSuccess = useInvalidateSuppliers();
+  return useMutation(orpc.suppliers.setFuelSurcharge.mutationOptions({ onSuccess }));
 }
 export function useCreateSupplierFee() {
-  return useMutation(useSupplierMutation("feeCreate"));
+  const onSuccess = useInvalidateSuppliers();
+  return useMutation(orpc.suppliers.feeCreate.mutationOptions({ onSuccess }));
 }
 export function useUpdateSupplierFee() {
-  return useMutation(useSupplierMutation("feeUpdate"));
+  const onSuccess = useInvalidateSuppliers();
+  return useMutation(orpc.suppliers.feeUpdate.mutationOptions({ onSuccess }));
 }
 export function useDeleteSupplierFee() {
-  return useMutation(useSupplierMutation("feeDelete"));
+  const onSuccess = useInvalidateSuppliers();
+  return useMutation(orpc.suppliers.feeDelete.mutationOptions({ onSuccess }));
 }
 
 /**
