@@ -14,6 +14,7 @@ import {
   type SpecialRow,
 } from "./pricing";
 import { rebuildForecast, settleDate, SUPPLIER_TERMS } from "./cashflow";
+import { isUnderlayCategory, ordersByRoll, rollOrder, wholeUnits } from "./order-sizes";
 
 /* ---------------------------------------------------------------------------
  * Purchase orders: what Terra PAYS a supplier for one job.
@@ -120,6 +121,20 @@ function qtyInProductUnit(qty: number, lineUnit: string, productUnit: string, wi
   return null;
 }
 
+/** What to put on the order for `qty` of a product, in its own unit. */
+function orderSize(p: typeof schema.products.$inferSelect, qty: number): { qty: number; rolls: number; note: string | null } {
+  // Underlay always comes on a roll, so a missing roll length is asked about.
+  const underlayRoll = isUnderlayCategory(p.category) && !p.soldAs && (p.unit === "lm" || p.unit === "m2");
+  if (ordersByRoll(p) || p.unit === "roll" || underlayRoll) {
+    const r = rollOrder(p, qty);
+    if (r) return { qty: r.qty, rolls: r.rolls, note: `${r.note}.` };
+    return { qty, rolls: 0, note: "No roll length in the price book. Check how many rolls to order." };
+  }
+  const w = wholeUnits(p, qty);
+  if (w.flag) return { qty, rolls: 0, note: "No length size in the price book. Check how many lengths to order." };
+  return { qty: w.qty, rolls: 0, note: w.note && (w.qty !== qty || p.soldAs === "box") ? `${w.note.replace(/\.$/, "")}.` : null };
+}
+
 export async function pricePo(input: PoPricingInput, today = todayISO()): Promise<PricedPo> {
   const [supplier] = await db.select().from(schema.suppliers).where(eq(schema.suppliers.id, input.supplierId));
   if (!supplier) throw new Error("Supplier not found");
@@ -135,6 +150,7 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
   let lm = 0;
   let items = 0;
   let autoBoxes = 0;
+  let autoRolls = 0;
   let specialSaving = 0;
   let anySolid = false;
 
@@ -166,6 +182,16 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
       if (unitCost === null && converted !== null) note = note ?? "No cost in the price book. Type the cost.";
       if (p.cutCostPrice !== null && p.cutCostPrice !== undefined && l.unitCostExGst == null) {
         note = [note, `Full roll price used. Cut price is $${p.cutCostPrice.toFixed(2)}, type it in if this is a cut.`].filter(Boolean).join(" ");
+      }
+
+      // Items 2 and 3. Order what can be bought: rolls (cut from stock, or
+      // whole rolls when not stocked), whole lengths, whole boxes and pails.
+      // A size missing is said, never guessed.
+      if (unit === p.unit) {
+        const sized = orderSize(p, qty);
+        qty = sized.qty;
+        autoRolls += sized.rolls;
+        if (sized.note) note = [note, sized.note].filter(Boolean).join(" ");
       }
 
       const lineM2 = m2ForQty(qty, unit, p.widthM);
@@ -235,7 +261,7 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
   if (!supplier.deliversDirect) notes.push(`${supplier.name} don't deliver. Terra books the carrier, that bill is not on this PO.`);
 
   const boxes = input.boxes ?? autoBoxes;
-  const measures = { m2: round2(m2), lm: round2(lm), boxes, rolls: input.rolls ?? 0, items: round2(items), pallets: input.pallets ?? 0 };
+  const measures = { m2: round2(m2), lm: round2(lm), boxes, rolls: input.rolls ?? autoRolls, items: round2(items), pallets: input.pallets ?? 0 };
   const quote = resolveSupplierCharges(
     supplier,
     rules,

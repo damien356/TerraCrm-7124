@@ -186,6 +186,13 @@ export const settings = {
         supplierId: z.number().nullable().optional(),
         /** Box or Broadloom (item 9). Left out = worked out from category and unit. Null = neither. */
         soldAs: z.enum(SOLD_AS).nullable().optional(),
+        /** Fix list items 2 and 3. Roll width (m), metres on a roll, one trim length (m), wastage % for this product. */
+        widthM: z.number().positive().max(10).nullable().optional(),
+        rollLengthM: z.number().positive().max(1000).nullable().optional(),
+        pieceLengthM: z.number().positive().max(20).nullable().optional(),
+        defaultWastagePct: z.number().min(0).max(100).nullable().optional(),
+        /** Terra keeps it in the warehouse, so it is cut from stock, not ordered in whole rolls. */
+        heldInWarehouse: z.boolean().optional(),
       }),
     )
     .handler(async ({ input }) => {
@@ -195,7 +202,7 @@ export const settings = {
         ...input,
         soldAs: input.soldAs !== undefined ? input.soldAs : autoSoldAs(input),
         // Item 1 (11 Oct): a new broadloom carpet gets its roll width by rule.
-        widthM: carpetWidthByRule(input),
+        widthM: input.widthM ?? carpetWidthByRule(input),
         variantKey: `manual|${crypto.randomUUID()}`,
       };
       if (input.supplierId) {
@@ -226,6 +233,13 @@ export const settings = {
         active: z.boolean().optional(),
         /** Box or Broadloom (item 9). Null = neither. */
         soldAs: z.enum(SOLD_AS).nullable().optional(),
+        /** Fix list items 2 and 3. Roll width (m), metres on a roll, one trim length (m), wastage % for this product. */
+        widthM: z.number().positive().max(10).nullable().optional(),
+        rollLengthM: z.number().positive().max(1000).nullable().optional(),
+        pieceLengthM: z.number().positive().max(20).nullable().optional(),
+        defaultWastagePct: z.number().min(0).max(100).nullable().optional(),
+        /** Terra keeps it in the warehouse, so it is cut from stock, not ordered in whole rolls. */
+        heldInWarehouse: z.boolean().optional(),
       }),
     )
     .handler(async ({ input }) => {
@@ -234,7 +248,7 @@ export const settings = {
       const [before] = await db.select().from(schema.products).where(eq(schema.products.id, id));
       if (!before) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
       const after = { ...before, ...rest };
-      const widthM = before.widthM == null ? carpetWidthByRule(after) : null;
+      const widthM = before.widthM == null && rest.widthM === undefined ? carpetWidthByRule(after) : null;
       const [row] = await db
         .update(schema.products)
         .set({ ...rest, ...(widthM != null ? { widthM } : {}), updatedAt: new Date() })

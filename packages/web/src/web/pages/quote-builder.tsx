@@ -61,7 +61,7 @@ function DepositReference({ quoteId, fallback }: { quoteId: number; fallback: st
 }
 
 const KINDS = ["supply", "labour", "prep", "removal", "accessory", "other"];
-const UNITS = ["m2", "lm", "each", "hour", "job"];
+const UNITS = ["m2", "lm", "each", "roll", "hour", "job"];
 
 function fmtDateTime(value: Date | string | null) {
   if (!value) return "Not yet";
@@ -94,7 +94,56 @@ type Item = {
   rollWidthM?: number | null;
   labourForItemId?: number | null;
   area?: LineArea | null;
+  /** Fix list items 2 and 3. */
+  followsItemId?: number | null;
+  size?: LineSize | null;
 };
+
+type LineSize = {
+  note: string | null;
+  follows: { id: number; description: string } | null;
+  floorChoices: { id: number; description: string }[] | null;
+};
+
+/** Whole boxes, lengths and pails, and which floor an underlay follows. Office only, never on the client quote. */
+function LineSizeStrip({ item, locked }: { item: Item; locked: boolean }) {
+  const update = useUpdateQuoteItem();
+  const size = item.size;
+  if (!size) return null;
+  const typedOver = Boolean(size.note?.startsWith("Typed over"));
+  return (
+    <div className="mt-1 space-y-1 text-xs text-muted-foreground">
+      {size.floorChoices ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span>Follows</span>
+          <Select
+            className="h-7 max-w-[260px] text-xs"
+            value={item.followsItemId == null ? "" : String(item.followsItemId)}
+            disabled={locked || update.isPending}
+            onChange={(e) => update.mutate({ id: item.id, followsItemId: e.target.value ? Number(e.target.value) : null })}
+          >
+            <option value="">No floor (type the qty)</option>
+            {size.floorChoices.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.description}
+              </option>
+            ))}
+          </Select>
+          {typedOver && item.followsItemId != null && !locked ? (
+            <button
+              type="button"
+              className="font-medium text-[var(--gold-deep)] underline-offset-2 hover:underline"
+              onClick={() => update.mutate({ id: item.id, followsItemId: item.followsItemId })}
+            >
+              Use the floor qty
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {size.note ? <p>{size.note}</p> : null}
+    </div>
+  );
+}
 
 /* ---------------------------- change product ---------------------------- */
 
@@ -309,6 +358,7 @@ function LineRow({ item, locked, onNotice }: { item: Item; locked: boolean; onNo
         {changing ? <ChangeProduct item={item} onClose={() => setChanging(false)} /> : null}
         {item.area ? <LineAreaStrip item={item} locked={locked} /> : null}
         {item.labourForItemId != null ? <LinkedInstallMark /> : null}
+        {item.size ? <LineSizeStrip item={item} locked={locked} /> : null}
       </td>
       <td className="px-2 py-1.5">
         <Input
@@ -389,9 +439,10 @@ function LineRow({ item, locked, onNotice }: { item: Item; locked: boolean; onNo
             type="button"
             onClick={() =>
               remove.mutateAsync({ id: item.id }).then((r) => {
-                if (r.removedLabour > 0)
+                const went = r.removedLabour + (r.removedUnderlay ?? 0);
+                if (went > 0)
                   onNotice(
-                    `${item.description} deleted, and the install added with it went too (${r.removedLabour} line${r.removedLabour === 1 ? "" : "s"}).`,
+                    `${item.description} deleted, and the ${r.removedUnderlay ? (r.removedLabour ? "install and underlay" : "underlay") : "install"} added with it went too (${went} line${went === 1 ? "" : "s"}).`,
                   );
               })
             }

@@ -6,6 +6,7 @@ import { liveSellFor } from "../lib/live-sell";
 import { rateBook } from "../routes/labour";
 import type { Extraction } from "./extract";
 import { categoriesForHint, categoryMatchesHint } from "../lib/product-categories";
+import { isUnderlayCategory, underlayName } from "../lib/order-sizes";
 
 /**
  * Pass 2: turn a structured `Extraction` (see `extract.ts`) into priced
@@ -385,7 +386,9 @@ async function priceMaterialLine(line: Extraction["lines"][number]): Promise<Pri
     };
   }
 
-  const description = [product.brand, product.range, product.colour].filter(Boolean).join(", ") || spoken;
+  const description = isUnderlayCategory(product.category)
+    ? underlayName(product)
+    : [product.brand, product.range, product.colour].filter(Boolean).join(", ") || spoken;
   const sells = product.unit || unit;
   const unitNote = unitCheck(qty, line.unit, sells);
   const flagged = Boolean(unitNote);

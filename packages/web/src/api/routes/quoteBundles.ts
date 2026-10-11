@@ -53,6 +53,7 @@ export async function bundleLinesFor(quoteId: number): Promise<BundleLine[]> {
       productCategory: schema.products.category,
       soldAs: schema.products.soldAs,
       labourForItemId: schema.quoteItems.labourForItemId,
+      followsItemId: schema.quoteItems.followsItemId,
     })
     .from(schema.quoteItems)
     .leftJoin(schema.products, eq(schema.products.id, schema.quoteItems.productId))

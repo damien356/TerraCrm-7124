@@ -33,6 +33,8 @@ export {
   type FloorCategory,
 } from "./bundleCatalog";
 
+const HARD_FLOORS = ["hybrid", "laminate", "engineered_timber", "solid_timber", "vinyl", "sheet_vinyl"];
+
 const isFloor = (c: string | null | undefined): c is FloorCategory =>
   !!c && (FLOOR_CATEGORIES as readonly string[]).includes(c);
 
@@ -47,6 +49,8 @@ export type BundleLine = {
   floorCategory: string | null;
   /** Item 8: an install added with a product line goes in that line's bundle. */
   labourForItemId?: number | null;
+  /** Items 2 and 3: an underlay that follows a floor line goes in that line's bundle. */
+  followsItemId?: number | null;
   total: number;
   sortOrder?: number;
 };
@@ -81,8 +85,9 @@ function keywordCategory(text: string): FloorCategory | null {
  *  3. A floor product: its category.
  *  4. Labour: the floor its own words name ("Carpet stairs" goes with carpet).
  *  5. Underlay, accessories, other labour: the floor they most likely go with.
- *     Underlay goes with carpet if there is carpet, then the first floating
- *     floor. Otherwise the only floor on the quote, or the biggest one.
+ *     An underlay that follows a floor line goes with that line. Otherwise
+ *     carpet underlay goes with carpet, hard floor underlay with the first
+ *     hard floor. Otherwise the only floor on the quote, or the biggest one.
  *  6. Nothing to go with: extras.
  */
 /** Work that is not laying a floor: it goes in "Preparation, removal and disposal". */
@@ -95,7 +100,8 @@ export function assignCategories(lines: BundleLine[]): Map<number, { key: string
 
   const handSet = (l: BundleLine) => !!l.floorCategory && (LINE_CATEGORIES as readonly string[]).includes(l.floorCategory);
   // Installs linked to a product line wait until that line is placed.
-  const linked = lines.filter((l) => l.labourForItemId != null && !handSet(l));
+  const parentOf = (l: BundleLine) => l.labourForItemId ?? l.followsItemId ?? null;
+  const linked = lines.filter((l) => parentOf(l) != null && !handSet(l));
   const place = (l: BundleLine) => {
     if (handSet(l)) {
       out.set(l.id, { key: l.floorCategory!, auto: false });
@@ -116,7 +122,7 @@ export function assignCategories(lines: BundleLine[]): Map<number, { key: string
   // Laminate is laid under the "Hybrid installation" rate, so its words alone
   // would start a hybrid bundle. It goes with the floor it was added for.
   for (const l of linked) {
-    const parent = out.get(l.labourForItemId!);
+    const parent = out.get(parentOf(l)!);
     if (parent) out.set(l.id, { key: parent.key, auto: true });
     else place(l);
   }
@@ -143,12 +149,11 @@ export function assignCategories(lines: BundleLine[]): Map<number, { key: string
     let key: string | null = null;
     const named = keywordCategory(l.description);
     if (named && floors.includes(named)) key = named;
-    else if (l.productCategory === "underlay") {
-      key = floors.includes("carpet")
-        ? "carpet"
-        : (floors.find((f) => ["hybrid", "laminate", "engineered_timber", "solid_timber", "vinyl", "sheet_vinyl"].includes(f)) ??
-          floors[0] ??
-          null);
+    else if (l.productCategory === "carpet_underlay") {
+      key = floors.includes("carpet") ? "carpet" : (floors[0] ?? null);
+    } else if (l.productCategory === "hard_floor_underlay" || l.productCategory === "underlay") {
+      // Old "underlay" rows are hard floor underlay now (11 Oct answers, 10).
+      key = floors.find((f) => HARD_FLOORS.includes(f)) ?? (l.productCategory === "underlay" && floors.includes("carpet") ? "carpet" : null) ?? floors[0] ?? null;
     } else key = floors[0] ?? null;
     out.set(l.id, { key: key ?? EXTRAS, auto: true });
   }

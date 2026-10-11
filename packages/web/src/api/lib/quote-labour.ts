@@ -24,6 +24,7 @@ import {
   type InstallPick,
   type QtyResult,
 } from "./flooring-qty";
+import { floorsForUnderlay, isSizeFlag, wholeUnits } from "./order-sizes";
 
 type Product = typeof schema.products.$inferSelect;
 type Line = typeof schema.quoteItems.$inferSelect;
@@ -34,6 +35,8 @@ const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 export async function wastageDefaultFor(product: Product): Promise<number> {
   const t = floorTypeOf(product);
   if (!t) return 0;
+  // The supplier file's own figure wins (price import spec, default_wastage_pct).
+  if (product.defaultWastagePct != null && product.defaultWastagePct >= 0) return product.defaultWastagePct;
   const rows = await db.select().from(schema.settings);
   return wastageFromSettings(Object.fromEntries(rows.map((r) => [r.key, r.value])), t);
 }
@@ -189,7 +192,7 @@ export async function followLinkedLabour(
 
 /** Keeps a flag set by someone else; replaces or clears one this feature set. */
 export function nextFlag(line: Pick<Line, "flagged" | "flagReason">, own: string | null) {
-  if (line.flagged && !isOwnFlag(line.flagReason)) return { flagged: true, flagReason: line.flagReason };
+  if (line.flagged && !isOwnFlag(line.flagReason) && !isSizeFlag(line.flagReason)) return { flagged: true, flagReason: line.flagReason };
   return own ? { flagged: true, flagReason: own } : { flagged: false, flagReason: null };
 }
 
@@ -197,7 +200,7 @@ export type LineArea = {
   floorType: string;
   floorLabel: string;
   soldAs: string;
-  /** "12.4 m² + 10% = 13.64 m². 7 boxes of 2.2 m² = 15.4 m²." Null until an area is entered. */
+  /** "12.4 m² + 10% = 13.64 m². 7 boxes (15.4 m²)." Null until an area is entered. */
   note: string | null;
   problem: "no_width" | "no_box_size" | null;
   /** The price book roll width. Null = the line has to pick one. */
@@ -259,9 +262,19 @@ export async function voiceAreas<
     const t = p ? floorTypeOf(p) : null;
     const unitSaid = said[i]?.unit ?? "m2";
     if (!p || !t || l.kind !== "supply" || unitSaid !== "m2") {
-      return { ...l, measuredM2: null as number | null, wastagePct: null as number | null, install: null as InstallPick | null, product: p ?? null };
+      const plain = { measuredM2: null as number | null, wastagePct: null as number | null, install: null as InstallPick | null, product: p ?? null };
+      if (!p || l.kind !== "supply") return { ...l, ...plain };
+      // Items 2 and 3. Underlay that follows a floor gets its qty off that
+      // floor once the lines are in (linkUnderlay), so what he said about its
+      // unit no longer applies. Anything else rounds to what can be bought.
+      if (floorsForUnderlay(p.category).length) {
+        const keep = l.flagReason?.startsWith("You said ") ? { flagged: false, flagReason: null } : {};
+        return { ...l, ...keep, ...plain };
+      }
+      const r = wholeUnits(p, l.qty);
+      return { ...l, qty: r.qty, ...nextFlag(l, r.flag), ...plain };
     }
-    const wastagePct = wastageFromSettings(kv, t);
+    const wastagePct = p.defaultWastagePct != null && p.defaultWastagePct >= 0 ? p.defaultWastagePct : wastageFromSettings(kv, t);
     const measuredM2 = said[i]?.qty ?? l.qty;
     const res = floorQty(p, measuredM2, wastagePct, null);
     const pick: InstallPick | null = covered.has(t) ? null : installFor(p, res);

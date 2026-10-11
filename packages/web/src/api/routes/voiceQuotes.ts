@@ -10,6 +10,7 @@ import { transcribeAudio } from "../agent/transcribe";
 import { extractVoiceQuote } from "../agent/extract";
 import { priceExtraction } from "../agent/price";
 import { addLinkedLabour, voiceAreas } from "../lib/quote-labour";
+import { linkUnderlay } from "../lib/quote-sizes";
 import { recalc } from "./quotes";
 import { quoteNumberFor, quoteRefOf } from "../lib/quote-number";
 import { depositDefaultFor } from "../lib/deposits";
@@ -363,6 +364,9 @@ export async function buildQuoteFromTranscript(
       }
     }
   }
+
+  // Items 2 and 3: each underlay follows the floor said with it.
+  await linkUnderlay(quoteRow.id);
 
   const totals = await recalc(quoteRow.id);
   const ref = await quoteRefOf(quoteRow);

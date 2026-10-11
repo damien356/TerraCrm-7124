@@ -760,10 +760,84 @@ type ProductRow = {
   sku: string | null;
   active: boolean;
   soldAs: string | null;
+  widthM: number | null;
+  rollLengthM: number | null;
+  pieceLengthM: number | null;
+  defaultWastagePct: number | null;
+  heldInWarehouse: boolean;
 };
+
+const numOrNull = (v: string) => (v.trim() === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+const shown = (n: number | null) => (n == null ? "" : String(n));
+
+/** Fix list items 2 and 3. The sizes the quote and the order sums run on. */
+function ProductSizesModal({ product, onClose }: { product: ProductRow; onClose: () => void }) {
+  const update = useUpdateProduct();
+  const [form, setForm] = React.useState({
+    widthM: shown(product.widthM),
+    rollLengthM: shown(product.rollLengthM),
+    pieceLengthM: shown(product.pieceLengthM),
+    defaultWastagePct: shown(product.defaultWastagePct),
+  });
+  const [error, setError] = React.useState<string | null>(null);
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  async function save() {
+    setError(null);
+    try {
+      await update.mutateAsync({
+        id: product.id,
+        widthM: numOrNull(form.widthM),
+        rollLengthM: numOrNull(form.rollLengthM),
+        pieceLengthM: numOrNull(form.pieceLengthM),
+        defaultWastagePct: numOrNull(form.defaultWastagePct),
+      });
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Sizes"
+      subtitle={[product.brand, product.range, product.colour].filter(Boolean).join(" · ")}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={save} disabled={update.isPending}>
+            {update.isPending ? <Spinner className="border-white/40 border-t-white" /> : null}
+            Save
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Roll width (m)" hint="Carpet and underlay. Carpet underlay metres are worked out off it.">
+          <Input inputMode="decimal" value={form.widthM} onChange={set("widthM")} />
+        </Field>
+        <Field label="Roll length (m)" hint="Metres on one roll. Orders that are not stocked go in whole rolls.">
+          <Input inputMode="decimal" value={form.rollLengthM} onChange={set("rollLengthM")} />
+        </Field>
+        <Field label="Length (m)" hint="Trims. One length, for example 2.4. Quotes round up to whole lengths.">
+          <Input inputMode="decimal" value={form.pieceLengthM} onChange={set("pieceLengthM")} />
+        </Field>
+        <Field label="Wastage (%)" hint="Blank uses the wastage for the floor type in Settings.">
+          <Input inputMode="decimal" value={form.defaultWastagePct} onChange={set("defaultWastagePct")} />
+        </Field>
+      </div>
+      {error ? <p className="mt-3 text-xs font-medium text-destructive">{error}</p> : null}
+    </Modal>
+  );
+}
 
 function ProductLine({ product }: { product: ProductRow }) {
   const update = useUpdateProduct();
+  const [sizing, setSizing] = React.useState(false);
   const [cost, setCost] = React.useState(product.costPrice === null ? "" : String(product.costPrice));
   const [sell, setSell] = React.useState(product.sellPrice === null ? "" : String(product.sellPrice));
 
@@ -856,13 +930,40 @@ function ProductLine({ product }: { product: ProductRow }) {
         )}
       </td>
       <td className="px-4 py-2 text-right">
-        <label htmlFor={`settings_cb6`} className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
-          <Checkbox id={`settings_cb6`}
-            checked={product.active}
-            onChange={(e) => update.mutate({ id: product.id, active: e.target.checked })}
-          />
-          Stocked
-        </label>
+        <div className="flex flex-col items-end gap-1">
+          <label
+            htmlFor={`product_active_${product.id}`}
+            className="flex items-center justify-end gap-2 text-xs text-muted-foreground"
+            title="Off = discontinued. It stops showing on quotes."
+          >
+            <Checkbox
+              id={`product_active_${product.id}`}
+              checked={product.active}
+              onChange={(e) => update.mutate({ id: product.id, active: e.target.checked })}
+            />
+            Active
+          </label>
+          <label
+            htmlFor={`product_stocked_${product.id}`}
+            className="flex items-center justify-end gap-2 text-xs text-muted-foreground"
+            title="Terra keeps it in the warehouse. Orders are cut from stock, not whole rolls."
+          >
+            <Checkbox
+              id={`product_stocked_${product.id}`}
+              checked={product.heldInWarehouse}
+              onChange={(e) => update.mutate({ id: product.id, heldInWarehouse: e.target.checked })}
+            />
+            Stocked
+          </label>
+          <button
+            type="button"
+            className="text-xs font-medium text-[var(--gold-deep)] underline-offset-2 hover:underline"
+            onClick={() => setSizing(true)}
+          >
+            Sizes
+          </button>
+        </div>
+        {sizing ? <ProductSizesModal product={product} onClose={() => setSizing(false)} /> : null}
       </td>
     </tr>
   );
@@ -886,10 +987,15 @@ function NewProductModal({ open, onClose }: { open: boolean; onClose: () => void
     sku: "",
     /** "auto" = worked out from category and unit when saved. */
     soldAs: "auto",
+    widthM: "",
+    rollLengthM: "",
+    pieceLengthM: "",
+    defaultWastagePct: "",
+    heldInWarehouse: false,
   });
   const [error, setError] = React.useState<string | null>(null);
 
-  function set<K extends keyof typeof form>(key: K, value: string) {
+  function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((f) => ({ ...f, [key]: value }));
   }
   const autoTag = autoSoldAs({ category: form.category, unit: form.unit });
@@ -916,6 +1022,11 @@ function NewProductModal({ open, onClose }: { open: boolean; onClose: () => void
         costPrice: form.costPrice.trim() === "" ? null : Number(form.costPrice),
         sellPrice: form.sellPrice.trim() === "" ? null : Number(form.sellPrice),
         sku: form.sku || null,
+        widthM: numOrNull(form.widthM),
+        rollLengthM: numOrNull(form.rollLengthM),
+        pieceLengthM: numOrNull(form.pieceLengthM),
+        defaultWastagePct: numOrNull(form.defaultWastagePct),
+        heldInWarehouse: form.heldInWarehouse,
         ...(form.soldAs === "auto"
           ? {}
           : { soldAs: form.soldAs === "box" || form.soldAs === "broadloom" ? form.soldAs : null }),
@@ -1016,6 +1127,26 @@ function NewProductModal({ open, onClose }: { open: boolean; onClose: () => void
         <Field label="Supplier code / SKU" className="sm:col-span-2">
           <Input value={form.sku} onChange={(e) => set("sku", e.target.value)} />
         </Field>
+        <Field label="Roll width (m)" hint="Carpet and underlay. Blank on carpet uses the width rule.">
+          <Input inputMode="decimal" value={form.widthM} onChange={(e) => set("widthM", e.target.value)} />
+        </Field>
+        <Field label="Roll length (m)" hint="Metres on one roll, for ordering.">
+          <Input inputMode="decimal" value={form.rollLengthM} onChange={(e) => set("rollLengthM", e.target.value)} />
+        </Field>
+        <Field label="Length (m)" hint="Trims. One length, for example 2.4.">
+          <Input inputMode="decimal" value={form.pieceLengthM} onChange={(e) => set("pieceLengthM", e.target.value)} />
+        </Field>
+        <Field label="Wastage (%)" hint="Blank uses the floor type's wastage.">
+          <Input inputMode="decimal" value={form.defaultWastagePct} onChange={(e) => set("defaultWastagePct", e.target.value)} />
+        </Field>
+        <label htmlFor="new_product_stocked" className="flex items-center gap-2 text-sm sm:col-span-2">
+          <Checkbox
+            id="new_product_stocked"
+            checked={form.heldInWarehouse}
+            onChange={(e) => set("heldInWarehouse", e.target.checked)}
+          />
+          Stocked in the warehouse (orders are cut from stock, not whole rolls)
+        </label>
       </div>
       {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
     </Modal>

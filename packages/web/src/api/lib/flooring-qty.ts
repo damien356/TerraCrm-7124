@@ -198,7 +198,8 @@ export function floorQty(
     return {
       soldAs, qty: byBox ? boxes : boxedM2, totalM2, boxes, boxM2, lm: null, widthM: null,
       labourM2: r4(measured), labourLm: null, problem: null,
-      note: `${head}. ${boxes} box${boxes === 1 ? "" : "es"} of ${fmt(boxM2)} m² = ${fmt(boxedM2)} m². Labour on ${fmt(measured)} m².`,
+      // Fix list 11 Oct, item 2: "30 boxes (62.94 m²)", in his words.
+      note: `${head}. ${boxes} box${boxes === 1 ? "" : "es"} (${fmt(boxedM2)} m²). Labour on ${fmt(measured)} m².`,
     };
   }
 

@@ -37,6 +37,8 @@ import {
   standardLabour,
   wastageDefaultFor,
 } from "../lib/quote-labour";
+import { floorLineFor, followsAFloor, followUnderlay, lineSizes, refollow, sizeFlag, startLine, wholeUnits } from "../lib/quote-sizes";
+import { isUnderlayCategory, underlayName } from "../lib/order-sizes";
 
 /**
  * Quotes are for Admin and Office. Field crew must never reach any procedure
@@ -124,8 +126,12 @@ export async function recalc(quoteId: number) {
   return { subtotal, gst, total };
 }
 
-/** "Andes Peak in Merida", the way it reads on the customer's quote. */
-function productLineName(p: { brand: string | null; range: string | null; colour: string | null }) {
+/**
+ * "Andes Peak in Merida", the way it reads on the customer's quote. Underlay
+ * reads "Carpetmate Standard underlay" (fix list 11 Oct, item 3).
+ */
+function productLineName(p: { brand: string | null; range: string | null; colour: string | null; category?: string | null }) {
+  if (isUnderlayCategory(p.category)) return underlayName(p);
   const named = [p.brand, p.range].filter(Boolean).join(" ");
   return p.colour ? (named ? `${named} in ${p.colour}` : p.colour) : named;
 }
@@ -403,15 +409,19 @@ export async function reviseQuoteRecord(
         })),
       )
       .returning({ id: schema.quoteItems.id, sortOrder: schema.quoteItems.sortOrder });
+    // Item 8 and fix list item 3: installs and underlay stay linked to their own floor line on the new version.
     // Item 8: each install stays linked to its own product line on the new version.
     const newIdAt = new Map(copied.map((c) => [c.sortOrder, c.id]));
     const newIdFor = new Map(items.map((i, idx) => [i.id, newIdAt.get(idx)]));
     for (const [idx, i] of items.entries()) {
-      if (i.labourForItemId == null) continue;
       const self = newIdAt.get(idx);
-      const parent = newIdFor.get(i.labourForItemId);
-      if (self && parent) {
-        await db.update(schema.quoteItems).set({ labourForItemId: parent }).where(eq(schema.quoteItems.id, self));
+      const parent = i.labourForItemId != null ? newIdFor.get(i.labourForItemId) : undefined;
+      const floor = i.followsItemId != null ? newIdFor.get(i.followsItemId) : undefined;
+      if (self && (parent || floor)) {
+        await db
+          .update(schema.quoteItems)
+          .set({ ...(parent ? { labourForItemId: parent } : {}), ...(floor ? { followsItemId: floor } : {}) })
+          .where(eq(schema.quoteItems.id, self));
       }
     }
   }
@@ -546,6 +556,7 @@ export const quotes = {
     const cost = items.reduce((sum, i) => sum + (i.unitCost ?? 0) * (i.qty ?? 0), 0);
     const showCosts = context.actor.canSeeCosts;
     const areas = await lineAreas(items);
+    const sizes = await lineSizes(items);
     const limit = await discountLimit();
     const discountPercent = discountPercentOf(items);
     const needsApproval =
@@ -564,8 +575,8 @@ export const quotes = {
       site: row.site,
       job: row.job?.id ? row.job : null,
       items: showCosts
-        ? items.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice), area: areas[i.id] ?? null }))
-        : items.map((i) => ({ ...i, unitCost: null, markupPercent: null, area: areas[i.id] ?? null })),
+        ? items.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice), area: areas[i.id] ?? null, size: sizes[i.id] ?? null }))
+        : items.map((i) => ({ ...i, unitCost: null, markupPercent: null, area: areas[i.id] ?? null, size: sizes[i.id] ?? null })),
       ...depositSplit(row.quote.total, row.quote.depositPercent),
       activity,
       versions: versions.map((v) => ({ ...v, ref: quoteRef(row.quote.number, v.version, jobRefText) })),
@@ -774,6 +785,8 @@ export const quotes = {
         rollWidthM: z.number().positive().nullable().optional(),
         /** Undefined = the default install. Null = unticked. */
         labour: z.object({ itemId: z.number() }).nullable().optional(),
+        /** Underlay: the floor line it goes with. Left out, the latest floor of its kind. */
+        followsItemId: z.number().nullable().optional(),
       }),
     )
     .handler(async ({ input, context }) => {
@@ -790,11 +803,13 @@ export const quotes = {
       const wastagePct = measured != null ? (input.wastagePct ?? (await wastageDefaultFor(product))) : null;
       const rollWidthM = measured != null && !product.widthM ? (input.rollWidthM ?? null) : null;
       const res = measured != null ? floorQty(product, measured, wastagePct ?? 0, rollWidthM) : null;
-      const qty = res ? res.qty : input.qty;
+      // Fix list 11 Oct, items 2 and 3: whole boxes, lengths and pails; underlay off its floor.
+      const start = res ? null : await startLine(input.quoteId, product, input.qty, input.followsItemId);
+      const qty = res ? res.qty : start!.qty;
 
       // Which install, if any. Only on a measured floor line.
       let installId: number | null = null;
-      let flag = qtyFlag(res);
+      let flag = qtyFlag(res) ?? start?.flag ?? null;
       if (res && input.labour !== null) {
         if (input.labour) installId = input.labour.itemId;
         else {
@@ -820,10 +835,11 @@ export const quotes = {
           unitCost: product.costPrice ?? null,
           markupPercent: markupOf(product.costPrice, unitPrice),
           total: round2(qty * unitPrice),
-          sortOrder: await nextSortOrder(input.quoteId),
+          sortOrder: start?.sortOrder ?? (await nextSortOrder(input.quoteId)),
           measuredM2: measured,
           wastagePct,
           rollWidthM,
+          followsItemId: start?.followsItemId ?? null,
           flagged: Boolean(flag),
           flagReason: flag,
         })
@@ -847,7 +863,12 @@ export const quotes = {
       }
 
       const totals = await recalc(input.quoteId);
-      return { item: hideCost(item, context.actor), labour: hideCost(labour, context.actor), qtyNote: res?.note ?? null, totals };
+      return {
+        item: hideCost(item, context.actor),
+        labour: hideCost(labour, context.actor),
+        qtyNote: res?.note ?? start?.note ?? null,
+        totals,
+      };
     }),
 
   /**
@@ -979,6 +1000,8 @@ export const quotes = {
         rollWidthM: z.number().positive().nullable().optional(),
         /** Item 8: put the default install on now, if the line has none linked. Used with a width pick. */
         addInstall: z.boolean().optional(),
+        /** Fix list item 3: on an underlay line, the floor line it follows. Null = stop following. */
+        followsItemId: z.number().nullable().optional(),
       }),
     )
     .handler(async ({ input, context }) => {
@@ -993,14 +1016,23 @@ export const quotes = {
 
       if (fields.kind !== undefined && fields.lineType === undefined) fields.lineType = lineTypeOf(fields.kind) as "material" | "labour";
 
+      if (fields.followsItemId != null) {
+        const [floor] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, fields.followsItemId));
+        if (!floor || floor.quoteId !== before.quoteId || floor.id === id || !floor.productId)
+          throw new ORPCError("BAD_REQUEST", { message: "That floor line is not on this quote." });
+      }
+
       // Item 9. A new area, wastage or width works the qty out again.
       const areaTouched = fields.measuredM2 !== undefined || fields.wastagePct !== undefined || fields.rollWidthM !== undefined;
+      const sizeTouched = areaTouched || fields.qty !== undefined || fields.followsItemId !== undefined;
       let product: typeof schema.products.$inferSelect | null = null;
       let areaRes: ReturnType<typeof qtyForLine> = null;
-      if (areaTouched && before.productId) {
+      if (sizeTouched && before.productId) {
         [product] = await db.select().from(schema.products).where(eq(schema.products.id, before.productId));
         product = product ?? null;
-        if (product && floorTypeOf(product)) {
+      }
+      if (areaTouched && product) {
+        if (floorTypeOf(product)) {
           const next = {
             measuredM2: fields.measuredM2 !== undefined ? fields.measuredM2 : before.measuredM2,
             wastagePct: fields.wastagePct !== undefined ? fields.wastagePct : before.wastagePct,
@@ -1017,6 +1049,13 @@ export const quotes = {
             fields.flagReason = f.flagReason;
           }
         }
+      }
+      // Fix list items 2 and 3: a typed qty goes up to whole boxes, lengths or pails.
+      // A typed qty on underlay is taken as typed, and the floor stops moving it.
+      if (product && !areaRes && fields.qty !== undefined && !followsAFloor(product)) {
+        const r = wholeUnits(product, fields.qty);
+        fields.qty = r.qty;
+        if (fields.flagged === undefined) Object.assign(fields, sizeFlag(before, r.flag));
       }
       const qty = fields.qty ?? before.qty;
       const cost = fields.unitCost !== undefined ? fields.unitCost : before.unitCost;
@@ -1075,6 +1114,12 @@ export const quotes = {
             target: [schema.voicePhraseProductMatches.phrase, schema.voicePhraseProductMatches.productId],
             set: { confirmCount: sql`${schema.voicePhraseProductMatches.confirmCount} + 1`, lastConfirmedAt: new Date(), updatedAt: new Date() },
           });
+      }
+
+      // Fix list item 3. Underlay under this floor follows it; an underlay given a floor works its qty out.
+      if (sizeTouched && product && row) {
+        await followUnderlay({ line: before, product }, { line: row, product });
+        if (fields.followsItemId != null && input.qty === undefined) await refollow(row.id);
       }
 
       // Item 8. The install lines linked to it follow the new area.
@@ -1220,12 +1265,14 @@ export const quotes = {
       // box size or roll width gives the qty.
       const measured = before.measuredM2 != null && floorTypeOf(product) ? before : null;
       const areaRes = measured ? qtyForLine(product, { ...measured, rollWidthM: product.widthM ? null : measured.rollWidthM }) : null;
-      const qty = areaRes ? areaRes.qty : before.qty;
+      // Fix list item 2: the new product's box, length or pail size rounds the qty.
+      const sized = !areaRes && !followsAFloor(product) ? wholeUnits(product, before.qty) : null;
+      const qty = areaRes ? areaRes.qty : (sized?.qty ?? before.qty);
       // Compare with the unit he said, not a wrong pick made a moment ago.
       const said = before.flagReason?.match(/^Was ([\d.]+) (\S+), this product sells by/);
       const saidUnit = said?.[2] ?? before.unit;
       // A measured line has just been worked out again in the new unit, so there is nothing to check.
-      const unitClash = !areaRes && Boolean(product.unit && saidUnit && product.unit !== saidUnit);
+      const unitClash = !areaRes && !followsAFloor(product) && Boolean(product.unit && saidUnit && product.unit !== saidUnit);
       const flagReason = unitClash
         ? `Was ${said?.[1] ?? before.qty} ${saidUnit}, this product sells by ${product.unit}. Check the quantity.`
         : unitPrice === 0
@@ -1235,7 +1282,7 @@ export const quotes = {
       const newPick = installFor(product, areaRes);
       const stillWaiting =
         before.flagged && isInstallFlag(before.flagReason) && newPick.kind === "ask" && !areaRes?.problem ? newPick.reason : null;
-      const ownFlag = qtyFlag(areaRes) ?? stillWaiting;
+      const ownFlag = qtyFlag(areaRes) ?? stillWaiting ?? sized?.flag ?? null;
 
       const [row] = await db
         .update(schema.quoteItems)
@@ -1257,6 +1304,22 @@ export const quotes = {
         })
         .where(eq(schema.quoteItems.id, input.id))
         .returning();
+
+      // Fix list item 3. Underlay under this floor follows the new product's
+      // width. An underlay line works its qty out off its floor again, and a
+      // line that has just become underlay finds its floor.
+      if (row) {
+        await followUnderlay({ line: before, product: oldProduct ?? null }, { line: row, product });
+        if (followsAFloor(product)) {
+          if (row.followsItemId == null) {
+            const floor = await floorLineFor(row.quoteId, product);
+            if (floor.line) await db.update(schema.quoteItems).set({ followsItemId: floor.line.id }).where(eq(schema.quoteItems.id, row.id));
+          }
+          await refollow(row.id);
+        } else if (row.followsItemId != null) {
+          await db.update(schema.quoteItems).set({ followsItemId: null }).where(eq(schema.quoteItems.id, row.id));
+        }
+      }
 
       // Item 8. The linked install follows. If it was the old floor's default
       // and the new floor has a different one, it swaps over too.
@@ -1339,9 +1402,14 @@ export const quotes = {
       .delete(schema.quoteItems)
       .where(eq(schema.quoteItems.labourForItemId, input.id))
       .returning({ id: schema.quoteItems.id });
+    // Fix list item 3: so does the underlay under it.
+    const underlay = await db
+      .delete(schema.quoteItems)
+      .where(eq(schema.quoteItems.followsItemId, input.id))
+      .returning({ id: schema.quoteItems.id });
     await db.delete(schema.quoteItems).where(eq(schema.quoteItems.id, input.id));
     const totals = await recalc(before.quoteId);
-    return { totals, removedLabour: linked.length };
+    return { totals, removedLabour: linked.length, removedUnderlay: underlay.length };
   }),
 
   /** Drag-reorder the lines on a quote. */

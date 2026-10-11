@@ -1249,6 +1249,16 @@ export const products = sqliteTable(
      * separate job and is not built.
      */
     heldInWarehouse: integer("held_in_warehouse", { mode: "boolean" }).notNull().default(false),
+    /**
+     * Fix list 11 Oct, items 2 and 3. Metres on one roll of underlay, plastic
+     * or Floorshield. Ordering: stocked (`heldInWarehouse`) is cut to the exact
+     * metres, "2 rolls + 4 m"; not stocked is ordered in whole rolls.
+     */
+    rollLengthM: real("roll_length_m"),
+    /** Trims: the length one piece comes in, 2.4 m. Quotes and POs round up to whole pieces. */
+    pieceLengthM: real("piece_length_m"),
+    /** The supplier file's wastage % for this product. Wins over the Settings figure for its floor type. */
+    defaultWastagePct: real("default_wastage_pct"),
     /** Working days to get it, where the supplier states one (Sunstar custom nosing: 10). */
     leadTimeDays: integer("lead_time_days"),
     /**
@@ -1435,6 +1445,13 @@ export const quoteItems = sqliteTable(
      * going takes this line with it. No FK on purpose: removeItem deletes it.
      */
     labourForItemId: integer("labour_for_item_id"),
+    /**
+     * Fix list 11 Oct, item 3. On an underlay line: the floor line it follows.
+     * Carpet underlay lm and hard floor underlay m2 are worked out from that
+     * line and move with it until someone types over the qty. The floor line
+     * going takes this line with it. No FK on purpose, same as labourForItemId.
+     */
+    followsItemId: integer("follows_item_id"),
     /** On a labour line: the rate book item it was priced off. Null on older lines. */
     rateItemId: integer("rate_item_id"),
     ...timestamps,

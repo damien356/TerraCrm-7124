@@ -67,7 +67,8 @@ const PRODUCT_CATEGORIES = [
   { name: "laminate", label: "Laminate" },
   { name: "engineered_timber", label: "Engineered timber" },
   { name: "solid_timber", label: "Solid timber" },
-  { name: "underlay", label: "Underlay" },
+  { name: "carpet_underlay", label: "Carpet underlay" },
+  { name: "hard_floor_underlay", label: "Hard floor underlay" },
   { name: "accessory", label: "Accessories" },
 ];
 

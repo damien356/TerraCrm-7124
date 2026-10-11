@@ -1,4 +1,5 @@
 import { FLOOR_CATEGORIES } from "./bundleCatalog";
+import { isUnderlayCategory } from "./order-sizes";
 
 /**
  * The pre-send check. Plain rules in code, no AI, so the same quote always
@@ -65,7 +66,7 @@ function isCarpet(l: CheckLine) {
   return /\b(?:carpet|broadloom)\b/i.test(l.description) && !/carpet\s*tile/i.test(l.description) && !REMOVAL_LINE.test(l.description);
 }
 const isUnderlay = (l: CheckLine) =>
-  l.productCategory === "underlay" || (/\bunderlay\b/i.test(l.description) && !REMOVAL_LINE.test(l.description));
+  isUnderlayCategory(l.productCategory) || (/\bunderlay\b/i.test(l.description) && !REMOVAL_LINE.test(l.description));
 const isRemoval = (l: CheckLine) => l.kind === "removal" || REMOVAL_LINE.test(l.description);
 const isPrep = (l: CheckLine) => l.kind === "prep" || PREP_LINE.test(l.description);
 /** Labour that lays a floor, not labour that takes one up or gets the slab ready. */

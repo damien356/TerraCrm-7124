@@ -4,7 +4,9 @@
  *
  * Fix list 11 Oct, item 10: "timber" is split into Engineered timber and
  * Solid timber. Damien, same day: the MJS 2.0 m outdoor ranges get their own
- * "Outdoor carpet" category so they keep their 2.0 m width.
+ * "Outdoor carpet" category so they keep their 2.0 m width. Item 3 (answer
+ * 10): underlay is two categories, carpet underlay (lm, follows the carpet)
+ * and hard floor underlay (m2 of floor plus wastage).
  */
 
 export const PRODUCT_CATEGORIES = [
@@ -16,7 +18,8 @@ export const PRODUCT_CATEGORIES = [
   "laminate",
   "engineered_timber",
   "solid_timber",
-  "underlay",
+  "carpet_underlay",
+  "hard_floor_underlay",
   "turf",
   "sheet_goods",
   "accessory",
@@ -31,13 +34,15 @@ export const PRODUCT_CATEGORY_LABELS: Record<string, string> = {
   laminate: "Laminate",
   engineered_timber: "Engineered timber",
   solid_timber: "Solid timber",
-  underlay: "Underlay",
+  carpet_underlay: "Carpet underlay",
+  hard_floor_underlay: "Hard floor underlay",
   turf: "Synthetic turf",
   /** Plywood. Not a floor covering, the substrate that goes under one. */
   sheet_goods: "Sheet goods",
   accessory: "Accessory",
-  /** Old name, before the split. Nothing on file uses it now. */
+  /** Old names, before the splits. Nothing on file uses them now. */
   timber: "Timber",
+  underlay: "Underlay",
 };
 
 export const categoryLabel = (c: string) => PRODUCT_CATEGORY_LABELS[c] ?? c;
@@ -51,9 +56,11 @@ export const isTimberCategory = (c: string | null | undefined) =>
 /**
  * The categories a spoken or typed category means. "timber" on its own covers
  * both kinds, so a voice quote that only says "timber" still finds the boards.
+ * "underlay" covers both underlays the same way.
  */
 export function categoriesForHint(hint: string): string[] {
   if (hint === "timber") return [...TIMBER_CATEGORIES, "timber"];
+  if (hint === "underlay") return ["carpet_underlay", "hard_floor_underlay", "underlay"];
   return [hint];
 }
 
