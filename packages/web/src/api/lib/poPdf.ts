@@ -1,5 +1,6 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import { INVOICES_TO } from "./gmail";
+import { TERRA_LOGO_PRINT_PNG_BASE64 } from "./terraLogoPrint";
 
 /**
  * Terra's purchase order, as a PDF the supplier can file. pdf-lib for the
@@ -62,19 +63,30 @@ export async function renderPoPdf(po: PoPdfInput): Promise<Buffer> {
     p.drawText(clean(s), { x, y: y - size, size, font: f, color });
   const right = (s: string, xr: number, size = 10, f: PDFFont = reg) => t(s, xr - f.widthOfTextAtSize(clean(s), size), size, f);
 
-  t("PURCHASE ORDER", M, 20, bold);
-  right(po.number, W - M, 20, bold);
-  y -= 28;
-  t(TERRA.name, M, 10, bold);
+  // Header: the logo on the left with Terra's details beside it, the PO number on the right.
+  const logo = await doc.embedPng(Buffer.from(TERRA_LOGO_PRINT_PNG_BASE64, "base64"));
+  const logoH = 72;
+  const logoW = (logo.width / logo.height) * logoH;
+  page.drawImage(logo, { x: M, y: H - M - logoH, width: logoW, height: logoH });
+  const dx = M + logoW + 14;
+  const top = y;
+  y = top - 8;
+  t(TERRA.name, dx, 10, bold);
+  y -= 14;
+  t(`ABN ${TERRA.abn}`, dx, 9, reg, MUTED);
+  y -= 12;
+  t(TERRA.address, dx, 9, reg, MUTED);
+  y -= 12;
+  t(`${TERRA.phone}   ${TERRA.orders}`, dx, 9, reg, MUTED);
+  y = top;
+  right("PURCHASE ORDER", W - M, 16, bold);
+  y -= 22;
+  right(po.number, W - M, 16, bold);
+  y -= 24;
   right(`Date ${po.date}`, W - M, 10);
   y -= 13;
-  t(`ABN ${TERRA.abn}`, M, 9, reg, MUTED);
   right(`Job ${po.jobNumber}`, W - M, 10);
-  y -= 12;
-  t(TERRA.address, M, 9, reg, MUTED);
-  y -= 12;
-  t(`${TERRA.phone}   ${TERRA.orders}`, M, 9, reg, MUTED);
-  y -= 26;
+  y = Math.min(y - 13, H - M - logoH) - 22;
 
   // The line that makes matching work.
   page.drawRectangle({ x: M, y: y - 40, width: W - M * 2, height: 40, color: FILL });
