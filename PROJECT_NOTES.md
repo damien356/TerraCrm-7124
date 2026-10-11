@@ -598,3 +598,13 @@ Checked on the branch head: lint clean, web build OK, API tsc 0, mobile tsc 0, a
   - Live had 1 quote (accepted) and 0 open quotes, so no quote prices moved.
 - **NFD later:** if NFD say they deliver, tick "delivers direct" on their card, switch rule 805 (Unified) off, and add or switch on their own delivery rule.
 - Not built yet: Unified's other runs (Yatala, Caboolture, Redland Bay $75, Ballina $120), Jocks double pallet over 1.2 m, delivery modes and order emails (later, per the 11 Oct answers).
+
+### 18.14 Items 4 and 5: price list import and export (12 Oct, merged a65e294)
+- Settings, Price list (Admin only, office sees "Admin only"): Download template, Export price list (CSV or Excel, uses the search and Show discontinued), Import CSV (takes .csv or .xlsx), Undo last import, Import log (last 20).
+- Import always previews first: counts for updates, new, discontinued, same, errors (skipped) and warnings. Price changes show amber. Nothing saves until Confirm import. If the price list changed between preview and confirm, confirm is refused and he previews again.
+- Matching: terra_id, then sku within the supplier, then supplier + brand + range + colour. More than one hit is an error. Blank cells keep what is there. Sell rounds to 10c; a new product with no sell gets the standard markup.
+- Undo works newest first. It puts back only fields still equal to what the import wrote, so hand edits after the import are kept. New products used on a quote, job, PO or account are set discontinued instead of deleted.
+- Code: lib/price-sheet.ts (pure), lib/price-xlsx.ts (exceljs 4.4.0), lib/price-import.ts, routes/priceImport.ts, queries/price-import.ts, components/price-import.tsx.
+- Schema live 12 Oct: products.roll_price, tables price_imports and price_import_rows (sql/2026-10-12-price-import.sql). Backup before: backups/terra-live-pre-price-import-2026-10-12.db.
+- Dunlop loaded 12 Oct by script through the same code (imports 1 and 2, actor "Runable for Damien"): 379 from the price file and 23 from the underlay file, 0 errors, 0 warnings. Dunlop (supplier 23) now has 402 products; 4399 in total. Backup before: backups/terra-live-pre-dunlop-load-2026-10-12.db. The 241 lm trims carry 2.4 m lengths.
+- Known: the Price list tab still draws every row at once (4399). Fine on a normal browser, slow in the sandbox.
