@@ -576,3 +576,25 @@ Checked on the branch head: lint clean, web build OK, API tsc 0, mobile tsc 0, a
 - Not done: an "Includes ... underlay" mention in client bundle wording (`agent/bundle-wording.ts` already covers underlay).
 - **Published 11 Oct** (Damien). Live bundle checked. Then the timber split went live (backup `backups/terra-live-pre-timber-2026-10-11.db`, dry run on a copy, his OK of the 552 / 421 grouping, script `fix1011/fix-i1i10.tmp.ts`): 552 to `solid_timber`, 421 to `engineered_timber`, 6 MJS to `outdoor_carpet`, 349 carpet widths (EC 236 and Victoria 91 from none to 3.66, Chaparral 22 from 3.6 to 3.66). 1328 product rows, each logged in `activity_log`. Carpets now 3.66 m = 359, 4.0 m = 145. No `timber` left.
 - Items 6, 7 and 13 confirmed live on 11 Oct (Stripe webhook answers 400 to an unsigned post). Touch list report: `/home/user/terra-touch-6-7-13.report/content.md`.
+
+### 18.13 Item 14: supplier freight inside the quote line price, carrier rules live (12 Oct, merged)
+
+`92e5fae` on `main` (branch `fixlist-1011`, commits `ccad3ad` and `92e5fae`). Web and API only, no phone build. Checked: lint clean, web build OK, API tsc 0, mobile tsc 0, app tsc 138 (baseline). Scratch tests `fix1011/t-fr` 60 pass, `fix1011/t-car` 14 pass, re-run of t-4a 113, t-i13 119, t-i11 51, all 0 fail. UI checks `fix1011/frui.py` and `fix1011/carui.py`.
+
+- **Freight in the price** (`api/lib/quote-freight.ts`, Damien's answer 5). Each supplier on a quote is one order. Its automatic charges (freight, baling, fuel, levies) are worked out with the PO rules for where that supplier delivers, then spread over that supplier's material lines in step with each line's cost and added to the cost per unit. Sell moves at the line's own markup, so freight is recovered at the same margin. The client never sees a freight line. The office sees "includes $X freight" under the line and a freight box on the quote page; staff without cost access see none of it.
+  - `quote_items.freight_unit_cost` holds the freight part of the cost per unit, so recalc can take it out and put it back when qty or lines change. `refreshQuoteFreight` runs on every recalc. Revise, `changeProduct` and `hideCost` carry or reset it.
+  - Typing a cost over a line sets `freight_unit_cost` to null (`updateItem`), so a typed cost is taken as final and freight is not added on top.
+  - Accepted, declined, expired and replaced quotes are never touched.
+  - Quote vs PO: a supplier who does not deliver (`delivers_direct = 0`) still costs Terra the carrier's bill, so quotes count carrier rules. The PO leaves them off because the carrier invoices Terra separately.
+- **Per-block charges** (`supplier_fee_rules.unit_block`, `pricing.ts` `blockUnits`). A rule can be charged per block of N units or part, eg $35 per 40 lm or part (40 lm = $35, 40.1 lm = $70). Suppliers page: "Charged per block of (optional)" on a new charge, hidden for per order, per shipment and percent. The rule list shows "per 40 or part".
+- **Pallet count (OPEN):** a quote counts 1 pallet per supplier order whenever boxed goods are on it. Asked Damien how he wants pallets counted.
+- **Live, 12 Oct** (backups `backups/terra-live-pre-freight-2026-10-12.db` and `backups/terra-live-pre-carriers-2026-10-12.db`, dry run on a copy, Damien's OK "go live once the rules are fixed", script `fix1011/fix-carriers.tmp.ts`): SQL `api/database/sql/2026-10-12-quote-freight.sql` (both columns). Fee rules 47 to 58:
+  - Unified Transport $123.50 a pallet ($95 + 30% fuel), auto, warehouse: ArtiFloor, Big Panda, Chameleon, Floor Distributors, Riverhill, NFD (rules 800 to 805).
+  - Chaparral: Jocks roll freight $31.25 auto (806), Jocks pickup $20 tick (807). Advantage Jocks pickup (799) back on as tick only.
+  - Chameleon 758 "Baling / dispatch fee" $50 per order, auto. Hurford's broken pack 765 tick only.
+  - Victoria 772 "Baling and delivery" $35 per 40 lm or part, auto. 773 off. New fuel $15 per order, auto (808).
+  - ArtiFloor 771 and NFD 776 freight off. Terramater fuel 1.5% auto (809), card 1.5. Gibbon delivery $80 per order auto (810).
+  - Suppliers: delivers_direct off for ArtiFloor, Riverhill, NFD; on for MJS. Freight method text updated on 8 cards.
+  - Live had 1 quote (accepted) and 0 open quotes, so no quote prices moved.
+- **NFD later:** if NFD say they deliver, tick "delivers direct" on their card, switch rule 805 (Unified) off, and add or switch on their own delivery rule.
+- Not built yet: Unified's other runs (Yatala, Caboolture, Redland Bay $75, Ballina $120), Jocks double pallet over 1.2 m, delivery modes and order emails (later, per the 11 Oct answers).
