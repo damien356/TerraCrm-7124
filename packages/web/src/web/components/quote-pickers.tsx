@@ -24,10 +24,10 @@ const UNIT_LABEL: Record<string, string> = {
   km: "km",
   roll: "roll",
 };
-const unitLabel = (u: string) => UNIT_LABEL[u] ?? u;
+export const unitLabel = (u: string) => UNIT_LABEL[u] ?? u;
 
 /** Typing should not fire a query per keystroke. */
-function useDebounced(value: string, ms = 250) {
+export function useDebounced(value: string, ms = 250) {
   const [out, setOut] = React.useState(value);
   React.useEffect(() => {
     const t = setTimeout(() => setOut(value), ms);
@@ -42,7 +42,7 @@ function useDebounced(value: string, ms = 250) {
  * The category row. These are the rate book's own groups, relabelled to what
  * the office calls them. "demolition" is the column name, nobody says it.
  */
-const GROUP_LABEL: Record<string, string> = {
+export const GROUP_LABEL: Record<string, string> = {
   carpet: "Carpet",
   resilient: "Vinyl / hybrid",
   timber: "Timber",
@@ -58,7 +58,7 @@ const GROUP_LABEL: Record<string, string> = {
  * screen: the list comes back capped, so whatever the cap cut off would
  * silently lose its own button.
  */
-const PRODUCT_CATEGORIES = [
+export const PRODUCT_CATEGORIES = [
   { name: "carpet", label: "Carpet" },
   { name: "outdoor_carpet", label: "Outdoor carpet" },
   { name: "carpet_tile", label: "Carpet tile" },
@@ -72,7 +72,7 @@ const PRODUCT_CATEGORIES = [
   { name: "accessory", label: "Accessories" },
 ];
 
-function GroupToggles({
+export function GroupToggles({
   groups,
   labels,
   value,

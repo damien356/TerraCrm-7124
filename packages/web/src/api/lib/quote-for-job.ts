@@ -6,6 +6,7 @@ import { depositDefaultFor } from "./deposits";
 import { hasTagSql } from "./job-people";
 import { jobNumberSql } from "./job-ref";
 import { quoteRef } from "./refs";
+import { AFTER_ACCEPT_MESSAGE } from "./variations";
 
 /* ---------------------------------------------------------------------------
  * Create quote on the job page (item 6, Damien 10 Oct). The quote takes the
@@ -74,6 +75,8 @@ export async function quoteStartForJob(jobId: number) {
   const draft = quotes.find((q) => OPEN_STATUSES.includes(q.status)) ?? null;
   const cardDeposit = await depositDefaultFor({ companyId: d.companyId, contactId: d.contactId });
   const notChargeable = d.job.parentJobId != null && d.job.chargeable === false;
+  // Item 12: after acceptance, only variations.
+  const accepted = quotes.find((q) => q.status === "accepted") ?? null;
   return {
     nextRef: quoteRef(d.job.number, (latest?.version ?? 0) + 1, d.job.ref),
     latest: latest ? { id: latest.id, ref: refOf(latest), status: latest.status, depositPercent: latest.depositPercent, total: latest.total } : null,
@@ -83,7 +86,9 @@ export async function quoteStartForJob(jobId: number) {
     hasSupervisor: d.supervisorContactId != null,
     blocked: notChargeable
       ? `Callback ${d.job.displayNumber ?? d.job.ref} is marked not chargeable, so nothing is billed. Change it to chargeable first.`
-      : null,
+      : accepted
+        ? `Quote ${refOf(accepted)} ${AFTER_ACCEPT_MESSAGE}`
+        : null,
   };
 }
 

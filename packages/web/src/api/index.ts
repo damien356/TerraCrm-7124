@@ -58,6 +58,7 @@ import { callbacks } from "./routes/callbacks";
 import { quoteSend } from "./routes/quoteSend";
 import { clientInvoices } from "./routes/clientInvoices";
 import { publicPages } from "./routes/publicPages";
+import { variations } from "./routes/variations";
 import { bootMailAgent } from "./lib/mail-agent";
 import { finishConnect } from "./lib/gmail";
 import { bootReminders } from "./lib/reminders";
@@ -178,6 +179,8 @@ export const router = {
   quoteSend,
   /** IQ invoices to the client: deposit, variations, final. Admin and Office mark paid, Admin voids. */
   clientInvoices,
+  /** Variations on a job after its quote is accepted: priced off the books, sent, accepted, billed (item 12). */
+  variations,
   /** No-login pages for clients: /q/<token> read and sign a quote, /m/<token> choose flooring. Never returns cost. */
   publicPages,
 };

@@ -2028,7 +2028,7 @@ export const variations = sqliteTable(
     seq: integer("seq").notNull().default(1),
     description: text("description").notNull().default(""),
     amount: real("amount").notNull().default(0),
-    /** draft · approved · rejected · invoiced */
+    /** draft · sent · approved · rejected · invoiced */
     status: text("status").notNull().default("draft"),
     /** The message that IS the approval. The evidence, not a note about it. */
     sourceMessageId: integer("source_message_id").references(() => messages.id, { onDelete: "set null" }),
@@ -2038,9 +2038,87 @@ export const variations = sqliteTable(
     approvedByName: text("approved_by_name"),
     approvedAt: integer("approved_at", { mode: "timestamp" }),
     createdByName: text("created_by_name").notNull().default(""),
+    /**
+     * Fix list 11 Oct, item 12. A variation is priced like a quote: lines off
+     * the price book and the rate book (variation_items), sent by email or SMS
+     * with a no-login link (/v/<token>), signed online like a quote. Status
+     * becomes sent · approved · rejected · invoiced as well as draft.
+     */
+    /** The accepted quote it adds to. Null on a job with no quote in Ops. */
+    quoteId: integer("quote_id").references(() => quotes.id, { onDelete: "set null" }),
+    /** The /v/<token> link. Made when it is first sent or previewed. */
+    token: text("token").unique(),
+    views: integer("views").notNull().default(0),
+    firstViewedAt: integer("first_viewed_at", { mode: "timestamp" }),
+    lastViewedAt: integer("last_viewed_at", { mode: "timestamp" }),
+    /** Ex GST, GST and inc GST, from the lines. `amount` keeps the inc GST total too. */
+    subtotal: real("subtotal").notNull().default(0),
+    gst: real("gst").notNull().default(0),
+    total: real("total").notNull().default(0),
+    /** final = goes on the final invoice. own = its own IQ invoice when accepted. */
+    billMode: text("bill_mode").notNull().default("final"),
+    /** The IQ invoice it was billed on. */
+    invoiceId: integer("invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+    /** job_media ids shown to the client to say why. JSON array. */
+    photoMediaIds: text("photo_media_ids").notNull().default("[]"),
+    sentAt: integer("sent_at", { mode: "timestamp" }),
+    rejectedAt: integer("rejected_at", { mode: "timestamp" }),
+    /** Set once its dispatch and materials are made, so they are made once. */
+    workMadeAt: integer("work_made_at", { mode: "timestamp" }),
     ...timestamps,
   },
   (t) => [index("variations_job_idx").on(t.jobId), unique("variation_ref_unique").on(t.jobId, t.seq)],
+);
+
+/** One priced line on a variation. The same shape as a quote line, cut down. */
+export const variationItems = sqliteTable(
+  "variation_items",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    variationId: integer("variation_id")
+      .notNull()
+      .references(() => variations.id, { onDelete: "cascade" }),
+    productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
+    /** The rate book item a labour line was priced off. */
+    rateItemId: integer("rate_item_id").references(() => labourRateItems.id, { onDelete: "set null" }),
+    /** supply · labour · prep · removal · accessory · other */
+    kind: text("kind").notNull().default("supply"),
+    /** material · labour */
+    lineType: text("line_type").notNull().default("material"),
+    description: text("description").notNull(),
+    qty: real("qty").notNull().default(1),
+    unit: text("unit").notNull().default("m2"),
+    unitPrice: real("unit_price").notNull().default(0),
+    unitCost: real("unit_cost"),
+    total: real("total").notNull().default(0),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [index("variation_items_variation_idx").on(t.variationId)],
+);
+
+/** A client's signed approval of one variation online. */
+export const variationSignatures = sqliteTable(
+  "variation_signatures",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    variationId: integer("variation_id")
+      .notNull()
+      .references(() => variations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    position: text("position").notNull().default(""),
+    email: text("email"),
+    /** Strokes as lib/signature.ts stores them. */
+    signatureJson: text("signature_json").notNull(),
+    termsVersion: text("terms_version").notNull().default(""),
+    signedAt: integer("signed_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+    ip: text("ip"),
+    userAgent: text("user_agent"),
+    /** The signed PDF in storage. */
+    pdfKey: text("pdf_key"),
+    ...timestamps,
+  },
+  (t) => [index("variation_signatures_variation_idx").on(t.variationId)],
 );
 
 /**

@@ -52,3 +52,21 @@ export function useConfirmCardPayment() {
     }),
   );
 }
+
+/* A variation (/v/<token>, item 12). Read, sign and accept, or decline. */
+export function usePublicVariation(token: string) {
+  // One fetch per visit: a refetch on focus would count another view.
+  return useQuery(
+    orpc.publicPages.variation.get.queryOptions({
+      input: { token },
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      retry: false,
+    }),
+  );
+}
+
+export const usePublicVariationPdf = () => useMutation(orpc.publicPages.variation.pdf.mutationOptions());
+export const useAcceptVariationOnline = () => useMutation(orpc.publicPages.variation.accept.mutationOptions());
+export const useDeclineVariationOnline = () => useMutation(orpc.publicPages.variation.decline.mutationOptions());

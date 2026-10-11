@@ -21,12 +21,14 @@ import { checkSignature, signatureInput, tidySignature } from "../lib/signature"
 import { SUPPLY_TERMS, SUPPLY_TERMS_TITLE, SUPPLY_TERMS_VERSION } from "../lib/supplyTerms";
 import { cardPaymentsOn, checkoutForInvoice, confirmSession, invoiceIdFromToken, owingOn, payUrl } from "../lib/stripe";
 import { INVOICE_KIND_LABEL } from "../lib/client-invoices";
+import { publicVariation } from "./publicVariation";
 
 /* ---------------------------------------------------------------------------
  * The two pages a client opens without a login (spec section 2):
  *   /q/<token>  read the quote, the Supply Terms, sign and accept
  *   /m/<token>  the material selection form after accepting
  *   /pay/<token> pay one client invoice by card (Stripe), or see it is paid
+ *   /v/<token>  read, sign and accept a variation (routes/publicVariation.ts)
  *
  * The token is the only key. Nothing here ever returns a cost, a markup, a
  * line quantity or a line price: the client sees bundles and totals, the
@@ -406,4 +408,4 @@ const payPage = {
     }),
 };
 
-export const publicPages = { quote: quotePage, selection: selectionPage, pay: payPage };
+export const publicPages = { quote: quotePage, selection: selectionPage, pay: payPage, variation: publicVariation };

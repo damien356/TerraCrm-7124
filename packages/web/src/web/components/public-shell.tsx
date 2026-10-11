@@ -1,4 +1,6 @@
 import * as React from "react";
+import { CreditCard } from "lucide-react";
+import { moneyExact } from "../lib/money";
 
 /**
  * The frame around the no-login client pages (/q, /m and /pay). No sidebar, no
@@ -58,4 +60,57 @@ export function PublicMessage({ title, children }: { title: string; children?: R
 export function errorText(e: unknown) {
   if (e && typeof e === "object" && "message" in e) return String((e as { message: unknown }).message);
   return String(e);
+}
+
+/* Shared by /q and /v: how to pay, and saving the PDF. */
+
+type Bank = { name: string; bsb: string; account: string };
+
+export function BankDetails({ bank, reference, amount }: { bank: Bank; reference: string; amount?: number }) {
+  return (
+    <div className="rounded-lg bg-[var(--gold-wash)] px-4 py-3 text-sm">
+      <p className="mb-1 font-semibold">Pay by bank transfer</p>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5">
+        <dt className="text-muted-foreground">Account name</dt>
+        <dd>{bank.name}</dd>
+        <dt className="text-muted-foreground">BSB</dt>
+        <dd className="tabular">{bank.bsb}</dd>
+        <dt className="text-muted-foreground">Account</dt>
+        <dd className="tabular">{bank.account}</dd>
+        <dt className="text-muted-foreground">Reference</dt>
+        <dd className="tabular font-semibold">{reference}</dd>
+        {amount != null ? (
+          <>
+            <dt className="text-muted-foreground">Amount</dt>
+            <dd className="tabular font-semibold">{moneyExact(amount)}</dd>
+          </>
+        ) : null}
+      </dl>
+    </div>
+  );
+}
+
+export function PayByCard({ url, amount }: { url: string; amount: number }) {
+  return (
+    <div className="mb-3 flex flex-col items-center gap-1">
+      <a
+        href={url}
+        className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--gold)] px-5 text-sm font-semibold text-white shadow-sm hover:brightness-95"
+      >
+        <CreditCard className="size-4" />
+        Pay {moneyExact(amount)} by card
+      </a>
+      <p className="text-xs text-muted-foreground">Secure payment through Stripe. No card surcharge.</p>
+    </div>
+  );
+}
+
+export function downloadBase64(filename: string, base64: string) {
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }

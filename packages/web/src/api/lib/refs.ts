@@ -8,6 +8,7 @@
  *   Repair       R188000-1          (old callbacks keep 3981-C1)
  *   PO           PO188000-1         (old POs keep 4113-A)
  *   Invoice      IQ188000-1 deposit, -2 final, -3 and up stages (section 2)
+ *   Variation    V188000-01, V188000-02 (fix list 11 Oct, item 12)
  *
  * The job, its quote, its invoices and its repairs all carry the job's own
  * number. A quote made before there is a job takes the next job number, and
@@ -67,6 +68,15 @@ export function poRef(jobNumber: number, n: number) {
 /** "IQ188000-1". Built with the invoices in section 2. */
 export function invoiceRef(jobNumber: number, n: number) {
   return `IQ${jobNumber}-${n}`;
+}
+
+/**
+ * "V188000-01", "V188000-02" (fix list 11 Oct, item 12). Two digits, then
+ * three past 99. A variation on repair R188000-1 reads VR188000-1-01.
+ */
+export function variationRef(jobRef: string | number, seq: number) {
+  const n = Math.max(1, Math.floor(Number(seq) || 1));
+  return `V${jobRef}-${String(n).padStart(2, "0")}`;
 }
 
 /**

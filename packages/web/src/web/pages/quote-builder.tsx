@@ -775,7 +775,16 @@ export default function QuoteBuilderPage() {
               </Button>
             </>
           ) : null}
-          {locked ? (
+          {/* Item 12: once accepted, changes are a variation on the job, never a new version. */}
+          {q.status === "accepted" && q.job ? (
+            <Link to={`/jobs/${q.job.id}?variation=new`}>
+              <Button variant="outline">
+                <Plus className="size-4" />
+                Create variation
+              </Button>
+            </Link>
+          ) : null}
+          {locked && q.status !== "accepted" ? (
             <Button
               variant="outline"
               onClick={() =>

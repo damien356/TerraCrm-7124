@@ -16,6 +16,7 @@ import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
 import { markupOf, markupPctUsed, sellAtMarkup } from "../lib/pricing";
 import { depositDefaultFor, depositSplit } from "../lib/deposits";
 import { liveSellFor } from "../lib/live-sell";
+import { assertNoAcceptedQuote } from "../lib/variations";
 import { suggestProducts } from "../agent/price";
 import { customerCandidates, SAID_DETAILS_NOTE, spokenForQuote, UNMATCHED_NOTE } from "../lib/quote-customer";
 import { forgetNames } from "../lib/memo-context";
@@ -354,6 +355,8 @@ export async function reviseQuoteRecord(
   opts: { depositPercent?: number } = {},
 ) {
   await assertBillable(quote.jobId);
+  // Item 12: after acceptance, only variations.
+  await assertNoAcceptedQuote({ number: quote.number, jobId: quote.jobId });
   const items = await db
     .select()
     .from(schema.quoteItems)
@@ -624,6 +627,7 @@ export const quotes = {
         if (!latest) throw new ORPCError("BAD_REQUEST", { message: "There is no quote on this job to copy yet. Start a blank one." });
         return reviseQuoteRecord(latest, context.actor, { depositPercent: input.depositPercent });
       }
+      await assertNoAcceptedQuote({ jobId: input.jobId });
       const d = await quoteDefaultsForJob(input.jobId);
       return createQuoteRecord(
         createQuoteInput.parse({

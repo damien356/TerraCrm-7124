@@ -13,6 +13,7 @@ import { buildWorkFromQuote, convertQuoteToJob } from "./quote-convert";
 import { quoteRefOf } from "./quote-number";
 import { doublesBeforeBuild, reworkJobForVersion, reworkSummary, workBaseQuoteId, type Rework } from "./quote-rework";
 import { jobText } from "./refs";
+import { approvedVariationsTotal } from "./variations";
 
 /* ---------------------------------------------------------------------------
  * The one accept routine (spec section 2.3). Staff pressing Accepted and a
@@ -90,11 +91,13 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
       ),
     );
 
-  // The job's value is the accepted price. The deposit is set by the first accept only.
+  // The job's value is the accepted price plus accepted variations (item 12).
+  // The deposit is set by the first accept only.
+  const variationsOn = await approvedVariationsTotal(jobId);
   await db
     .update(schema.jobs)
     .set({
-      value: locked.total,
+      value: round2(locked.total + variationsOn),
       ...(prev ? {} : { depositAmount: depositSplit(locked.total, locked.depositPercent).deposit }),
       updatedAt: now,
     })

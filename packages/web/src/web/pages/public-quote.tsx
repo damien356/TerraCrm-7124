@@ -1,11 +1,11 @@
 import * as React from "react";
 import { useParams } from "wouter";
-import { Check, CreditCard, Download, FileText } from "lucide-react";
+import { Check, Download, FileText } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input } from "../components/ui/field";
 import { Spinner } from "../components/ui/card";
 import { SignaturePad, type SignatureValue } from "../components/signature-pad";
-import { PublicCard, PublicMessage, PublicShell, errorText } from "../components/public-shell";
+import { BankDetails, PayByCard, PublicCard, PublicMessage, PublicShell, downloadBase64, errorText } from "../components/public-shell";
 import { moneyExact } from "../lib/money";
 import { useAcceptQuoteOnline, usePublicQuote, usePublicQuotePdf } from "../queries/publicPages";
 
@@ -16,57 +16,6 @@ import { useAcceptQuoteOnline, usePublicQuote, usePublicQuotePdf } from "../quer
  * surcharge) or by bank transfer. Position / Company is only asked for when
  * the quote is billed to a company.
  */
-
-type Bank = { name: string; bsb: string; account: string };
-
-function BankDetails({ bank, reference, amount }: { bank: Bank; reference: string; amount?: number }) {
-  return (
-    <div className="rounded-lg bg-[var(--gold-wash)] px-4 py-3 text-sm">
-      <p className="mb-1 font-semibold">Pay by bank transfer</p>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5">
-        <dt className="text-muted-foreground">Account name</dt>
-        <dd>{bank.name}</dd>
-        <dt className="text-muted-foreground">BSB</dt>
-        <dd className="tabular">{bank.bsb}</dd>
-        <dt className="text-muted-foreground">Account</dt>
-        <dd className="tabular">{bank.account}</dd>
-        <dt className="text-muted-foreground">Reference</dt>
-        <dd className="tabular font-semibold">{reference}</dd>
-        {amount != null ? (
-          <>
-            <dt className="text-muted-foreground">Amount</dt>
-            <dd className="tabular font-semibold">{moneyExact(amount)}</dd>
-          </>
-        ) : null}
-      </dl>
-    </div>
-  );
-}
-
-function PayByCard({ url, amount }: { url: string; amount: number }) {
-  return (
-    <div className="mb-3 flex flex-col items-center gap-1">
-      <a
-        href={url}
-        className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[var(--gold)] px-5 text-sm font-semibold text-white shadow-sm hover:brightness-95"
-      >
-        <CreditCard className="size-4" />
-        Pay {moneyExact(amount)} by card
-      </a>
-      <p className="text-xs text-muted-foreground">Secure payment through Stripe. No card surcharge.</p>
-    </div>
-  );
-}
-
-function downloadBase64(filename: string, base64: string) {
-  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-  const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
-}
 
 export default function PublicQuotePage() {
   const { token = "" } = useParams<{ token: string }>();
