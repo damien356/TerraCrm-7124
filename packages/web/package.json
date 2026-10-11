@@ -36,6 +36,7 @@
     "clsx": "^2.1.1",
     "dedent": "^1.7.2",
     "drizzle-orm": "0.45.2",
+    "exceljs": "4.4.0",
     "hono": "4.12.10",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.577.0",

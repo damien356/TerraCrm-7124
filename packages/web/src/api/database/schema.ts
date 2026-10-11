@@ -1259,6 +1259,12 @@ export const products = sqliteTable(
     rollLengthM: real("roll_length_m"),
     /** Trims: the length one piece comes in, 2.4 m. Quotes and POs round up to whole pieces. */
     pieceLengthM: real("piece_length_m"),
+    /**
+     * Item 4 (price list import). The supplier's price for one full roll, ex GST,
+     * as their list prints it (underlay, carpet). Kept for reference and the
+     * export. Quotes still price off `costPrice` per unit.
+     */
+    rollPrice: real("roll_price"),
     /** The supplier file's wastage % for this product. Wins over the Settings figure for its floor type. */
     defaultWastagePct: real("default_wastage_pct"),
     /** Working days to get it, where the supplier states one (Sunstar custom nosing: 10). */
@@ -1341,6 +1347,46 @@ export const productSpecials = sqliteTable(
     ...timestamps,
   },
   (t) => [index("product_specials_product_idx").on(t.productId, t.endsOn)],
+);
+
+/**
+ * Fix list 11 Oct, item 4. One row per confirmed price list import from
+ * Settings, Price list. The undo reads `price_import_rows` for the latest one.
+ */
+export const priceImports = sqliteTable("price_imports", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fileName: text("file_name").notNull().default(""),
+  actorName: text("actor_name").notNull().default(""),
+  actorUserId: text("actor_user_id"),
+  /** JSON: { updated, created, discontinued, unchanged, errors, warnings }. */
+  counts: text("counts").notNull().default("{}"),
+  /** applied · undone */
+  status: text("status").notNull().default("applied"),
+  undoneAt: integer("undone_at", { mode: "timestamp" }),
+  undoneBy: text("undone_by").notNull().default(""),
+  /** What the undo did, e.g. products kept because a quote uses them. */
+  undoNote: text("undo_note").notNull().default(""),
+  ...timestamps,
+});
+
+/** What one import did to one product, with the fields before and after, for the undo. */
+export const priceImportRows = sqliteTable(
+  "price_import_rows",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    importId: integer("import_id")
+      .notNull()
+      .references(() => priceImports.id, { onDelete: "cascade" }),
+    /** No FK on purpose: the undo deletes products the import made. */
+    productId: integer("product_id").notNull(),
+    /** create · update */
+    action: text("action").notNull(),
+    /** JSON of the changed fields only, as they were. Null on create. */
+    before: text("before"),
+    /** JSON of the changed fields only, as the import set them. */
+    after: text("after").notNull().default("{}"),
+  },
+  (t) => [index("price_import_rows_import_idx").on(t.importId)],
 );
 
 export const jobMaterials = sqliteTable(

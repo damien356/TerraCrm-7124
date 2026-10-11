@@ -9,6 +9,7 @@ import { Modal } from "../components/ui/modal";
 import { downloadText, useDatasets, useExportCsv, useExportSnapshot } from "../queries/backups";
 import { LabourRatesTab, RATE_UNITS, UNIT_LABEL } from "../components/labour";
 import { EmailAgentCard } from "../components/email-agent";
+import { PriceListTools } from "../components/price-import";
 import { QuoteEmailCard } from "../components/quote-email-settings";
 import { QUOTE_EMAIL_BODY_KEY, QUOTE_EMAIL_SUBJECT_KEY } from "../../api/lib/quote-email-template";
 import { useOpeningBalance, useSetOpeningBalance } from "../queries/finance";
@@ -672,6 +673,8 @@ function NewStatusModal({ open, onClose, nextSort }: { open: boolean; onClose: (
 
 function ProductsTab() {
   const products = useProducts();
+  // Items 4 and 5 (11 Oct): the import and export buttons are Admin only.
+  const isAdmin = useBootstrap().data?.actor.role === "admin";
   const [q, setQ] = React.useState("");
   const [newOpen, setNewOpen] = React.useState(false);
   const [showInactive, setShowInactive] = React.useState(false);
@@ -704,6 +707,7 @@ function ProductsTab() {
           New product
         </Button>
       </div>
+      {isAdmin ? <PriceListTools search={q} includeDiscontinued={showInactive} /> : null}
 
       <Card>
         <CardHeader

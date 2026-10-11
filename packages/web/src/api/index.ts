@@ -31,6 +31,7 @@ import { backups } from "./routes/backups";
 import { team } from "./routes/team";
 import { suppliers } from "./routes/suppliers";
 import { products } from "./routes/products";
+import { priceImport } from "./routes/priceImport";
 import { review } from "./routes/review";
 import { labour } from "./routes/labour";
 import { costing } from "./routes/costing";
@@ -122,6 +123,8 @@ export const router = {
   suppliers,
   /** The price book: variants, standard prices, and dated specials that revert themselves. */
   products,
+  /** Settings, Price list: template, export, import with preview, undo. Admin only. */
+  priceImport,
   /** Sorting the ServiceM8 import: what is a homeowner, what is a business. */
   review,
   /** Labour rate book: Terra defaults, installer overrides, effective-dated history. */
