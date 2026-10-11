@@ -107,8 +107,9 @@ export function wholeUnits(p: SizeShape, qtyIn: number): Rounded {
   if (p.unit === "lm" && p.category === "accessory") {
     const len = p.pieceLengthM && p.pieceLengthM > 0 ? p.pieceLengthM : null;
     if (!len) {
-      // Weld rod and the like comes on a coil (length_mm), not in lengths.
-      return { qty, note: null, flag: p.lengthMm && p.lengthMm > 0 ? null : PIECE_FLAG };
+      // Weld rod comes on a coil (length_mm, or just named weld rod), not in lengths.
+      const coil = (p.lengthMm && p.lengthMm > 0) || /weld\s*rod/i.test(`${p.brand ?? ""} ${p.range ?? ""}`);
+      return { qty, note: null, flag: coil ? null : PIECE_FLAG };
     }
     const n = Math.ceil(qty / len - 1e-9);
     const lm = r4(n * len);
