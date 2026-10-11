@@ -5,7 +5,7 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
-import { cancelPo, commitPo, nextPoNumber, pricePo, WAREHOUSE_ADDRESS, writeLines, type PoLineInput, type PoPricingInput } from "../lib/purchase-orders";
+import { cancelPo, commitPo, nextPoNumber, pricePo, supplierDeliversTo, WAREHOUSE_ADDRESS, writeLines, type PoLineInput, type PoPricingInput } from "../lib/purchase-orders";
 import { renderPoPdf } from "../lib/poPdf";
 import { sendAsTeam } from "../lib/agent-mail";
 import { INVOICES_TO } from "../lib/gmail";
@@ -84,6 +84,18 @@ function pricingOf(input: PoInput): PoPricingInput {
     rolls: input.rolls,
     pallets: input.pallets,
   };
+}
+
+/** Fix list 11 Oct, item 14: a supplier that only delivers to one place can't be sent the other way. */
+async function assertDeliverable(input: PoInput) {
+  const [sup] = await db
+    .select({ name: schema.suppliers.name, deliversTo: schema.suppliers.deliversTo })
+    .from(schema.suppliers)
+    .where(eq(schema.suppliers.id, input.supplierId));
+  if (sup && !supplierDeliversTo(sup.deliversTo, input.deliverTo)) {
+    const only = sup.deliversTo === "site" ? "site" : "the warehouse";
+    throw new ORPCError("BAD_REQUEST", { message: `${sup.name} only deliver to ${only}. Change where it's going.` });
+  }
 }
 
 async function deliveryFor(jobId: number, input: PoInput) {
@@ -205,6 +217,7 @@ export const purchasing = {
         email: schema.suppliers.email,
         deliversDirect: schema.suppliers.deliversDirect,
         freightMethod: schema.suppliers.freightMethod,
+        deliversTo: schema.suppliers.deliversTo,
       })
       .from(schema.suppliers)
       .where(eq(schema.suppliers.active, true))
@@ -237,6 +250,7 @@ export const purchasing = {
         percent: schema.supplierFeeRules.percent,
         autoApply: schema.supplierFeeRules.autoApply,
         condition: schema.supplierFeeRules.condition,
+        appliesTo: schema.supplierFeeRules.appliesTo,
       })
       .from(schema.supplierFeeRules)
       .where(and(eq(schema.supplierFeeRules.supplierId, input.supplierId), eq(schema.supplierFeeRules.active, true)))
@@ -253,6 +267,7 @@ export const purchasing = {
   }),
 
   create: adminOnly.input(poInput.extend({ jobId: z.number() })).handler(async ({ input, context }) => {
+    await assertDeliverable(input);
     const priced = await pricePo(pricingOf(input)).catch((e: Error) => {
       throw new ORPCError("BAD_REQUEST", { message: e.message });
     });
@@ -286,6 +301,7 @@ export const purchasing = {
   update: adminOnly.input(poInput.extend({ id: z.number() })).handler(async ({ input }) => {
     const po = await loadPo(input.id);
     if (po.status !== "draft") throw new ORPCError("BAD_REQUEST", { message: `PO ${po.number} has gone to the supplier. Cancel it and raise a new one.` });
+    await assertDeliverable(input);
     const priced = await pricePo(pricingOf(input)).catch((e: Error) => {
       throw new ORPCError("BAD_REQUEST", { message: e.message });
     });

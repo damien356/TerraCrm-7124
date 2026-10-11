@@ -24,7 +24,11 @@ import { rebuildForecast, settleDate, SUPPLIER_TERMS } from "./cashflow";
  *  - Supplier charges come off the supplier's fee rules, the same function
  *    the quote screen uses, so the PO and the quote agree.
  *  - Freight rules (Damien's):
- *      warehouse delivery is $0
+ *      each fee rule says which orders it goes on: warehouse, site or both
+ *      (fix list 11 Oct, item 14). Most suppliers charge to deliver into
+ *      Terra's warehouse, so a warehouse order carries that fee (EC $69.90).
+ *      Before 11 Oct every warehouse order was $0, which was backwards.
+ *      each supplier says where it will deliver: warehouse, site or both
  *      Hurford's solids to site are $320 flat, solids only
  *      a supplier that does not deliver gets no supplier freight, Terra books
  *      its own carrier and that bill is not on the supplier's PO
@@ -86,6 +90,16 @@ export type PricedPo = {
 };
 
 const isHurfords = (name: string) => /hurford/i.test(name);
+
+export type DeliverTo = "warehouse" | "site";
+/** Where a fee rule goes on: warehouse, site or both. Anything else reads as both. */
+export function feeAppliesTo(appliesTo: string | null | undefined, deliverTo: DeliverTo): boolean {
+  return appliesTo !== "warehouse" && appliesTo !== "site" ? true : appliesTo === deliverTo;
+}
+/** Whether a supplier will send an order there. Anything but warehouse or site reads as both. */
+export function supplierDeliversTo(deliversTo: string | null | undefined, deliverTo: DeliverTo): boolean {
+  return deliversTo !== "warehouse" && deliversTo !== "site" ? true : deliversTo === deliverTo;
+}
 /** Solid timber (item 10, 11 Oct), or the old single timber category marked solid. */
 const isSolid = (p: { tier: string; category: string } | undefined) =>
   Boolean(p && (p.category === "solid_timber" || (p.category === "timber" && /solid/i.test(p.tier))));
@@ -199,11 +213,16 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
   ).filter((r) => !(r.autoApply && skip.has(r.id)));
 
   const picked = new Set(input.feeIds ?? []);
-  if (input.deliverTo === "warehouse") {
-    const dropped = rules.filter((r) => r.kind === "delivery" && (r.autoApply || picked.has(r.id)));
-    rules = rules.filter((r) => r.kind !== "delivery");
-    if (dropped.length) notes.push("Going to the warehouse, so no delivery charge.");
-  } else if (isHurfords(supplier.name)) {
+  const offRoute = rules.filter((r) => !feeAppliesTo(r.appliesTo, input.deliverTo));
+  rules = rules.filter((r) => feeAppliesTo(r.appliesTo, input.deliverTo));
+  const offTicked = offRoute.filter((r) => r.autoApply || picked.has(r.id));
+  if (offTicked.length) {
+    notes.push(`Not charged on a ${input.deliverTo} order: ${offTicked.map((r) => r.name).join(", ")}.`);
+  }
+  if (!supplierDeliversTo(supplier.deliversTo, input.deliverTo)) {
+    notes.push(`${supplier.name} only deliver to ${supplier.deliversTo === "site" ? "site" : "the warehouse"}.`);
+  }
+  if (input.deliverTo === "site" && isHurfords(supplier.name)) {
     const crane = rules.find((r) => r.kind === "delivery" && /crane|site/i.test(r.name));
     if (anySolid && crane) {
       picked.add(crane.id);

@@ -139,7 +139,7 @@ export async function renderPoPdf(po: PoPdfInput): Promise<Buffer> {
   };
   sum("Goods", po.goodsExGst);
   if (po.chargesExGst) sum("Supplier charges", po.chargesExGst);
-  sum(po.deliverTo === "warehouse" && !po.freightExGst ? "Freight (to our warehouse, no charge)" : "Freight", po.freightExGst);
+  sum(po.deliverTo === "warehouse" ? "Freight to our warehouse" : "Freight to site", po.freightExGst);
   sum("Total ex GST", po.totalExGst, true);
   sum("GST", Math.round(po.totalExGst * 10) / 100);
   sum("Total inc GST", Math.round(po.totalExGst * 110) / 100, true);

@@ -945,6 +945,12 @@ export const suppliers = sqliteTable(
      * shape for a different reason — they do not deliver at all.
      */
     deliversDirect: integer("delivers_direct", { mode: "boolean" }).notNull().default(true),
+    /**
+     * Where this supplier will send an order (fix list 11 Oct, item 14):
+     * warehouse · site · both. EC Carpets is warehouse only, so the PO screen
+     * will not offer Site for them.
+     */
+    deliversTo: text("delivers_to").notNull().default("both"),
     /** How stock actually reaches Terra, e.g. "Jocks Transport / on-forwarder". */
     freightMethod: text("freight_method").notNull().default(""),
     /** Who pays and how it is billed. Plain English, shown on the supplier card. */
@@ -1046,6 +1052,13 @@ export const supplierFeeRules = sqliteTable(
     effectiveFrom: text("effective_from"),
     effectiveUntil: text("effective_until"),
 
+    /**
+     * Which purchase orders the fee goes on, by where the order is going
+     * (fix list 11 Oct, item 14): warehouse · site · both. Most delivery fees
+     * are the supplier's charge into Terra's warehouse. Hurford's crane truck
+     * is site only.
+     */
+    appliesTo: text("applies_to").notNull().default("both"),
     /** Plain English: when this fee actually bites. Shown next to the tickbox. */
     condition: text("condition").notNull().default(""),
     /** Free text — what the supplier's letter or price list actually said. */

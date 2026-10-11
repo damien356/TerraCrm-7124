@@ -70,9 +70,33 @@ const feeInput = z.object({
   effectiveFrom: dateOnly,
   /** Null = until further notice, which is how a supplier words a fuel levy. */
   effectiveUntil: dateOnly,
+  /** Item 14: which purchase orders the fee goes on, by where the order is going. */
+  appliesTo: z.enum(["warehouse", "site", "both"]).default("both"),
   condition: z.string().default(""),
   notes: z.string().default(""),
   sortOrder: z.number().int().default(0),
+});
+
+/**
+ * The same fields with their defaults taken off, for a patch. Zod 4 fills a
+ * default even inside .partial(), so feeInput.partial() turned a one field
+ * edit (a date, an amount) into a reset of every other field on the rule.
+ */
+const feePatch = z.object({
+  name: z.string().min(1).optional(),
+  kind: z.enum(FEE_KINDS).optional(),
+  basis: z.enum(FEE_BASES).optional(),
+  amount: z.number().nullable().optional(),
+  percent: z.number().nullable().optional(),
+  amountIncludesGst: z.boolean().optional(),
+  isCredit: z.boolean().optional(),
+  autoApply: z.boolean().optional(),
+  effectiveFrom: dateOnly.unwrap().optional(),
+  effectiveUntil: dateOnly.unwrap().optional(),
+  appliesTo: z.enum(["warehouse", "site", "both"]).optional(),
+  condition: z.string().optional(),
+  notes: z.string().optional(),
+  sortOrder: z.number().int().optional(),
 });
 
 async function logSupplier(supplierId: number, action: string, detail: string, actorName: string) {
@@ -153,6 +177,8 @@ export const suppliers = {
         dealerPricingNote: z.string().optional(),
         /** false = their published delivery charge is never Terra's cost. */
         deliversDirect: z.boolean().optional(),
+        /** Item 14: where they will send an order. */
+        deliversTo: z.enum(["warehouse", "site", "both"]).optional(),
         freightMethod: z.string().optional(),
         freightNote: z.string().optional(),
         priceListExGst: z.boolean().optional(),
@@ -244,7 +270,7 @@ export const suppliers = {
     }),
 
   feeUpdate: adminOnly
-    .input(feeInput.partial().extend({ id: z.number(), active: z.boolean().optional() }))
+    .input(feePatch.extend({ id: z.number(), active: z.boolean().optional() }))
     .handler(async ({ input, context }) => {
       const { id, ...rest } = input;
       const [row] = await db

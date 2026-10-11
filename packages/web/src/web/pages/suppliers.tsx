@@ -190,6 +190,19 @@ function NewSupplierModal({ open, onClose }: { open: boolean; onClose: () => voi
 
 /* ------------------------------- new fee --------------------------------- */
 
+/** Item 14 (11 Oct): where an order is going decides which charges go on it. */
+const APPLIES_TO = ["both", "warehouse", "site"] as const;
+const APPLIES_LABEL: Record<string, string> = {
+  both: "Every order, warehouse or site",
+  warehouse: "Warehouse orders only",
+  site: "Site orders only",
+};
+const DELIVERS_LABEL: Record<string, string> = {
+  both: "Warehouse or site",
+  warehouse: "Our warehouse only",
+  site: "Site only",
+};
+
 function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: boolean; onClose: () => void }) {
   const create = useCreateSupplierFee();
   const [form, setForm] = React.useState({
@@ -204,6 +217,7 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
     effectiveFrom: "",
     /** Left blank on purpose: blank means until further notice. */
     effectiveUntil: "",
+    appliesTo: "both",
     condition: "",
     notes: "",
   });
@@ -223,6 +237,7 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
       autoApply: form.autoApply,
       effectiveFrom: form.effectiveFrom || null,
       effectiveUntil: form.effectiveUntil || null,
+      appliesTo: form.appliesTo as "both",
       condition: form.condition,
       notes: form.notes,
       sortOrder: 0,
@@ -308,6 +323,15 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
             />
           </Field>
         </div>
+        <Field label="Goes on" hint="Which purchase orders get this charge, by where the order is going.">
+          <Select value={form.appliesTo} onChange={(e) => setForm({ ...form, appliesTo: e.target.value })}>
+            {APPLIES_TO.map((a) => (
+              <option key={a} value={a}>
+                {APPLIES_LABEL[a]}
+              </option>
+            ))}
+          </Select>
+        </Field>
         <Field label="When it applies" hint="Plain English. This is what shows next to the tickbox on an order.">
           <Input value={form.condition} onChange={(e) => setForm({ ...form, condition: e.target.value })} />
         </Field>
@@ -363,6 +387,7 @@ function FreightCard({
     id: number;
     name: string;
     deliversDirect: boolean;
+    deliversTo: string;
     freightMethod: string;
     freightNote: string;
   };
@@ -402,6 +427,18 @@ function FreightCard({
             </span>
           </span>
         </label>
+        <Field label="Where they deliver" hint="A supplier that only delivers one way can't be put on a PO going the other way.">
+          <Select
+            value={supplier.deliversTo === "warehouse" || supplier.deliversTo === "site" ? supplier.deliversTo : "both"}
+            onChange={(e) => update.mutate({ id: supplier.id, deliversTo: e.target.value as "both" })}
+          >
+            {APPLIES_TO.map((a) => (
+              <option key={a} value={a}>
+                {DELIVERS_LABEL[a]}
+              </option>
+            ))}
+          </Select>
+        </Field>
         <div className="grid gap-3 md:grid-cols-2">
           <Field label="Comes to us via" hint="The carrier or on-forwarder, where it is not the supplier.">
             <Input
@@ -930,6 +967,21 @@ export default function SuppliersPage() {
                             {windowLapsed(f.effectiveUntil) ? <Badge colour="#B4342A">lapsed</Badge> : null}
                           </div>
                           {f.condition ? <ClampText text={f.condition} className="mt-0.5 text-xs" /> : null}
+                          <div className="mt-1.5 max-w-[320px]">
+                            <Field label="Goes on">
+                              <Select
+                                className="h-8"
+                                value={f.appliesTo === "warehouse" || f.appliesTo === "site" ? f.appliesTo : "both"}
+                                onChange={(e) => feeUpdate.mutate({ id: f.id, appliesTo: e.target.value as "both" })}
+                              >
+                                {APPLIES_TO.map((a) => (
+                                  <option key={a} value={a}>
+                                    {APPLIES_LABEL[a]}
+                                  </option>
+                                ))}
+                              </Select>
+                            </Field>
+                          </div>
                           {/* Blank end date reads as "until further notice", not as forever. */}
                           <p className="mt-0.5 text-[11px] text-muted-foreground">
                             {windowLabel(f.effectiveFrom, f.effectiveUntil)}

@@ -281,6 +281,11 @@ export function PurchaseOrdersCard({ jobId }: { jobId: number }) {
 
 /* ================================= editor ================================= */
 
+/** Item 14: the one place a supplier delivers to, or null when it does both. */
+function onlyTo(s: { deliversTo?: string | null } | null | undefined): "warehouse" | "site" | null {
+  return s?.deliversTo === "warehouse" || s?.deliversTo === "site" ? s.deliversTo : null;
+}
+
 function linesFrom(po: Po | null, data: ForJob, supplierId: number | null): LineDraft[] {
   const saved = po?.pricingInputs.lines;
   if (po && saved?.length) {
@@ -361,7 +366,9 @@ function PoEditor({
 }) {
   const initialSupplier = po?.supplierId ?? guessSupplier(data) ?? data.suppliers[0]?.id ?? null;
   const [supplierId, setSupplierId] = React.useState<number | null>(initialSupplier);
-  const [deliverTo, setDeliverTo] = React.useState<"warehouse" | "site">((po?.deliverTo as "warehouse" | "site") ?? "warehouse");
+  const [deliverTo, setDeliverTo] = React.useState<"warehouse" | "site">(
+    () => (po?.deliverTo as "warehouse" | "site") ?? onlyTo(data.suppliers.find((s) => s.id === initialSupplier)) ?? "warehouse",
+  );
   const [address, setAddress] = React.useState(po?.deliverTo === "site" ? po.deliveryAddress : data.siteAddress);
   const [notes, setNotes] = React.useState(po?.notes.replace(/\s*Draft removed, never sent\.\s*/g, "") ?? "");
   const [lines, setLines] = React.useState<LineDraft[]>(() => linesFrom(po, data, initialSupplier));
@@ -423,6 +430,9 @@ function PoEditor({
 
   function changeSupplier(id: number) {
     setSupplierId(id);
+    // Item 14: a supplier that only delivers one way flips the order to that way.
+    const only = onlyTo(data.suppliers.find((s) => s.id === id));
+    if (only) setDeliverTo(only);
     setPicked(new Set());
     setSkipped(new Set());
     // A new PO picks up that supplier's materials. Lines typed by hand stay.
@@ -480,21 +490,34 @@ function PoEditor({
             </Field>
             <Field label="Deliver to">
               <div className="flex gap-1.5">
-                {(["warehouse", "site"] as const).map((d) => (
+                {(["warehouse", "site"] as const).map((d) => {
+                  const only = onlyTo(supplier);
+                  const blocked = only !== null && only !== d;
+                  return (
                   <button
                     key={d}
                     type="button"
+                    disabled={blocked}
+                    title={blocked ? `${supplier?.name ?? "This supplier"} only deliver to ${only === "site" ? "site" : "the warehouse"}.` : undefined}
                     onClick={() => setDeliverTo(d)}
                     className={
                       deliverTo === d
                         ? "h-9 flex-1 rounded-md bg-primary text-[13px] font-semibold text-primary-foreground"
-                        : "h-9 flex-1 rounded-md border border-border text-[13px] font-medium text-muted-foreground hover:text-foreground"
+                        : blocked
+                          ? "h-9 flex-1 cursor-not-allowed rounded-md border border-border text-[13px] font-medium text-muted-foreground opacity-40"
+                          : "h-9 flex-1 rounded-md border border-border text-[13px] font-medium text-muted-foreground hover:text-foreground"
                     }
                   >
                     {d === "warehouse" ? "Warehouse" : "Site"}
                   </button>
-                ))}
+                  );
+                })}
               </div>
+              {onlyTo(supplier) ? (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {supplier?.name} only deliver to {onlyTo(supplier) === "site" ? "site" : "the warehouse"}.
+                </p>
+              ) : null}
             </Field>
           </div>
           {deliverTo === "site" ? (
@@ -502,7 +525,7 @@ function PoEditor({
               <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street, suburb" />
             </Field>
           ) : (
-            <p className="-mt-2 text-xs text-muted-foreground">Warehouse: {data.warehouseAddress}. No delivery charge.</p>
+            <p className="-mt-2 text-xs text-muted-foreground">Warehouse: {data.warehouseAddress}.</p>
           )}
           {supplier && !supplier.email ? (
             <div className="flex items-start gap-2 rounded-md border border-[var(--warning)]/35 bg-[var(--warning)]/[0.06] px-3 py-2 text-xs text-muted-foreground">
@@ -621,8 +644,8 @@ function PoEditor({
             ) : (
               <ul className="space-y-1.5">
                 {(fees.data ?? []).map((r) => {
-                  const isDelivery = r.kind === "delivery";
-                  const off = isDelivery && deliverTo === "warehouse";
+                  // Item 14: each fee says which orders it goes on (warehouse, site or both).
+                  const off = r.appliesTo === "warehouse" || r.appliesTo === "site" ? r.appliesTo !== deliverTo : false;
                   const checked = r.autoApply ? !skipped.has(r.id) : picked.has(r.id);
                   const rate = r.basis === "percent_of_order" ? `${r.percent ?? 0}%` : `$${(r.amount ?? 0).toFixed(2)}${r.basis === "order" ? "" : ` / ${r.basis}`}`;
                   return (
@@ -652,7 +675,7 @@ function PoEditor({
                         />
                         <span className="flex-1">{r.name}</span>
                         <span className="tabular text-xs text-muted-foreground">{rate}</span>
-                        <span className="w-20 text-right text-[11px] text-muted-foreground">{off ? "not to warehouse" : r.autoApply ? "every order" : "tick to add"}</span>
+                        <span className="w-20 text-right text-[11px] text-muted-foreground">{off ? (r.appliesTo === "site" ? "site only" : "warehouse only") : r.autoApply ? "every order" : "tick to add"}</span>
                       </label>
                     </li>
                   );
