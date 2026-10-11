@@ -211,6 +211,8 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
     basis: "lm",
     amount: "",
     percent: "",
+    /** Blank = per unit. 40 = "per 40 lm or part". */
+    unitBlock: "",
     amountIncludesGst: false,
     isCredit: false,
     autoApply: true,
@@ -232,6 +234,7 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
       basis: form.basis as "lm",
       amount: isPercent ? null : Number(form.amount || 0),
       percent: isPercent ? Number(form.percent || 0) : null,
+      unitBlock: !isPercent && Number(form.unitBlock) > 0 ? Number(form.unitBlock) : null,
       amountIncludesGst: form.amountIncludesGst,
       isCredit: form.isCredit,
       autoApply: form.autoApply,
@@ -307,6 +310,17 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
             />
           </Field>
         )}
+        {!isPercent && form.basis !== "order" && form.basis !== "shipment" ? (
+          <Field label="Charged per block of (optional)" hint='Leave blank to charge on every unit. Put 40 for "per 40 lm or part of 40 lm".'>
+            <Input
+              type="number"
+              step="1"
+              value={form.unitBlock}
+              onChange={(e) => setForm({ ...form, unitBlock: e.target.value })}
+              placeholder="40"
+            />
+          </Field>
+        ) : null}
         <div className="grid grid-cols-2 gap-3">
           <Field label="Effective from" hint="The date on their letter or price list.">
             <Input
@@ -1026,6 +1040,7 @@ export default function SuppliersPage() {
                           )}
                           <p className="mt-1 text-right text-[11px] text-muted-foreground">
                             {f.basis === "percent_of_order" && f.percentBase === "goods_and_charges" ? "% of goods and charges" : BASIS_LABEL[f.basis]}
+                            {f.unitBlock ? ` · per ${f.unitBlock} or part` : ""}
                             {f.amountIncludesGst ? " · inc GST" : ""}
                           </p>
                         </div>

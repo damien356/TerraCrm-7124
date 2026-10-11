@@ -63,6 +63,8 @@ const feeInput = z.object({
   basis: z.enum(FEE_BASES).default("order"),
   amount: z.number().nullable().default(null),
   percent: z.number().nullable().default(null),
+  /** Charged per block of this many units, e.g. 40 for "per 40 lm or part". */
+  unitBlock: z.number().positive().nullable().default(null),
   amountIncludesGst: z.boolean().default(false),
   isCredit: z.boolean().default(false),
   autoApply: z.boolean().default(false),
@@ -88,6 +90,7 @@ const feePatch = z.object({
   basis: z.enum(FEE_BASES).optional(),
   amount: z.number().nullable().optional(),
   percent: z.number().nullable().optional(),
+  unitBlock: z.number().positive().nullable().optional(),
   amountIncludesGst: z.boolean().optional(),
   isCredit: z.boolean().optional(),
   autoApply: z.boolean().optional(),

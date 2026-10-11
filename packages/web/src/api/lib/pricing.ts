@@ -783,6 +783,11 @@ export type SupplierChargeRule = {
   percent: number | null;
   /** "goods" (default) or "goods_and_charges". See supplier_fee_rules.percent_base. */
   percentBase?: string | null;
+  /**
+   * Charged once for every block of this many units, a part block counting as
+   * a whole one. Victoria Carpets: $35 per 40 lm or part of 40 lm. Null = per unit.
+   */
+  unitBlock?: number | null;
   amountIncludesGst: boolean;
   isCredit: boolean;
   autoApply: boolean;
@@ -839,6 +844,17 @@ export function chargeUnits(basis: string, order: ChargeOrder): number {
     default:
       return 1;
   }
+}
+
+/**
+ * A charge billed per block of units bills every started block once.
+ * 40 lm blocks: 40 lm = 1, 40.1 lm = 2. Flat and percentage charges are never blocked.
+ */
+export function blockUnits(rule: Pick<SupplierChargeRule, "basis" | "unitBlock">, units: number): number {
+  const block = rule.unitBlock ?? 0;
+  if (!(block > 0) || units <= 0) return units;
+  if (rule.basis === "order" || rule.basis === "percent_of_order" || rule.basis === "shipment") return units;
+  return Math.ceil(units / block - 1e-9);
 }
 
 /** Inside the charge's dated window today. No end date = until further notice. */
@@ -957,7 +973,7 @@ export function resolveSupplierCharges(
       continue;
     }
 
-    const units = chargeUnits(r.basis, order);
+    const units = blockUnits(r, chargeUnits(r.basis, order));
     const isPercent = r.basis === "percent_of_order";
     if (isPercent && r.percentBase === "goods_and_charges") {
       onCharges.push(r);
@@ -1052,6 +1068,7 @@ function chargeNote(r: SupplierChargeRule, units: number, exGst: number, goodsEx
   const u = chargeUnitLabel(r.basis);
   const rate = `${money(r.amount ?? 0)}/${u}`;
   if (r.basis === "order") return `${money(r.amount ?? 0)} flat on the order.`;
+  if ((r.unitBlock ?? 0) > 0) return `${money(r.amount ?? 0)} per ${r.unitBlock} ${u} or part × ${units} = ${money(exGst)}.`;
   return `${rate} × ${units} ${u}${units === 1 ? "" : "s"} = ${money(exGst)}.`;
 }
 

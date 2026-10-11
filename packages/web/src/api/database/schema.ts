@@ -1032,6 +1032,8 @@ export const supplierFeeRules = sqliteTable(
      * Only ever changed by Damien approving a price check, never by itself.
      */
     percentBase: text("percent_base").notNull().default("goods"),
+    /** Charged once per block of this many units, part blocks count whole. Victoria: 40 lm. Null = per unit. */
+    unitBlock: real("unit_block"),
     /** false = `amount` is ex-GST (the normal case on a supplier schedule). */
     amountIncludesGst: integer("amount_includes_gst", { mode: "boolean" }).notNull().default(false),
     /** A credit, not a charge — Armstrong pays $50 back per crate returned. */
