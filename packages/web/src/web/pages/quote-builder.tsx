@@ -97,6 +97,8 @@ type Item = {
   /** Fix list items 2 and 3. */
   followsItemId?: number | null;
   size?: LineSize | null;
+  /** Fix list item 14. Supplier freight built into the sell, cost viewers only. */
+  freightSell?: number | null;
 };
 
 type LineSize = {
@@ -359,6 +361,11 @@ function LineRow({ item, locked, onNotice }: { item: Item; locked: boolean; onNo
         {item.area ? <LineAreaStrip item={item} locked={locked} /> : null}
         {item.labourForItemId != null ? <LinkedInstallMark /> : null}
         {item.size ? <LineSizeStrip item={item} locked={locked} /> : null}
+        {item.freightSell ? (
+          <p className="mt-1 text-[11px] text-muted-foreground" title="Supplier freight and charges, built into this price. The client does not see it.">
+            Includes {money(item.freightSell)} supplier freight
+          </p>
+        ) : null}
       </td>
       <td className="px-2 py-1.5">
         <Input
@@ -956,6 +963,23 @@ export default function QuoteBuilderPage() {
                   {q.estimatedMarginPercent}%
                 </span>
               </div>
+              {q.freightIncluded?.length ? (
+                <div className="mt-1 rounded-md bg-secondary/60 px-3 py-2 text-[13px]">
+                  <p className="font-medium">Supplier freight in the prices</p>
+                  {q.freightIncluded.map((f) => (
+                    <div key={f.supplier} className="mt-1 flex justify-between gap-3">
+                      <span className="text-muted-foreground">
+                        {f.supplier}
+                        {f.charges ? `: ${f.charges}` : ""}
+                      </span>
+                      <span className="tabular whitespace-nowrap" title={`Adds ${money(f.sellExGst)} to the client price`}>
+                        {money(f.costExGst)}
+                      </span>
+                    </div>
+                  ))}
+                  <p className="mt-1 text-xs text-muted-foreground">Built into the material lines. The client never sees a freight line.</p>
+                </div>
+              ) : null}
               <p className="text-xs text-muted-foreground">
                 Only lines with a cost entered count. Blank cost reads as zero cost.
               </p>

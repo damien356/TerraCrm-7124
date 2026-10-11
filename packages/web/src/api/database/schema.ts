@@ -1454,6 +1454,12 @@ export const quoteItems = sqliteTable(
     followsItemId: integer("follows_item_id"),
     /** On a labour line: the rate book item it was priced off. Null on older lines. */
     rateItemId: integer("rate_item_id"),
+    /**
+     * Fix list 11 Oct, item 14. How much of unit_cost is the supplier's freight
+     * and charges, spread over its lines (api/lib/quote-freight.ts). The sell
+     * carries it at the line's markup. Never shown to the client.
+     */
+    freightUnitCost: real("freight_unit_cost"),
     ...timestamps,
   },
   (t) => [index("quote_items_quote_idx").on(t.quoteId)],

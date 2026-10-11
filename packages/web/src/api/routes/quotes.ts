@@ -39,6 +39,7 @@ import {
 } from "../lib/quote-labour";
 import { floorLineFor, followsAFloor, followUnderlay, lineSizes, refollow, sizeFlag, startLine, wholeUnits } from "../lib/quote-sizes";
 import { isUnderlayCategory, underlayName } from "../lib/order-sizes";
+import { lineFreightSell, quoteFreightView, refreshQuoteFreight } from "../lib/quote-freight";
 
 /**
  * Quotes are for Admin and Office. Field crew must never reach any procedure
@@ -109,6 +110,8 @@ export async function recordPriceHistory(quote: typeof schema.quotes.$inferSelec
  *  Exported for the voice quote pipeline, which inserts lines directly and
  *  then needs the same header maths this file already does. */
 export async function recalc(quoteId: number) {
+  // Fix list item 14: supplier freight goes into the material lines first.
+  await refreshQuoteFreight(quoteId);
   const items = await db
     .select({ total: schema.quoteItems.total })
     .from(schema.quoteItems)
@@ -189,8 +192,8 @@ async function assertSentEditAllowed(
 }
 
 /** Cost is never sent to someone who is not allowed to see it. */
-function hideCost<T extends { unitCost: number | null; markupPercent: number | null }>(row: T | undefined, actor: Actor): T | undefined {
-  return row && !actor.canSeeCosts ? { ...row, unitCost: null, markupPercent: null } : row;
+function hideCost<T extends { unitCost: number | null; markupPercent: number | null; freightUnitCost?: number | null }>(row: T | undefined, actor: Actor): T | undefined {
+  return row && !actor.canSeeCosts ? { ...row, unitCost: null, markupPercent: null, freightUnitCost: null } : row;
 }
 
 export const createQuoteInput = z.object({
@@ -406,6 +409,7 @@ export async function reviseQuoteRecord(
           wastagePct: i.wastagePct,
           rollWidthM: i.rollWidthM,
           rateItemId: i.rateItemId,
+          freightUnitCost: i.freightUnitCost,
         })),
       )
       .returning({ id: schema.quoteItems.id, sortOrder: schema.quoteItems.sortOrder });
@@ -552,6 +556,7 @@ export const quotes = {
         .orderBy(desc(schema.quotes.version)),
       bundlesFor(row.quote),
     ]);
+    const freightIncluded = context.actor.canSeeCosts ? await quoteFreightView(row.quote.id) : null;
 
     const cost = items.reduce((sum, i) => sum + (i.unitCost ?? 0) * (i.qty ?? 0), 0);
     const showCosts = context.actor.canSeeCosts;
@@ -575,8 +580,8 @@ export const quotes = {
       site: row.site,
       job: row.job?.id ? row.job : null,
       items: showCosts
-        ? items.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice), area: areas[i.id] ?? null, size: sizes[i.id] ?? null }))
-        : items.map((i) => ({ ...i, unitCost: null, markupPercent: null, area: areas[i.id] ?? null, size: sizes[i.id] ?? null })),
+        ? items.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice), area: areas[i.id] ?? null, size: sizes[i.id] ?? null, freightSell: lineFreightSell(i) }))
+        : items.map((i) => ({ ...i, unitCost: null, markupPercent: null, freightUnitCost: null, area: areas[i.id] ?? null, size: sizes[i.id] ?? null, freightSell: null })),
       ...depositSplit(row.quote.total, row.quote.depositPercent),
       activity,
       versions: versions.map((v) => ({ ...v, ref: quoteRef(row.quote.number, v.version, jobRefText) })),
@@ -584,6 +589,8 @@ export const quotes = {
       bundles: bundleView.bundles,
       /** Only for Admin, or Office with the cost switch on. Never expose these through field.ts. */
       estimatedCost: showCosts ? round2(cost) : null,
+      /** Fix list item 14: supplier freight and charges inside the line prices. Cost viewers only. */
+      freightIncluded,
       estimatedMargin: showCosts ? round2(row.quote.subtotal - cost) : null,
       estimatedMarginPercent: !showCosts ? null : row.quote.subtotal > 0 ? round2(((row.quote.subtotal - cost) / row.quote.subtotal) * 100) : 0,
     };
@@ -1012,6 +1019,8 @@ export const quotes = {
       // Only an Admin can change what Terra pays or the markup on it. Office edits price and quantity only.
       const { markupPercent: markupIn, ...fields } = rest;
       if (context.actor.role !== "admin") delete fields.unitCost;
+      // A typed cost is the supplier price. Freight is added back on top by recalc.
+      const freightReset = fields.unitCost !== undefined ? { freightUnitCost: null } : {};
       const setMarkup = context.actor.role === "admin" ? markupIn : undefined;
 
       if (fields.kind !== undefined && fields.lineType === undefined) fields.lineType = lineTypeOf(fields.kind) as "material" | "labour";
@@ -1094,7 +1103,7 @@ export const quotes = {
 
       const [row] = await db
         .update(schema.quoteItems)
-        .set({ ...fields, markupPercent, ...(listUnitPrice !== undefined ? { listUnitPrice } : {}), total: round2(qty * unitPrice), updatedAt: new Date() })
+        .set({ ...fields, ...freightReset, markupPercent, ...(listUnitPrice !== undefined ? { listUnitPrice } : {}), total: round2(qty * unitPrice), updatedAt: new Date() })
         .where(eq(schema.quoteItems.id, id))
         .returning();
 
@@ -1295,6 +1304,7 @@ export const quotes = {
           listUnitPrice: null,
           unitCost: product.costPrice ?? null,
           markupPercent: markupOf(product.costPrice, unitPrice),
+          freightUnitCost: null,
           qty,
           total: round2(qty * unitPrice),
           ...(areaRes ? {} : { measuredM2: null, wastagePct: null, rollWidthM: null }),
