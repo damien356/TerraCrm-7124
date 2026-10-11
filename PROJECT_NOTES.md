@@ -587,7 +587,7 @@ Checked on the branch head: lint clean, web build OK, API tsc 0, mobile tsc 0, a
   - Accepted, declined, expired and replaced quotes are never touched.
   - Quote vs PO: a supplier who does not deliver (`delivers_direct = 0`) still costs Terra the carrier's bill, so quotes count carrier rules. The PO leaves them off because the carrier invoices Terra separately.
 - **Per-block charges** (`supplier_fee_rules.unit_block`, `pricing.ts` `blockUnits`). A rule can be charged per block of N units or part, eg $35 per 40 lm or part (40 lm = $35, 40.1 lm = $70). Suppliers page: "Charged per block of (optional)" on a new charge, hidden for per order, per shipment and percent. The rule list shows "per 40 or part".
-- **Pallet count (OPEN):** a quote counts 1 pallet per supplier order whenever boxed goods are on it. Asked Damien how he wants pallets counted.
+- **Pallet count:** a quote counts 1 pallet per supplier order whenever boxed goods are on it. Damien, 12 Oct: keep it at 1 for now. Later he will enter a pallet size on every product (not part of this fix).
 - **Live, 12 Oct** (backups `backups/terra-live-pre-freight-2026-10-12.db` and `backups/terra-live-pre-carriers-2026-10-12.db`, dry run on a copy, Damien's OK "go live once the rules are fixed", script `fix1011/fix-carriers.tmp.ts`): SQL `api/database/sql/2026-10-12-quote-freight.sql` (both columns). Fee rules 47 to 58:
   - Unified Transport $123.50 a pallet ($95 + 30% fuel), auto, warehouse: ArtiFloor, Big Panda, Chameleon, Floor Distributors, Riverhill, NFD (rules 800 to 805).
   - Chaparral: Jocks roll freight $31.25 auto (806), Jocks pickup $20 tick (807). Advantage Jocks pickup (799) back on as tick only.
