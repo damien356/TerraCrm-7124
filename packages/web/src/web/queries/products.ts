@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { orpc } from "../lib/api";
+import { client, orpc } from "../lib/api";
 
 export function useProductRanges(supplierId: number | null = null) {
   return useQuery(orpc.products.ranges.queryOptions({ input: { supplierId }, staleTime: 30_000 }));
@@ -160,4 +160,29 @@ export function useSetSoldAs() {
       },
     }),
   );
+}
+
+/**
+ * Item 8: a colour swatch picture for the client's colour form. Straight to
+ * storage from the browser, then saved on the product.
+ */
+export function useSetSwatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: { id: number; file: File | null }) => {
+      let key: string | null = null;
+      if (args.file) {
+        const type = args.file.type || "image/jpeg";
+        const slot = await client.products.swatchPresign({ id: args.id, filename: args.file.name, contentType: type });
+        const res = await fetch(slot.url, { method: "PUT", body: args.file, headers: { "Content-Type": type } });
+        if (!res.ok) throw new Error("That picture did not upload. Try again.");
+        key = slot.key;
+      }
+      return client.products.setSwatch({ id: args.id, key });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: orpc.products.key() });
+      void queryClient.invalidateQueries({ queryKey: orpc.settings.products.key() });
+    },
+  });
 }

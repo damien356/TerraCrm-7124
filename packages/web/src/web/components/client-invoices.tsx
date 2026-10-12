@@ -587,7 +587,7 @@ export function MaterialSelectionCard({ jobId }: { jobId: number }) {
     <Card>
       <CardHeader
         title="Material selection"
-        subtitle="The client picks product and colour for each room before anything is ordered."
+        subtitle="The client checks the colour of each floor on the accepted quote before anything is ordered. Only sent from here."
         action={
           sel.isLoading ? null : (
             <Button size="sm" variant="outline" onClick={openSend}>
@@ -602,10 +602,11 @@ export function MaterialSelectionCard({ jobId }: { jobId: number }) {
       ) : sel.isError ? (
         <Empty>{errorText(sel.error)}</Empty>
       ) : !s ? (
-        <Empty>No form yet. It goes out by itself when the quote is accepted, or send it now.</Empty>
+        <Empty>No form yet. It never goes by itself. Send it once the quote is accepted.</Empty>
       ) : (
         <div className="px-4 py-3">
           <div className="flex flex-wrap items-center gap-2 text-sm">
+            {s.locked && s.kind === "products" ? <Badge>Locked, materials ordered</Badge> : null}
             {s.status === "submitted" ? (
               <Badge colour="#3F7D3A">Filled in</Badge>
             ) : s.sentAt ? (
@@ -627,7 +628,9 @@ export function MaterialSelectionCard({ jobId }: { jobId: number }) {
             </a>
           </div>
           {notice ? <p className="mt-2 text-xs text-[var(--success)]">{notice}</p> : null}
-          {filled.length ? (
+          {s.kind === "products" ? (
+            <SelectionSections s={s} />
+          ) : filled.length ? (
             <ul className="mt-3 divide-y divide-border rounded-md border border-border">
               {filled.map((i) => (
                 <li key={i.id} className="px-3 py-2 text-sm">
@@ -669,5 +672,58 @@ export function MaterialSelectionCard({ jobId }: { jobId: number }) {
         {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
       </Modal>
     </Card>
+  );
+}
+
+type SelectionView = NonNullable<ReturnType<typeof useMaterialSelection>["data"]>;
+
+const CHANGE_LABEL: Record<string, string> = { swap: "Changed, same price", cheaper: "Changed, cheaper", dearer: "Changed, dearer" };
+
+/** Item 8: the product form's sections, what the client picked and what it made. */
+function SelectionSections({ s }: { s: SelectionView }) {
+  return (
+    <div className="mt-3 flex flex-col gap-2">
+      <ul className="divide-y divide-border rounded-md border border-border">
+        {s.sections.map((x) => (
+          <li key={x.id} className="px-3 py-2 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-medium">{x.title}</p>
+              <span className="text-xs text-muted-foreground">{[x.kindLabel, x.qtyText].filter(Boolean).join(", ")}</span>
+              {x.change !== "same" ? (
+                <Badge colour={x.change === "dearer" ? "#D08A1E" : x.change === "cheaper" ? "#2E6B8F" : "#3F7D3A"}>{CHANGE_LABEL[x.change]}</Badge>
+              ) : null}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {x.change === "same" ? (
+                <>Colour {x.colour}{s.status === "submitted" ? ", as quoted" : ""}</>
+              ) : (
+                <>
+                  {x.quotedColour} to <span className="font-semibold text-foreground">{x.colour}</span>
+                  {x.change === "dearer" || x.change === "cheaper"
+                    ? `, ${moneyExact(Math.abs(x.extraIncGst))} inc GST ${x.change === "dearer" ? "more" : "less"}`
+                    : ""}
+                </>
+              )}
+            </p>
+            {x.variation ? (
+              <p className="mt-0.5 text-xs">
+                Variation {x.variation.ref}, {x.variation.status}
+                {x.variation.status === "draft" ? ". Check it and send it from Variations." : ""}
+              </p>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      {s.notes ? (
+        <p className="rounded-md bg-secondary px-3 py-2 text-xs">
+          <span className="font-semibold">Client note:</span> {s.notes}
+        </p>
+      ) : null}
+      {s.task ? (
+        <p className="text-xs text-muted-foreground">
+          Task: {s.task.title} ({s.task.status})
+        </p>
+      ) : null}
+    </div>
   );
 }

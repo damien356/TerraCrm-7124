@@ -770,7 +770,6 @@ export default function QuoteBuilderPage() {
                         `Accepted.`,
                         out.replacedRef ? `${out.replacedRef} is now replaced.` : "",
                         out.invoiceRef ? `Invoice ${out.invoiceRef} raised.` : "",
-                        out.selection ? (out.selection.sent ? `Material selection sent to ${out.selection.to}.` : `Material selection not sent: ${out.selection.reason ?? "no email"}. Send it from the job page.`) : "",
                         out.workChanges ? `${out.workChanges} dispatch and material change${out.workChanges === 1 ? "" : "s"} made from this version.` : "",
                         out.toSort
                           ? `${out.toSort} thing${out.toSort === 1 ? "" : "s"} to sort by hand. The office has a task and a notification listing them. Crew have not been told.`

@@ -5,6 +5,7 @@ import { assertBillable } from "./callbacks";
 import { insertDispatchForLines, type WorkLine } from "./dispatch-build";
 import { pushToOffice } from "./push";
 import { jobText } from "./refs";
+import { applyAcceptedColours } from "./selection-colours";
 import { addressedFor } from "./variation-send";
 import { bad, itemsOf, money, SUPPLY_KINDS, variationOrThrow, WORK_KINDS, type Variation, type VariationItem } from "./variations";
 
@@ -107,6 +108,8 @@ export async function acceptVariation(args: { id: number; actor: VariationActor;
     .where(eq(schema.jobs.id, locked.jobId));
 
   const work = await makeVariationWork(locked);
+  // A dearer colour from the material selection form goes onto the order now (item 8).
+  const colours = await applyAcceptedColours(locked);
   const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, locked.jobId));
   const jobRef = job ? jobText(job) : String(locked.jobId);
   const billedToCompany = (await addressedFor(locked)).billedToCompany;
@@ -128,7 +131,8 @@ export async function acceptVariation(args: { id: number; actor: VariationActor;
     billedToCompany ? WORK_ORDER_WARNING : "",
     work.materials ? `${work.materials} material${work.materials === 1 ? "" : "s"} to order.` : "",
     work.taskId ? "A new dispatch is on the job for the extra work. Book it in." : "",
-    lines.some((l) => !SUPPLY_KINDS.has(l.kind) && !WORK_KINDS.has(l.kind)) ? "It has other lines. Check if anything else needs doing." : "",
+    colours.items ? `The colour change${colours.items === 1 ? " is" : "s are"} now on the materials to order${colours.moved ? "" : ". None was found to change, check the order by hand"}.` : "",
+    lines.some((l) => !SUPPLY_KINDS.has(l.kind) && !WORK_KINDS.has(l.kind)) && !colours.items ? "It has other lines. Check if anything else needs doing." : "",
   ]
     .filter(Boolean)
     .join("\n");

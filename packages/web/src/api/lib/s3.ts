@@ -59,6 +59,12 @@ export function installerLogoKey(installerId: number, filename: string) {
   return `installers/${installerId}/logo/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`;
 }
 
+/** A product's colour swatch picture, uploaded in the Price list (item 8). */
+export function productSwatchKey(productId: number, filename: string) {
+  const safe = filename.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-60);
+  return `products/${productId}/swatch/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`;
+}
+
 /** Where a submitted subcontractor invoice PDF is stored. */
 export function invoicePdfKey(installerId: number, taskId: number) {
   return `installers/${installerId}/invoices/task-${taskId}-${Date.now()}.pdf`;

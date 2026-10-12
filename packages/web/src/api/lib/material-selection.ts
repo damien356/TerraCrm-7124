@@ -7,13 +7,17 @@ import { addParticipant, ensureForJob, logMessage, subjectWithRef } from "./conv
 import { pushToOffice } from "./push";
 import { newToken, selectionUrl } from "./quote-links";
 import { jobText } from "./refs";
+import { isProductForm, productItemsFor } from "./selection-colours";
 
 const bad = (message: string) => new ORPCError("BAD_REQUEST", { message });
 
 /* ---------------------------------------------------------------------------
- * The material selection form (spec section 2, Damien: keep it simple).
- * Sent to the decision-maker once a quote is accepted. Per room: the
- * product, the colour and any notes. No login, opened by link.
+ * The material selection form (spec section 2). No login, opened by link.
+ *
+ * Fix list 13 Oct, items 8 and 10: it is one section per product on the
+ * accepted quote (lib/selection-colours.ts), and it is never sent by itself.
+ * The office sends it from the job page. The old room by room forms (product,
+ * colour and notes per room) still open and send back as they were.
  * ------------------------------------------------------------------------- */
 
 export const SENDER_NAME = "Damien from Terra";
@@ -57,17 +61,24 @@ export async function selectionForJob(jobId: number) {
   return { ...sel, url: selectionUrl(sel.token), items };
 }
 
-/** Make the form for a job, one row per room already on the job. Reuses one that is still waiting. */
-export async function createSelection(args: { jobId: number; quoteId: number | null }) {
+/**
+ * The job's form, one section per product on the accepted quote. Reuses the
+ * newest one when it is already the new kind for the same accepted quote, so
+ * a resend is the same link. An old room by room form, or one made from an
+ * earlier version of the quote, is replaced by a new one.
+ */
+export async function createSelection(args: { jobId: number }) {
+  // Checked before anything is written, so a job with nothing to choose gets no form.
+  const probe = await productItemsFor(args.jobId, 0);
   const existing = await selectionForJob(args.jobId);
-  if (existing && existing.status === "waiting") return existing;
+  if (existing && isProductForm(existing.items) && existing.quoteId === probe.quoteId) return existing;
 
   const who = await decisionMakerFor(args.jobId);
   const [sel] = await db
     .insert(schema.materialSelections)
     .values({
       jobId: args.jobId,
-      quoteId: args.quoteId,
+      quoteId: probe.quoteId,
       token: newToken(),
       contactId: who?.id ?? null,
       sentTo: who?.email?.trim() || null,
@@ -75,24 +86,14 @@ export async function createSelection(args: { jobId: number; quoteId: number | n
     })
     .returning();
   if (!sel) throw bad("Selection form not created");
-
-  const areas = await db
-    .select()
-    .from(schema.jobAreas)
-    .where(eq(schema.jobAreas.jobId, args.jobId))
-    .orderBy(asc(schema.jobAreas.sortOrder), asc(schema.jobAreas.id));
-  if (areas.length) {
-    await db.insert(schema.materialSelectionItems).values(
-      areas.map((a, i) => ({ selectionId: sel.id, areaId: a.id, room: a.name, sortOrder: i })),
-    );
-  }
+  await db.insert(schema.materialSelectionItems).values(probe.rows.map((r) => ({ ...r, selectionId: sel.id })));
   return (await selectionForJob(args.jobId))!;
 }
 
 /**
  * Email the form link to the decision-maker through team@, and log it on the
- * job's thread. Returns why it did not go, rather than throwing, so an
- * accept never fails over it.
+ * job's thread. Returns why it did not go, rather than throwing, so the
+ * Send button can show the reason.
  */
 export async function sendSelection(selectionId: number, by: { name: string }): Promise<{ sent: boolean; to: string | null; reason?: string }> {
   const [sel] = await db.select().from(schema.materialSelections).where(eq(schema.materialSelections.id, selectionId));
@@ -107,16 +108,16 @@ export async function sendSelection(selectionId: number, by: { name: string }): 
   const first = contact?.firstName?.trim() || "there";
   const url = selectionUrl(sel.token);
   const conv = await ensureForJob(job.id);
-  const subject = subjectWithRef(`Choose your flooring, job ${ref}`, conv.ref);
+  const subject = subjectWithRef(`Check your flooring colours, job ${ref}`, conv.ref);
   const text = [
     `Hi ${first},`,
     "",
     "Thanks for accepting your quote with Terra Flooring.",
     "",
-    "Before we order your flooring, please tell us the product and colour you want in each room. It takes a couple of minutes:",
+    "Before we order, please check the colour of each floor on your quote. If you would like a different colour from the same range, you can change it there. It takes a couple of minutes:",
     url,
     "",
-    "If you are not sure yet, fill in what you know and add a note. We will call you about the rest.",
+    "If you are not sure yet, leave us a note on the form and we will call you.",
     "",
     "Kind regards,",
     "Damien",

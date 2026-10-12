@@ -7,7 +7,6 @@ import { depositInvoiceFor, raiseInvoice, type InvoiceRow } from "./client-invoi
 import { depositSplit } from "./deposits";
 import { carryQuotePeopleToJob } from "./job-people";
 import { moveJobForward } from "./job-stage";
-import { createSelection, sendSelection } from "./material-selection";
 import { pushToOffice } from "./push";
 import { buildWorkFromQuote, convertQuoteToJob } from "./quote-convert";
 import { quoteRefOf } from "./quote-number";
@@ -22,8 +21,9 @@ import { approvedVariationsTotal } from "./variations";
  *   lock the quote, make the job if there is none, job value = the quote,
  *   job to Won, other versions expire (an earlier accepted one is marked
  *   replaced), deposit invoice IQ{n}-1 at the quote's deposit %, or for a
- *   replacement a variation for the difference when it comes to more, the
- *   material selection form to the decision-maker, and an Order product task.
+ *   replacement a variation for the difference when it comes to more, and an
+ *   Order product task. The material selection form is sent by the office
+ *   from the job page, never by itself (fix list 13 Oct, item 10).
  *
  *   Dispatches and materials (item 7): made from the lines the first time a
  *   version is accepted on the job. A later version swaps over the free ones
@@ -188,15 +188,10 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     }
   }
 
-  // Material selection and the Order product task, on the first accept.
+  // The Order product task. The material selection form is never sent by
+  // itself (fix list 13 Oct, item 10): the office sends it from the job page.
   const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, jobId));
   const jobRef = job ? jobText(job) : String(jobId);
-  let selection: { id: number; sent: boolean; to: string | null; reason?: string } | null = null;
-  if (!prev) {
-    const sel = await createSelection({ jobId, quoteId: locked.id });
-    const out = await sendSelection(sel.id, { name: args.actor.name });
-    selection = { id: sel.id, ...out };
-  }
 
   const taskDetail = [
     prev
@@ -205,8 +200,7 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     invoice?.kind === "deposit" ? `Order once deposit ${invoice.number} (${money(invoice.total)}) is paid.` : "",
     invoice?.kind === "variation" ? `Variation ${invoice.number} raised for ${money(invoice.total)}.` : "",
     !prev && !invoice ? "No deposit on this quote. Raise the invoice from the job's Client invoices card when it is ready to bill." : "",
-    selection && !selection.sent ? `Material selection email did not go: ${selection.reason ?? "unknown"}. Send it from the job page.` : "",
-    selection?.sent ? `Material selection sent to ${selection.to}.` : "",
+    !prev ? "Send the material selection form from the job page so the client can check the colours before you order." : "",
     rework?.changes.length ? `Ops changed:\n${rework.changes.map((c) => `- ${c}`).join("\n")}` : "",
     rework?.flags.length ? `To sort by hand (crew have not been told):\n${rework.flags.map((f) => `- ${f}`).join("\n")}` : "",
   ]
@@ -253,7 +247,6 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     converted,
     replaced: prev ? { id: prev.id, ref: prevRef } : null,
     invoice,
-    selection,
     taskId: task?.id ?? null,
     work: built,
     rework,

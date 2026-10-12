@@ -1526,7 +1526,6 @@ export const quotes = {
         jobId: out.jobId,
         invoiceRef: out.invoice?.number ?? null,
         replacedRef: out.replaced?.ref ?? null,
-        selection: out.selection,
         /** Dispatches and materials a later version could not swap over on its own. */
         toSort: out.rework?.flags.length ?? 0,
         workChanges: out.rework?.changes.length ?? 0,

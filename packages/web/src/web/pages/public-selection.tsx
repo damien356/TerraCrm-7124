@@ -5,11 +5,14 @@ import { Button } from "../components/ui/button";
 import { Field, Input, Textarea } from "../components/ui/field";
 import { Spinner } from "../components/ui/card";
 import { PublicCard, PublicMessage, PublicShell, errorText } from "../components/public-shell";
+import { ProductSelection } from "../components/selection-products";
 import { usePublicSelection, useSubmitSelection } from "../queries/publicPages";
 
 /**
- * /m/<token>: the material selection form, sent after a quote is accepted.
- * Per room: product, colour, notes. No login. Kept simple on purpose.
+ * /m/<token>: the material selection form. No login.
+ * New forms (fix list 13 Oct, item 8) are one section per product on the
+ * quote, in components/selection-products.tsx. Old forms are per room:
+ * product, colour, notes, below.
  */
 
 type Row = { areaId: number | null; room: string; product: string; colour: string; notes: string };
@@ -19,6 +22,12 @@ const blank = (): Row => ({ areaId: null, room: "", product: "", colour: "", not
 export default function PublicSelectionPage() {
   const { token = "" } = useParams<{ token: string }>();
   const sel = usePublicSelection(token);
+  if (sel.data && !sel.data.superseded && sel.data.kind === "products") return <ProductSelection token={token} d={sel.data} />;
+  return <RoomSelection token={token} sel={sel} />;
+}
+
+/** The old room by room form, still open for forms sent before item 8. */
+function RoomSelection({ token, sel }: { token: string; sel: ReturnType<typeof usePublicSelection> }) {
   const submit = useSubmitSelection();
   const [rows, setRows] = React.useState<Row[] | null>(null);
   const [name, setName] = React.useState("");

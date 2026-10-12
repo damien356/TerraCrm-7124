@@ -1242,6 +1242,8 @@ export const products = sqliteTable(
      * rings the branch for a current number. Nothing here silently reprices.
      */
     priceValidUntil: text("price_valid_until").notNull().default(""),
+    /** Item 8 (fix list 13 Oct). The colour swatch picture, uploaded in the Price list. Storage key. */
+    swatchKey: text("swatch_key"),
     /**
      * Trims and stair nosings are sold PER FLOOR RANGE, and a range with no
      * trim genuinely has none — Riverhill confirmed the gaps are real, not
@@ -1790,6 +1792,12 @@ export const materialSelections = sqliteTable(
     sentAt: integer("sent_at", { mode: "timestamp" }),
     submittedAt: integer("submitted_at", { mode: "timestamp" }),
     submittedName: text("submitted_name"),
+    /** Item 8. The one "Anything else we should know?" box at the bottom of the form. */
+    notes: text("notes").notNull().default(""),
+    /** Item 8. The draft variation this form made for dearer colours. No FK on purpose. */
+    variationId: integer("variation_id"),
+    /** Item 8. The office task this form made for colour changes. No FK on purpose. */
+    taskId: integer("task_id"),
     ...timestamps,
   },
   (t) => [index("material_selections_job_idx").on(t.jobId)],
@@ -1808,6 +1816,27 @@ export const materialSelectionItems = sqliteTable(
     colour: text("colour").notNull().default(""),
     notes: text("notes").notNull().default(""),
     sortOrder: integer("sort_order").notNull().default(0),
+    /*
+     * Item 8 (fix list 13 Oct). One row per product on the accepted quote,
+     * not per room. Null on the old room by room forms, which still open.
+     * No FKs on purpose: the form keeps reading if a line or product goes.
+     */
+    /** The first quote line of this product. */
+    quoteItemId: integer("quote_item_id"),
+    /** The product on the quote. */
+    quotedProductId: integer("quoted_product_id"),
+    /** The colour the client picked. Starts as the quoted product. */
+    productId: integer("product_id"),
+    /** All the quote lines of this product added up. */
+    qty: real("qty"),
+    unit: text("unit"),
+    /** What the pick adds ex GST at the quote line's markup. Negative is cheaper. */
+    extraExGst: real("extra_ex_gst"),
+    /** job_materials ids for this product when the form was made. JSON array. */
+    materialIds: text("material_ids").notNull().default("[]"),
+    /** The variation and its line that carry a dearer pick. */
+    variationId: integer("variation_id"),
+    variationItemId: integer("variation_item_id"),
     ...timestamps,
   },
   (t) => [index("material_selection_items_sel_idx").on(t.selectionId)],

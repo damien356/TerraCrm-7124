@@ -22,6 +22,8 @@ import {
   type SpecialRow,
 } from "../lib/pricing";
 import { editedCost, specialCost } from "../lib/bulk-price";
+import { productSwatchKey, signPut } from "../lib/s3";
+import { swatchUrlOf } from "../lib/selection-colours";
 
 /**
  * The price book: one row per buyable variant, with dated specials on top.
@@ -407,6 +409,7 @@ export const products = {
 
     return {
       ...decorate(product, history, today),
+      swatchUrl: await swatchUrlOf(product),
       history: history
         .slice()
         .reverse()
@@ -773,6 +776,38 @@ export const products = {
    * the cut being asked for. Quantity is deliberately an input, not a column:
    * the same product has two prices and only the order decides which is live.
    */
+  /** A presigned slot for a colour swatch picture (item 8). Saved with setSwatch once it is up. */
+  swatchPresign: adminOnly
+    .input(
+      z.object({
+        id: z.number(),
+        filename: z.string().min(1).max(200),
+        contentType: z.string().regex(/^image\//, "Pick a picture file."),
+      }),
+    )
+    .handler(async ({ input }) => {
+      const [p] = await db.select({ id: schema.products.id }).from(schema.products).where(eq(schema.products.id, input.id));
+      if (!p) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
+      const key = productSwatchKey(p.id, input.filename);
+      return { key, url: await signPut(key, input.contentType) };
+    }),
+
+  /** Put a swatch on a product, or take it off with null. The client's colour form shows it. */
+  setSwatch: adminOnly
+    .input(z.object({ id: z.number(), key: z.string().max(300).nullable() }))
+    .handler(async ({ input }) => {
+      if (input.key && !input.key.startsWith(`products/${input.id}/swatch/`)) {
+        throw new ORPCError("BAD_REQUEST", { message: "That upload is not for this product." });
+      }
+      const [row] = await db
+        .update(schema.products)
+        .set({ swatchKey: input.key, updatedAt: new Date() })
+        .where(eq(schema.products.id, input.id))
+        .returning({ id: schema.products.id, swatchKey: schema.products.swatchKey });
+      if (!row) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
+      return { id: row.id, swatchUrl: await swatchUrlOf(row) };
+    }),
+
   rollQuote: adminOnly
     .input(
       z.object({

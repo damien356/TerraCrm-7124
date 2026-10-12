@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
-import { and, desc, eq, gt, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { withUser, type Actor } from "../middleware/auth";
@@ -10,6 +10,7 @@ import { depositInvoiceFor } from "../lib/client-invoices";
 import { depositSplit } from "../lib/deposits";
 import { auDate } from "../lib/invoice-match";
 import { selectionForJob, submitSelection } from "../lib/material-selection";
+import { isProductForm, lockState, publicSections, submitProductSelection } from "../lib/selection-colours";
 import { todayISO } from "../lib/pricing";
 import { acceptQuote } from "../lib/quote-accept";
 import { EMAIL_RE, sendSignedCopy } from "../lib/quote-email";
@@ -291,10 +292,24 @@ const selectionPage = {
     const items =
       full && full.id === sel.id
         ? full.items
-        : await db.select().from(schema.materialSelectionItems).where(eq(schema.materialSelectionItems.selectionId, sel.id));
+        : await db
+            .select()
+            .from(schema.materialSelectionItems)
+            .where(eq(schema.materialSelectionItems.selectionId, sel.id))
+            .orderBy(asc(schema.materialSelectionItems.sortOrder), asc(schema.materialSelectionItems.id));
     const [contact] = sel.contactId ? await db.select().from(schema.contacts).where(eq(schema.contacts.id, sel.contactId)) : [];
     const [site] = job?.siteId ? await db.select().from(schema.sites).where(eq(schema.sites.id, job.siteId)) : [];
+    // Item 8: one section per product on the quote, with the colours of its range.
+    const productForm = isProductForm(items);
+    const products = productForm ? await publicSections(sel, items) : null;
+    const lock = productForm ? await lockState(sel.jobId) : { locked: false, reason: null };
     return {
+      kind: productForm ? ("products" as const) : ("rooms" as const),
+      sections: products?.sections ?? [],
+      showPrices: products?.showPrices ?? false,
+      notes: sel.notes,
+      locked: lock.locked,
+      lockReason: lock.reason,
       jobRef: job ? jobText(job) : "",
       firstName: contact?.firstName?.trim() || "",
       siteAddress: site ? [site.address, site.suburb].filter(Boolean).join(", ") : null,
@@ -312,6 +327,7 @@ const selectionPage = {
       z.object({
         token: z.string().min(1).max(80),
         name: z.string().trim().min(2, "Type your name.").max(120),
+        /** The old room by room form. */
         items: z
           .array(
             z.object({
@@ -322,14 +338,22 @@ const selectionPage = {
               notes: z.string().max(1000),
             }),
           )
-          .min(1)
-          .max(60),
+          .max(60)
+          .optional(),
+        /** The product form (item 8): the colour picked in each section. */
+        picks: z.array(z.object({ itemId: z.number().int(), productId: z.number().int() })).max(60).optional(),
+        notes: z.string().max(2000).optional(),
       }),
     )
     .handler(async ({ input }) => {
       const sel = await selectionByToken(input.token);
       const latest = await selectionForJob(sel.jobId);
       if (latest && latest.id !== sel.id) throw bad("This form has been replaced by a newer one. Open the newest email from us.");
+      if (latest && isProductForm(latest.items)) {
+        await submitProductSelection(sel, input.name, input.picks ?? [], input.notes ?? "");
+        return { status: "submitted", submittedAt: new Date() };
+      }
+      if (!input.items?.length) throw bad("Fill in at least one room.");
       const out = await submitSelection(sel, input.name, input.items);
       return { status: out?.status ?? "submitted", submittedAt: out?.submittedAt ?? new Date() };
     }),

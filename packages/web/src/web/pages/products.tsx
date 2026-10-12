@@ -1,6 +1,7 @@
 import * as React from "react";
 import { AlertTriangle, CalendarClock, ChevronLeft, PackageCheck, Search, Tag, TrendingDown } from "lucide-react";
 import { Page } from "../components/layout";
+import { SwatchEditor } from "../components/product-swatch";
 import { Card, CardHeader, Empty, Loading, Stat } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -773,6 +774,11 @@ function VariantModal({ id, onClose }: { id: number | null; onClose: () => void 
               Minimum order {p.minOrderQty} {unit(p.unit)}.
             </p>
           ) : null}
+
+          <div>
+            <p className="label-xs mb-2">Colour swatch</p>
+            <SwatchEditor id={p.id} swatchUrl={p.swatchUrl} colour={p.colour} />
+          </div>
 
           <div>
             <p className="label-xs mb-2">Specials history</p>

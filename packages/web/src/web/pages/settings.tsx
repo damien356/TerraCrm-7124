@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Download, HardDriveDownload, Plus, Search } from "lucide-react";
 import { Page } from "../components/layout";
+import { SwatchModal } from "../components/product-swatch";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge, SKILL_TINT } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -769,6 +770,7 @@ type ProductRow = {
   pieceLengthM: number | null;
   defaultWastagePct: number | null;
   heldInWarehouse: boolean;
+  swatchKey: string | null;
 };
 
 const numOrNull = (v: string) => (v.trim() === "" || !Number.isFinite(Number(v)) ? null : Number(v));
@@ -842,6 +844,7 @@ function ProductSizesModal({ product, onClose }: { product: ProductRow; onClose:
 function ProductLine({ product }: { product: ProductRow }) {
   const update = useUpdateProduct();
   const [sizing, setSizing] = React.useState(false);
+  const [swatch, setSwatch] = React.useState(false);
   const [cost, setCost] = React.useState(product.costPrice === null ? "" : String(product.costPrice));
   const [sell, setSell] = React.useState(product.sellPrice === null ? "" : String(product.sellPrice));
 
@@ -966,8 +969,19 @@ function ProductLine({ product }: { product: ProductRow }) {
           >
             Sizes
           </button>
+          <button
+            type="button"
+            className="text-xs font-medium text-[var(--gold-deep)] underline-offset-2 hover:underline"
+            onClick={() => setSwatch(true)}
+            title="The colour picture the client sees on the material selection form"
+          >
+            {product.swatchKey ? "Swatch" : "Add swatch"}
+          </button>
         </div>
         {sizing ? <ProductSizesModal product={product} onClose={() => setSizing(false)} /> : null}
+        {swatch ? (
+          <SwatchModal id={product.id} title={[product.range, product.colour].filter(Boolean).join(" ")} onClose={() => setSwatch(false)} />
+        ) : null}
       </td>
     </tr>
   );

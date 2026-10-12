@@ -7,6 +7,7 @@ import { adminOnly, staffOnly } from "../middleware/auth";
 import { rebuildForecast } from "../lib/cashflow";
 import { invoicesForJob, markInvoicePaid, PAYMENT_METHODS, shapeInvoice, voidInvoice } from "../lib/client-invoices";
 import { createSelection, selectionForJob, sendSelection } from "../lib/material-selection";
+import { isProductForm, lockState, staffSections } from "../lib/selection-colours";
 import { EMAIL_RE } from "../lib/quote-email";
 import { sendInvoiceEmail } from "../lib/invoice-email";
 import { cardPaymentsOn, payUrl } from "../lib/stripe";
@@ -21,19 +22,37 @@ import { billingOnJob, RAISE_KINDS, raiseJobInvoice } from "../lib/final-invoice
 
 const rebuild = () => rebuildForecast().catch((e) => console.error("[cashflow] rebuild after invoice change failed:", e));
 
-const shapeSelection = (s: Awaited<ReturnType<typeof selectionForJob>>) =>
-  s
-    ? {
-        id: s.id,
-        status: s.status,
-        url: s.url,
-        sentTo: s.sentTo,
-        sentAt: s.sentAt,
-        submittedAt: s.submittedAt,
-        submittedName: s.submittedName,
-        items: s.items.map((i) => ({ id: i.id, areaId: i.areaId, room: i.room, product: i.product, colour: i.colour, notes: i.notes })),
-      }
-    : null;
+/** The card's view. New forms (item 8) carry one section per product; old room by room ones carry items. */
+async function shapeSelection(s: Awaited<ReturnType<typeof selectionForJob>>) {
+  if (!s) return null;
+  const productForm = isProductForm(s.items);
+  const [lock, sections, variation, task] = await Promise.all([
+    lockState(s.jobId),
+    productForm ? staffSections(s.items) : Promise.resolve([]),
+    s.variationId
+      ? db.select({ id: schema.variations.id, ref: schema.variations.ref, status: schema.variations.status }).from(schema.variations).where(eq(schema.variations.id, s.variationId))
+      : Promise.resolve([]),
+    s.taskId
+      ? db.select({ id: schema.officeTasks.id, title: schema.officeTasks.title, status: schema.officeTasks.status }).from(schema.officeTasks).where(eq(schema.officeTasks.id, s.taskId))
+      : Promise.resolve([]),
+  ]);
+  return {
+    id: s.id,
+    status: s.status,
+    url: s.url,
+    sentTo: s.sentTo,
+    sentAt: s.sentAt,
+    submittedAt: s.submittedAt,
+    submittedName: s.submittedName,
+    kind: productForm ? ("products" as const) : ("rooms" as const),
+    notes: s.notes,
+    locked: lock.locked,
+    sections,
+    variation: variation[0] ?? null,
+    task: task[0] ?? null,
+    items: s.items.map((i) => ({ id: i.id, areaId: i.areaId, room: i.room, product: i.product, colour: i.colour, notes: i.notes })),
+  };
+}
 
 export const clientInvoices = {
   forJob: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
@@ -140,14 +159,18 @@ export const clientInvoices = {
     return shapeSelection(await selectionForJob(input.jobId));
   }),
 
-  /** Send (or send again) the selection form. Makes one first if the job has none. */
+  /**
+   * Send (or send again) the selection form. Only ever from this button
+   * (fix list item 10). Makes the product form first if the job has none.
+   */
   sendSelection: staffOnly
     .input(z.object({ jobId: z.number(), to: z.string().trim().max(200).nullish() }))
     .handler(async ({ input, context }) => {
       const [job] = await db.select({ id: schema.jobs.id }).from(schema.jobs).where(eq(schema.jobs.id, input.jobId));
       if (!job) throw new ORPCError("NOT_FOUND", { message: "Job not found" });
       if (input.to && !EMAIL_RE.test(input.to)) throw new ORPCError("BAD_REQUEST", { message: `"${input.to}" is not an email address.` });
-      const sel = (await selectionForJob(job.id)) ?? (await createSelection({ jobId: job.id, quoteId: null }));
+      // A new product form unless the newest one already is one (lib/material-selection.ts).
+      const sel = await createSelection({ jobId: job.id });
       if (input.to) {
         await db
           .update(schema.materialSelections)
@@ -156,6 +179,6 @@ export const clientInvoices = {
       }
       const out = await sendSelection(sel.id, { name: context.actor.name });
       if (!out.sent) throw new ORPCError("BAD_REQUEST", { message: `Not sent: ${out.reason ?? "unknown reason"}` });
-      return { ...out, selection: shapeSelection(await selectionForJob(job.id)) };
+      return { ...out, selection: await shapeSelection(await selectionForJob(job.id)) };
     }),
 };
