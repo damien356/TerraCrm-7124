@@ -278,7 +278,18 @@ function useCostView() {
   return { show: Boolean(actor?.canSeeCosts), edit: actor?.role === "admin" };
 }
 
-function LineRow({ item, locked, onNotice }: { item: Item; locked: boolean; onNotice: (text: string) => void }) {
+function LineRow({
+  item,
+  locked,
+  wordingOpen = false,
+  onNotice,
+}: {
+  item: Item;
+  locked: boolean;
+  /** Accepted quote: the description can still be fixed, nothing else (188001 list item 7). */
+  wordingOpen?: boolean;
+  onNotice: (text: string) => void;
+}) {
   const cost = useCostView();
   const update = useUpdateQuoteItem();
   const remove = useRemoveQuoteItem();
@@ -336,7 +347,7 @@ function LineRow({ item, locked, onNotice }: { item: Item; locked: boolean; onNo
         <Input
           className="h-8"
           value={draft.description}
-          disabled={locked}
+          disabled={locked && !wordingOpen}
           onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
           onBlur={() =>
             draft.description &&
@@ -653,6 +664,8 @@ export default function QuoteBuilderPage() {
 
   const q = quote.data;
   const locked = q.status === "accepted" || q.status === "declined" || q.status === "expired" || q.status === "replaced";
+  // 188001 list item 7: on an accepted quote the words can still be fixed and re-sent.
+  const wordingOpen = q.status === "accepted";
   const customer = q.contact ? `${q.contact.firstName} ${q.contact.lastName}` : q.company ? "" : "No customer yet";
 
   async function run(fn: () => Promise<unknown>) {
@@ -776,6 +789,16 @@ export default function QuoteBuilderPage() {
             </>
           ) : null}
           {/* Item 12: once accepted, changes are a variation on the job, never a new version. */}
+          {wordingOpen ? (
+            <EmailQuoteButton
+              quoteId={q.id}
+              resend
+              onSent={(m) => {
+                setError(null);
+                setNotice(m);
+              }}
+            />
+          ) : null}
           {q.status === "accepted" && q.job ? (
             <Link to={`/jobs/${q.job.id}?variation=new`}>
               <Button variant="outline">
@@ -821,6 +844,12 @@ export default function QuoteBuilderPage() {
           </button>
         </div>
       ) : null}
+      {wordingOpen ? (
+        <div className="mb-3 rounded-md border border-border bg-secondary/60 px-3 py-2 text-sm">
+          Accepted. You can still fix the wording: section titles, section wording and line descriptions. Then use Save and re-send to email the client the updated copy.
+          Prices, qty, lines and the deposit are locked. Change those with a variation on the job.
+        </div>
+      ) : null}
       {q.status === "replaced" ? (
         <div className="mb-3 rounded-md border border-border bg-secondary/60 px-3 py-2 text-sm">
           This version was accepted, then replaced by a newer accepted version. The job value follows the newer one.
@@ -849,7 +878,13 @@ export default function QuoteBuilderPage() {
         <Card>
           <CardHeader
             title="Lines"
-            subtitle={locked ? "Locked. Make a new version to change the price." : "Prices come off the price book."}
+            subtitle={
+              wordingOpen
+                ? "Accepted. Line descriptions can still be fixed. Price changes go through a variation on the job."
+                : locked
+                  ? "Locked. Make a new version to change the price."
+                  : "Prices come off the price book."
+            }
           />
           {q.items.length === 0 ? (
             <Empty>No lines yet. Add the supply and the labour. Labour lines become the dispatches on the job.</Empty>
@@ -871,7 +906,7 @@ export default function QuoteBuilderPage() {
                 </thead>
                 <tbody>
                   {q.items.map((item) => (
-                    <LineRow key={item.id} item={item} locked={locked} onNotice={setLineNotice} />
+                    <LineRow key={item.id} item={item} locked={locked} wordingOpen={wordingOpen} onNotice={setLineNotice} />
                   ))}
                 </tbody>
               </table>
@@ -896,7 +931,7 @@ export default function QuoteBuilderPage() {
 
         <QuoteAgentCard quoteId={q.id} locked={locked} />
 
-        <QuoteBundlesCard quote={q} locked={locked} />
+        <QuoteBundlesCard quote={q} locked={locked} wordingOpen={wordingOpen} />
         </div>
 
         <div className="flex flex-col gap-4">

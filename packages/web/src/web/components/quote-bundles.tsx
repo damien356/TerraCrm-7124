@@ -68,6 +68,7 @@ function BundleEditor({
   lines,
   split,
   locked,
+  wordingOpen,
   onError,
 }: {
   quoteId: number;
@@ -75,8 +76,11 @@ function BundleEditor({
   lines: Line[];
   split: boolean;
   locked: boolean;
+  /** Accepted quote: the title and wording can still be fixed (188001 list item 7). */
+  wordingOpen: boolean;
   onError: (msg: string | null) => void;
 }) {
+  const textLocked = locked && !wordingOpen;
   const update = useUpdateBundle();
   const regenerate = useRegenerateBundle();
   const setCategory = useSetLineCategory();
@@ -120,7 +124,7 @@ function BundleEditor({
         <Input
           className="h-8 flex-1 font-semibold"
           value={title}
-          disabled={locked || busy}
+          disabled={textLocked || busy}
           aria-label="Section title"
           placeholder={BUNDLE_TITLES[bundle.key] ?? "Section title"}
           onChange={(e) => setTitle(e.target.value)}
@@ -149,14 +153,14 @@ function BundleEditor({
         className="mt-2 text-sm"
         rows={Math.min(8, Math.max(3, Math.ceil(wording.length / 90)))}
         value={wording}
-        disabled={locked || busy}
+        disabled={textLocked || busy}
         aria-label={`Wording for ${bundle.title}`}
         placeholder="What the client reads for this section. No qty or prices. You can type the meterage in if you want it shown."
         onChange={(e) => setWording(e.target.value)}
         onBlur={() => wording.trim() !== bundle.wording.trim() && save({ wording })}
       />
 
-      {locked ? null : (
+      {textLocked ? null : (
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <Button size="sm" variant="outline" disabled={busy || inBundle.length === 0} onClick={() => write(false)}>
             {regenerate.isPending ? <Spinner className="size-3.5" /> : <Sparkles className="size-3.5" />}
@@ -172,7 +176,7 @@ function BundleEditor({
         </div>
       )}
 
-      {askHint && !locked ? (
+      {askHint && !textLocked ? (
         <div className="mt-2 flex items-center gap-2">
           <Input
             className="h-8 flex-1"
@@ -268,9 +272,11 @@ function ClientPreview({ bundles, subtotal, gst, total }: { bundles: Bundle[]; s
 export function QuoteBundlesCard({
   quote,
   locked,
+  wordingOpen = false,
 }: {
   quote: { id: number; bundleMode: string; bundles: Bundle[]; items: Line[]; subtotal: number; gst: number; total: number };
   locked: boolean;
+  wordingOpen?: boolean;
 }) {
   const setMode = useSetBundleMode();
   const pdf = useQuotePdf();
@@ -357,6 +363,7 @@ export function QuoteBundlesCard({
               lines={quote.items}
               split={split}
               locked={locked}
+              wordingOpen={wordingOpen}
               onError={setError}
             />
           ))}

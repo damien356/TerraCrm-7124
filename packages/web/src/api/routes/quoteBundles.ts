@@ -30,9 +30,15 @@ import { cardPaymentsOn, owingOn, payUrl } from "../lib/stripe";
 
 const LOCKED = ["accepted", "declined", "expired", "replaced"];
 
-async function quoteRow(id: number, editable: boolean) {
+/**
+ * editable "wording": titles and wording, which can still change on an
+ * accepted quote (188001 list item 7). Bundle mode and which section a line
+ * sits in stay locked, the same as prices.
+ */
+async function quoteRow(id: number, editable: boolean | "wording") {
   const [q] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, id));
   if (!q) throw new ORPCError("NOT_FOUND", { message: "Quote not found" });
+  if (editable === "wording" && q.status === "accepted") return q;
   if (editable && LOCKED.includes(q.status)) {
     throw new ORPCError("BAD_REQUEST", { message: "This quote is locked. Make a new version to change it." });
   }
@@ -63,12 +69,14 @@ export async function bundleLinesFor(quoteId: number): Promise<BundleLine[]> {
 }
 
 /** The bundles for a quote as the client would see them now. */
-export async function bundlesFor(quote: { id: number; bundleMode: string }) {
+export async function bundlesFor(quote: { id: number; bundleMode: string; status?: string }) {
   const [lines, saved] = await Promise.all([
     bundleLinesFor(quote.id),
     db.select().from(schema.quoteBundles).where(eq(schema.quoteBundles.quoteId, quote.id)),
   ]);
-  return { lines, bundles: buildBundles(quote.bundleMode, lines, saved) };
+  const bundles = buildBundles(quote.bundleMode, lines, saved);
+  // Accepted: the lines are fixed, so a fixed line description never makes the wording out of date.
+  return { lines, bundles: quote.status === "accepted" ? bundles.map((b) => ({ ...b, stale: false })) : bundles };
 }
 
 export async function saveBundle(
@@ -236,7 +244,7 @@ export const quoteBundles = {
       }),
     )
     .handler(async ({ input }) => {
-      const quote = await quoteRow(input.quoteId, true);
+      const quote = await quoteRow(input.quoteId, "wording");
       const { bundles } = await bundlesFor(quote);
       const b = bundles.find((x) => x.key === input.key);
       if (!b) throw new ORPCError("BAD_REQUEST", { message: "That section is not on this quote." });
@@ -256,7 +264,7 @@ export const quoteBundles = {
   regenerate: staffOnly
     .input(z.object({ quoteId: z.number(), key: z.string().min(1).max(40), hint: z.string().max(500).optional() }))
     .handler(async ({ input, context }) => {
-      const quote = await quoteRow(input.quoteId, true);
+      const quote = await quoteRow(input.quoteId, "wording");
       const { lines, bundles } = await bundlesFor(quote);
       const b = bundles.find((x) => x.key === input.key);
       if (!b) throw new ORPCError("BAD_REQUEST", { message: "That section is not on this quote." });

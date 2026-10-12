@@ -390,7 +390,7 @@ export function QuoteAgentCard({ quoteId, locked }: { quoteId: number; locked: b
 
       {locked ? (
         <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
-          This quote is locked. Make a new version to change it. The check above still works.
+          This quote is locked, so the assistant cannot change it. The check above still works.
         </p>
       ) : (
         <div className="flex items-end gap-2 border-t border-border px-4 py-3">

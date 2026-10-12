@@ -17,20 +17,28 @@ import { needsScope, SCOPE_FILL } from "../../api/lib/quote-email-template";
 export function EmailQuoteButton({
   quoteId,
   again = false,
+  resend = false,
   disabled,
   onSent,
 }: {
   quoteId: number;
   again?: boolean;
+  /** Accepted quote with its wording fixed (188001 list item 7). */
+  resend?: boolean;
   disabled?: boolean;
   onSent?: (msg: string) => void;
 }) {
   const [open, setOpen] = React.useState(false);
   return (
     <>
-      <Button variant={again ? "outline" : "default"} onClick={() => setOpen(true)} disabled={disabled}>
+      <Button
+        variant={again || resend ? "outline" : "default"}
+        onClick={() => setOpen(true)}
+        disabled={disabled}
+        title={resend ? "Emails the client the updated copy. Logged as wording edited, re-sent." : undefined}
+      >
         <Mail className="size-4" />
-        {again ? "Email again" : "Email quote"}
+        {resend ? "Save and re-send" : again ? "Email again" : "Email quote"}
       </Button>
       {/* Portalled out of the dark page header, or its colour rules turn the form white on white. */}
       {open ? createPortal(<EmailQuoteDialog quoteId={quoteId} onClose={() => setOpen(false)} onSent={onSent} />, document.body) : null}
@@ -71,7 +79,8 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
     setError(null);
     try {
       const out = await send.mutateAsync({ quoteId, to: toValue.trim(), subject: subjectValue, body: bodyValue });
-      onSent?.(`Quote ${d.ref} emailed to ${out.to}${out.via === "relay" ? " (sent through the backup mailer, team@ is not connected)" : ""}.`);
+      const what = d.resend ? `Wording edited, re-sent. Quote ${d.ref} emailed to ${out.to}` : `Quote ${d.ref} emailed to ${out.to}`;
+      onSent?.(`${what}${out.via === "relay" ? " (sent through the backup mailer, team@ is not connected)" : ""}.`);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -82,8 +91,12 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
     <Modal
       open
       onClose={onClose}
-      title={d ? `Email quote ${d.ref}` : "Email quote"}
-      subtitle='From team@ as "Damien from Terra". Replies come back to team@. The PDF is attached.'
+      title={d ? `${d.resend ? "Re-send quote" : "Email quote"} ${d.ref}` : "Email quote"}
+      subtitle={
+        d?.resend
+          ? 'The updated copy goes from team@ as "Damien from Terra", PDF attached. The quote stays accepted and the price does not change.'
+          : 'From team@ as "Damien from Terra". Replies come back to team@. The PDF is attached.'
+      }
       width="max-w-2xl"
       footer={
         <>
@@ -191,7 +204,7 @@ export function QuoteLinkCard({ quoteId, status }: { quoteId: number; status: st
           <p className="flex items-center gap-1.5">
             <Eye className="size-3.5 text-muted-foreground" />
             {l.views === 0 ? (
-              <span className="text-muted-foreground">{status === "sent" ? "Not opened yet." : "Not sent yet."}</span>
+              <span className="text-muted-foreground">{status === "draft" || status === "needs_review" ? "Not sent yet." : "Not opened yet."}</span>
             ) : (
               <span>
                 Opened {l.views} {l.views === 1 ? "time" : "times"}

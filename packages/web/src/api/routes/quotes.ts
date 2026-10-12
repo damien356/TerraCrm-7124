@@ -150,6 +150,11 @@ export async function quoteOrThrow(id: number) {
   return row;
 }
 
+/** Wording typed on an accepted quote: trimmed, and long dashes swapped for a comma. */
+export function cleanWording(text: string) {
+  return text.replace(/\s*[\u2013\u2014]\s*/g, ", ").trim();
+}
+
 /** Accepted, declined and expired quotes are history. Change them by making a new version. */
 const LOCKED_STATUSES = ["accepted", "declined", "expired", "replaced"];
 export async function editableQuoteOrThrow(id: number) {
@@ -241,6 +246,8 @@ export async function createQuoteRecord(input: z.infer<typeof createQuoteInput>,
     throw new ORPCError("BAD_REQUEST", { message: "Pick where the job came from. Unknown is fine." });
   }
   await assertBillable(input.jobId);
+  // Item 12 and 188001 item 7: a job with an accepted quote never gets another quote.
+  if (input.jobId) await assertNoAcceptedQuote({ jobId: input.jobId });
   await assertSupervisor(input.companyId, input.supervisorContactId);
   // The job's own number, or the next job number when there is no job yet.
   const { number, version } = await quoteNumberFor(input.jobId);
@@ -1019,6 +1026,29 @@ export const quotes = {
       const { id, addInstall, ...rest } = input;
       const [before] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, id));
       if (!before) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
+      const current = await quoteOrThrow(before.quoteId);
+      // 188001 list item 7: an accepted quote keeps its prices, qty and lines.
+      // Only the words on a line can change. Anything else is a variation.
+      if (current.status === "accepted") {
+        const touched = Object.entries(rest).filter(([, v]) => v !== undefined).map(([k]) => k);
+        if (addInstall || touched.length !== 1 || touched[0] !== "description") {
+          throw new ORPCError("BAD_REQUEST", {
+            message: "This quote is accepted. Only the wording can change. Prices, qty and lines go through a variation on the job.",
+          });
+        }
+        const text = cleanWording(rest.description ?? "");
+        if (!text) throw new ORPCError("BAD_REQUEST", { message: "A line needs some words." });
+        const [row] = await db
+          .update(schema.quoteItems)
+          .set({ description: text, updatedAt: new Date() })
+          .where(eq(schema.quoteItems.id, id))
+          .returning();
+        return {
+          item: hideCost(row, context.actor),
+          labour: undefined as typeof row | undefined,
+          totals: { subtotal: current.subtotal, gst: current.gst, total: current.total },
+        };
+      }
       const quote = await editableQuoteOrThrow(before.quoteId);
       // Only an Admin can change what Terra pays or the markup on it. Office edits price and quantity only.
       const { markupPercent: markupIn, ...fields } = rest;

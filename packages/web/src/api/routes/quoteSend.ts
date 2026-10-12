@@ -22,13 +22,47 @@ async function profileIdOf(userId: string) {
   return p?.id ?? null;
 }
 
+/**
+ * 188001 list item 7: an accepted quote can have its wording fixed and go out
+ * again. Declined, expired and replaced ones stay shut.
+ */
+async function sendableQuoteOrThrow(id: number) {
+  const quote = await quoteOrThrow(id);
+  return quote.status === "accepted" ? quote : editableQuoteOrThrow(id);
+}
+
+/** The re-send email for an accepted quote: the wording changed, the price did not. */
+async function resendDraft(quote: typeof schema.quotes.$inferSelect, ref: string) {
+  const base = await quoteEmailDraft(quote, ref);
+  const first = base.recipients[0]?.name.split(" ")[0] || "there";
+  return {
+    ...base,
+    subject: `Updated copy of your Terra Flooring quote ${ref}`,
+    body: [
+      `Hi ${first},`,
+      "",
+      `We have tidied up the wording on quote ${ref}, which you have already accepted. The price, quantities and deposit are the same.`,
+      "",
+      "The updated copy is attached. You can also view it online here:",
+      base.url,
+      "",
+      "Nothing to sign or pay because of this email. Any questions, just reply or call me on 1300 183 772.",
+      "",
+      "Kind regards,",
+      "Damien",
+      "Terra Flooring",
+    ].join("\n"),
+  };
+}
+
 export const quoteSend = {
   /** What the Email quote dialog opens with: recipients, subject, body and the link. */
   draft: staffOnly.input(z.object({ quoteId: z.number() })).handler(async ({ input }) => {
-    const quote = await editableQuoteOrThrow(input.quoteId);
+    const quote = await sendableQuoteOrThrow(input.quoteId);
     const ref = await quoteRefOf(quote);
-    const draft = await quoteEmailDraft(quote, ref);
-    return { ...draft, ref, link: await linkSummary(quote.id) };
+    const resend = quote.status === "accepted";
+    const draft = resend ? await resendDraft(quote, ref) : await quoteEmailDraft(quote, ref);
+    return { ...draft, ref, resend, link: await linkSummary(quote.id) };
   }),
 
   /** Email it. Only marked sent once the email has actually gone. */
@@ -42,7 +76,29 @@ export const quoteSend = {
       }),
     )
     .handler(async ({ input, context }) => {
-      const quote = await editableQuoteOrThrow(input.quoteId);
+      const quote = await sendableQuoteOrThrow(input.quoteId);
+      if (quote.status === "accepted") {
+        // Wording edited after acceptance. The status, price history and job stage stay as they are.
+        const out = await sendQuoteEmail({
+          quote,
+          to: input.to,
+          subject: input.subject,
+          body: input.body,
+          byName: context.actor.name,
+          byProfileId: await profileIdOf(context.actor.userId),
+        });
+        await db.insert(schema.activityLog).values({
+          jobId: quote.jobId,
+          contactId: quote.contactId,
+          entityType: "quote",
+          entityId: quote.id,
+          action: "wording_resent",
+          detail: `Wording edited, re-sent. Quote ${out.ref} emailed to ${out.to}`,
+          actorName: context.actor.name,
+          actorRole: context.actor.role,
+        });
+        return { quote, to: out.to, via: out.via, url: out.url };
+      }
       await assertBillable(quote.jobId);
       await assertReadyToGoOut(quote, context.actor);
       await recordPriceHistory(quote, context.actor.name);
