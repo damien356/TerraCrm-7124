@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { isBuilderType } from "./person-tags";
 
 /**
  * Where a new quote's deposit % comes from. Damien's rules, 2026-10-06:
@@ -24,7 +25,7 @@ export function depositDefaultOf(
   if (company) {
     if (company.depositPercent != null) return { percent: company.depositPercent, source: "company" };
     return {
-      percent: company.type === "builder" ? BUILDER_DEPOSIT_PERCENT : STANDARD_DEPOSIT_PERCENT,
+      percent: isBuilderType(company.type) ? BUILDER_DEPOSIT_PERCENT : STANDARD_DEPOSIT_PERCENT,
       source: "company_type",
     };
   }

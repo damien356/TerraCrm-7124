@@ -13,6 +13,21 @@ import { rebuildForecast } from "../lib/cashflow";
  * several companies. Whether a job bills to the company or to the person is
  * decided on the job (`jobs.billToType`), never here.
  */
+/** Insurance builder details on the card. Blank saves as null. */
+const optText = z
+  .string()
+  .trim()
+  .max(300)
+  .nullable()
+  .optional()
+  .transform((v) => (v === undefined ? undefined : v || null));
+const workOrderFields = {
+  complianceEmail: optText,
+  adminEmail: optText,
+  workOrderPrefix: optText,
+  workOrderSender: optText,
+};
+
 export const companies = {
   list: staffOnly
     .input(
@@ -127,6 +142,7 @@ export const companies = {
         /** Deposit % new quotes start at. Null = 0 for a builder, 50 otherwise. Admin and Office. */
         depositPercent: z.number().min(0).max(100).nullable().optional(),
         notes: z.string().nullable().optional(),
+        ...workOrderFields,
       }),
     )
     .handler(async ({ input, context }) => {
@@ -152,6 +168,7 @@ export const companies = {
         /** Deposit % new quotes start at. Null = 0 for a builder, 50 otherwise. Admin and Office. */
         depositPercent: z.number().min(0).max(100).nullable().optional(),
         notes: z.string().nullable().optional(),
+        ...workOrderFields,
         active: z.boolean().optional(),
       }),
     )

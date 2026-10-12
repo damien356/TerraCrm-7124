@@ -3,6 +3,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/field";
 import { useUpdateCompany } from "../queries/companies";
 import { useUpdateContact } from "../queries/contacts";
+import { isBuilderType } from "../../api/lib/person-tags";
 
 /**
  * The deposit % new quotes start at, set on a company or contact card.
@@ -28,9 +29,9 @@ export function DepositDefault({
   const [error, setError] = React.useState<string | null>(null);
   React.useEffect(() => setDraft(value == null ? "" : String(value)), [value]);
 
-  const fallback = kind === "company" ? (companyType === "builder" ? 0 : 50) : 50;
+  const fallback = kind === "company" ? (isBuilderType(companyType) ? 0 : 50) : 50;
   const fallbackLabel =
-    kind === "company" ? (companyType === "builder" ? "0%, the builder default" : "50%, the standard") : "50%, the standard";
+    kind === "company" ? (isBuilderType(companyType) ? "0%, the builder default" : "50%, the standard") : "50%, the standard";
 
   async function save(next: number | null) {
     setError(null);

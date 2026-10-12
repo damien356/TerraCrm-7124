@@ -73,6 +73,17 @@ export const companies = sqliteTable(
     needsReview: integer("needs_review", { mode: "boolean" }).notNull().default(false),
     /** The ServiceM8 company name this came in as. */
     externalRef: text("external_ref"),
+    /**
+     * Insurance builders (work order spec part 1). The accounts email is
+     * `email` above, which invoices already go to. These sit beside it on the
+     * card and are never people of their own.
+     */
+    complianceEmail: text("compliance_email"),
+    adminEmail: text("admin_email"),
+    /** How their work order numbers look, e.g. "NG" or "PO no. (e.g. 20301852)". */
+    workOrderPrefix: text("work_order_prefix"),
+    /** The address their work orders come from, e.g. nexus.mailer@primeeco.tech. */
+    workOrderSender: text("work_order_sender"),
     active: integer("active", { mode: "boolean" }).notNull().default(true),
     ...timestamps,
   },

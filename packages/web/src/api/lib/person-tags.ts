@@ -87,9 +87,15 @@ export function tagLabel(tag: string): string {
   return (PERSON_TAG_LABELS as Record<string, string>)[tag] ?? tag;
 }
 
-/** Company types. Insurer and Real estate agency join the old list. */
+/**
+ * Company types. Insurer and Real estate agency join the old list.
+ * Insurance builder (Nexus, QAT and the rest) is a builder in every way that
+ * matters for money: 0% deposit default, no marketing. It also never gets the
+ * quote follow-up sequence, and carries the work order prefix and sender.
+ */
 export const COMPANY_TYPES = [
   "builder",
+  "insurance_builder",
   "real_estate",
   "property_manager",
   "insurer",
@@ -101,6 +107,7 @@ export const COMPANY_TYPES = [
 
 export const COMPANY_TYPE_LABELS: Record<string, string> = {
   builder: "Builder",
+  insurance_builder: "Insurance builder",
   real_estate: "Real estate agency",
   property_manager: "Property manager",
   insurer: "Insurer",
@@ -109,3 +116,8 @@ export const COMPANY_TYPE_LABELS: Record<string, string> = {
   retail: "Retail",
   other: "Other",
 };
+
+/** Builder or Insurance builder: both start new quotes at 0% deposit. */
+export function isBuilderType(type: string | null | undefined): boolean {
+  return type === "builder" || type === "insurance_builder";
+}

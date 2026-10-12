@@ -7,7 +7,7 @@ import { Button } from "../components/ui/button";
 import { Input, Select } from "../components/ui/field";
 import { orpc } from "../lib/api";
 import { useCompanyTypes } from "../queries/people";
-import { COMPANY_TYPES, COMPANY_TYPE_LABELS } from "../../api/lib/person-tags";
+import { COMPANY_TYPES, COMPANY_TYPE_LABELS, isBuilderType } from "../../api/lib/person-tags";
 
 /**
  * COMPANY TYPES.
@@ -116,8 +116,8 @@ function TypeRow({ r, flagged }: { r: Row; flagged: boolean }) {
 
   const changed = type !== r.type;
   const depositNote =
-    changed && r.depositPercent == null && (r.type === "builder") !== (type === "builder")
-      ? `New quotes will start at ${type === "builder" ? "0" : "50"}% deposit.`
+    changed && r.depositPercent == null && isBuilderType(r.type) !== isBuilderType(type)
+      ? `New quotes will start at ${isBuilderType(type) ? "0" : "50"}% deposit.`
       : null;
 
   async function save() {

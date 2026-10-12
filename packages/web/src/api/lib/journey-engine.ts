@@ -84,6 +84,16 @@ export async function enrol(
     .where(eq(schema.contacts.id, contactId));
   if (!contact) return { ok: false, reason: "contact not found" };
 
+  /* Insurance builders never get the quote follow-up or any other journey,
+   * whatever the trade signals say about the person. */
+  const [insurance] = await db
+    .select({ id: schema.companies.id })
+    .from(schema.companyContacts)
+    .innerJoin(schema.companies, eq(schema.companies.id, schema.companyContacts.companyId))
+    .where(and(eq(schema.companyContacts.contactId, contactId), eq(schema.companies.type, "insurance_builder")))
+    .limit(1);
+  if (insurance) return { ok: false, reason: "journeys are off for insurance builders" };
+
   /* Is this contact trade? Not answered by jobs.company_id: ServiceM8 filed
    * builder work against the company with contact_id NULL, so that test found
    * two contacts out of 1,653 and waved through a Coronis agent, a shopfitter

@@ -205,6 +205,14 @@ export default function CompanyDetailPage() {
             <div className="grid gap-3 px-4 py-3">
               <Fact label="Phone">{c.phone ?? "-"}</Fact>
               <Fact label="Accounts email">{c.email ?? "-"}</Fact>
+              {c.complianceEmail ? <Fact label="Compliance email">{c.complianceEmail}</Fact> : null}
+              {c.adminEmail ? <Fact label="Admin email">{c.adminEmail}</Fact> : null}
+              {c.workOrderPrefix || c.workOrderSender || c.type === "insurance_builder" ? (
+                <>
+                  <Fact label="Work order number">{c.workOrderPrefix ?? "-"}</Fact>
+                  <Fact label="Work orders come from">{c.workOrderSender ?? "-"}</Fact>
+                </>
+              ) : null}
               <Fact label="Website">
                 {c.website ? (
                   <a href={c.website} target="_blank" rel="noreferrer" className="text-primary hover:underline">
@@ -242,8 +250,9 @@ export default function CompanyDetailPage() {
                       >
                         {contact.firstName} {contact.lastName}
                       </Link>
+                      {link.jobTitle ? <p className="text-xs text-muted-foreground">{link.jobTitle}</p> : null}
                       <p className="tabular text-xs text-muted-foreground">
-                        {contact.mobile ?? contact.email ?? "No number on file"}
+                        {contact.mobile ?? contact.phone ?? contact.email ?? "No number on file"}
                       </p>
                     </div>
                     <span className="flex shrink-0 items-center gap-1">
@@ -345,7 +354,23 @@ export default function CompanyDetailPage() {
   );
 }
 
-type CompanyRow = { name: string; abn: string | null; type: string; phone: string | null; email: string | null; website: string | null; billingAddress: string | null; paymentTerms: number; creditLimit: number | null; notes: string | null; active: boolean };
+type CompanyRow = {
+  name: string;
+  abn: string | null;
+  type: string;
+  phone: string | null;
+  email: string | null;
+  complianceEmail: string | null;
+  adminEmail: string | null;
+  workOrderPrefix: string | null;
+  workOrderSender: string | null;
+  website: string | null;
+  billingAddress: string | null;
+  paymentTerms: number;
+  creditLimit: number | null;
+  notes: string | null;
+  active: boolean;
+};
 
 function EditCompanyModal({
   open,
@@ -364,6 +389,10 @@ function EditCompanyModal({
     type: string;
     phone: string | null;
     email: string | null;
+    complianceEmail: string | null;
+    adminEmail: string | null;
+    workOrderPrefix: string | null;
+    workOrderSender: string | null;
     website: string | null;
     billingAddress: string | null;
     paymentTerms: number;
@@ -378,6 +407,10 @@ function EditCompanyModal({
     type: company.type,
     phone: company.phone ?? "",
     email: company.email ?? "",
+    complianceEmail: company.complianceEmail ?? "",
+    adminEmail: company.adminEmail ?? "",
+    workOrderPrefix: company.workOrderPrefix ?? "",
+    workOrderSender: company.workOrderSender ?? "",
     website: company.website ?? "",
     billingAddress: company.billingAddress ?? "",
     paymentTerms: String(company.paymentTerms),
@@ -400,6 +433,10 @@ function EditCompanyModal({
         type: form.type,
         phone: form.phone || null,
         email: form.email || null,
+        complianceEmail: form.complianceEmail || null,
+        adminEmail: form.adminEmail || null,
+        workOrderPrefix: form.workOrderPrefix || null,
+        workOrderSender: form.workOrderSender || null,
         website: form.website || null,
         billingAddress: form.billingAddress || null,
         paymentTerms: Number(form.paymentTerms) || 0,
@@ -451,6 +488,18 @@ function EditCompanyModal({
         </Field>
         <Field label="Accounts email">
           <Input value={form.email} onChange={(e) => set("email", e.target.value)} />
+        </Field>
+        <Field label="Compliance email">
+          <Input value={form.complianceEmail} onChange={(e) => set("complianceEmail", e.target.value)} />
+        </Field>
+        <Field label="Admin email">
+          <Input value={form.adminEmail} onChange={(e) => set("adminEmail", e.target.value)} />
+        </Field>
+        <Field label="Work order number looks like">
+          <Input value={form.workOrderPrefix} onChange={(e) => set("workOrderPrefix", e.target.value)} />
+        </Field>
+        <Field label="Work orders come from">
+          <Input value={form.workOrderSender} onChange={(e) => set("workOrderSender", e.target.value)} />
         </Field>
         <Field label="Website">
           <Input value={form.website} onChange={(e) => set("website", e.target.value)} />
