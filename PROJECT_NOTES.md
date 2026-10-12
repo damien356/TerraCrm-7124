@@ -640,3 +640,13 @@ Checked on the branch head: lint clean, web build OK, API tsc 0, mobile tsc 0, a
 - UI: quote-builder banner on accepted quotes, description inputs and section title and wording open, "Save and re-send" button (EmailQuoteButton `resend`). Quote assistant locked text and the client link "Not opened yet" fixed.
 - Live data 13 Oct (Damien's OK, backup backups/pre-188001-data.db): Q188001-2 (quote 13, items 43 and 44, bundle 12) deleted with a history line on job 4227. Karndean Korlok 5G, Knight Tile Rigid Core and Van Gogh Rigid Core (82 products) moved from vinyl to hybrid. Q188001 bundle 7 key vinyl to hybrid, title "Hybrid flooring supply", "vinyl planks" to "hybrid planks". Total 5455.01 and job value unchanged. A later Karndean price import shows a category change in its preview if the sheet still says vinyl.
 - Tests: terra-scratch-tests/fix1011/t-w7.head.ts + t-w7.body.ts PASS 52; UI check fix1011/w7ui.py. Data script: terra-scratch-tests/d188/s188.ts.
+
+### 18.18 188001 list item 15: GST in GP, margin and cash (13 Oct, merged 13e0444)
+- Rule: jobs.value stays inc GST (no data change). GP and margin use the ex GST value (value / 1.1). Cash in stays inc GST. Cash out adds 10% GST to every cost, except installer costs where installers.gstRegistered is false.
+- New api/lib/gst.ts: GST_RATE, GST_FACTOR, exGst, incGst, costCashOut(amount, kind, installerGstRegistered), costHasGst(kind, installerGstRegistered). Use these, never a bare 1.1.
+- finance.jobBudget: summary has value (inc), valueIncGst, valueExGst; grossProfit = valueExGst minus totalCost; margin over valueExGst; outBeforeReceipt uses costCashOut; each cost has hasGst. finance expenses rows carry cashOut (inc GST, what leaves the account).
+- lib/cashflow.ts: out events are costCashOut amounts, basis gets ", plus GST" when GST applies. Cost amounts in job_costs stay ex GST.
+- intel.ts: VALUE_EX SQL, costed_revenue_ex, gross_profit and margin ex GST. Revenue figures stay inc GST. lib/supervisors.ts and routes/costing.ts fallback revenue use exGst.
+- UI: job Value shows ex GST with an inc GST line; Money out shows Contract ex GST, "Amount ex GST" column with an inc GST or "no GST" subline; Expenses page "Amount inc GST" with ex GST subline; Jobs list header "Value inc GST". New job modal: value typed ex GST, saved as x*1.1 with "Saved as $X inc GST" hint.
+- Q188001 (job 4227): Contract $4,959.10 ex GST, $5,455.01 inc GST.
+- Tests: terra-scratch-tests/fix1011/t-g15.head.ts + t-g15.body.ts PASS 44; UI check fix1011/g15ui.py.
