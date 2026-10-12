@@ -488,6 +488,11 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
                       {r.amountPaid > 0 && r.status !== "void" ? `. ${moneyExact(r.amountPaid)} received` : ""}
                       {r.outstanding > 0 ? `, ${moneyExact(r.outstanding)} owing` : ""}
                     </p>
+                    {open ? (
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {r.emailedAt ? `Emailed ${dateOf(r.emailedAt) ?? ""}` : "Not emailed yet"}
+                      </p>
+                    ) : null}
                     {r.status === "paid" ? (
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         Paid {dateOf(r.paidAt) ?? ""}

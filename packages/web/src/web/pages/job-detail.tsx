@@ -13,6 +13,8 @@ import { PurchaseOrdersCard } from "../components/purchase-orders";
 import { PaymentTermsCard } from "../components/payment-terms";
 import { ClientInvoicesCard, MaterialSelectionCard } from "../components/client-invoices";
 import { DeliveryCard } from "../components/delivery";
+import { STEP_ANCHOR, SupplyStepsCard } from "../components/supply-steps";
+import { useDeliveryStatus } from "../queries/delivery";
 import { VariationsCard } from "../components/variations";
 import { JobConversation } from "../components/conversation";
 import { BookInstallerPanel } from "../components/book-installer";
@@ -315,6 +317,7 @@ export default function JobDetailPage() {
   const addNote = useAddJobNote();
   const removeTask = useRemoveTask();
   const work = useJobDispatchLines(Number.isFinite(id) ? id : 0);
+  const delivery = useDeliveryStatus(Number.isFinite(id) ? id : 0);
 
   // The inbox deep-links straight at the thread: /jobs/12?tab=conversation.
   const searchString = useSearch();
@@ -348,6 +351,93 @@ export default function JobDetailPage() {
   const j = job.data;
   const isCallback = j.parentJobId != null;
   const isAdmin = bootstrap.data?.actor.role === "admin";
+  // Supply only (item 14): the order, delivery and billing cards sit together in step order.
+  const supplyOnly = delivery.data?.supplyOnly === true;
+  const orderCards = (
+    <>
+          {/* materials */}
+          <Card>
+            <CardHeader title="Materials" subtitle="What has to be on site before anyone turns up." />
+            {j.materials.length > 0 ? (
+              <ul className="divide-y divide-border">
+                {j.materials.map((m) => (
+                  <li key={m.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm">{m.description}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {m.qty} {m.unit}
+                      </p>
+                    </div>
+                    <Select
+                      className="w-auto"
+                      value={m.status}
+                      onChange={(e) => updateMaterial.mutate({ id: m.id, status: e.target.value })}
+                    >
+                      {MATERIAL_STATUS.map((s) => (
+                        <option key={s} value={s}>
+                          {roleLabel(s)}
+                        </option>
+                      ))}
+                    </Select>
+                    <button
+                      type="button"
+                      onClick={() => removeMaterial.mutate({ id: m.id })}
+                      className="text-muted-foreground transition-colors hover:text-destructive"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <div className="flex flex-wrap items-end gap-2 border-t border-border px-4 py-3">
+              <Field label="Material" className="min-w-[200px] flex-1">
+                <Input
+                  value={material.description}
+                  onChange={(e) => setMaterial((m) => ({ ...m, description: e.target.value }))}
+                  placeholder="Belgotex Tuscany in Nomad, 4m broadloom"
+                />
+              </Field>
+              <Field label="Qty" className="w-20">
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  value={material.qty}
+                  onChange={(e) => setMaterial((m) => ({ ...m, qty: e.target.value }))}
+                />
+              </Field>
+              <Field label="Unit" className="w-24">
+                <Select value={material.unit} onChange={(e) => setMaterial((m) => ({ ...m, unit: e.target.value }))}>
+                  <option value="m2">m²</option>
+                  <option value="lm">lm</option>
+                  <option value="each">each</option>
+                  <option value="roll">roll</option>
+                </Select>
+              </Field>
+              <Button
+                variant="secondary"
+                disabled={!material.description || addMaterial.isPending}
+                onClick={async () => {
+                  await addMaterial.mutateAsync({
+                    jobId: j.id,
+                    description: material.description,
+                    qty: material.qty ? Number(material.qty) : 0,
+                    unit: material.unit,
+                  });
+                  setMaterial({ description: "", qty: "", unit: "m2" });
+                }}
+              >
+                Add
+              </Button>
+            </div>
+          </Card>
+
+          {/* ordering the materials, and the supplier invoices that come back */}
+          <div id={STEP_ANCHOR.order} className="scroll-mt-4 transition-shadow">
+            <PurchaseOrdersCard jobId={j.id} />
+          </div>
+    </>
+  );
   const customer = j.company?.name ?? [j.contact?.firstName, j.contact?.lastName].filter(Boolean).join(" ") ?? "-";
 
   return (
@@ -453,6 +543,9 @@ export default function JobDetailPage() {
             ) : null}
           </Card>
 
+          {/* supply only: where the job is up to, with a jump to each card (item 14) */}
+          {supplyOnly ? <SupplyStepsCard jobId={j.id} isAdmin={isAdmin} /> : null}
+
           {/* what the job makes */}
           <JobForecastCard jobId={j.id} />
 
@@ -462,19 +555,33 @@ export default function JobDetailPage() {
           {/* when the customer's money actually lands */}
           <PaymentTermsCard jobId={j.id} companyName={j.company?.name ?? null} />
 
+          {supplyOnly ? (
+            <>
+              <div id={STEP_ANCHOR.colours} className="scroll-mt-4 transition-shadow">
+                <MaterialSelectionCard jobId={j.id} />
+              </div>
+              {orderCards}
+            </>
+          ) : null}
+
           {/* supply only: mark delivered with proof, completes the job and raises the final invoice */}
-          <DeliveryCard jobId={j.id} />
+          <div id={STEP_ANCHOR.delivered} className="scroll-mt-4 transition-shadow">
+            <DeliveryCard jobId={j.id} />
+          </div>
 
           {/* what the client has been billed, and what has come in */}
-          <ClientInvoicesCard jobId={j.id} />
+          <div id={STEP_ANCHOR.invoice} className="scroll-mt-4 transition-shadow">
+            <ClientInvoicesCard jobId={j.id} />
+          </div>
 
           {/* extra work the client approves after the quote is accepted */}
           {isCallback && j.callbackChargeable === false ? null : <VariationsCard jobId={j.id} />}
 
           {/* product and colour per room, from the client */}
-          <MaterialSelectionCard jobId={j.id} />
+          {supplyOnly ? null : <MaterialSelectionCard jobId={j.id} />}
 
-          {/* dispatches */}
+          {/* dispatches (none on a supply only job, the steps card covers it) */}
+          {supplyOnly ? null : (
           <Card>
             <CardHeader
               title="Dispatches"
@@ -559,6 +666,7 @@ export default function JobDetailPage() {
               </ul>
             )}
           </Card>
+          )}
 
           {/* who sent the work */}
           <SupervisorCard
@@ -585,85 +693,7 @@ export default function JobDetailPage() {
             company={j.company ? { id: j.company.id, name: j.company.name } : null}
           />
 
-          {/* materials */}
-          <Card>
-            <CardHeader title="Materials" subtitle="What has to be on site before anyone turns up." />
-            {j.materials.length > 0 ? (
-              <ul className="divide-y divide-border">
-                {j.materials.map((m) => (
-                  <li key={m.id} className="flex items-center gap-3 px-4 py-2.5">
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm">{m.description}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {m.qty} {m.unit}
-                      </p>
-                    </div>
-                    <Select
-                      className="w-auto"
-                      value={m.status}
-                      onChange={(e) => updateMaterial.mutate({ id: m.id, status: e.target.value })}
-                    >
-                      {MATERIAL_STATUS.map((s) => (
-                        <option key={s} value={s}>
-                          {roleLabel(s)}
-                        </option>
-                      ))}
-                    </Select>
-                    <button
-                      type="button"
-                      onClick={() => removeMaterial.mutate({ id: m.id })}
-                      className="text-muted-foreground transition-colors hover:text-destructive"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            <div className="flex flex-wrap items-end gap-2 border-t border-border px-4 py-3">
-              <Field label="Material" className="min-w-[200px] flex-1">
-                <Input
-                  value={material.description}
-                  onChange={(e) => setMaterial((m) => ({ ...m, description: e.target.value }))}
-                  placeholder="Belgotex Tuscany in Nomad, 4m broadloom"
-                />
-              </Field>
-              <Field label="Qty" className="w-20">
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  value={material.qty}
-                  onChange={(e) => setMaterial((m) => ({ ...m, qty: e.target.value }))}
-                />
-              </Field>
-              <Field label="Unit" className="w-24">
-                <Select value={material.unit} onChange={(e) => setMaterial((m) => ({ ...m, unit: e.target.value }))}>
-                  <option value="m2">m²</option>
-                  <option value="lm">lm</option>
-                  <option value="each">each</option>
-                  <option value="roll">roll</option>
-                </Select>
-              </Field>
-              <Button
-                variant="secondary"
-                disabled={!material.description || addMaterial.isPending}
-                onClick={async () => {
-                  await addMaterial.mutateAsync({
-                    jobId: j.id,
-                    description: material.description,
-                    qty: material.qty ? Number(material.qty) : 0,
-                    unit: material.unit,
-                  });
-                  setMaterial({ description: "", qty: "", unit: "m2" });
-                }}
-              >
-                Add
-              </Button>
-            </div>
-          </Card>
-
-          {/* ordering the materials, and the supplier invoices that come back */}
-          <PurchaseOrdersCard jobId={j.id} />
+          {supplyOnly ? null : orderCards}
         </div>
 
         {/* right rail */}

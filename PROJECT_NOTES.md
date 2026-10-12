@@ -691,3 +691,10 @@ Checked on the branch head: lint clean, web build OK, API tsc 0, mobile tsc 0, a
 - Builder: Versions card has an admin Delete on draft and needs_review rows. A cancelled quote shows a banner and no New version button. Quote list has a Cancelled filter and colour.
 - No schema change (quote status is plain text).
 - Tests: terra-scratch-tests/fix1011/t-cancel.body.ts PASS 148; dry run t-candry.body.ts on a copy of the live backup (188000 clear, 188001 preview only); UI check fix1011/canui.py.
+
+### 18.23 188001 list item 14: run a supply job from the job page (15 Oct)
+- New web/components/supply-steps.tsx (SupplyStepsCard), only on a supply only job (delivery.status supplyOnly). Sits under the header facts. Steps: Colours checked (optional), Ordered, Delivered, Invoiced, Paid. Each open step has a button that scrolls to the card that does it (STEP_ANCHOR ids) and flashes it. "Next:" names the first open step that can be done from here. Read only, it changes no data.
+- Ordered reads purchasing.forJob (admin only). Office sees "An admin raises and sends the PO" and the PO is not offered as their next step.
+- Invoiced is open while a live, unpaid invoice has not been emailed. clientInvoices.forJob now returns emailedAt per invoice (newest invoice_emailed activity row). The Client invoices card shows "Emailed <day>" or "Not emailed yet" on open invoices.
+- Job page on a supply only job: Material selection, Materials and Purchase orders move up into step order before Delivery and Client invoices. The empty Dispatches card is hidden. Install jobs keep the old order.
+- Tests: UI check terra-scratch-tests/fix1011/i14ui2.py (layout, office view, install job unchanged) and i14ui3.py (draft PO, sent PO, mark delivered, emailed, paid). Seed t-i913seed.body.ts on a /tmp copy.

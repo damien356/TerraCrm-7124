@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly } from "../middleware/auth";
@@ -58,10 +58,21 @@ export const clientInvoices = {
   forJob: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
     const rows = await invoicesForJob(input.jobId);
     const live = rows.filter((r) => r.status !== "void");
+    // When each invoice was last emailed (lib/invoice-email.ts logs it), so the job shows what has gone out.
+    const emails = await db
+      .select({ id: schema.activityLog.entityId, at: schema.activityLog.createdAt })
+      .from(schema.activityLog)
+      .where(and(eq(schema.activityLog.jobId, input.jobId), eq(schema.activityLog.entityType, "invoice"), eq(schema.activityLog.action, "invoice_emailed")));
+    const emailedAt = new Map<number, Date>();
+    for (const e of emails) {
+      if (e.id == null || !e.at) continue;
+      const prev = emailedAt.get(e.id);
+      if (!prev || e.at > prev) emailedAt.set(e.id, e.at);
+    }
     const round2 = (n: number) => Math.round(n * 100) / 100;
     const card = cardPaymentsOn();
     return {
-      invoices: rows.map((r) => ({ ...r, payUrl: card && r.outstanding > 0 ? payUrl(r.id) : null })),
+      invoices: rows.map((r) => ({ ...r, emailedAt: emailedAt.get(r.id) ?? null, payUrl: card && r.outstanding > 0 ? payUrl(r.id) : null })),
       cardPayments: card,
       billed: round2(live.reduce((s, r) => s + r.total, 0)),
       received: round2(live.reduce((s, r) => s + r.amountPaid, 0)),
