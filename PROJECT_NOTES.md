@@ -610,3 +610,13 @@ Checked on the branch head: lint clean, web build OK, API tsc 0, mobile tsc 0, a
 - Known: the Price list tab still draws every row at once (4399). Fine on a normal browser, slow in the sandbox.
 - 12 Oct: Gibbon Group card (supplier 25) filled in: 14b Moonbi St, Brendale QLD 4500, 07 3881 1777, info@gibbontrade.com.au, ABN 71 145 382 556 (in notes, the card has no ABN field). Product 9529 (Sureboard, inactive) linked to it. Backup before: backups/terra-live-pre-gibbon-2026-10-12.db.
 - 12 Oct: logo on the PO PDF (3781d3c), header now matches the quote PDF. Client invoices have no PDF; the pay page already shows the logo. The variation document gets the logo when item 12 builds it.
+
+### 18.15 Insurance builders and supervisors import (12 Oct, merged b4e7b8f)
+- Source: Damien's file `insurance-builders-supervisors-import_KBywd6.csv` (34 people, 8 companies). Plan and dry run: `terra-scratch-tests/supimport/plan.py` (options used: `--dane=two --qat215=move --prime=file --matt-mobile=keep`), report `supervisor-import-dry-run/content.md`. Scratch API test `supimport/t-sup.tmp.ts` PASS 27, UI check `supimport/supui.py`.
+- Code: company type `insurance_builder` ("Insurance builder"), `isBuilderType()` in `lib/person-tags.ts` gives it the 0% deposit default. `journey-engine.ts` `enrol()` refuses anyone linked to an insurance builder company, so the quote follow-up is off for them. Companies get `compliance_email`, `admin_email`, `work_order_prefix`, `work_order_sender` (sql `2026-10-13-company-work-orders.sql`). The accounts email stays in `companies.email`, which invoices use. Company card shows and edits all four; People here shows title and phone.
+- Live 12 Oct (backup `backups/terra-live-pre-supervisors-apply-2026-10-12.db`, 87 statements in one batch, 35 checks passed):
+  - Types set to insurance_builder: 19 Ambrose, 73 Commerce, 104 Ezy, 188 Nexus, 210 Prime, 219 QAT, 224 Responsive, new 290 Repair & Rebuild. Emails and phones replaced from the file (Ezy keeps taylor.harris@, none in file). Prime is now pbaaccounts@.
+  - New 291 Schuurman Trading (type other, dane@schuurmantrading.com.au).
+  - 32 new contacts (source builder, audience trade, no marketing) plus 2 existing: 1135 Matthew Campbell (email now matthew@repairrebuild.com.au, shane@ removed everywhere, mobile kept) linked to Repair & Rebuild; 1231 Dane stays on the trading email, linked to Schuurman Trading as owner. New 1683 Dane under QAT with dane@qat.com.au. Both Dane cards carry a same-person note. QAT work goes to 1683. Dane's 5 personal jobs stay on 1231.
+  - 215 "Qld All Trades" (QAT duplicate): 7 jobs (company and bill to) and 6 sites moved to 219, card made inactive.
+  - Counts after: companies 290, contacts 1689, company_contacts 41.
