@@ -147,7 +147,7 @@ export async function loadQuotes(): Promise<SupQuote[]> {
     companyName: r.company_name,
     createdAt: r.created_at ?? 0,
     sentAt: r.sent_at ?? null,
-    sent: r.sent_at != null || ["sent", "accepted", "declined", "expired"].includes(r.status),
+    sent: r.sent_at != null || ["sent", "accepted", "declined", "expired", "cancelled"].includes(r.status),
     won: r.status === "accepted",
   }));
 }

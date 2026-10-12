@@ -29,7 +29,7 @@ import { cardPaymentsOn, owingOn, payUrl } from "../lib/stripe";
  * as the rest of quoting. Nothing here returns cost.
  */
 
-const LOCKED = ["accepted", "declined", "expired", "replaced"];
+const LOCKED = ["accepted", "declined", "expired", "replaced", "cancelled"];
 
 /**
  * editable "wording": titles and wording, which can still change on an

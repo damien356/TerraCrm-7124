@@ -29,7 +29,7 @@ import { feeAppliesTo } from "./purchase-orders";
  * recover it, so carrier freight rules count here.
  * ------------------------------------------------------------------------- */
 
-const LOCKED = new Set(["accepted", "declined", "expired", "replaced"]);
+const LOCKED = new Set(["accepted", "declined", "expired", "replaced", "cancelled"]);
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const r4 = (n: number) => Math.round((n + Number.EPSILON) * 10_000) / 10_000;

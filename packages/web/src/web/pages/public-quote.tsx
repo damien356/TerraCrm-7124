@@ -178,6 +178,9 @@ export default function PublicQuotePage() {
       {q.state === "declined" ? (
         <PublicMessage title="This quote was declined">If you have changed your mind, reply to our email and we will send you a fresh one.</PublicMessage>
       ) : null}
+      {q.state === "cancelled" ? (
+        <PublicMessage title="This quote has been cancelled">The job has been called off, so this quote can no longer be signed. If you would like a new one, reply to our email.</PublicMessage>
+      ) : null}
       {q.state === "past_valid" ? (
         <PublicMessage title="This quote has passed its valid until date">
           Prices may have moved since {q.validUntil}. Reply to our email and we will update it for you.

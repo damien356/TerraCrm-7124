@@ -59,6 +59,7 @@ import { quoteSend } from "./routes/quoteSend";
 import { clientInvoices } from "./routes/clientInvoices";
 import { delivery } from "./routes/delivery";
 import { publicPages } from "./routes/publicPages";
+import { jobCancel } from "./routes/jobCancel";
 import { variations } from "./routes/variations";
 import { bootMailAgent } from "./lib/mail-agent";
 import { finishConnect } from "./lib/gmail";
@@ -185,6 +186,7 @@ export const router = {
   variations,
   /** No-login pages for clients: /q/<token> read and sign a quote, /m/<token> choose flooring. Never returns cost. */
   publicPages,
+  jobCancel,
 };
 
 export type AppRouter = typeof router;

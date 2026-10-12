@@ -27,9 +27,10 @@ export const QUOTE_STATUS_COLOUR: Record<string, string> = {
   declined: "#B4342A",
   expired: "#7A736D",
   replaced: "#5B6E7A",
+  cancelled: "#8A4B3C",
 };
 
-const STATUSES = ["draft", "needs_review", "sent", "accepted", "declined", "expired", "replaced"];
+const STATUSES = ["draft", "needs_review", "sent", "accepted", "declined", "expired", "replaced", "cancelled"];
 
 function fmtDate(value: Date | string | null) {
   if (!value) return "-";

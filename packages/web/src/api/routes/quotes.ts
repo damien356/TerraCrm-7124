@@ -156,8 +156,8 @@ export function cleanWording(text: string) {
   return text.replace(/\s*[\u2013\u2014]\s*/g, ", ").trim();
 }
 
-/** Accepted, declined and expired quotes are history. Change them by making a new version. */
-const LOCKED_STATUSES = ["accepted", "declined", "expired", "replaced"];
+/** Accepted, declined, expired and cancelled quotes are history. Change them by making a new version. */
+const LOCKED_STATUSES = ["accepted", "declined", "expired", "replaced", "cancelled"];
 export async function editableQuoteOrThrow(id: number) {
   const quote = await quoteOrThrow(id);
   if (LOCKED_STATUSES.includes(quote.status)) {
@@ -363,6 +363,9 @@ export async function reviseQuoteRecord(
   opts: { depositPercent?: number } = {},
 ) {
   await assertBillable(quote.jobId);
+  if (quote.status === "cancelled") {
+    throw new ORPCError("BAD_REQUEST", { message: "This quote was cancelled with its job. Start a new quote for the client instead." });
+  }
   // Item 12: after acceptance, only variations.
   await assertNoAcceptedQuote({ number: quote.number, jobId: quote.jobId });
   const items = await db
@@ -721,8 +724,10 @@ export const quotes = {
 
   remove: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
     const quote = await quoteOrThrow(input.id);
-    if (quote.status === "accepted" || quote.status === "replaced") {
-      throw new ORPCError("BAD_REQUEST", { message: "An accepted quote can't be deleted. Void it instead." });
+    if (quote.status === "accepted" || quote.status === "replaced" || quote.status === "cancelled") {
+      throw new ORPCError("BAD_REQUEST", {
+        message: "An accepted quote can't be deleted. Use Cancel job on the quote or the job page instead.",
+      });
     }
     await db.delete(schema.quotes).where(eq(schema.quotes.id, input.id));
     return { ok: true };
@@ -1551,6 +1556,7 @@ export const quotes = {
       const quote = await quoteOrThrow(input.id);
       if (quote.status === "accepted") throw new ORPCError("BAD_REQUEST", { message: "This quote is accepted and locked." });
       if (quote.status === "replaced") throw new ORPCError("BAD_REQUEST", { message: "This version was replaced by a newer accepted one." });
+      if (quote.status === "cancelled") throw new ORPCError("BAD_REQUEST", { message: "This quote is cancelled and locked." });
       const [row] = await db
         .update(schema.quotes)
         .set({ status: "declined", updatedAt: new Date() })

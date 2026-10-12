@@ -37,6 +37,7 @@ import { useCreateTask, useRemoveTask } from "../queries/tasks";
 import { useBootstrap } from "../queries/settings";
 import { JobPeopleCard } from "../components/job-people";
 import { DispatchWork, MergeDispatchesModal, SplitDispatchModal } from "../components/dispatch-split";
+import { CancelJobButton } from "../components/job-cancel";
 import { useJobDispatchLines } from "../queries/dispatches";
 import {
   CallbackBanner,
@@ -381,6 +382,7 @@ export default function JobDetailPage() {
             <LifeBuoy className="size-4" />
             Create callback
           </Button>
+          <CancelJobButton jobId={j.id} />
           <Button onClick={() => setTaskModal(true)}>
             <Plus className="size-4" />
             Add dispatch

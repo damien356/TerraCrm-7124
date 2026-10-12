@@ -24,6 +24,7 @@ import {
   useAddQuoteItem,
   useChangeQuoteProduct,
   useConvertQuote,
+  useRemoveQuote,
   useDeclineQuote,
   useQuote,
   useRemoveQuoteItem,
@@ -36,6 +37,7 @@ import {
 } from "../queries/quotes";
 import { useProducts } from "../queries/products";
 import { QUOTE_STATUS_COLOUR } from "./quotes";
+import { CancelJobButton } from "../components/job-cancel";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
 
@@ -644,6 +646,7 @@ export default function QuoteBuilderPage() {
   const decline = useDeclineQuote();
   const revise = useReviseQuote();
   const convert = useConvertQuote();
+  const removeQuote = useRemoveQuote();
 
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
@@ -671,7 +674,7 @@ export default function QuoteBuilderPage() {
   }
 
   const q = quote.data;
-  const locked = q.status === "accepted" || q.status === "declined" || q.status === "expired" || q.status === "replaced";
+  const locked = q.status === "accepted" || q.status === "declined" || q.status === "expired" || q.status === "replaced" || q.status === "cancelled";
   // 188001 list item 7: on an accepted quote the words can still be fixed and re-sent.
   const wordingOpen = q.status === "accepted";
   const customer = q.contact ? `${q.contact.firstName} ${q.contact.lastName}` : q.company ? "" : "No customer yet";
@@ -814,7 +817,8 @@ export default function QuoteBuilderPage() {
               </Button>
             </Link>
           ) : null}
-          {locked && q.status !== "accepted" ? (
+          {q.job ? <CancelJobButton jobId={q.job.id} show={q.status === "accepted"} /> : null}
+          {locked && q.status !== "accepted" && q.status !== "cancelled" ? (
             <Button
               variant="outline"
               onClick={() =>
@@ -855,6 +859,11 @@ export default function QuoteBuilderPage() {
         <div className="mb-3 rounded-md border border-border bg-secondary/60 px-3 py-2 text-sm">
           Accepted. You can still fix the wording: section titles, section wording and line descriptions. Then use Save and re-send to email the client the updated copy.
           Prices, qty, lines and the deposit are locked. Change those with a variation on the job.
+        </div>
+      ) : null}
+      {q.status === "cancelled" ? (
+        <div className="mb-3 rounded-md border border-border bg-secondary/60 px-3 py-2 text-sm">
+          This quote was cancelled with its job. It is kept on record, out of the win numbers, and the client can no longer sign it.
         </div>
       ) : null}
       {q.status === "replaced" ? (
@@ -1074,7 +1083,29 @@ export default function QuoteBuilderPage() {
                       )}
                       <Badge colour={QUOTE_STATUS_COLOUR[v.status]}>{v.status}</Badge>
                     </span>
-                    <span className="tabular text-muted-foreground">{money(v.total)}</span>
+                    <span className="flex items-center gap-3">
+                      <span className="tabular text-muted-foreground">{money(v.total)}</span>
+                      {actor?.role === "admin" && (v.status === "draft" || v.status === "needs_review") ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={removeQuote.isPending}
+                          onClick={() => {
+                            if (!window.confirm(`Delete draft ${v.ref}? This cannot be undone.`)) return;
+                            void run(async () => {
+                              await removeQuote.mutateAsync({ id: v.id });
+                              if (v.id === q.id) {
+                                const keep = q.versions.find((x) => x.id !== v.id);
+                                navigate(keep ? `/quotes/${keep.id}` : "/quotes");
+                              } else setNotice(`Draft ${v.ref} deleted.`);
+                            });
+                          }}
+                        >
+                          <Trash2 className="size-3.5" />
+                          Delete
+                        </Button>
+                      ) : null}
+                    </span>
                   </li>
                 ))}
               </ul>

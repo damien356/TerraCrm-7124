@@ -99,12 +99,13 @@ async function newerVersionUrl(quote: Quote) {
   return quoteUrl((await linkForQuote(newer.id)).token);
 }
 
-type PageState = "open" | "accepted" | "declined" | "replaced" | "past_valid" | "not_ready";
+type PageState = "open" | "accepted" | "declined" | "replaced" | "cancelled" | "past_valid" | "not_ready";
 
 function stateOf(quote: Quote): PageState {
   if (NOT_READY.includes(quote.status)) return "not_ready";
   if (quote.status === "accepted") return "accepted";
   if (quote.status === "declined") return "declined";
+  if (quote.status === "cancelled") return "cancelled";
   if (quote.status === "replaced" || quote.status === "expired") return "replaced";
   if (quote.validUntil && quote.validUntil.getTime() < Date.now() - 86_400_000) return "past_valid";
   return "open";
@@ -218,6 +219,7 @@ const quotePage = {
       if (state === "accepted") throw bad("This quote is already accepted. Thank you.");
       if (state === "replaced") throw bad("This version has been replaced by a newer quote. Open the newest email from us.");
       if (state === "declined") throw bad("This quote was declined. Reply to our email and we will send a new one.");
+      if (state === "cancelled") throw bad("This quote has been cancelled. Reply to our email if you would like a new one.");
       if (state === "past_valid") throw bad("This quote has passed its valid until date. Reply to our email and we will update it for you.");
       if (state === "not_ready") throw notFound();
       const email = input.email?.trim() || null;

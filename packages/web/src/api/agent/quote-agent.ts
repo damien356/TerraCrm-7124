@@ -25,7 +25,7 @@ import { categoriesForHint, categoryMatchesHint } from "../lib/product-categorie
  * model's context, and out of its tools, when the person asking is an Admin.
  */
 
-export const LOCKED = ["accepted", "declined", "expired"];
+export const LOCKED = ["accepted", "declined", "expired", "replaced", "cancelled"];
 const KINDS = ["supply", "labour", "prep", "removal", "accessory", "delivery", "other"] as const;
 const UNITS = ["m2", "lm", "each", "hour", "job"] as const;
 

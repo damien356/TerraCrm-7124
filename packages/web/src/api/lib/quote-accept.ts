@@ -40,6 +40,7 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
   const [quote] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, args.quoteId));
   if (!quote) throw new ORPCError("NOT_FOUND", { message: "Quote not found" });
   if (quote.status === "accepted") throw bad("This quote is already accepted.");
+  if (quote.status === "cancelled") throw bad("This quote has been cancelled. Ask us for a new one.");
   if (quote.status === "expired" || quote.status === "replaced") {
     throw bad("This version has been replaced by a newer one. Accept the current version.");
   }
