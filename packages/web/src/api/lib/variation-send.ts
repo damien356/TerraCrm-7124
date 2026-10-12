@@ -10,7 +10,6 @@ import { quoteRefOf } from "./quote-number";
 import { jobText } from "./refs";
 import { getObject, putObject, signGet } from "./s3";
 import { normaliseMobile, sendSms, SMS_OPT_OUT } from "./sms";
-import { cardPaymentsOn, owingOn, payUrl } from "./stripe";
 import { type Signature } from "./signature";
 import { renderVariationPdf, type VariationPdfInput } from "./variationPdf";
 import {
@@ -29,7 +28,8 @@ import {
  * A variation going out (item 12): by email with the PDF, or by SMS, both
  * with the /v/<token> link where the client reads, signs and accepts it.
  * Logged on the job's thread, the same as a quote. The signed copy comes back
- * by email after an online accept.
+ * by email after an online accept and is filed in the job file, in the office
+ * only Signed documents bucket. It is sign only: no card, bank or invoice.
  * ------------------------------------------------------------------------- */
 
 const EMAIL_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
@@ -102,18 +102,9 @@ export async function addressedFor(v: Variation) {
   };
 }
 
-/** The invoice it was billed on, with what is owing and the card link. */
-export async function variationInvoice(v: Variation) {
-  if (!v.invoiceId) return null;
-  const [inv] = await db.select().from(schema.invoices).where(eq(schema.invoices.id, v.invoiceId));
-  if (!inv) return null;
-  const owing = owingOn(inv);
-  return { id: inv.id, ref: inv.number, total: inv.total, status: inv.status, owing, payUrl: cardPaymentsOn() && owing > 0 ? payUrl(inv.id) : null };
-}
-
-export function billNoteOf(v: Variation, invoiceRef: string | null) {
-  if (v.billMode === "own") return invoiceRef ? `Billed on invoice ${invoiceRef}.` : "Billed on its own invoice once you accept.";
-  return "Added to your final invoice.";
+/** Never its own invoice: it goes on the final invoice, or the end invoice when a company is billed. */
+export function billNoteOf(billedToCompany: boolean) {
+  return billedToCompany ? "Added to the end invoice." : "Added to your final invoice.";
 }
 
 /** The photos picked to show why, with short-lived links. Archived ones drop off. */
@@ -145,20 +136,11 @@ async function pdfPhotos(v: Variation) {
   return out;
 }
 
+/** The PDF. The signed copy is one page: no photos, tight layout. */
 export async function variationPdfFor(id: number, signed?: VariationPdfInput["signed"]) {
   const v = await variationOrThrow(id);
   const to = await addressedFor(v);
   const lines = await itemsOf(v.id);
-  const inv = await variationInvoice(v);
-  const token = await tokenFor(v);
-  const cardPay =
-    v.billMode === "own" && cardPaymentsOn()
-      ? inv
-        ? inv.payUrl
-          ? { url: inv.payUrl, note: `Pay invoice ${inv.ref} online by card.` }
-          : null
-        : { url: variationUrl(token), note: "Accept this variation online, then pay by card." }
-      : null;
   const pdf = await renderVariationPdf({
     ref: v.ref,
     date: auDate(todayISO(v.sentAt ?? v.createdAt)),
@@ -171,12 +153,11 @@ export async function variationPdfFor(id: number, signed?: VariationPdfInput["si
     subtotal: v.subtotal,
     gst: v.gst,
     total: v.total,
-    billNote: billNoteOf(v, inv?.ref ?? null),
-    payRef: v.billMode === "own" ? (inv?.ref ?? v.ref) : null,
-    cardPay,
+    billNote: billNoteOf(to.billedToCompany),
     showPosition: to.billedToCompany,
     signed: signed ?? null,
-    photos: await pdfPhotos(v),
+    onePage: Boolean(signed),
+    photos: signed ? [] : await pdfPhotos(v),
   });
   return { pdf, filename: `Terra Flooring variation ${v.ref}.pdf`, ref: v.ref };
 }
@@ -189,7 +170,7 @@ export async function variationDraft(id: number) {
   const url = variationUrl(await tokenFor(v));
   const first = (recipients[0]?.name || to.name).split(" ")[0] || "there";
   const why = v.description.trim() ? `: ${v.description.trim().replace(/\.$/, "")}.` : ".";
-  const billing = v.billMode === "own" ? "It is billed on its own invoice once you accept." : "It goes on your final invoice.";
+  const billing = to.billedToCompany ? "It goes on the end invoice." : "It goes on your final invoice.";
   return {
     recipients,
     email: recipients.find((r) => r.email)?.email ?? "",
@@ -321,17 +302,19 @@ export async function sendVariationSignedCopy(args: {
   const { pdf, filename } = await variationPdfFor(v.id, args.signed);
   const key = `variations/${v.jobId}/${v.id}/signed-${stamp()}.pdf`;
   const conv = await ensureForJob(v.jobId);
-  const inv = await variationInvoice(v);
+  const { billedToCompany } = await addressedFor(v);
   const first = args.signerName.split(" ")[0] || "there";
-  const lines = [`Hi ${first},`, "", `Thanks for accepting variation ${v.ref} for ${money(v.total)} inc GST. Your signed copy is attached.`, ""];
-  if (inv && inv.owing > 0) {
-    lines.push(`Your invoice is ${inv.ref} for ${money(inv.total)}.`, "");
-    if (inv.payUrl) lines.push("Pay by card online:", inv.payUrl, "", `Or pay by bank transfer and use ${inv.ref} as the reference.`, "");
-    else lines.push(`Please pay by bank transfer and use ${inv.ref} as the reference.`, "");
-  } else if (v.billMode === "final") {
-    lines.push("It will go on your final invoice.", "");
-  }
-  lines.push("Kind regards,", "Damien", "Terra Flooring");
+  const lines = [
+    `Hi ${first},`,
+    "",
+    `Thanks for accepting variation ${v.ref} for ${money(v.total)} inc GST. Your signed copy is attached.`,
+    "",
+    billedToCompany ? "It will go on the end invoice. Nothing is due now." : "It will go on your final invoice. Nothing is due now.",
+    "",
+    "Kind regards,",
+    "Damien",
+    "Terra Flooring",
+  ];
   const body = lines.join("\n");
   const subject = subjectWithRef(`Variation ${v.ref} accepted, your signed copy`, conv.ref);
 
@@ -363,6 +346,19 @@ export async function sendVariationSignedCopy(args: {
     failedAt: failed ? new Date() : null,
   });
   await attachPdf(msg.id, key, pdf, filename);
+  // Filed in the job file too, in the office only bucket, so it is never only in an email.
+  await db.insert(schema.jobMedia).values({
+    jobId: v.jobId,
+    bucket: "signed",
+    kind: "doc",
+    storageKey: key,
+    url: key,
+    filename,
+    mime: "application/pdf",
+    sizeBytes: pdf.length,
+    caption: `Signed variation ${v.ref}, ${args.signerName}`,
+    uploaderName: "Terra Ops",
+  });
   await db.update(schema.variationSignatures).set({ pdfKey: key, updatedAt: new Date() }).where(eq(schema.variationSignatures.id, args.signatureId));
   return { key, emailed: Boolean(providerId), failed };
 }

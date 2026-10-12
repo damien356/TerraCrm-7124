@@ -4,15 +4,14 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { staffOnly, type Actor } from "../middleware/auth";
 import { rebuildForecast } from "../lib/cashflow";
-import { acceptVariation, rejectVariation } from "../lib/variation-accept";
-import { sendVariation, variationDraft, variationInvoice, variationPdfFor, variationPhotos } from "../lib/variation-send";
+import { acceptVariation, rejectVariation, WORK_ORDER_WARNING } from "../lib/variation-accept";
+import { addressedFor, billNoteOf, sendVariation, variationDraft, variationPdfFor, variationPhotos } from "../lib/variation-send";
 import {
   acceptedQuoteFor,
   addLabourLine,
   addOtherLine,
   addProductLine,
   approvedVariationsTotal,
-  BILL_MODES,
   createVariation,
   deleteVariation,
   itemsOf,
@@ -36,7 +35,6 @@ import { todayISO } from "../lib/pricing";
  * ------------------------------------------------------------------------- */
 
 const lineKind = z.enum(LINE_KINDS);
-const billMode = z.enum(BILL_MODES);
 const qty = z.number().positive().max(100000);
 
 async function profileIdOf(userId: string) {
@@ -52,6 +50,7 @@ async function viewOf(v: Variation, actor: Actor) {
     .where(eq(schema.variationSignatures.variationId, v.id))
     .orderBy(desc(schema.variationSignatures.id))
     .limit(1);
+  const { billedToCompany } = await addressedFor(v);
   return {
     id: v.id,
     jobId: v.jobId,
@@ -61,7 +60,10 @@ async function viewOf(v: Variation, actor: Actor) {
     description: v.description,
     status: v.status,
     statusLabel: STATUS_LABEL[v.status] ?? v.status,
-    billMode: v.billMode,
+    billedToCompany,
+    billNote: billNoteOf(billedToCompany),
+    /** Company billed: an updated work order is needed before invoicing. Checked by hand until the work order build. */
+    workOrderWarning: billedToCompany ? WORK_ORDER_WARNING : null,
     subtotal: v.subtotal,
     gst: v.gst,
     total: v.total,
@@ -76,7 +78,6 @@ async function viewOf(v: Variation, actor: Actor) {
     createdAt: v.createdAt,
     createdByName: v.createdByName,
     url: v.token ? variationUrl(v.token) : null,
-    invoice: await variationInvoice(v),
     signature: sig ?? null,
     photos: (await variationPhotos(v)).map((p) => ({ id: p.id, caption: p.caption, kind: p.kind, url: p.url })),
     items: items.map((i) => ({
@@ -115,7 +116,7 @@ export const variations = {
   get: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => fresh(input.id, context.actor)),
 
   create: staffOnly
-    .input(z.object({ jobId: z.number(), description: z.string().max(4000).optional(), billMode: billMode.optional() }))
+    .input(z.object({ jobId: z.number(), description: z.string().max(4000).optional() }))
     .handler(async ({ input, context }) => {
       const row = await createVariation({ ...input, byName: context.actor.name, actorRole: context.actor.role });
       return fresh(row.id, context.actor);
@@ -126,7 +127,6 @@ export const variations = {
       z.object({
         id: z.number(),
         description: z.string().max(4000).optional(),
-        billMode: billMode.optional(),
         photoMediaIds: z.array(z.number()).max(12).optional(),
       }),
     )
@@ -240,7 +240,7 @@ export const variations = {
       const out = await acceptVariation({ id: input.id, actor: context.actor, via: "staff", note: input.note ? `How: ${input.note}` : null });
       await rebuildForecast().catch((e) => console.error("[cashflow] rebuild after variation accept failed:", e));
       return {
-        invoice: out.invoice ? { id: out.invoice.id, ref: out.invoice.number, total: out.invoice.total } : null,
+        workOrderWarning: out.billedToCompany ? WORK_ORDER_WARNING : null,
         dispatchId: out.work.taskId,
         materials: out.work.materials,
         variation: await fresh(input.id, context.actor),

@@ -1,7 +1,7 @@
 import { jobNumberSql, taskRefSql } from "../lib/job-ref";
 import { syncJobForTask } from "../lib/job-stage";
 import { z } from "zod";
-import { and, asc, desc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, lte, notInArray, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -9,6 +9,7 @@ import { installerOnly } from "../middleware/auth";
 import { pushToOffice } from "../lib/push";
 import { signMany } from "../lib/s3";
 import { acceptOffer, declineOffer, expireStale, releaseTask } from "./offers";
+import { OFFICE_ONLY_BUCKETS } from "./media";
 import { addLocalDays, todayLocal } from "../lib/local-date";
 import { taskIdsOn } from "../lib/crew-days";
 import { completionPhotosOn, minCompletionPhotos, recheckPhotoFlags } from "../lib/site-visits";
@@ -623,7 +624,7 @@ export const field = {
       db
         .select()
         .from(schema.jobMedia)
-        .where(and(eq(schema.jobMedia.jobId, task.jobId), sql`${schema.jobMedia.archivedAt} is null`))
+        .where(and(eq(schema.jobMedia.jobId, task.jobId), sql`${schema.jobMedia.archivedAt} is null`, notInArray(schema.jobMedia.bucket, [...OFFICE_ONLY_BUCKETS])))
         .orderBy(asc(schema.jobMedia.capturedAt)),
     ]);
 
@@ -633,7 +634,7 @@ export const field = {
       ? await db
           .select()
           .from(schema.jobMedia)
-          .where(and(eq(schema.jobMedia.jobId, parentId), sql`${schema.jobMedia.archivedAt} is null`))
+          .where(and(eq(schema.jobMedia.jobId, parentId), sql`${schema.jobMedia.archivedAt} is null`, notInArray(schema.jobMedia.bucket, [...OFFICE_ONLY_BUCKETS])))
           .orderBy(asc(schema.jobMedia.capturedAt))
       : [];
     const signed = await signMany(mediaRows);

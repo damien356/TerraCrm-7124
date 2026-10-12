@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { markupOf } from "./pricing";
@@ -18,9 +18,13 @@ import { OPS_URL } from "./swms-checks";
  *   draft     being priced. Editing a sent one puts it back to draft.
  *   sent      out to the client by email or SMS with the /v/<token> link
  *   approved  accepted (signed online, or marked by the office). Added to
- *             the job value. On the final invoice unless billed on its own.
- *   invoiced  billed on its own IQ invoice when accepted (bill mode own)
+ *             the job value. It goes on the final invoice (homeowner) or the
+ *             end invoice (company billed). Never its own invoice, never a
+ *             new deposit, so it stays approved.
  *   rejected  the client said no
+ *
+ * "invoiced" is never set now. It stays counted and labelled only so an old
+ * row would still read right.
  *
  * Accepting is lib/variation-accept.ts, sending lib/variation-send.ts.
  * ------------------------------------------------------------------------- */
@@ -29,7 +33,8 @@ export type Variation = typeof schema.variations.$inferSelect;
 export type VariationItem = typeof schema.variationItems.$inferSelect;
 
 export const GST_RATE = 0.1;
-export const BILL_MODES = ["final", "own"] as const;
+/** The bill_mode column stays, always "final". Damien: never a separate invoice. */
+export const BILL_MODES = ["final"] as const;
 export type BillMode = (typeof BILL_MODES)[number];
 /** Statuses whose total is in the job value. */
 export const COUNTED_STATUSES = ["approved", "invoiced"] as const;
@@ -127,7 +132,7 @@ async function nextSort(variationId: number) {
 
 /* --------------------------------- create --------------------------------- */
 
-export async function createVariation(args: { jobId: number; description?: string; billMode?: BillMode; byName: string; actorRole: string }) {
+export async function createVariation(args: { jobId: number; description?: string; byName: string; actorRole: string }) {
   const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, args.jobId));
   if (!job) throw new ORPCError("NOT_FOUND", { message: "Job not found" });
   const quote = await acceptedQuoteFor(job.id);
@@ -149,7 +154,7 @@ export async function createVariation(args: { jobId: number; description?: strin
           ref: variationRef(jobRef, seq),
           seq,
           description: args.description?.trim() ?? "",
-          billMode: args.billMode ?? "final",
+          billMode: "final",
           status: "draft",
           createdByName: args.byName,
         })
@@ -172,24 +177,23 @@ export async function createVariation(args: { jobId: number; description?: strin
   return row;
 }
 
-export async function updateVariation(id: number, fields: { description?: string; billMode?: BillMode; photoMediaIds?: number[] }) {
+export async function updateVariation(id: number, fields: { description?: string; photoMediaIds?: number[] }) {
   const v = await editableOrThrow(id);
   const set: Partial<typeof schema.variations.$inferInsert> = { updatedAt: new Date() };
   if (fields.description !== undefined) set.description = fields.description.trim();
-  if (fields.billMode !== undefined) set.billMode = fields.billMode;
   if (fields.photoMediaIds !== undefined) {
     const ids = [...new Set(fields.photoMediaIds)].slice(0, 12);
     if (ids.length) {
       const found = await db
         .select({ id: schema.jobMedia.id })
         .from(schema.jobMedia)
-        .where(and(eq(schema.jobMedia.jobId, v.jobId), inArray(schema.jobMedia.id, ids)));
+        .where(and(eq(schema.jobMedia.jobId, v.jobId), inArray(schema.jobMedia.id, ids), ne(schema.jobMedia.bucket, "signed")));
       if (found.length !== ids.length) throw bad("A photo picked is not in this job's file.");
     }
     set.photoMediaIds = JSON.stringify(ids);
   }
   // The reason and the photos are what the client reads, so a change there needs a resend too.
-  if (v.status === "sent" && (fields.description !== undefined || fields.photoMediaIds !== undefined || fields.billMode !== undefined)) {
+  if (v.status === "sent" && (fields.description !== undefined || fields.photoMediaIds !== undefined)) {
     set.status = "draft";
   }
   const [row] = await db.update(schema.variations).set(set).where(eq(schema.variations.id, id)).returning();

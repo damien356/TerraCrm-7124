@@ -2,10 +2,10 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { assertBillable } from "./callbacks";
-import { raiseInvoice, type InvoiceRow } from "./client-invoices";
 import { insertDispatchForLines, type WorkLine } from "./dispatch-build";
 import { pushToOffice } from "./push";
 import { jobText } from "./refs";
+import { addressedFor } from "./variation-send";
 import { bad, itemsOf, money, SUPPLY_KINDS, variationOrThrow, WORK_KINDS, type Variation, type VariationItem } from "./variations";
 
 /* ---------------------------------------------------------------------------
@@ -13,13 +13,18 @@ import { bad, itemsOf, money, SUPPLY_KINDS, variationOrThrow, WORK_KINDS, type V
  * signing online both come through here:
  *
  *   lock it (only from draft or sent, and only once), add its total to the
- *   job value, raise its own IQ invoice when the bill mode is own (it is then
- *   invoiced), make its work once: labour, prep and removal lines become a
+ *   job value, make its work once: labour, prep and removal lines become a
  *   new unassigned dispatch, supply and accessory lines become materials to
  *   order. Then an office task, a log line, and a push when it was online.
  *
- * Bill mode final leaves it approved and unbilled, for the final invoice.
+ * A variation is never invoiced on its own and never takes a deposit. It
+ * stays approved and goes on the final invoice (homeowner) or the end invoice
+ * (company billed). A company billed job also needs an updated work order
+ * from the supervisor before it is invoiced, so the task says so.
  * ------------------------------------------------------------------------- */
+
+/** Shown on accept, on the office task and on the card for a company billed job. */
+export const WORK_ORDER_WARNING = "Get an updated work order from the supervisor that covers this variation before invoicing.";
 
 export type VariationActor = { name: string; role: string };
 
@@ -101,23 +106,10 @@ export async function acceptVariation(args: { id: number; actor: VariationActor;
     .set({ value: sql`coalesce(${schema.jobs.value}, 0) + ${locked.total}`, updatedAt: now })
     .where(eq(schema.jobs.id, locked.jobId));
 
-  let invoice: InvoiceRow | null = null;
-  if (locked.billMode === "own") {
-    invoice = await raiseInvoice({
-      jobId: locked.jobId,
-      quoteId: locked.quoteId,
-      kind: "variation",
-      label: `Variation ${locked.ref}${locked.description ? `: ${locked.description.slice(0, 120)}` : ""}`,
-      total: locked.total,
-      createdByName: args.actor.name,
-      actorRole: args.actor.role,
-    });
-    await db.update(schema.variations).set({ status: "invoiced", invoiceId: invoice.id, updatedAt: new Date() }).where(eq(schema.variations.id, locked.id));
-  }
-
   const work = await makeVariationWork(locked);
   const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, locked.jobId));
   const jobRef = job ? jobText(job) : String(locked.jobId);
+  const billedToCompany = (await addressedFor(locked)).billedToCompany;
 
   await db.insert(schema.activityLog).values({
     jobId: locked.jobId,
@@ -132,7 +124,8 @@ export async function acceptVariation(args: { id: number; actor: VariationActor;
   const lines = await itemsOf(locked.id);
   const taskDetail = [
     `Variation ${locked.ref} accepted, ${money(locked.total)}.`,
-    invoice ? `Invoice ${invoice.number} raised for ${money(invoice.total)}.` : "It goes on the final invoice.",
+    billedToCompany ? "It goes on the end invoice." : "It goes on the final invoice.",
+    billedToCompany ? WORK_ORDER_WARNING : "",
     work.materials ? `${work.materials} material${work.materials === 1 ? "" : "s"} to order.` : "",
     work.taskId ? "A new dispatch is on the job for the extra work. Book it in." : "",
     lines.some((l) => !SUPPLY_KINDS.has(l.kind) && !WORK_KINDS.has(l.kind)) ? "It has other lines. Check if anything else needs doing." : "",
@@ -147,13 +140,13 @@ export async function acceptVariation(args: { id: number; actor: VariationActor;
   if (args.via === "online") {
     await pushToOffice({
       title: `Variation ${locked.ref} accepted online`,
-      body: `${args.actor.name} accepted ${money(locked.total)}${invoice ? `. Invoice ${invoice.number} is waiting.` : "."}`,
+      body: `${args.actor.name} accepted ${money(locked.total)}.${billedToCompany ? " Get an updated work order before invoicing." : ""}`,
       data: { kind: "job", jobId: locked.jobId },
     }).catch((e) => console.error("[variation] push failed:", e));
   }
 
   const [fresh] = await db.select().from(schema.variations).where(eq(schema.variations.id, locked.id));
-  return { variation: fresh ?? locked, invoice, work, taskId: task?.id ?? null };
+  return { variation: fresh ?? locked, work, billedToCompany, taskId: task?.id ?? null };
 }
 
 export async function rejectVariation(args: { id: number; actor: VariationActor; via: "staff" | "online"; reason?: string | null }) {

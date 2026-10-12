@@ -30,6 +30,7 @@ const BUCKETS = [
     label: "Client photos",
     blurb: "What the client sent in about the problem. Save emailed or texted photos here. The crew sees them read only.",
   },
+  { key: "signed", label: "Signed documents", blurb: "Signed paperwork, such as an accepted variation. Office only. The crew never sees this." },
 ] as const;
 
 type BucketKey = (typeof BUCKETS)[number]["key"];

@@ -5,15 +5,15 @@ import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input, Textarea } from "../components/ui/field";
 import { Spinner } from "../components/ui/card";
 import { SignaturePad, type SignatureValue } from "../components/signature-pad";
-import { BankDetails, PayByCard, PublicCard, PublicMessage, PublicShell, downloadBase64, errorText } from "../components/public-shell";
+import { PublicCard, PublicMessage, PublicShell, downloadBase64, errorText } from "../components/public-shell";
 import { moneyExact } from "../lib/money";
 import { useAcceptVariationOnline, useDeclineVariationOnline, usePublicVariation, usePublicVariationPdf } from "../queries/publicPages";
 
 /**
  * /v/<token>: the client reads a variation, signs and accepts it, or
  * declines it (item 12). No login. What the work is, the qty and the
- * totals. Never a unit price. A variation billed on its own invoice can be
- * paid by card once accepted.
+ * totals. Never a unit price. Sign only: nothing to pay here, no card and
+ * no bank details. It goes on the final or end invoice.
  */
 
 const UNIT: Record<string, string> = { m2: "m²", lm: "lm", each: "each", hour: "hr", day: "day", job: "job", step: "step" };
@@ -112,8 +112,6 @@ export default function PublicVariationPage() {
     }
   }
 
-  const owing = v.invoice && !v.invoice.paid && v.invoice.owing > 0 ? v.invoice : null;
-
   return (
     <PublicShell>
       {v.preview ? (
@@ -138,16 +136,6 @@ export default function PublicVariationPage() {
               {done.emailedTo ? `Your signed copy is on its way to ${done.emailedTo}.` : "You can download your signed copy below."} {done.billNote}
             </p>
           </div>
-          {done.invoice ? (
-            <div className="mx-auto max-w-md">
-              <p className="mb-2 text-center text-sm">
-                Your invoice is <span className="font-semibold">{done.invoice.ref}</span> for{" "}
-                <span className="font-semibold">{moneyExact(done.invoice.total)}</span>.
-              </p>
-              {done.invoice.payUrl ? <PayByCard url={done.invoice.payUrl} amount={done.invoice.total} /> : null}
-              <BankDetails bank={done.bank} reference={done.invoice.ref} amount={done.invoice.total} />
-            </div>
-          ) : null}
           <div className="mt-4 flex justify-center">
             <Button variant="outline" disabled={pdf.isPending} onClick={savePdf}>
               <Download className="size-4" />
@@ -168,17 +156,6 @@ export default function PublicVariationPage() {
             ) : null}
             <p className="mt-1 text-sm text-muted-foreground">{v.billNote}</p>
           </div>
-          {owing ? (
-            <div className="mx-auto mt-3 max-w-md">
-              <p className="mb-2 text-center text-sm">
-                Invoice {owing.ref}: {moneyExact(owing.owing)} still to pay.
-              </p>
-              {owing.payUrl ? <PayByCard url={owing.payUrl} amount={owing.owing} /> : null}
-              <BankDetails bank={v.bank} reference={owing.ref} amount={owing.owing} />
-            </div>
-          ) : v.invoice?.paid ? (
-            <p className="mt-2 text-center text-sm text-[#3F7D3A]">Invoice {v.invoice.ref} paid. Thank you.</p>
-          ) : null}
         </PublicCard>
       ) : null}
 
@@ -323,7 +300,7 @@ export default function PublicVariationPage() {
                 </Button>
               </div>
             ) : null}
-            {v.cardPayments ? <p className="text-xs text-muted-foreground">After you accept you can pay its invoice by card or by bank transfer.</p> : null}
+            <p className="text-xs text-muted-foreground">Signing takes no payment. Nothing is due now.</p>
           </div>
         </PublicCard>
       ) : null}

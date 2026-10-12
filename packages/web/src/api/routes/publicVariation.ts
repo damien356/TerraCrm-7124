@@ -8,12 +8,10 @@ import { rebuildForecast } from "../lib/cashflow";
 import { auDate } from "../lib/invoice-match";
 import { todayISO } from "../lib/pricing";
 import { EMAIL_RE } from "../lib/quote-email";
-import { TERRA_PRINT } from "../lib/quotePdf";
 import { checkSignature, signatureInput, tidySignature } from "../lib/signature";
 import { SUPPLY_TERMS_VERSION } from "../lib/supplyTerms";
-import { cardPaymentsOn } from "../lib/stripe";
 import { acceptVariation, rejectVariation } from "../lib/variation-accept";
-import { addressedFor, billNoteOf, sendVariationSignedCopy, variationInvoice, variationPdfFor, variationPhotos } from "../lib/variation-send";
+import { addressedFor, billNoteOf, sendVariationSignedCopy, variationPdfFor, variationPhotos } from "../lib/variation-send";
 import { VARIATION_ACCEPT_HEADING, variationAcceptText } from "../lib/variationPdf";
 import { itemsOf, type Variation } from "../lib/variations";
 
@@ -22,7 +20,8 @@ import { itemsOf, type Variation } from "../lib/variations";
  * declines it (item 12). No login. The token is the only key.
  *
  * The client sees what the work is, the qty and the totals. Never a unit
- * price, a cost or a markup, the same as the PDF.
+ * price, a cost or a markup, the same as the PDF. Sign only: no card, no
+ * bank details, nothing to pay. It goes on the final or end invoice.
  * ------------------------------------------------------------------------- */
 
 const notFound = () => new ORPCError("NOT_FOUND", { message: "This link is not valid. Check the message we sent, or reply to it and we will help." });
@@ -50,8 +49,6 @@ function stateOf(v: Variation): PageState {
   // A draft that went out once is being changed by the office.
   return v.sentAt ? "being_updated" : "not_ready";
 }
-
-const bank = () => ({ name: TERRA_PRINT.bank.name, bsb: TERRA_PRINT.bank.bsb, account: TERRA_PRINT.bank.account });
 
 async function latestSignature(variationId: number) {
   const [s] = await db
@@ -85,7 +82,6 @@ export const publicVariation = {
     }
     const to = await addressedFor(v);
     const lines = await itemsOf(v.id);
-    const inv = await variationInvoice(v);
     const sig = await latestSignature(v.id);
     return {
       full: true as const,
@@ -103,12 +99,7 @@ export const publicVariation = {
       subtotal: v.subtotal,
       gst: v.gst,
       total: v.total,
-      billMode: v.billMode,
-      billNote: billNoteOf(v, inv?.ref ?? null),
-      bank: bank(),
-      /** Only for a variation billed on its own: card pay happens on its invoice. */
-      cardPayments: v.billMode === "own" && cardPaymentsOn(),
-      invoice: inv ? { ref: inv.ref, total: inv.total, owing: inv.owing, paid: inv.status === "paid", payUrl: inv.payUrl } : null,
+      billNote: billNoteOf(to.billedToCompany),
       billedToCompany: to.billedToCompany,
       acceptHeading: VARIATION_ACCEPT_HEADING,
       acceptText: variationAcceptText(to.jobRef),
@@ -195,13 +186,10 @@ export const publicVariation = {
         }
       }
       await rebuildForecast().catch((e) => console.error("[cashflow] rebuild after variation accept failed:", e));
-      const inv = await variationInvoice(out.variation);
       return {
         ref: v.ref,
         total: v.total,
-        billNote: billNoteOf(out.variation, inv?.ref ?? null),
-        invoice: inv ? { ref: inv.ref, total: inv.total, payUrl: inv.payUrl } : null,
-        bank: bank(),
+        billNote: billNoteOf(out.billedToCompany),
         emailedTo: email,
       };
     }),

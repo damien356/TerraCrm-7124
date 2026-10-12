@@ -1,4 +1,4 @@
-import { PDFArray, PDFDocument, PDFName, PDFString, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { TERRA_PRINT } from "./quotePdf";
 import { drawSignature, type Signature } from "./signature";
 import { TERRA_LOGO_PRINT_PNG_BASE64 } from "./terraLogoPrint";
@@ -10,6 +10,10 @@ import { TERRA_LOGO_PRINT_PNG_BASE64 } from "./terraLogoPrint";
  *
  * The client sees each line's description and quantity, never a rate, a line
  * price, a cost or a markup. Lines come in with no money on them.
+ *
+ * Sign only: no bank details and no card link. It goes on the final or end
+ * invoice. The signed copy (onePage) is always one page: no photos, the reason
+ * cut short and any lines that do not fit counted at the end of the table.
  */
 
 export type VariationPdfInput = {
@@ -26,12 +30,11 @@ export type VariationPdfInput = {
   subtotal: number;
   gst: number;
   total: number;
-  /** "Added to your final invoice." or "Billed on invoice IQ188000-3." */
+  /** "Added to your final invoice." or "Added to the end invoice." */
   billNote: string;
-  /** Bank details with this reference. Null when it goes on the final invoice. */
-  payRef: string | null;
-  cardPay?: { url: string; note: string } | null;
   showPosition?: boolean;
+  /** The signed copy: kept to one page. */
+  onePage?: boolean;
   signed?: { name: string; position: string; date: string; signature: Signature } | null;
   /** Up to four photos, already read from storage. */
   photos?: { bytes: Buffer; type: "png" | "jpg" }[];
@@ -100,8 +103,11 @@ function textRight(page: PDFPage, s: string, right: number, y: number, font: PDF
   page.drawText(c, { x: right - font.widthOfTextAtSize(c, size), y, size, font, color });
 }
 
+const BOTTOM = M + 24;
+
 function need(ctx: Ctx, h: number) {
-  if (ctx.y - h >= M + 24) return;
+  if (ctx.y - h >= BOTTOM) return;
+  if (ctx.input.onePage) return;
   ctx.page = ctx.doc.addPage([W, H]);
   ctx.y = H - M;
   text(ctx.page, `Variation ${ctx.input.ref} (continued)`, M, ctx.y - 10, ctx.bold, 10);
@@ -163,8 +169,9 @@ function addressed(ctx: Ctx) {
 }
 
 function reason(ctx: Ctx) {
-  const body = wrap(ctx.input.reason || "", ctx.reg, 9.5, CW - 20);
+  let body = wrap(ctx.input.reason || "", ctx.reg, 9.5, CW - 20);
   if (!body.some((l) => l.trim())) return;
+  if (ctx.input.onePage && body.length > 6) body = [...body.slice(0, 5), `${body[5]!.replace(/\s*\S*$/, "")}...`];
   need(ctx, 30 + Math.min(body.length, 6) * 12.5);
   text(ctx.page, "WHY THIS VARIATION", M, ctx.y, ctx.bold, 7.5, LABEL);
   ctx.y -= 14;
@@ -221,8 +228,19 @@ function table(ctx: Ctx) {
   };
   need(ctx, 60);
   head();
-  for (const l of ctx.input.lines) {
+  // One page: leave room for the totals and the acceptance block under the table.
+  const floor = ctx.input.onePage ? BOTTOM + totalsHeight(ctx) + acceptanceHeight(ctx) : -Infinity;
+  const list = ctx.input.lines;
+  for (let i = 0; i < list.length; i++) {
+    const l = list[i]!;
     const rows = wrap(l.description, ctx.reg, 9.5, descW);
+    const left = list.length - i - 1;
+    if (ctx.y - (rows.length * 12.5 + 12) - (left ? 16 : 0) < floor) {
+      const more = list.length - i;
+      text(ctx.page, `Plus ${more} more line${more === 1 ? "" : "s"}, as on the variation sent to you.`, M + 8, ctx.y, ctx.reg, 9, MUTED);
+      ctx.y -= 16;
+      break;
+    }
     need(ctx, rows.length * 12.5 + 10);
     const top = ctx.y;
     for (const r of rows) {
@@ -234,6 +252,13 @@ function table(ctx: Ctx) {
     ctx.page.drawLine({ start: { x: M, y: ctx.y + 4 }, end: { x: W - M, y: ctx.y + 4 }, thickness: 0.6, color: RULE });
     ctx.y -= 8;
   }
+}
+
+function totalsHeight(ctx: Ctx) {
+  return 14 + 14 + 2 + 18 + wrap(ctx.input.billNote, ctx.reg, 9, CW * 0.42).length * 12 + 10;
+}
+function acceptanceHeight(ctx: Ctx) {
+  return 16 + 15 + wrap(variationAcceptText(ctx.input.jobRef), ctx.reg, 8.5, CW).length * 11 + 22 + 26 + 16;
 }
 
 function totals(ctx: Ctx) {
@@ -256,63 +281,6 @@ function totals(ctx: Ctx) {
     ctx.y -= 12;
   }
   ctx.y -= 10;
-}
-
-function linkArea(ctx: Ctx, x: number, y: number, w: number, h: number, url: string) {
-  const annot = ctx.doc.context.obj({
-    Type: "Annot",
-    Subtype: "Link",
-    Rect: [x, y, x + w, y + h],
-    Border: [0, 0, 0],
-    A: { Type: "Action", S: "URI", URI: PDFString.of(url) },
-  });
-  const ref = ctx.doc.context.register(annot);
-  const annots = ctx.page.node.lookup(PDFName.of("Annots"));
-  if (annots instanceof PDFArray) annots.push(ref);
-  else ctx.page.node.set(PDFName.of("Annots"), ctx.doc.context.obj([ref]));
-}
-
-function payment(ctx: Ctx) {
-  const { input } = ctx;
-  if (input.payRef) {
-    need(ctx, 70);
-    const top = ctx.y;
-    const h = 52;
-    ctx.page.drawRectangle({ x: M, y: top - h + 12, width: CW, height: h, color: FILL });
-    text(ctx.page, "PAYMENT BY BANK TRANSFER", M + 10, top, ctx.bold, 7.5, LABEL);
-    const cols: [string, string][] = [
-      ["Account Name", TERRA_PRINT.bank.name],
-      ["BSB", TERRA_PRINT.bank.bsb],
-      ["Account", TERRA_PRINT.bank.account],
-      ["Reference", input.payRef],
-    ];
-    const cw = (CW - 20) / cols.length;
-    cols.forEach(([k, v], i) => {
-      text(ctx.page, k, M + 10 + i * cw, top - 14, ctx.reg, 8, MUTED);
-      text(ctx.page, v, M + 10 + i * cw, top - 26, ctx.bold, 10);
-    });
-    ctx.y = top - h - 6;
-  }
-  const pay = input.cardPay;
-  if (!pay) return;
-  need(ctx, 52);
-  const top = ctx.y;
-  const h = 44;
-  ctx.page.drawRectangle({ x: M, y: top - h + 12, width: CW, height: h, color: FILL });
-  text(ctx.page, "PAY BY CARD", M + 10, top, ctx.bold, 7.5, LABEL);
-  const bw = 104;
-  const by = top - 26;
-  ctx.page.drawRectangle({ x: M + 10, y: by, width: bw, height: 18, color: GOLD });
-  const label = "Pay by card";
-  text(ctx.page, label, M + 10 + (bw - ctx.bold.widthOfTextAtSize(label, 9.5)) / 2, by + 5.5, ctx.bold, 9.5, rgb(1, 1, 1));
-  linkArea(ctx, M + 10, by, bw, 18, pay.url);
-  const tx = M + 10 + bw + 12;
-  const tw = CW - (tx - M) - 10;
-  text(ctx.page, wrap(pay.note, ctx.reg, 8, tw)[0] ?? "", tx, by + 10, ctx.reg, 8, MUTED);
-  const shown = pay.url.replace(/^https?:\/\//, "");
-  text(ctx.page, shown, tx, by, ctx.reg, 7.5, GOLD);
-  linkArea(ctx, tx, by - 2, Math.min(tw, ctx.reg.widthOfTextAtSize(clean(shown), 7.5)), 10, pay.url);
-  ctx.y = top - h - 6;
 }
 
 function acceptance(ctx: Ctx) {
@@ -367,7 +335,6 @@ export async function renderVariationPdf(input: VariationPdfInput): Promise<Buff
   await photos(ctx);
   table(ctx);
   totals(ctx);
-  payment(ctx);
   acceptance(ctx);
   footers(doc, reg, input);
   return Buffer.from(await doc.save());

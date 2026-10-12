@@ -1,7 +1,7 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { useSearch } from "wouter";
-import { Ban, Check, Copy, ExternalLink, FileText, ImagePlus, Mail, MessageSquare, Plus, Search, Send, Trash2 } from "lucide-react";
+import { AlertTriangle, Ban, Check, Copy, ExternalLink, FileText, ImagePlus, Mail, MessageSquare, Plus, Search, Send, Trash2 } from "lucide-react";
 import { Card, CardHeader, Empty, Loading, Spinner } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -35,9 +35,11 @@ import {
  * VARIATIONS (fix list 11 Oct, item 12). After a quote is accepted, extra
  * work or a dearer product is a variation the client approves. Priced off the
  * price book and the rate book, numbered off the job (V188000-01), sent by
- * email or SMS with a link where the client signs and accepts. Accepting adds
- * it to the job value, bills it on the final invoice or its own, and makes
- * its dispatch and materials.
+ * email or SMS with a link where the client signs and accepts. Sign only,
+ * nothing to pay. Accepting adds it to the job value and makes its dispatch
+ * and materials. It goes on the final invoice (homeowner) or the end invoice
+ * (company billed), never its own invoice and never a new deposit. A company
+ * billed job needs an updated work order before invoicing, so it says so.
  */
 
 type List = NonNullable<ReturnType<typeof useJobVariations>["data"]>;
@@ -134,10 +136,15 @@ export function VariationsCard({ jobId }: { jobId: number }) {
                     <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
                       <span className="tabular text-primary">{v.ref}</span>
                       <Badge colour={STATUS_COLOUR[v.status] ?? "#7A736D"}>{v.statusLabel}</Badge>
-                      {v.billMode === "own" ? <span className="text-xs text-muted-foreground">own invoice</span> : null}
                     </p>
                     <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{v.description || "No reason written yet"}</p>
                     <p className="mt-0.5 text-xs text-muted-foreground">{rowNote(v)}</p>
+                    {v.workOrderWarning && (v.status === "approved" || v.status === "invoiced") ? (
+                      <p className="mt-1 flex items-start gap-1 text-xs font-medium text-amber-800">
+                        <AlertTriangle className="mt-px size-3.5 shrink-0" />
+                        {v.workOrderWarning}
+                      </p>
+                    ) : null}
                   </div>
                   <span className="tabular shrink-0 text-sm font-semibold">{moneyExact(v.total)}</span>
                 </button>
@@ -155,7 +162,7 @@ export function VariationsCard({ jobId }: { jobId: number }) {
 function rowNote(v: Variation) {
   if (v.status === "approved" || v.status === "invoiced") {
     const how = v.approvalChannel === "online" ? `signed online by ${v.approvedByName ?? "the client"}` : `marked by ${v.approvedByName ?? "the office"}`;
-    return [`Accepted ${dateOf(v.approvedAt) ?? ""}, ${how}`, v.invoice ? `Invoice ${v.invoice.ref}` : "On the final invoice"].join(". ");
+    return [`Accepted ${dateOf(v.approvedAt) ?? ""}, ${how}`, v.billedToCompany ? "On the end invoice" : "On the final invoice"].join(". ");
   }
   if (v.status === "rejected") return `Declined ${dateOf(v.rejectedAt) ?? ""}`;
   if (v.status === "sent") return `Sent ${dateOf(v.sentAt) ?? ""}. Opened ${v.views} ${v.views === 1 ? "time" : "times"}`;
@@ -168,13 +175,12 @@ function rowNote(v: Variation) {
 function CreateVariationModal({ jobId, onClose, onMade }: { jobId: number; onClose: () => void; onMade: (id: number) => void }) {
   const create = useCreateVariation();
   const [description, setDescription] = React.useState("");
-  const [billMode, setBillMode] = React.useState<"final" | "own">("final");
   const [error, setError] = React.useState<string | null>(null);
 
   async function submit() {
     setError(null);
     try {
-      const v = await create.mutateAsync({ jobId, description, billMode });
+      const v = await create.mutateAsync({ jobId, description });
       onClose();
       onMade(v.id);
     } catch (e) {
@@ -210,20 +216,11 @@ function CreateVariationModal({ jobId, onClose, onMade }: { jobId: number; onClo
             placeholder="e.g. Subfloor in the hallway is uneven, it needs levelling before the hybrid goes down."
           />
         </Field>
-        <BillModeField value={billMode} onChange={setBillMode} />
+        <p className="text-xs text-muted-foreground">
+          The client signs it online. Nothing to pay now: it goes on the final invoice, or the end invoice when a company is billed.
+        </p>
       </div>
     </Modal>
-  );
-}
-
-function BillModeField({ value, onChange, disabled }: { value: string; onChange: (v: "final" | "own") => void; disabled?: boolean }) {
-  return (
-    <Field label="How it is billed">
-      <Select value={value} disabled={disabled} onChange={(e) => onChange(e.target.value === "own" ? "own" : "final")}>
-        <option value="final">On the final invoice</option>
-        <option value="own">Its own invoice when accepted</option>
-      </Select>
-    </Field>
   );
 }
 
@@ -266,7 +263,7 @@ function VariationModal({ v, canSeeCosts, onClose }: { v: Variation; canSeeCosts
           <Badge colour={STATUS_COLOUR[v.status] ?? "#7A736D"}>{v.statusLabel}</Badge>
         </span>
       }
-      subtitle={`${moneyExact(v.total)} inc GST. ${v.billMode === "own" ? "Its own invoice when accepted." : "On the final invoice."}`}
+      subtitle={`${moneyExact(v.total)} inc GST. ${v.billNote}`}
       footer={
         <>
           {error ? <p className="mr-auto max-w-md text-sm text-destructive">{error}</p> : null}
@@ -332,9 +329,10 @@ function VariationModal({ v, canSeeCosts, onClose }: { v: Variation; canSeeCosts
           <p className="rounded-md border border-[#3F7D3A]/30 bg-[#3F7D3A]/8 px-3 py-2 text-sm">
             Accepted {dateOf(v.approvedAt)}
             {v.signature ? `, signed online by ${v.signature.name}${v.signature.position ? `, ${v.signature.position}` : ""}` : v.approvedByName ? `, marked by ${v.approvedByName}` : ""}.{" "}
-            {v.invoice ? `Invoice ${v.invoice.ref} for ${moneyExact(v.invoice.total)}${v.invoice.owing > 0 ? `, ${moneyExact(v.invoice.owing)} owing` : ", paid"}.` : "It goes on the final invoice."}
+            {v.billedToCompany ? "It goes on the end invoice." : "It goes on the final invoice."}
           </p>
         ) : null}
+        {v.workOrderWarning ? <WorkOrderWarning text={v.workOrderWarning} /> : null}
         {v.status === "rejected" ? (
           <p className="rounded-md border border-border bg-secondary/50 px-3 py-2 text-sm">Declined {dateOf(v.rejectedAt)}. Make a new variation if it changes.</p>
         ) : null}
@@ -344,11 +342,9 @@ function VariationModal({ v, canSeeCosts, onClose }: { v: Variation; canSeeCosts
             <Textarea rows={3} value={description} disabled={!canEdit} onChange={(e) => setDescription(e.target.value)} onBlur={saveDescription} />
           </Field>
           <div className="grid content-start gap-2">
-            <BillModeField
-              value={v.billMode}
-              disabled={!canEdit}
-              onChange={(billMode) => run(() => update.mutateAsync({ id: v.id, billMode }))}
-            />
+            <p className="rounded-md border border-border bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
+              Sign only. {v.billedToCompany ? "Goes on the end invoice." : "Goes on the final invoice."} No new deposit.
+            </p>
             {v.url ? (
               <div className="flex gap-1.5">
                 <Button
@@ -1054,24 +1050,39 @@ function AcceptModal({ v, onClose }: { v: Variation; onClose: () => void }) {
       {out ? (
         <p className="text-sm">
           Accepted. {moneyExact(v.total)} added to the job value.
-          {out.invoice ? ` Invoice ${out.invoice.ref} raised for ${moneyExact(out.invoice.total)}.` : " It goes on the final invoice."}
+          {v.billedToCompany ? " It goes on the end invoice." : " It goes on the final invoice."}
           {out.dispatchId ? " A new dispatch is on the job for the extra work." : ""}
           {out.materials ? ` ${out.materials} material${out.materials === 1 ? "" : "s"} to order.` : ""}
+          {out.workOrderWarning ? (
+            <span className="mt-3 block">
+              <WorkOrderWarning text={out.workOrderWarning} />
+            </span>
+          ) : null}
         </p>
       ) : (
         <div className="grid gap-3 text-sm">
           <ul className="list-disc pl-5 text-muted-foreground">
             <li>{moneyExact(v.total)} inc GST is added to the job value.</li>
-            <li>{v.billMode === "own" ? "Its own IQ invoice is raised now." : "It goes on the final invoice."}</li>
+            <li>{v.billedToCompany ? "It goes on the end invoice." : "It goes on the final invoice."} No new invoice and no deposit.</li>
             {labour ? <li>Its labour becomes a new dispatch on the job.</li> : null}
             {supply ? <li>Its supply lines go on the materials list to order.</li> : null}
           </ul>
+          {v.workOrderWarning ? <WorkOrderWarning text={v.workOrderWarning} /> : null}
           <Field label="How did they accept? (goes in the history)">
             <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Email from Sam, 14 Oct" />
           </Field>
         </div>
       )}
     </Modal>
+  );
+}
+
+function WorkOrderWarning({ text }: { text: string }) {
+  return (
+    <span className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+      <span>{text}</span>
+    </span>
   );
 }
 
