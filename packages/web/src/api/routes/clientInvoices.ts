@@ -10,6 +10,7 @@ import { createSelection, selectionForJob, sendSelection } from "../lib/material
 import { EMAIL_RE } from "../lib/quote-email";
 import { sendInvoiceEmail } from "../lib/invoice-email";
 import { cardPaymentsOn, payUrl } from "../lib/stripe";
+import { billingOnJob, RAISE_KINDS, raiseJobInvoice } from "../lib/final-invoice";
 
 /* ---------------------------------------------------------------------------
  * The job page's money-in card and material selection card (spec section 2).
@@ -48,6 +49,49 @@ export const clientInvoices = {
       owing: round2(live.reduce((s, r) => s + r.outstanding, 0)),
     };
   }),
+
+  /** What is left to bill on the job, its default due date and who the invoice goes to. */
+  billing: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => billingOnJob(input.jobId)),
+
+  /**
+   * Raise a final or progress invoice (fix list item 9). Defaults to what is
+   * left to bill. Emailed with the Pay by card link when asked. If the email
+   * fails the invoice still stands and the reason comes back.
+   */
+  raise: staffOnly
+    .input(
+      z.object({
+        jobId: z.number(),
+        kind: z.enum(RAISE_KINDS),
+        amount: z.number().positive().nullish(),
+        label: z.string().trim().max(200).nullish(),
+        email: z.boolean().default(false),
+        to: z.string().trim().max(200).nullish(),
+      }),
+    )
+    .handler(async ({ input, context }) => {
+      if (input.email && input.to && !EMAIL_RE.test(input.to)) {
+        throw new ORPCError("BAD_REQUEST", { message: `"${input.to}" is not an email address.` });
+      }
+      const row = await raiseJobInvoice({
+        jobId: input.jobId,
+        kind: input.kind,
+        amount: input.amount ?? null,
+        label: input.label ?? null,
+        actor: { name: context.actor.name, role: context.actor.role },
+      });
+      await rebuild();
+      let emailedTo: string | null = null;
+      let emailError: string | null = null;
+      if (input.email) {
+        try {
+          emailedTo = (await sendInvoiceEmail({ invoiceId: row.id, to: input.to ?? null, byName: context.actor.name, actorRole: context.actor.role })).to;
+        } catch (e) {
+          emailError = e instanceof Error ? e.message : String(e);
+        }
+      }
+      return { invoice: shapeInvoice(row), emailedTo, emailError };
+    }),
 
   /** Money landed. Paid in full unless a part amount is given. */
   markPaid: staffOnly

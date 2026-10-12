@@ -25,7 +25,7 @@ export type InvoiceKind = (typeof INVOICE_KINDS)[number];
 export const INVOICE_KIND_LABEL: Record<string, string> = {
   deposit: "Deposit",
   final: "Final",
-  stage: "Stage payment",
+  stage: "Progress",
   variation: "Variation",
   other: "Invoice",
 };

@@ -1,9 +1,9 @@
 import * as React from "react";
-import { Ban, CheckCircle2, Copy, ExternalLink, Mail, Send } from "lucide-react";
+import { Ban, CheckCircle2, Copy, ExternalLink, FilePlus2, Mail, Send } from "lucide-react";
 import { Card, CardHeader, Empty, Loading, Spinner } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
-import { Field, Input, Select, Textarea } from "./ui/field";
+import { Checkbox, Field, Input, Select, Textarea } from "./ui/field";
 import { Modal } from "./ui/modal";
 import { errorText } from "./public-shell";
 import { moneyExact } from "../lib/money";
@@ -11,7 +11,9 @@ import { useBootstrap } from "../queries/settings";
 import {
   useClientInvoices,
   useEmailInvoice,
+  useJobBilling,
   useMarkInvoicePaid,
+  useRaiseInvoice,
   useMaterialSelection,
   useSendSelection,
   useVoidInvoice,
@@ -239,6 +241,166 @@ function VoidModal({ invoice, onClose }: { invoice: Invoice | null; onClose: () 
   );
 }
 
+type Billing = NonNullable<ReturnType<typeof useJobBilling>["data"]>;
+
+const prettyIsoDay = (s: string) => {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+};
+
+const labelFor = (kind: "final" | "stage", b: Billing) => {
+  const ref = b.quoteRef ? `quote ${b.quoteRef}` : `job ${b.jobRef}`;
+  return kind === "final" ? `Final invoice, ${ref}` : `Progress invoice, ${ref}`;
+};
+
+/**
+ * Raise a final or progress invoice (fix list item 9). The amount starts at
+ * what is left to bill and can be changed. Emailed with the Pay by card link
+ * straight away unless the box is unticked.
+ */
+function RaiseInvoiceModal({
+  jobId,
+  billing,
+  open,
+  onClose,
+  onDone,
+}: {
+  jobId: number;
+  billing: Billing;
+  open: boolean;
+  onClose: () => void;
+  onDone: (msg: string) => void;
+}) {
+  const raise = useRaiseInvoice();
+  const [kind, setKind] = React.useState<"final" | "stage">("final");
+  const [amount, setAmount] = React.useState("");
+  const [label, setLabel] = React.useState("");
+  const [labelEdited, setLabelEdited] = React.useState(false);
+  const [email, setEmail] = React.useState(true);
+  const [to, setTo] = React.useState("");
+  const [error, setError] = React.useState<string | null>(null);
+  const [mailFail, setMailFail] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const k = billing.finalRef ? "stage" : "final";
+    setKind(k);
+    setAmount(billing.toBill.toFixed(2));
+    setLabel(labelFor(k, billing));
+    setLabelEdited(false);
+    setEmail(true);
+    setTo("");
+    setError(null);
+    setMailFail(null);
+    raise.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  if (!open) return null;
+
+  const value = Number(amount);
+  const exGst = value > 0 ? Math.round((value / 1.1) * 100) / 100 : 0;
+
+  function save() {
+    setError(null);
+    if (!(value > 0)) return setError("Enter an amount over $0.");
+    if (value > billing.toBill + 0.005) return setError(`That is more than the ${moneyExact(billing.toBill)} not billed yet.`);
+    if (email && !to.trim() && !billing.recipient) return setError("No email address on file for this client. Type one in, or untick Email it now.");
+    raise.mutate(
+      { jobId, kind, amount: value, label: label.trim() || null, email, to: email ? to.trim() || null : null },
+      {
+        onSuccess: (out) => {
+          if (out.emailError) {
+            setMailFail(`${out.invoice.ref} is raised, but the email did not go: ${out.emailError} Use Email on the invoice to try again.`);
+            return;
+          }
+          onDone(out.emailedTo ? `${out.invoice.ref} raised and emailed to ${out.emailedTo}.` : `${out.invoice.ref} raised. Use Email on it when you are ready to send.`);
+          onClose();
+        },
+        onError: (e) => setError(errorText(e)),
+      },
+    );
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Raise an invoice"
+      subtitle={`Job value ${moneyExact(billing.jobValue)} inc GST. Billed so far ${moneyExact(billing.billed)}. Not billed yet ${moneyExact(billing.toBill)}.`}
+      footer={
+        mailFail ? (
+          <Button onClick={onClose}>Close</Button>
+        ) : (
+          <>
+            <Button variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button onClick={save} disabled={raise.isPending}>
+              {raise.isPending ? <Spinner /> : email ? <Send className="size-4" /> : <FilePlus2 className="size-4" />}
+              {email ? "Raise and email" : "Raise invoice"}
+            </Button>
+          </>
+        )
+      }
+    >
+      {mailFail ? (
+        <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{mailFail}</p>
+      ) : (
+        <div className="grid gap-3">
+          <Field label="Kind">
+            <Select
+              value={kind}
+              onChange={(e) => {
+                const k = e.target.value as "final" | "stage";
+                setKind(k);
+                if (!labelEdited) setLabel(labelFor(k, billing));
+              }}
+            >
+              <option value="final" disabled={!!billing.finalRef}>
+                {billing.finalRef ? `Final (already raised as ${billing.finalRef})` : "Final"}
+              </option>
+              <option value="stage">Progress</option>
+            </Select>
+          </Field>
+          <Field
+            label="Amount, inc GST"
+            hint={value > 0 ? `${moneyExact(exGst)} ex GST plus ${moneyExact(Math.round((value - exGst) * 100) / 100)} GST.` : undefined}
+          >
+            <Input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="0.00" />
+          </Field>
+          <Field label="Wording on the invoice">
+            <Input
+              value={label}
+              maxLength={200}
+              onChange={(e) => {
+                setLabel(e.target.value);
+                setLabelEdited(true);
+              }}
+            />
+          </Field>
+          <p className="text-xs text-muted-foreground">
+            Due {prettyIsoDay(billing.dueDay)} ({billing.termsText}).
+          </p>
+          <label htmlFor={`raise_inv_email_${jobId}`} className="flex items-center gap-2 text-sm">
+            <Checkbox id={`raise_inv_email_${jobId}`} checked={email} onChange={(e) => setEmail(e.target.checked)} />
+            Email it now with the Pay by card link
+          </label>
+          {email ? (
+            <Field
+              label="Send to"
+              hint={billing.recipient ? `Leave empty to send to ${billing.recipient.who}, ${billing.recipient.email}.` : "No email on file for this client. Type one in."}
+            >
+              <Input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder={billing.recipient?.email ?? "client@example.com"} />
+            </Field>
+          ) : null}
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 export function ClientInvoicesCard({ jobId }: { jobId: number }) {
   const bootstrap = useBootstrap();
   const isAdmin = bootstrap.data?.actor.role === "admin";
@@ -247,6 +409,10 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
   const [voiding, setVoiding] = React.useState<Invoice | null>(null);
   const [emailing, setEmailing] = React.useState<Invoice | null>(null);
   const [copied, setCopied] = React.useState<number | null>(null);
+  const billing = useJobBilling(jobId);
+  const [raising, setRaising] = React.useState(false);
+  const [notice, setNotice] = React.useState<string | null>(null);
+  const bill = billing.data;
 
   const rows = data.data?.invoices ?? [];
 
@@ -259,13 +425,33 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
             ? "What the client has been billed, and what has come in. Card payments mark themselves paid. Mark bank transfers here."
             : "What the client has been billed, and what has come in. Mark payments here."
         }
+        action={
+          bill ? (
+            <Button size="sm" onClick={() => setRaising(true)} disabled={!bill.canRaise} title={bill.reason ?? undefined}>
+              <FilePlus2 className="size-3.5" />
+              Raise invoice
+            </Button>
+          ) : null
+        }
       />
+      {bill && bill.jobValue > 0 ? (
+        <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
+          Job value {moneyExact(bill.jobValue)} inc GST, accepted variations included.{" "}
+          {bill.toBill > 0.005 ? (
+            <span className="font-medium text-foreground">Not billed yet {moneyExact(bill.toBill)}.</span>
+          ) : (
+            "All of it is billed."
+          )}
+          {bill.reason && bill.toBill > 0.005 ? ` ${bill.reason}` : ""}
+        </p>
+      ) : null}
+      {notice ? <p className="border-b border-border px-4 py-2 text-xs text-[var(--success)]">{notice}</p> : null}
       {data.isLoading ? (
         <Loading />
       ) : data.isError ? (
         <Empty>{errorText(data.error)}</Empty>
       ) : rows.length === 0 ? (
-        <Empty>No client invoices yet. The deposit invoice is raised when the quote is accepted.</Empty>
+        <Empty>No client invoices yet. A deposit invoice is raised by itself when a quote with a deposit is accepted. Use Raise invoice to bill the rest.</Empty>
       ) : (
         <>
           <div className="grid grid-cols-3 gap-3 border-b border-border px-4 py-3">
@@ -355,6 +541,7 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
           </ul>
         </>
       )}
+      {bill ? <RaiseInvoiceModal jobId={jobId} billing={bill} open={raising} onClose={() => setRaising(false)} onDone={setNotice} /> : null}
       <MarkPaidModal invoice={paying} onClose={() => setPaying(null)} />
       <EmailInvoiceModal invoice={emailing} onClose={() => setEmailing(null)} />
       {isAdmin ? <VoidModal invoice={voiding} onClose={() => setVoiding(null)} /> : null}

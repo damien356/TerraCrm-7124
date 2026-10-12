@@ -10,10 +10,16 @@ export function useMaterialSelection(jobId: number) {
   return useQuery(orpc.clientInvoices.selection.queryOptions({ input: { jobId }, staleTime: 15_000 }));
 }
 
+/** What is left to bill on the job, the default due date and who it goes to. */
+export function useJobBilling(jobId: number) {
+  return useQuery(orpc.clientInvoices.billing.queryOptions({ input: { jobId }, staleTime: 10_000 }));
+}
+
 function useRefresh() {
   const queryClient = useQueryClient();
   return () => {
     queryClient.invalidateQueries({ queryKey: orpc.clientInvoices.key() });
+    queryClient.invalidateQueries({ queryKey: orpc.delivery.key() });
     queryClient.invalidateQueries({ queryKey: orpc.finance.key() });
     queryClient.invalidateQueries({ queryKey: orpc.jobs.key() });
     queryClient.invalidateQueries({ queryKey: orpc.quoteSend.key() });
@@ -41,6 +47,20 @@ export function useEmailInvoice() {
   return useMutation(
     orpc.clientInvoices.email.mutationOptions({
       onSuccess: () => queryClient.invalidateQueries({ queryKey: orpc.conversations.key() }),
+    }),
+  );
+}
+
+/** Raise a final or progress invoice, emailed now if asked. */
+export function useRaiseInvoice() {
+  const queryClient = useQueryClient();
+  const refresh = useRefresh();
+  return useMutation(
+    orpc.clientInvoices.raise.mutationOptions({
+      onSuccess: () => {
+        refresh();
+        queryClient.invalidateQueries({ queryKey: orpc.conversations.key() });
+      },
     }),
   );
 }

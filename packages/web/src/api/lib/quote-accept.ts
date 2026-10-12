@@ -204,6 +204,7 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
       : `Quote ${ref} accepted, ${money(locked.total)}.`,
     invoice?.kind === "deposit" ? `Order once deposit ${invoice.number} (${money(invoice.total)}) is paid.` : "",
     invoice?.kind === "variation" ? `Variation ${invoice.number} raised for ${money(invoice.total)}.` : "",
+    !prev && !invoice ? "No deposit on this quote. Raise the invoice from the job's Client invoices card when it is ready to bill." : "",
     selection && !selection.sent ? `Material selection email did not go: ${selection.reason ?? "unknown"}. Send it from the job page.` : "",
     selection?.sent ? `Material selection sent to ${selection.to}.` : "",
     rework?.changes.length ? `Ops changed:\n${rework.changes.map((c) => `- ${c}`).join("\n")}` : "",
