@@ -3,6 +3,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { depositDefaultOf } from "./deposits";
 import { quoteRef } from "./refs";
+import { costCashOut, costHasGst } from "./gst";
 
 /**
  * THE CASHFLOW ENGINE.
@@ -396,6 +397,16 @@ export async function rebuildForecast(): Promise<RebuildResult> {
     acceptedQuoteDeposits(liveIds),
   ]);
 
+  // Costs are entered ex GST. Cash out is what the bill says, so GST goes on
+  // top unless it is an installer who is not GST registered.
+  const installerGst = new Map<number, boolean>();
+  if (costRows.some((c) => c.installerId)) {
+    const inst = await db
+      .select({ id: schema.installers.id, gst: schema.installers.gstRegistered })
+      .from(schema.installers);
+    for (const i of inst) installerGst.set(i.id, !!i.gst);
+  }
+
   const costsByJob = new Map<number, typeof costRows>();
   for (const c of costRows) {
     const list = costsByJob.get(c.jobId) ?? [];
@@ -566,6 +577,8 @@ export async function rebuildForecast(): Promise<RebuildResult> {
       if (!cc) continue;
       const computed = costDueDate(c.kind ?? "other", start, completion, now);
       const date = c.dueDateLocked && c.dueDate ? c.dueDate : (c.dueDate ?? computed.date);
+      const gstOn = c.installerId ? (installerGst.get(c.installerId) ?? false) : false;
+      const dateBasis = c.dueDateLocked && c.dueDate ? `date set by hand` : computed.basis;
       events.push({
         direction: "out",
         confidence: conf === "pipeline" ? "pipeline" : cc,
@@ -574,9 +587,9 @@ export async function rebuildForecast(): Promise<RebuildResult> {
         costId: c.id,
         companyId: job.companyId,
         label: `${c.description || c.kind}, job ${job.number}`,
-        amount: c.amount ?? 0,
+        amount: costCashOut(c.amount, c.kind, gstOn),
         dueDate: date,
-        basis: c.dueDateLocked && c.dueDate ? `date set by hand` : computed.basis,
+        basis: costHasGst(c.kind, gstOn) ? `${dateBasis}, plus GST` : dateBasis,
       });
     }
   }

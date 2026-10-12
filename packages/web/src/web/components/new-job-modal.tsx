@@ -24,6 +24,7 @@ import {
   type NewContactDraft,
   type NewSiteDraft,
 } from "./new-records";
+import { money } from "../lib/money";
 import { useCreateJob } from "../queries/jobs";
 import { useBootstrap } from "../queries/settings";
 import { useCompanies, useSites } from "../queries/companies";
@@ -238,7 +239,8 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
         newContacts,
         people: jobDraftsToInput(people),
         furnitureOnSite: form.furnitureOnSite,
-        value: form.value ? Number(form.value) : 0,
+        // Typed ex GST, kept inc GST like every quoted job, so GP and cash read it the same way.
+        value: form.value ? Math.round(Number(form.value) * 110) / 100 : 0,
         description: form.description || null,
         accessNotes: form.accessNotes || null,
         source: form.source,
@@ -436,7 +438,10 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
             <option value="__new">Someone else (add them)…</option>
           </Select>
         </Field>
-        <Field label="Job value (ex GST)">
+        <Field
+          label="Job value (ex GST)"
+          hint={Number(form.value) > 0 ? `Saved as ${money(Math.round(Number(form.value) * 110) / 100)} inc GST` : undefined}
+        >
           <Input type="number" inputMode="decimal" value={form.value} onChange={(e) => set("value", e.target.value)} placeholder="0" />
         </Field>
         <label htmlFor="jobs_cb1" className="flex items-center gap-2 pb-2 text-sm sm:col-span-2">

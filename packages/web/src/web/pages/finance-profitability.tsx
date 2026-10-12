@@ -31,9 +31,9 @@ type SortKey =
   | "jobsPerYear";
 
 const COLUMNS: { key: SortKey; label: string; hint: string }[] = [
-  { key: "revenue", label: "Revenue", hint: "Delivered work, lifetime" },
-  { key: "grossProfit", label: "Gross profit", hint: "Revenue less recorded costs" },
-  { key: "marginPercent", label: "Margin", hint: "GP over the revenue that has costs behind it" },
+  { key: "revenue", label: "Revenue", hint: "Delivered work, lifetime, inc GST" },
+  { key: "grossProfit", label: "Gross profit", hint: "Revenue ex GST less recorded costs" },
+  { key: "marginPercent", label: "Margin", hint: "GP over the ex GST revenue that has costs behind it" },
   { key: "avgJobValue", label: "Avg job", hint: "Revenue over delivered jobs" },
   { key: "deliveredJobs", label: "Jobs", hint: "Delivered, cancelled excluded" },
   { key: "outstanding", label: "Owing", hint: "Invoiced and unpaid" },

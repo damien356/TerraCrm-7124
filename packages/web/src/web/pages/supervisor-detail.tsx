@@ -88,7 +88,7 @@ export default function SupervisorDetailPage() {
               hint={
                 s.gpIncompleteJobs > 0
                   ? `${s.gpIncompleteJobs} ${s.gpIncompleteJobs === 1 ? "job is" : "jobs are"} missing a cost`
-                  : "Sell price less installer and material cost"
+                  : "Sell price ex GST less installer and material cost"
               }
             />
           ) : null}

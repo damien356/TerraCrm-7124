@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { exGst } from "./gst";
 
 /**
  * SUPERVISORS, STARTING CLEAN.
@@ -121,7 +122,8 @@ export async function loadJobs(): Promise<SupJob[]> {
       materialCost: r.mat,
       otherCost: r.other,
       complete,
-      grossProfit: complete ? r2((r.value ?? 0) - r.inst - r.mat - r.other) : null,
+      // Value is inc GST, costs ex GST: GP is ex GST.
+      grossProfit: complete ? r2(exGst(r.value) - r.inst - r.mat - r.other) : null,
     };
   });
 }

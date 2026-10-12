@@ -62,6 +62,7 @@ type CostRow = {
   invoiceRef: string | null;
   notes: string;
   computedDue: { date: string; basis: string };
+  hasGst?: boolean;
 };
 
 type Draft = {
@@ -153,18 +154,18 @@ export function JobCashCard({ jobId }: { jobId: number }) {
           <div className="grid gap-4 px-4 py-3">
             {/* the six figures Damien reads in this order */}
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-              <Fig label="Contract" value={money(s.value)} hint="ex GST" />
-              <Fig label="Material" value={s.materials ? money(s.materials) : "-"} />
-              <Fig label="Installer" value={s.installer ? money(s.installer) : "-"} />
-              <Fig label="Other" value={s.other ? money(s.other) : "-"} />
+              <Fig label="Contract" value={money(s.valueExGst)} hint={`ex GST, ${money(s.valueIncGst)} inc GST`} />
+              <Fig label="Material" value={s.materials ? money(s.materials) : "-"} hint={s.materials ? "ex GST" : undefined} />
+              <Fig label="Installer" value={s.installer ? money(s.installer) : "-"} hint={s.installer ? "ex GST" : undefined} />
+              <Fig label="Other" value={s.other ? money(s.other) : "-"} hint={s.other ? "ex GST" : undefined} />
               <Fig
                 label="Expected GP"
                 value={s.hasCosts ? money(s.grossProfit) : "-"}
                 hint={
                   s.hasCosts
                     ? s.marginPercent == null
-                      ? undefined
-                      : `${s.marginPercent.toFixed(1)}% margin`
+                      ? "ex GST"
+                      : `ex GST, ${s.marginPercent.toFixed(1)}% margin`
                     : "no costs entered"
                 }
                 tone={s.hasCosts ? (s.grossProfit > 0 ? "good" : "bad") : undefined}
@@ -185,16 +186,16 @@ export function JobCashCard({ jobId }: { jobId: number }) {
                     <span className="font-semibold">
                       This job creates a {money(s.cashRequirement)} cash requirement before the customer pays.
                     </span>{" "}
-                    {money(s.outBeforeReceipt)} of costs fall due before the {money(s.value)} lands on{" "}
+                    {money(s.outBeforeReceipt)} of bills, inc GST, fall due before the {money(s.valueIncGst)} inc GST lands on{" "}
                     {longDate(s.receiptDate)}
                     {s.deposit > 0 ? `, offset by a ${money(s.deposit)} deposit` : ", with no deposit to soften it"}.
                   </>
                 ) : (
                   <>
-                    <span className="font-semibold">This job funds itself.</span> The {money(s.value)} lands on{" "}
+                    <span className="font-semibold">This job funds itself.</span> The {money(s.valueIncGst)} inc GST lands on{" "}
                     {longDate(s.receiptDate)}
                     {s.outBeforeReceipt > 0
-                      ? ` and only ${money(s.outBeforeReceipt)} of cost falls due before then`
+                      ? ` and only ${money(s.outBeforeReceipt)} of bills, inc GST, fall due before then`
                       : " and nothing has to leave the account before then"}
                     {s.deposit > 0 ? `, with a ${money(s.deposit)} deposit ahead of it` : ""}. Terra carries none
                     of it.
@@ -206,7 +207,7 @@ export function JobCashCard({ jobId }: { jobId: number }) {
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
                 <span>
                   <span className="font-medium">No costs on this job.</span> The forecast has{" "}
-                  {money(s.value)} coming in on {longDate(s.receiptDate)} with nothing going out against it, so
+                  {money(s.valueIncGst)} inc GST coming in on {longDate(s.receiptDate)} with nothing going out against it, so
                   every cash low point it shows is kinder than reality.
                 </span>
               </p>
@@ -226,7 +227,7 @@ export function JobCashCard({ jobId }: { jobId: number }) {
                       <th className="th px-2">Cost</th>
                       <th className="th px-2">State</th>
                       <th className="th px-2">Leaves the account</th>
-                      <th className="th px-2 text-right">Amount</th>
+                      <th className="th px-2 text-right">Amount ex GST</th>
                       <th aria-hidden="true" className="th px-2" />
                     </tr>
                   </thead>
@@ -254,7 +255,12 @@ export function JobCashCard({ jobId }: { jobId: number }) {
                               {c.dueDate ? "date you set" : c.computedDue.basis}
                             </p>
                           </td>
-                          <td className="tabular px-2 py-2.5 text-right font-medium">{moneyExact(c.amount)}</td>
+                          <td className="tabular px-2 py-2.5 text-right font-medium">
+                            {moneyExact(c.amount)}
+                            <p className="text-[11px] font-normal text-muted-foreground">
+                              {c.hasGst ? `${moneyExact(Math.round(c.amount * 110) / 100)} inc GST` : "no GST"}
+                            </p>
+                          </td>
                           <td className="px-2 py-2.5">
                             <div className="flex justify-end gap-1">
                               <button

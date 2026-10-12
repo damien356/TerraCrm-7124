@@ -4,6 +4,7 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import { adminOnly, staffOnly } from "../middleware/auth";
 import { goneQuiet, supervisorDetail, supervisorList } from "../lib/supervisors";
+import { exGst, GST_FACTOR } from "../lib/gst";
 
 /**
  * CLIENT, COMPANY AND SUPERVISOR INTELLIGENCE.
@@ -35,6 +36,8 @@ const LIVE = sql`(s.stage in ('open','won','scheduled','active'))`;
 const JOB_DATE = sql`coalesce(j.completed_at, j.scheduled_start, j.created_at)`;
 const JOB_COSTS = sql`(select coalesce(sum(jc.amount), 0) from job_costs jc where jc.job_id = j.id)`;
 const HAS_COSTS = sql`exists (select 1 from job_costs jc where jc.job_id = j.id)`;
+/** Job value is stored inc GST and costs ex GST, so GP and margin take the value back to ex GST. */
+const VALUE_EX = sql`(j.value / ${sql.raw(String(GST_FACTOR))})`;
 
 /**
  * WHO SENT THE WORK.
@@ -71,7 +74,8 @@ const AGG = sql`
   coalesce(sum(case when ${DELIVERED} then j.value end), 0) as revenue,
   coalesce(sum(case when ${LIVE} then j.value end), 0) as pipeline_value,
   coalesce(sum(case when ${DELIVERED} and ${HAS_COSTS} then j.value end), 0) as costed_revenue,
-  coalesce(sum(case when ${DELIVERED} and ${HAS_COSTS} then j.value - ${JOB_COSTS} end), 0) as gross_profit,
+  coalesce(sum(case when ${DELIVERED} and ${HAS_COSTS} then ${VALUE_EX} end), 0) as costed_revenue_ex,
+  coalesce(sum(case when ${DELIVERED} and ${HAS_COSTS} then ${VALUE_EX} - ${JOB_COSTS} end), 0) as gross_profit,
   min(case when ${DELIVERED} then ${JOB_DATE} end) as first_job_at,
   max(case when ${DELIVERED} then ${JOB_DATE} end) as last_job_at
 `;
@@ -84,6 +88,7 @@ interface AggRow {
   revenue: number;
   pipeline_value: number;
   costed_revenue: number;
+  costed_revenue_ex: number;
   gross_profit: number;
   first_job_at: number | null;
   last_job_at: number | null;
@@ -96,6 +101,7 @@ const isoOrNull = (secs: number | null) =>
 function shapeAgg(r: AggRow) {
   const revenue = Math.round((r.revenue ?? 0) * 100) / 100;
   const costed = Math.round((r.costed_revenue ?? 0) * 100) / 100;
+  const costedEx = r.costed_revenue_ex ?? 0;
   const gp = costed > 0 ? Math.round((r.gross_profit ?? 0) * 100) / 100 : null;
   const delivered = Number(r.delivered_jobs ?? 0);
   return {
@@ -105,11 +111,11 @@ function shapeAgg(r: AggRow) {
     liveJobs: Number(r.live_jobs ?? 0),
     revenue,
     pipelineValue: Math.round((r.pipeline_value ?? 0) * 100) / 100,
-    /** Null means no costs recorded, not a zero margin. */
+    /** Ex GST. Null means no costs recorded, not a zero margin. */
     grossProfit: gp,
     /** How much of the revenue above actually has costs behind it. */
     costedRevenue: costed,
-    marginPercent: gp !== null && costed > 0 ? Math.round((gp / costed) * 1000) / 10 : null,
+    marginPercent: gp !== null && costedEx > 0 ? Math.round((gp / costedEx) * 1000) / 10 : null,
     avgJobValue: delivered > 0 ? Math.round((revenue / delivered) * 100) / 100 : 0,
     firstJob: isoOrNull(r.first_job_at),
     lastJob: isoOrNull(r.last_job_at),
@@ -256,7 +262,7 @@ export const intel = {
         ...j,
         date: isoOrNull(j.job_date),
         hasCosts: !!j.has_costs,
-        grossProfit: j.has_costs ? Math.round((j.value - j.cost) * 100) / 100 : null,
+        grossProfit: j.has_costs ? Math.round((exGst(j.value) - j.cost) * 100) / 100 : null,
       })),
       quotes: {
         won: Number(quoteAgg?.won ?? 0),
@@ -436,7 +442,7 @@ export const intel = {
         ...j,
         date: isoOrNull(j.job_date),
         hasCosts: !!j.has_costs,
-        grossProfit: j.has_costs ? Math.round((j.value - j.cost) * 100) / 100 : null,
+        grossProfit: j.has_costs ? Math.round((exGst(j.value) - j.cost) * 100) / 100 : null,
         senderName: j.sender_name,
         displayNumber: j.display_number,
       })),

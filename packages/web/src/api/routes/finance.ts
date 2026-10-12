@@ -6,6 +6,7 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
+import { costCashOut, costHasGst, exGst } from "../lib/gst";
 import {
   acceptedQuoteDeposits,
   addDays,
@@ -536,6 +537,7 @@ export const finance = {
           cost: schema.jobCosts,
           supplierName: schema.suppliers.name,
           installerName: schema.installers.name,
+          installerGst: schema.installers.gstRegistered,
         })
         .from(schema.jobCosts)
         .leftJoin(schema.suppliers, eq(schema.suppliers.id, schema.jobCosts.supplierId))
@@ -558,7 +560,10 @@ export const finance = {
     const installer = byKind("installer");
     const other = byKind("other");
     const totalCost = money(materials + installer + other);
-    const grossProfit = money((job.value ?? 0) - totalCost);
+    // Job value is inc GST, costs are ex GST. GP and margin are both ex GST.
+    const valueIncGst = money(job.value ?? 0);
+    const valueExGst = exGst(job.value);
+    const grossProfit = money(valueExGst - totalCost);
 
     // The number Damien asked for: how much of Terra's own cash the job eats
     // before the customer pays anything.
@@ -578,7 +583,8 @@ export const finance = {
             c.cost.dueDate ?? costDueDate(c.cost.kind, start, completion, today()).date;
           return d <= receiptDate;
         })
-        .reduce((a, c) => a + (c.cost.amount ?? 0), 0),
+        // Cash: the deposit comes in inc GST, so the bills go out inc GST too.
+        .reduce((a, c) => a + costCashOut(c.cost.amount, c.cost.kind, c.installerGst), 0),
     );
 
     return {
@@ -587,6 +593,7 @@ export const finance = {
         ...c.cost,
         supplierName: c.supplierName,
         installerName: c.installerName,
+        hasGst: costHasGst(c.cost.kind, c.installerGst),
         computedDue: costDueDate(c.cost.kind, start, completion, today()),
       })),
       suppliers,
@@ -598,13 +605,15 @@ export const finance = {
       },
       milestones: terms.id ? (milestones.get(terms.id) ?? []) : [],
       summary: {
-        value: money(job.value ?? 0),
+        value: valueIncGst,
+        valueIncGst,
+        valueExGst,
         materials,
         installer,
         other,
         totalCost,
         grossProfit,
-        marginPercent: job.value ? money((grossProfit / job.value) * 100) : null,
+        marginPercent: valueExGst ? money((grossProfit / valueExGst) * 100) : null,
         hasCosts: costs.length > 0,
         receiptDate,
         deposit,
@@ -669,6 +678,7 @@ export const finance = {
           jobTitle: schema.jobs.title,
           supplierName: schema.suppliers.name,
           installerName: schema.installers.name,
+          installerGst: schema.installers.gstRegistered,
         })
         .from(schema.jobCosts)
         .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobCosts.jobId))
@@ -687,6 +697,8 @@ export const finance = {
         jobNumber: r.jobNumber,
         jobTitle: r.jobTitle,
         who: r.supplierName ?? r.installerName ?? "",
+        /** What leaves the bank: the amount plus GST when the bill carries it. */
+        cashOut: costCashOut(r.cost.amount, r.cost.kind, r.installerGst),
         overdue: !!r.cost.dueDate && r.cost.dueDate < now,
       }));
     }),

@@ -70,7 +70,7 @@ export default function JobsPage() {
                   <th className="th px-4">Site</th>
                   <th className="th px-4">Status</th>
                   <th className="th px-4 text-right">Dispatches</th>
-                  <th className="th px-4 text-right">Value</th>
+                  <th className="th px-4 text-right">Value inc GST</th>
                 </tr>
               </thead>
               <tbody>

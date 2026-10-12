@@ -52,7 +52,7 @@ export default function ExpensesPage() {
   const rows = q.data ?? [];
 
   const sum = (f: (r: (typeof rows)[number]) => boolean) =>
-    rows.filter(f).reduce((a, r) => a + (r.amount ?? 0), 0);
+    rows.filter(f).reduce((a, r) => a + (r.cashOut ?? 0), 0);
 
   const overdue = sum((r) => r.overdue);
   const invoiced = sum((r) => r.state === "invoiced");
@@ -63,7 +63,7 @@ export default function ExpensesPage() {
   return (
     <Page
       title="Expenses"
-      subtitle="Supplier and installer money going out, by the date it leaves the account."
+      subtitle="Supplier and installer money going out, by the date it leaves the account. Amounts are inc GST, as the bills are paid."
       actions={
         <div className="flex flex-wrap gap-1.5">
           {RANGES.map((r) => (
@@ -107,7 +107,7 @@ export default function ExpensesPage() {
                   <span className="font-semibold text-foreground">
                     {noDate.length} {noDate.length === 1 ? "cost has" : "costs have"} no due date
                   </span>{" "}
-                  ({money(noDate.reduce((a, r) => a + (r.amount ?? 0), 0))}). They are listed at the bottom and
+                  ({money(noDate.reduce((a, r) => a + (r.cashOut ?? 0), 0))}). They are listed at the bottom and
                   the forecast dates them off the job, not off a real bill.
                 </p>
               </div>
@@ -135,7 +135,7 @@ export default function ExpensesPage() {
                       <th className="th px-4">What</th>
                       <th className="th px-4">Job</th>
                       <th className="th px-4">State</th>
-                      <th className="th px-4 text-right">Amount</th>
+                      <th className="th px-4 text-right">Amount inc GST</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -167,7 +167,12 @@ export default function ExpensesPage() {
                         <td className="px-4 py-2.5">
                           <Badge colour={STATE_COLOUR[r.state]}>{STATE_LABEL[r.state] ?? r.state}</Badge>
                         </td>
-                        <td className="tabular px-4 py-2.5 text-right font-semibold">{money(r.amount)}</td>
+                        <td className="tabular px-4 py-2.5 text-right font-semibold">
+                          {money(r.cashOut)}
+                          <p className="text-[11px] font-normal text-muted-foreground">
+                            {r.cashOut !== r.amount ? `${money(r.amount)} ex GST` : "no GST"}
+                          </p>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

@@ -425,8 +425,9 @@ export default function JobDetailPage() {
                 <p className="text-xs text-muted-foreground">{j.site?.suburb ?? ""}</p>
               </div>
               <div>
-                <p className="label-xs">Value ex GST</p>
-                <p className="tabular mt-0.5 text-sm font-medium">{money(j.value)}</p>
+                <p className="label-xs">Value</p>
+                <p className="tabular mt-0.5 text-sm font-medium">{money(Math.round((j.value / 1.1) * 100) / 100)} ex GST</p>
+                <p className="tabular text-xs text-muted-foreground">{money(j.value)} inc GST</p>
                 {isCallback && j.callbackChargeable === false ? (
                   <p className="text-xs text-muted-foreground">Not chargeable. Nothing is billed.</p>
                 ) : null}

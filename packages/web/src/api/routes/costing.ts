@@ -5,6 +5,7 @@ import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
 import { rateBook } from "./labour";
 import { crewOutputPerDay } from "../lib/day-estimate";
+import { exGst } from "../lib/gst";
 import { jobText, quoteRef, taskRef } from "../lib/refs";
 
 /**
@@ -358,8 +359,8 @@ export const costing = {
         ? await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quote.id))
         : [];
 
-      /** Sale ex GST. The quote's subtotal, or the job value if there's no quote. */
-      const revenue = round2(quote ? quote.subtotal : job.value);
+      /** Sale ex GST. The quote's subtotal, or the job value (stored inc GST) taken back to ex GST. */
+      const revenue = round2(quote ? quote.subtotal : exGst(job.value));
       const materials = round2(
         quoteItems
           .filter((i) => i.kind === "supply" || i.kind === "accessory")
