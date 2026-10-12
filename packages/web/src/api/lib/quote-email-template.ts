@@ -30,6 +30,15 @@ export const DEFAULT_QUOTE_EMAIL_BODY = [
 ].join("\n");
 
 /**
+ * 188001 list item 1: a supply only quote has no install, so the draft swaps
+ * the install date wording for delivery. Works on a saved template too, as
+ * long as it still has the default wording.
+ */
+const INSTALL_WORDS = /lock in an install date that suits you/gi;
+export const SUPPLY_ONLY_WORDS = "arrange a delivery date that suits you";
+export const forSupplyOnly = (body: string) => body.replace(INSTALL_WORDS, SUPPLY_ONLY_WORDS);
+
+/**
  * What the quote is for is typed by the office each time (Damien, 11 Oct), so
  * the draft leaves this in its place and the email will not send until it is
  * replaced.

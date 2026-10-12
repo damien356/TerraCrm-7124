@@ -5,23 +5,29 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input, Select, Textarea } from "./ui/field";
 import { openPdf } from "./purchase-orders";
-import { BUNDLE_TITLES, CATEGORY_LABELS, LINE_CATEGORIES } from "../../api/lib/bundleCatalog";
+import { CATEGORY_LABELS, LINE_CATEGORIES } from "../../api/lib/bundleCatalog";
+import { isSupplyOnly, LAYOUT_LABELS, QUOTE_LAYOUTS, type QuoteLayout } from "../../api/lib/quote-layout";
+import { QuoteItemRows, type QuoteItemRow } from "./quote-item-rows";
 import {
   useQuotePdf,
   useRegenerateBundle,
   useSetBundleMode,
   useSetLineCategory,
+  useSetQuoteLayout,
   useUpdateBundle,
 } from "../queries/quoteBundles";
 
 /**
- * What the client reads on the quote, the PDF and (later) the online quote:
- * section titles, wording and totals. Never qty, m2, rates or line prices.
+ * What the client reads on the quote, the PDF and the online quote.
+ * Sections: titles, wording and totals, never qty, m2, rates or line prices.
+ * Itemised (item 1, supply only): one row per line with qty, rate and total.
  */
 
 type Bundle = {
   key: string;
   title: string;
+  /** "X supply" when the section has no install line (item 2). */
+  defaultTitle: string;
   wording: string;
   wordingSource: string;
   total: number;
@@ -126,7 +132,7 @@ function BundleEditor({
           value={title}
           disabled={textLocked || busy}
           aria-label="Section title"
-          placeholder={BUNDLE_TITLES[bundle.key] ?? "Section title"}
+          placeholder={bundle.defaultTitle || "Section title"}
           onChange={(e) => setTitle(e.target.value)}
           onBlur={() => title.trim() !== bundle.title && save({ title })}
         />
@@ -234,6 +240,63 @@ function BundleEditor({
   );
 }
 
+const LAYOUT_HINTS: Record<QuoteLayout, string> = {
+  auto: "Itemised when the quote is supply only, else sections",
+  itemised: "One row per line: qty, unit, rate and total",
+  sections: "Section titles, wording and totals",
+};
+
+/** used: what Auto would give for these lines, so the label stays right when Itemised or Sections is picked by hand. */
+function LayoutSelect({ value, used, disabled, onChange }: { value: string; used: string; disabled: boolean; onChange: (l: QuoteLayout) => void }) {
+  return (
+    <label className="flex items-center gap-1.5 text-xs text-muted-foreground" title={LAYOUT_HINTS[value as QuoteLayout] ?? LAYOUT_HINTS.auto}>
+      Layout
+      <Select
+        aria-label="Client layout"
+        className="h-7 w-auto py-0 text-xs"
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value as QuoteLayout)}
+      >
+        {QUOTE_LAYOUTS.map((l) => (
+          <option key={l} value={l}>
+            {l === "auto" ? `Auto (${used === "itemised" ? "itemised" : "sections"})` : LAYOUT_LABELS[l]}
+          </option>
+        ))}
+      </Select>
+    </label>
+  );
+}
+
+function PreviewTotals({ subtotal, gst, total }: { subtotal: number; gst: number; total: number }) {
+  return (
+    <div className="ml-auto mt-2 flex w-56 flex-col gap-1 text-[13px]">
+      <div className="flex justify-between">
+        <span className="text-[#6A6A6A]">Sub Total (ex GST)</span>
+        <span className="tabular">{money(subtotal)}</span>
+      </div>
+      <div className="flex justify-between">
+        <span className="text-[#6A6A6A]">GST</span>
+        <span className="tabular">{money(gst)}</span>
+      </div>
+      <div className="flex justify-between font-semibold">
+        <span>Grand Total</span>
+        <span className="tabular">{money(total)}</span>
+      </div>
+    </div>
+  );
+}
+
+/** Itemised: the rows the client gets, with the totals. */
+function ItemisedPreview({ rows, subtotal, gst, total }: { rows: QuoteItemRow[]; subtotal: number; gst: number; total: number }) {
+  return (
+    <div className="mx-4 my-3 rounded-md border border-border bg-white px-4 py-3 text-[#1F1F1F]">
+      <QuoteItemRows rows={rows} />
+      <PreviewTotals subtotal={subtotal} gst={gst} total={total} />
+    </div>
+  );
+}
+
 /** How it reads to the client. Same content as the PDF page, no line detail. */
 function ClientPreview({ bundles, subtotal, gst, total }: { bundles: Bundle[]; subtotal: number; gst: number; total: number }) {
   return (
@@ -251,20 +314,7 @@ function ClientPreview({ bundles, subtotal, gst, total }: { bundles: Bundle[]; s
           {b.wording.trim() ? <p className="mt-1 whitespace-pre-line text-[13px] text-[#4A4A4A]">{b.wording}</p> : null}
         </div>
       ))}
-      <div className="ml-auto mt-2 flex w-56 flex-col gap-1 text-[13px]">
-        <div className="flex justify-between">
-          <span className="text-[#6A6A6A]">Sub Total (ex GST)</span>
-          <span className="tabular">{money(subtotal)}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-[#6A6A6A]">GST</span>
-          <span className="tabular">{money(gst)}</span>
-        </div>
-        <div className="flex justify-between font-semibold">
-          <span>Grand Total</span>
-          <span className="tabular">{money(total)}</span>
-        </div>
-      </div>
+      <PreviewTotals subtotal={subtotal} gst={gst} total={total} />
     </div>
   );
 }
@@ -274,11 +324,24 @@ export function QuoteBundlesCard({
   locked,
   wordingOpen = false,
 }: {
-  quote: { id: number; bundleMode: string; bundles: Bundle[]; items: Line[]; subtotal: number; gst: number; total: number };
+  quote: {
+    id: number;
+    bundleMode: string;
+    layout: string;
+    layoutUsed: string;
+    itemRows: QuoteItemRow[];
+    bundles: Bundle[];
+    items: Line[];
+    subtotal: number;
+    gst: number;
+    total: number;
+  };
   locked: boolean;
   wordingOpen?: boolean;
 }) {
   const setMode = useSetBundleMode();
+  const setLayout = useSetQuoteLayout();
+  const itemised = quote.layoutUsed === "itemised";
   const pdf = useQuotePdf();
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
@@ -311,9 +374,25 @@ export function QuoteBundlesCard({
     <Card>
       <CardHeader
         title="What the client sees"
-        subtitle="Section titles, wording and totals only. Never qty, m², rates or line prices."
+        subtitle={
+          itemised
+            ? "Itemised: one row per line with qty, unit, rate and total, ex GST. Delivery prints last."
+            : "Section titles, wording and totals only. Never qty, m², rates or line prices."
+        }
         action={
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <LayoutSelect
+              value={quote.layout}
+              used={isSupplyOnly(quote.items) ? "itemised" : "sections"}
+              disabled={locked || setLayout.isPending}
+              onChange={(layout) =>
+                setLayout
+                  .mutateAsync({ quoteId: quote.id, layout })
+                  .then(() => setError(null))
+                  .catch((e) => setError(errText(e)))
+              }
+            />
+            {itemised ? null : (
             <ModeToggle
               mode={quote.bundleMode}
               disabled={locked || setMode.isPending}
@@ -324,10 +403,13 @@ export function QuoteBundlesCard({
                   .catch((e) => setError(errText(e)))
               }
             />
+            )}
+            {itemised ? null : (
             <Button size="sm" variant="outline" onClick={() => setPreview((v) => !v)}>
               <Eye className="size-3.5" />
               {preview ? "Edit" : "Preview"}
             </Button>
+            )}
             <Button size="sm" variant="outline" disabled={pdf.isPending || quote.items.length === 0} onClick={download}>
               {pdf.isPending ? <Spinner className="size-3.5" /> : <FileDown className="size-3.5" />}
               PDF
@@ -343,6 +425,8 @@ export function QuoteBundlesCard({
       ) : null}
       {quote.items.length === 0 ? (
         <p className="px-4 py-3 text-sm text-muted-foreground">Add lines first. The sections build from them.</p>
+      ) : itemised ? (
+        <ItemisedPreview rows={quote.itemRows} subtotal={quote.subtotal} gst={quote.gst} total={quote.total} />
       ) : preview ? (
         <ClientPreview bundles={quote.bundles} subtotal={quote.subtotal} gst={quote.gst} total={quote.total} />
       ) : (

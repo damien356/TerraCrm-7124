@@ -20,6 +20,7 @@ import { auDate } from "../lib/invoice-match";
 import { quoteRefOf } from "../lib/quote-number";
 import { depositInvoiceFor } from "../lib/client-invoices";
 import { linkForQuote, quoteUrl } from "../lib/quote-links";
+import { itemRows, LAYOUT_LABELS, layoutUsed, QUOTE_LAYOUTS, type ItemRow } from "../lib/quote-layout";
 import { cardPaymentsOn, owingOn, payUrl } from "../lib/stripe";
 
 /**
@@ -68,15 +69,61 @@ export async function bundleLinesFor(quoteId: number): Promise<BundleLine[]> {
   return items.map(({ soldAs, ...i }) => ({ ...i, productCategory: bundleCategoryOf(i.productCategory, soldAs) }));
 }
 
-/** The bundles for a quote as the client would see them now. */
-export async function bundlesFor(quote: { id: number; bundleMode: string; status?: string }) {
+/**
+ * 188001 list item 2 changed the default section title ("X supply" when the
+ * section has no install line). A quote that went out before that keeps the
+ * title it went out with.
+ */
+export const TITLES_CHANGED_AT = new Date("2026-10-12T11:51:00Z");
+
+type QuoteLike = {
+  id: number;
+  bundleMode: string;
+  status?: string;
+  layout?: string;
+  sentAt?: Date | null;
+  acceptedAt?: Date | null;
+  createdAt?: Date | null;
+};
+
+function wentOutBeforeTitleChange(q: QuoteLike) {
+  const when = q.sentAt ?? (q.status === "accepted" ? (q.acceptedAt ?? q.createdAt ?? null) : null);
+  return !!when && when.getTime() < TITLES_CHANGED_AT.getTime();
+}
+
+/** One row per line for the itemised layout (item 1). The client sees these, so no cost. */
+export async function itemRowsFor(quoteId: number): Promise<ItemRow[]> {
+  const rows = await db
+    .select({
+      id: schema.quoteItems.id,
+      kind: schema.quoteItems.kind,
+      description: schema.quoteItems.description,
+      qty: schema.quoteItems.qty,
+      unit: schema.quoteItems.unit,
+      unitPrice: schema.quoteItems.unitPrice,
+      total: schema.quoteItems.total,
+      sortOrder: schema.quoteItems.sortOrder,
+    })
+    .from(schema.quoteItems)
+    .where(eq(schema.quoteItems.quoteId, quoteId));
+  return itemRows(rows);
+}
+
+/**
+ * The bundles for a quote as the client would see them now, and the layout
+ * the client gets (item 1). Itemised also returns the rows.
+ */
+export async function bundlesFor(quote: QuoteLike) {
   const [lines, saved] = await Promise.all([
     bundleLinesFor(quote.id),
     db.select().from(schema.quoteBundles).where(eq(schema.quoteBundles.quoteId, quote.id)),
   ]);
-  const bundles = buildBundles(quote.bundleMode, lines, saved);
+  const built = buildBundles(quote.bundleMode, lines, saved, { legacyTitles: wentOutBeforeTitleChange(quote) });
   // Accepted: the lines are fixed, so a fixed line description never makes the wording out of date.
-  return { lines, bundles: quote.status === "accepted" ? bundles.map((b) => ({ ...b, stale: false })) : bundles };
+  const bundles = quote.status === "accepted" ? built.map((b) => ({ ...b, stale: false })) : built;
+  const layout = layoutUsed(quote.layout, lines);
+  const items = layout === "itemised" ? await itemRowsFor(quote.id) : [];
+  return { lines, bundles, layout, layoutSetting: quote.layout ?? "auto", items };
 }
 
 export async function saveBundle(
@@ -140,7 +187,7 @@ export async function clientPdfFor(quoteId: number, signed?: QuotePdfInput["sign
     ? await db.select().from(schema.companies).where(eq(schema.companies.id, quote.companyId))
     : [];
   const [site] = quote.siteId ? await db.select().from(schema.sites).where(eq(schema.sites.id, quote.siteId)) : [];
-  const { bundles } = await bundlesFor(quote);
+  const { bundles, layout, items } = await bundlesFor(quote);
 
   const person = supervisor ?? contact;
   const siteAddress = site
@@ -165,6 +212,7 @@ export async function clientPdfFor(quoteId: number, signed?: QuotePdfInput["sign
     },
     siteAddress,
     bundles: bundles.map((b) => ({ title: b.title, wording: b.wording, total: b.total })),
+    items: layout === "itemised" ? items.map((r) => ({ description: r.description, qty: r.qty, unit: r.unit, rate: r.rate, total: r.total })) : undefined,
     subtotal: quote.subtotal,
     gst: quote.gst,
     total: quote.total,
@@ -175,8 +223,9 @@ export async function clientPdfFor(quoteId: number, signed?: QuotePdfInput["sign
     showPosition: Boolean(company) || (await jobBillsCompany(quote.jobId)) || Boolean(signed?.position?.trim()),
     signed: signed ?? null,
   });
-  const missing = bundles.filter((b) => !b.wording.trim()).map((b) => b.title);
-  const stale = bundles.filter((b) => b.stale).map((b) => b.title);
+  // Itemised: the client reads the rows, so section wording is not needed.
+  const missing = layout === "itemised" ? [] : bundles.filter((b) => !b.wording.trim()).map((b) => b.title);
+  const stale = layout === "itemised" ? [] : bundles.filter((b) => b.stale).map((b) => b.title);
   return {
     pdf,
     filename: signed ? `Terra Flooring Quote ${ref} signed.pdf` : `Terra Flooring Quote ${ref}.pdf`,
@@ -189,9 +238,25 @@ export async function clientPdfFor(quoteId: number, signed?: QuotePdfInput["sign
 export const quoteBundles = {
   get: staffOnly.input(z.object({ quoteId: z.number() })).handler(async ({ input }) => {
     const quote = await quoteRow(input.quoteId, false);
-    const { bundles } = await bundlesFor(quote);
-    return { mode: quote.bundleMode, bundles };
+    const { bundles, layout, layoutSetting, items } = await bundlesFor(quote);
+    return { mode: quote.bundleMode, bundles, layout, layoutSetting, items };
   }),
+
+  /**
+   * Item 1: Auto (itemised when supply only), Itemised or Sections. Locked
+   * once accepted, the same as the bundle mode.
+   */
+  setLayout: staffOnly
+    .input(z.object({ quoteId: z.number(), layout: z.enum(QUOTE_LAYOUTS) }))
+    .handler(async ({ input, context }) => {
+      const quote = await quoteRow(input.quoteId, true);
+      if (quote.layout !== input.layout) {
+        await db.update(schema.quotes).set({ layout: input.layout, updatedAt: new Date() }).where(eq(schema.quotes.id, quote.id));
+        await logActivity(quote, "bundles", `Client layout set to ${LAYOUT_LABELS[input.layout]}`, context.actor);
+      }
+      const { bundles, layout, layoutSetting, items } = await bundlesFor({ ...quote, layout: input.layout });
+      return { mode: quote.bundleMode, bundles, layout, layoutSetting, items };
+    }),
 
   /** The client PDF. Warnings come back with it: sections with no wording, or wording written for other lines. */
   pdf: staffOnly.input(z.object({ quoteId: z.number() })).handler(async ({ input }) => {
@@ -216,7 +281,7 @@ export const quoteBundles = {
           context.actor,
         );
       }
-      return bundlesFor({ id: quote.id, bundleMode: input.mode });
+      return bundlesFor({ ...quote, bundleMode: input.mode });
     }),
 
   /** Put a line in a bundle by hand. Null goes back to automatic. */
@@ -249,7 +314,11 @@ export const quoteBundles = {
       const b = bundles.find((x) => x.key === input.key);
       if (!b) throw new ORPCError("BAD_REQUEST", { message: "That section is not on this quote." });
       const patch: Parameters<typeof saveBundle>[2] = {};
-      if (input.title !== undefined) patch.title = input.title.trim() === BUNDLE_TITLES[input.key] ? "" : input.title.trim();
+      // The default title (either form) is saved as blank, so it follows the lines.
+      if (input.title !== undefined) {
+        const t = input.title.trim();
+        patch.title = t === BUNDLE_TITLES[input.key] || t === b.defaultTitle ? "" : t;
+      }
       if (input.wording !== undefined) {
         // Ops may type meterage in on purpose. Only dashes are swapped out.
         patch.wording = input.wording.replace(/\s*[—–]\s*/g, ", ").trim();

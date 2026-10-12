@@ -6,6 +6,7 @@ import { clientPdfFor } from "../routes/quoteBundles";
 import { sendAsTeam } from "./agent-mail";
 import { addParticipant, ensureForQuote, logMessage, subjectWithRef } from "./conversations";
 import { depositSplit } from "./deposits";
+import { isSupplyOnly } from "./quote-layout";
 import { linkForQuote, quoteUrl } from "./quote-links";
 import { SENDER_NAME } from "./material-selection";
 import { TERRA_PRINT } from "./quotePdf";
@@ -14,6 +15,7 @@ import {
   DEFAULT_QUOTE_EMAIL_BODY,
   DEFAULT_QUOTE_EMAIL_SUBJECT,
   fillQuoteTemplate,
+  forSupplyOnly,
   longDate,
   needsScope,
   QUOTE_EMAIL_BODY_KEY,
@@ -110,11 +112,13 @@ export async function quoteEmailDraft(quote: Quote, _ref: string) {
     valid_until: longDate(quote.validUntil),
   };
   const t = await templates();
+  const kinds = await db.select({ kind: schema.quoteItems.kind }).from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quote.id));
+  const body = fillQuoteTemplate(t.body, values);
   return {
     recipients,
     to: recipients[0]?.email ?? "",
     subject: fillQuoteTemplate(t.subject, values).replace(/\s*\n\s*/g, " "),
-    body: fillQuoteTemplate(t.body, values),
+    body: isSupplyOnly(kinds) ? forSupplyOnly(body) : body,
     url,
   };
 }

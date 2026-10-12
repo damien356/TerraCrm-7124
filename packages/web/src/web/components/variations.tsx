@@ -60,6 +60,7 @@ const KIND_LABEL: Record<string, string> = {
   labour: "Labour",
   prep: "Prep",
   removal: "Removal",
+  delivery: "Delivery",
   other: "Other",
 };
 

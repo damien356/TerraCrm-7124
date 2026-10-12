@@ -15,6 +15,7 @@ import { JobPeopleCard, QuotePeopleCard } from "../components/job-people";
 import { useJob } from "../queries/jobs";
 import { QuoteCustomerPanel } from "../components/quote-customer";
 import { QuoteBundlesCard } from "../components/quote-bundles";
+import { DELIVERY, KIND_LABELS } from "../../api/lib/line-kinds";
 import { QuoteAgentCard } from "../components/quote-agent";
 import { EmailQuoteButton, QuoteLinkCard } from "../components/quote-email";
 import { useQuoteLink } from "../queries/quoteSend";
@@ -60,7 +61,8 @@ function DepositReference({ quoteId, fallback }: { quoteId: number; fallback: st
   );
 }
 
-const KINDS = ["supply", "labour", "prep", "removal", "accessory", "other"];
+/** Item 6: delivery is its own kind. Never a material, never labour. */
+const KINDS = ["supply", "labour", "prep", "removal", "accessory", "delivery", "other"];
 const UNITS = ["m2", "lm", "each", "roll", "hour", "job"];
 
 function fmtDateTime(value: Date | string | null) {
@@ -324,10 +326,15 @@ function LineRow({
         >
           {KINDS.map((k) => (
             <option key={k} value={k}>
-              {k}
+              {KIND_LABELS[k] ?? k}
             </option>
           ))}
         </Select>
+        {item.kind === DELIVERY ? (
+          <span className="mt-1 block text-[11px] text-muted-foreground" title="Delivery goes to Money out as an Other cost, never on a supplier order">
+            Delivery
+          </span>
+        ) : (
         <button
           type="button"
           disabled={locked}
@@ -337,6 +344,7 @@ function LineRow({
         >
           {item.lineType === "labour" ? "Labour" : "Material"}
         </button>
+        )}
       </td>
       <td className="min-w-[240px] px-2 py-1.5">
         {item.flagged ? (
@@ -572,7 +580,7 @@ function AddLine({ quoteId }: { quoteId: number }) {
         <Select className="h-9 w-[110px]" value={form.kind} onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value }))}>
           {KINDS.map((k) => (
             <option key={k} value={k}>
-              {k}
+              {KIND_LABELS[k] ?? k}
             </option>
           ))}
         </Select>

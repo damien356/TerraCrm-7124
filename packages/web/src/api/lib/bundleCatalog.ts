@@ -45,6 +45,15 @@ export const BUNDLE_TITLES: Record<string, string> = {
   [EXTRAS]: "Preparation, removal and disposal",
 };
 
+/**
+ * 188001 list item 2. A section with no install line is supply only, so its
+ * default title drops "and installation": "Hybrid flooring supply".
+ */
+export function defaultBundleTitle(key: string, hasInstall: boolean): string {
+  const full = BUNDLE_TITLES[key] ?? key;
+  return hasInstall ? full : full.replace(/ supply and installation$/, " supply");
+}
+
 /** Short names for the line category picker. */
 export const CATEGORY_LABELS: Record<string, string> = {
   carpet: "Carpet",

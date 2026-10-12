@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { syncDeliveryCosts } from "./delivery-cost";
 import { quoteLines, type QuoteLine } from "./quote-convert";
 import { addLabour, insertDispatchForLines, labourQtys, quoteDispatchIds, rateItemsFor, SIDE_GROUPS, taskLock, withFreeTextNote } from "./dispatch-build";
 
@@ -343,6 +344,13 @@ export async function reworkJobForVersion(args: { jobId: number; fromQuoteId: nu
       out.materialsRemoved += 1;
     }
   }
+
+  /* ------------------------- delivery (fix list item 11) ------------------------- */
+  const del = await syncDeliveryCosts(args.jobId, args.toQuoteId);
+  out.flags.push(...del.flags);
+  if (del.added) out.changes.push(`${del.added} delivery cost${del.added === 1 ? "" : "s"} added to Money out.`);
+  if (del.changed) out.changes.push(`${del.changed} delivery cost${del.changed === 1 ? "" : "s"} updated.`);
+  if (del.removed) out.changes.push(`${del.removed} delivery cost${del.removed === 1 ? "" : "s"} removed, not on the new quote.`);
 
   return out;
 }

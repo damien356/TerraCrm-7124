@@ -14,6 +14,11 @@ export function useSetBundleMode() {
   const onSuccess = useRefresh();
   return useMutation(orpc.quoteBundles.setMode.mutationOptions({ onSuccess }));
 }
+/** Item 1: Auto, Itemised or Sections. */
+export function useSetQuoteLayout() {
+  const onSuccess = useRefresh();
+  return useMutation(orpc.quoteBundles.setLayout.mutationOptions({ onSuccess }));
+}
 export function useSetLineCategory() {
   const onSuccess = useRefresh();
   return useMutation(orpc.quoteBundles.setLineCategory.mutationOptions({ onSuccess }));

@@ -361,13 +361,15 @@ export const costing = {
 
       /** Sale ex GST. The quote's subtotal, or the job value (stored inc GST) taken back to ex GST. */
       const revenue = round2(quote ? quote.subtotal : exGst(job.value));
+      // Delivery (fix list item 11) is a cost of the goods too, so it stays in here.
+      const goods = (k: string) => k === "supply" || k === "accessory" || k === "delivery";
       const materials = round2(
         quoteItems
-          .filter((i) => i.kind === "supply" || i.kind === "accessory")
+          .filter((i) => goods(i.kind))
           .reduce((sum, i) => sum + (i.unitCost ?? 0) * (i.qty ?? 0), 0),
       );
       const materialsUnknown = quoteItems.some(
-        (i) => (i.kind === "supply" || i.kind === "accessory") && i.unitCost == null,
+        (i) => goods(i.kind) && i.unitCost == null,
       );
 
       const items = new Map(itemRows.map((i) => [i.id, i]));

@@ -3,6 +3,7 @@ import { convertQuoteToJob, createJobForQuote, fillJobFromQuote } from "../lib/q
 import { acceptQuote } from "../lib/quote-accept";
 import { latestQuoteOnJob, quoteDefaultsForJob, quoteStartForJob } from "../lib/quote-for-job";
 import { rebuildForecast } from "../lib/cashflow";
+import { DELIVERY, isDeliveryText, lineTypeOfKind } from "../lib/line-kinds";
 import { quoteNumberFor, quoteRefById, quoteRefOf } from "../lib/quote-number";
 import { parseQuoteRef, quoteRef } from "../lib/refs";
 import { jobNumberSql } from "../lib/job-ref";
@@ -54,8 +55,8 @@ import { lineFreightSell, quoteFreightView, refreshQuoteFreight } from "../lib/q
 
 const GST_RATE = 0.1;
 
-/** Labour, prep and removal lines are Labour. Everything else is Material. */
-export const lineTypeOf = (kind: string) => (["labour", "prep", "removal"].includes(kind) ? "labour" : "material");
+/** Labour, prep and removal lines are Labour. Delivery is Delivery (188001 list item 6). Everything else is Material. */
+export const lineTypeOf = lineTypeOfKind;
 
 export const DISCOUNT_LIMIT_KEY = "office_discount_limit_percent";
 
@@ -391,6 +392,7 @@ export async function reviseQuoteRecord(
       notes: quote.notes,
       terms: quote.terms,
       bundleMode: quote.bundleMode,
+      layout: quote.layout,
     })
     .returning();
 
@@ -597,6 +599,9 @@ export const quotes = {
       versions: versions.map((v) => ({ ...v, ref: quoteRef(row.quote.number, v.version, jobRefText) })),
       /** What the client sees: titles, wording and totals only. */
       bundles: bundleView.bundles,
+      /** Item 1: the layout the client gets now, and the rows when itemised. */
+      layoutUsed: bundleView.layout,
+      itemRows: bundleView.items,
       /** Only for Admin, or Office with the cost switch on. Never expose these through field.ts. */
       estimatedCost: showCosts ? round2(cost) : null,
       /** Fix list item 14: supplier freight and charges inside the line prices. Cost viewers only. */
@@ -743,6 +748,10 @@ export const quotes = {
     .handler(async ({ input, context }) => {
       const quote = await editableQuoteOrThrow(input.quoteId);
       if (context.actor.role !== "admin") input.unitCost = null;
+      // A delivery charge typed in by hand is a delivery line, not a product (188001 list item 6).
+      if (input.productId == null && (input.kind === "supply" || input.kind === "other") && isDeliveryText(input.description)) {
+        input.kind = DELIVERY;
+      }
       // A price book product typed in at a lower price is still a discount off the price book.
       let listUnitPrice: number | null = null;
       if (input.productId != null) {
@@ -1010,7 +1019,7 @@ export const quotes = {
         flagged: z.boolean().optional(),
         flagReason: z.string().nullable().optional(),
         productId: z.number().nullable().optional(),
-        lineType: z.enum(["material", "labour"]).optional(),
+        lineType: z.enum(["material", "labour", "delivery"]).optional(),
         /** Item 9: the measured m2 on a Box or Broadloom line. Qty is worked out from it. */
         measuredM2: z.number().min(0).nullable().optional(),
         wastagePct: z.number().min(0).max(100).nullable().optional(),
@@ -1057,7 +1066,11 @@ export const quotes = {
       const freightReset = fields.unitCost !== undefined ? { freightUnitCost: null } : {};
       const setMarkup = context.actor.role === "admin" ? markupIn : undefined;
 
-      if (fields.kind !== undefined && fields.lineType === undefined) fields.lineType = lineTypeOf(fields.kind) as "material" | "labour";
+      if (fields.kind !== undefined && fields.lineType === undefined) fields.lineType = lineTypeOf(fields.kind);
+      // A delivery line is always Delivery, never tagged Material or Labour (188001 list item 6).
+      const kindNow = fields.kind ?? before.kind;
+      if (kindNow === DELIVERY) fields.lineType = "delivery";
+      else if (fields.lineType === "delivery") fields.lineType = lineTypeOf(kindNow);
 
       if (fields.followsItemId != null) {
         const [floor] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, fields.followsItemId));

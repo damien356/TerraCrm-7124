@@ -16,6 +16,7 @@ import { quoteNumberFor, quoteRefOf } from "../lib/quote-number";
 import { depositDefaultFor } from "../lib/deposits";
 import { markupOf } from "../lib/pricing";
 import { customerCandidates, spokenCustomer, strongMatch } from "../lib/quote-customer";
+import { lineTypeOfKind } from "../lib/line-kinds";
 
 /**
  * Damien records a rough job note on site, this turns it into a draft quote.
@@ -331,7 +332,7 @@ export async function buildQuoteFromTranscript(
         quoteId: quoteRow.id,
         productId: l.productId,
         kind: l.kind,
-        lineType: ["labour", "prep", "removal"].includes(l.kind) ? "labour" : "material",
+        lineType: lineTypeOfKind(l.kind),
         description: l.description,
         qty: l.qty,
         unit: l.unit,

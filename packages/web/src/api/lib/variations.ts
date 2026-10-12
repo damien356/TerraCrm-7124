@@ -9,6 +9,7 @@ import { standardLabour } from "./quote-labour";
 import { newToken } from "./quote-links";
 import { jobText, variationRef } from "./refs";
 import { OPS_URL } from "./swms-checks";
+import { isDeliveryText, lineTypeOfKind } from "./line-kinds";
 
 /* ---------------------------------------------------------------------------
  * Variations (fix list 11 Oct, item 12). Extra work or a dearer product after
@@ -40,7 +41,7 @@ export type BillMode = (typeof BILL_MODES)[number];
 export const COUNTED_STATUSES = ["approved", "invoiced"] as const;
 /** Statuses the office can still change the lines on. */
 export const EDITABLE_STATUSES = ["draft", "sent"] as const;
-export const LINE_KINDS = ["supply", "accessory", "labour", "prep", "removal", "other"] as const;
+export const LINE_KINDS = ["supply", "accessory", "labour", "prep", "removal", "delivery", "other"] as const;
 export const WORK_KINDS = new Set(["labour", "prep", "removal"]);
 export const SUPPLY_KINDS = new Set(["supply", "accessory"]);
 
@@ -57,7 +58,8 @@ export const money = (n: number) => `$${n.toLocaleString("en-AU", { minimumFract
 export const bad = (message: string) => new ORPCError("BAD_REQUEST", { message });
 
 export const variationUrl = (token: string) => `${OPS_URL}/v/${token}`;
-export const lineTypeOfKind = (kind: string) => (WORK_KINDS.has(kind) ? "labour" : "material");
+/** Labour, prep and removal are labour, delivery is delivery (188001 list item 6), the rest material. */
+export { lineTypeOfKind };
 
 /** "Andes Peak in Merida", the same as a quote line (routes/quotes.ts). */
 export function productLineName(p: { brand: string | null; range: string | null; colour: string | null; category?: string | null }) {
@@ -307,12 +309,14 @@ export async function addOtherLine(args: {
   unitCost?: number | null;
 }) {
   const v = await editableOrThrow(args.variationId);
+  // A delivery charge typed in is a delivery line (188001 list item 6).
+  const kind = (args.kind === "other" || args.kind === "supply") && isDeliveryText(args.description) ? "delivery" : args.kind;
   const [row] = await db
     .insert(schema.variationItems)
     .values({
       variationId: v.id,
-      kind: args.kind,
-      lineType: lineTypeOfKind(args.kind),
+      kind,
+      lineType: lineTypeOfKind(kind),
       description: args.description.trim(),
       qty: args.qty,
       unit: args.unit.trim() || "each",

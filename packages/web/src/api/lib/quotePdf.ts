@@ -7,9 +7,13 @@ import { TERRA_LOGO_PRINT_PNG_BASE64 } from "./terraLogoPrint";
  * The client's quote, as a PDF. pdf-lib for the same reason as invoicePdf.ts:
  * it bundles cleanly.
  *
- * THE CLIENT ONLY EVER SEES BUNDLES: a title, the wording and a total per
- * bundle. Never qty, m2, rates, line prices, cost or markup. This file takes
- * no line items at all, so it cannot leak them.
+ * Sections layout: the client sees a title, the wording and a total per
+ * bundle. Never qty, m2, rates, line prices, cost or markup.
+ *
+ * Itemised layout (188001 fix list item 1, supply only quotes): one row per
+ * line with description, qty, unit, rate and total, all ex GST. The rows come
+ * in already cut down to those five fields (routes/quoteBundles.ts), so cost
+ * and markup can never reach this file.
  *
  * Layout follows the agreed print layout: header with logo and business
  * details, Quote title, number and large total on the right, Quote To block,
@@ -36,6 +40,8 @@ export type QuotePdfInput = {
   /** Site address when it differs from the client's own. */
   siteAddress: string | null;
   bundles: { title: string; wording: string; total: number }[];
+  /** Set for the itemised layout. Drawn in place of the bundles. Ex GST. */
+  items?: { description: string; qty: number; unit: string; rate: number; total: number }[];
   subtotal: number;
   gst: number;
   total: number;
@@ -252,6 +258,47 @@ function table(ctx: Ctx) {
   }
 }
 
+const qtyOut = (n: number) => String(Math.round((n + Number.EPSILON) * 100) / 100);
+const unitOut = (u: string) => (u === "m2" ? "m\u00B2" : u);
+
+/** Itemised layout: Description / Qty / Unit / Rate / Total, ex GST. */
+function itemTable(ctx: Ctx, items: NonNullable<QuotePdfInput["items"]>) {
+  const descW = CW * 0.5;
+  const qtyR = M + 8 + descW + 52;
+  const unitX = qtyR + 10;
+  const rateR = W - M - 8 - 86;
+  const totalR = W - M - 8;
+  const head = () => {
+    ctx.page.drawRectangle({ x: M, y: ctx.y - 6, width: CW, height: 20, color: FILL });
+    text(ctx.page, "DESCRIPTION", M + 8, ctx.y, ctx.bold, 7.5, LABEL);
+    textRight(ctx.page, "QTY", qtyR, ctx.y, ctx.bold, 7.5, LABEL);
+    text(ctx.page, "UNIT", unitX, ctx.y, ctx.bold, 7.5, LABEL);
+    textRight(ctx.page, "RATE", rateR, ctx.y, ctx.bold, 7.5, LABEL);
+    textRight(ctx.page, "TOTAL", totalR, ctx.y, ctx.bold, 7.5, LABEL);
+    ctx.y -= 24;
+  };
+  head();
+  for (const r of items) {
+    const lines = wrap(r.description, ctx.reg, 9.5, descW);
+    need(ctx, lines.length * 12 + 12);
+    if (ctx.y > H - M - 40) head();
+    const top = ctx.y;
+    textRight(ctx.page, qtyOut(r.qty), qtyR, top, ctx.reg, 9.5);
+    text(ctx.page, unitOut(r.unit), unitX, top, ctx.reg, 9.5, MUTED);
+    textRight(ctx.page, money(r.rate), rateR, top, ctx.reg, 9.5);
+    textRight(ctx.page, money(r.total), totalR, top, ctx.bold, 9.5);
+    for (const l of lines) {
+      if (l) text(ctx.page, l, M + 8, ctx.y, ctx.reg, 9.5);
+      ctx.y -= 12;
+    }
+    ctx.y -= 2;
+    ctx.page.drawLine({ start: { x: M, y: ctx.y + 4 }, end: { x: W - M, y: ctx.y + 4 }, thickness: 0.6, color: RULE });
+    ctx.y -= 10;
+  }
+  text(ctx.page, "All prices ex GST.", M + 8, ctx.y, ctx.reg, 8, LABEL);
+  ctx.y -= 14;
+}
+
 function totals(ctx: Ctx) {
   const { input } = ctx;
   need(ctx, 70);
@@ -437,7 +484,8 @@ export async function renderQuotePdf(input: QuotePdfInput): Promise<Buffer> {
 
   header(ctx);
   quoteTo(ctx);
-  table(ctx);
+  if (input.items?.length) itemTable(ctx, input.items);
+  else table(ctx);
   totals(ctx);
   payment(ctx);
   acceptance(ctx);

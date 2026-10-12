@@ -26,7 +26,7 @@ import { categoriesForHint, categoryMatchesHint } from "../lib/product-categorie
  */
 
 export const LOCKED = ["accepted", "declined", "expired"];
-const KINDS = ["supply", "labour", "prep", "removal", "accessory", "other"] as const;
+const KINDS = ["supply", "labour", "prep", "removal", "accessory", "delivery", "other"] as const;
 const UNITS = ["m2", "lm", "each", "hour", "job"] as const;
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
@@ -174,10 +174,11 @@ export async function loadQuoteState(quoteId: number) {
   const [company] = quote.companyId
     ? await db.select().from(schema.companies).where(eq(schema.companies.id, quote.companyId))
     : [];
-  const { bundles } = await bundlesFor(quote);
+  const { bundles, layout } = await bundlesFor(quote);
   return {
     quote,
     items,
+    layout,
     customer: company?.name ?? (contact ? `${contact.firstName} ${contact.lastName}`.trim() : null),
     bundles,
     discountPct: discountPercentOf(items),
@@ -208,7 +209,11 @@ export function runCheck(state: QuoteState, actor: Pick<Actor, "role" | "canSeeC
     hasSupervisor: !!state.quote.supervisorContactId,
     notes: state.quote.notes,
     lines,
-    bundles: state.bundles.filter((b) => b.lineIds.length).map((b) => ({ title: b.title, wording: b.wording, stale: b.stale })),
+    // Itemised (item 1): the client reads the rows, so section wording is not checked.
+    bundles:
+      state.layout === "itemised"
+        ? []
+        : state.bundles.filter((b) => b.lineIds.length).map((b) => ({ title: b.title, wording: b.wording, stale: b.stale })),
     discountPct: state.discountPct,
     discountLimit: state.discountLimit,
     discountApprovedPct: state.quote.discountApprovedPercent,
@@ -368,6 +373,7 @@ function systemPrompt(actor: Pick<Actor, "role" | "name">, brief: string) {
     "- You never change the quote yourself. To change anything, call propose with the full list of changes. The person sees the list and taps Apply. Say in one or two sentences what you proposed. Do not repeat the list.",
     "- Use only productId values from search_products and itemId values from search_labour. Never guess an id.",
     "- Prices come from the price book and the rate book. Do not set unitPrice unless the person gave a price. add_custom is for things not in either book, and needs a price from the person.",
+    "- A delivery or freight charge to the client is kind delivery, never supply or labour.",
     "- Use the quantities the person said. If they give rooms but no measurements, ask for the m2 or lm. Do not round or pad quantities unless asked.",
     "- Carpet normally needs underlay at the same m2 and installation labour. Suggest what looks missing, but only add removal, disposal, levelling or furniture moving when the person asks for it.",
     "- To change a line, use update_line with its #id. To remove one, remove_line.",

@@ -2,7 +2,9 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { assertBillable } from "./callbacks";
+import { addDeliveryCosts } from "./delivery-cost";
 import { insertDispatchForLines, type WorkLine } from "./dispatch-build";
+import { DELIVERY } from "./line-kinds";
 import { pushToOffice } from "./push";
 import { jobText } from "./refs";
 import { applyAcceptedColours } from "./selection-colours";
@@ -16,7 +18,7 @@ import { bad, itemsOf, money, SUPPLY_KINDS, variationOrThrow, WORK_KINDS, type V
  *   lock it (only from draft or sent, and only once), add its total to the
  *   job value, make its work once: labour, prep and removal lines become a
  *   new unassigned dispatch, supply and accessory lines become materials to
- *   order. Then an office task, a log line, and a push when it was online.
+ *   order, delivery lines become Other costs. Then an office task, a log line, and a push when it was online.
  *
  * A variation is never invoiced on its own and never takes a deposit. It
  * stays approved and goes on the final invoice (homeowner) or the end invoice
@@ -42,11 +44,17 @@ export async function makeVariationWork(v: Variation) {
     .set({ workMadeAt: now, updatedAt: now })
     .where(and(eq(schema.variations.id, v.id), sql`${schema.variations.workMadeAt} is null`))
     .returning({ id: schema.variations.id });
-  if (!claimed) return { taskId: null as number | null, materials: 0, skipped: true };
+  if (!claimed) return { taskId: null as number | null, materials: 0, deliveryCosts: 0, skipped: true };
 
   const lines = await itemsOf(v.id);
   const work = lines.filter((l) => WORK_KINDS.has(l.kind));
   const supply = lines.filter((l) => SUPPLY_KINDS.has(l.kind));
+  // Fix list item 11: delivery is an Other cost on Money out, never a material.
+  const deliveryCosts = await addDeliveryCosts(
+    v.jobId,
+    lines.filter((l) => l.kind === DELIVERY),
+    v.ref,
+  );
   if (supply.length) {
     await db.insert(schema.jobMaterials).values(
       supply.map((l) => ({ jobId: v.jobId, productId: l.productId, description: l.description, qty: l.qty, unit: l.unit, status: "to_order" })),
@@ -79,11 +87,11 @@ export async function makeVariationWork(v: Variation) {
     entityType: "variation",
     entityId: v.id,
     action: "work_made",
-    detail: `Made from variation ${v.ref}: ${taskId ? "1 dispatch" : "no dispatch"}, ${supply.length} material${supply.length === 1 ? "" : "s"} to order`,
+    detail: `Made from variation ${v.ref}: ${taskId ? "1 dispatch" : "no dispatch"}, ${supply.length} material${supply.length === 1 ? "" : "s"} to order${deliveryCosts ? `, ${deliveryCosts} delivery cost${deliveryCosts === 1 ? "" : "s"}` : ""}`,
     actorName: "Terra Ops",
     actorRole: "system",
   });
-  return { taskId, materials: supply.length, skipped: false };
+  return { taskId, materials: supply.length, deliveryCosts, skipped: false };
 }
 
 export async function acceptVariation(args: { id: number; actor: VariationActor; via: "staff" | "online"; note?: string | null }) {
@@ -130,9 +138,10 @@ export async function acceptVariation(args: { id: number; actor: VariationActor;
     billedToCompany ? "It goes on the end invoice." : "It goes on the final invoice.",
     billedToCompany ? WORK_ORDER_WARNING : "",
     work.materials ? `${work.materials} material${work.materials === 1 ? "" : "s"} to order.` : "",
+    work.deliveryCosts ? `Delivery is on Money out as ${work.deliveryCosts === 1 ? "an Other cost" : `${work.deliveryCosts} Other costs`}.` : "",
     work.taskId ? "A new dispatch is on the job for the extra work. Book it in." : "",
     colours.items ? `The colour change${colours.items === 1 ? " is" : "s are"} now on the materials to order${colours.moved ? "" : ". None was found to change, check the order by hand"}.` : "",
-    lines.some((l) => !SUPPLY_KINDS.has(l.kind) && !WORK_KINDS.has(l.kind)) && !colours.items ? "It has other lines. Check if anything else needs doing." : "",
+    lines.some((l) => !SUPPLY_KINDS.has(l.kind) && !WORK_KINDS.has(l.kind) && l.kind !== DELIVERY) && !colours.items ? "It has other lines. Check if anything else needs doing." : "",
   ]
     .filter(Boolean)
     .join("\n");

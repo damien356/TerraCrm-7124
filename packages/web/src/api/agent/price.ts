@@ -7,6 +7,7 @@ import { rateBook } from "../routes/labour";
 import type { Extraction } from "./extract";
 import { categoriesForHint, categoryMatchesHint } from "../lib/product-categories";
 import { isUnderlayCategory, underlayName } from "../lib/order-sizes";
+import { isDeliveryText } from "../lib/line-kinds";
 
 /**
  * Pass 2: turn a structured `Extraction` (see `extract.ts`) into priced
@@ -452,11 +453,13 @@ function priceOtherLine(line: Extraction["lines"][number]): PricedLine {
   const cost = line.spokenDollarAmount;
   const description = line.description ?? "Other";
   const qty = line.qty || 1;
+  // "Delivery" said as an other line is a delivery line (188001 list item 6).
+  const kind = isDeliveryText(description) ? "delivery" : "other";
 
   if (cost === null) {
     return {
       productId: null,
-      kind: "other",
+      kind,
       description,
       qty,
       unit: "each",
@@ -470,7 +473,7 @@ function priceOtherLine(line: Extraction["lines"][number]): PricedLine {
 
   return {
     productId: null,
-    kind: "other",
+    kind,
     description,
     qty,
     unit: "each",

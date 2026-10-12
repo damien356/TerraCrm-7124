@@ -7,11 +7,13 @@ import { Spinner } from "../components/ui/card";
 import { SignaturePad, type SignatureValue } from "../components/signature-pad";
 import { BankDetails, PayByCard, PublicCard, PublicMessage, PublicShell, downloadBase64, errorText } from "../components/public-shell";
 import { moneyExact } from "../lib/money";
+import { QuoteItemRows } from "../components/quote-item-rows";
 import { useAcceptQuoteOnline, usePublicQuote, usePublicQuotePdf } from "../queries/publicPages";
 
 /**
  * /q/<token>: the client reads the quote, the Supply Terms, signs and
- * accepts. No login. Bundles and totals only, the same as the PDF.
+ * accepts. No login. Bundles and totals, the same as the PDF. A supply only
+ * quote is itemised: one row per line with qty, rate and total (item 1).
  * The deposit can be paid by card (Stripe, through /pay/<token>, no
  * surcharge) or by bank transfer. Position / Company is only asked for when
  * the quote is billed to a company.
@@ -225,6 +227,9 @@ export default function PublicQuotePage() {
       </PublicCard>
 
       <PublicCard title="What is included">
+        {q.layout === "itemised" ? (
+          <QuoteItemRows rows={q.items} />
+        ) : (
         <div className="divide-y divide-border">
           {q.bundles.map((b) => (
             <div key={b.key} className="py-3 first:pt-0 last:pb-0">
@@ -236,6 +241,7 @@ export default function PublicQuotePage() {
             </div>
           ))}
         </div>
+        )}
         <dl className="mt-4 ml-auto flex max-w-xs flex-col gap-1 border-t border-border pt-3 text-sm">
           <div className="flex justify-between">
             <dt className="text-muted-foreground">Subtotal</dt>

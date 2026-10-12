@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { depositSplit } from "./deposits";
+import { syncDeliveryCosts } from "./delivery-cost";
 import { insertDispatchForLines } from "./dispatch-build";
 import { carryQuotePeopleToJob } from "./job-people";
 import { nextJobNumber } from "./job-number";
@@ -15,6 +16,7 @@ import { quoteRef } from "./refs";
  *   buildWorkFromQuote  labour, prep and removal lines become one unassigned
  *                       dispatch (lib/dispatch-build.ts), supply and
  *                       accessory lines become materials to order.
+ *                       Delivery lines become Other costs (lib/delivery-cost.ts).
  *   convertQuoteToJob   both. The Convert to job button, and an accept on an
  *                       old quote that has no job yet.
  *
@@ -72,7 +74,9 @@ export async function buildWorkFromQuote(quoteId: number, jobId: number, opts: {
       tasksCreated = 1;
     }
   }
-  return { tasksCreated, materialsCreated: supply.length };
+  // Fix list item 11: delivery lines are an Other cost, never a material.
+  const delivery = await syncDeliveryCosts(jobId, quoteId);
+  return { tasksCreated, materialsCreated: supply.length, deliveryCosts: delivery.added };
 }
 
 /**

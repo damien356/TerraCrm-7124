@@ -152,7 +152,7 @@ const quotePage = {
 
     const ref = await quoteRefOf(quote);
     const to = await addressedTo(quote);
-    const { bundles } = await bundlesFor(quote);
+    const { bundles, layout, items } = await bundlesFor(quote);
     const { deposit, balance } = depositSplit(quote.total, quote.depositPercent);
     return {
       state,
@@ -164,6 +164,9 @@ const quotePage = {
       validUntil: quote.validUntil ? auDate(todayISO(quote.validUntil)) : null,
       to,
       bundles: bundles.map((b) => ({ key: b.key, title: b.title, wording: b.wording, total: b.total })),
+      /** Item 1: itemised shows one row per line (ex GST) in place of the sections. */
+      layout,
+      items: items.map((r) => ({ id: r.id, description: r.description, qty: r.qty, unit: r.unit, rate: r.rate, total: r.total })),
       subtotal: quote.subtotal,
       gst: quote.gst,
       total: quote.total,

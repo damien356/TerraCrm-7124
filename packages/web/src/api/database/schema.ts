@@ -1449,6 +1449,11 @@ export const quotes = sqliteTable(
     acceptedAt: integer("accepted_at", { mode: "timestamp" }),
     /** combined = one client bundle for the whole quote. split = one per floor type, plus one for other work. */
     bundleMode: text("bundle_mode").notNull().default("combined"),
+    /**
+     * 188001 list item 1. What the client sees: auto (itemised when the quote
+     * is supply only, else sections), itemised (one row per line) or sections.
+     */
+    layout: text("layout").notNull().default("auto"),
     ...timestamps,
   },
   (t) => [index("quotes_contact_idx").on(t.contactId), unique("quotes_number_version_unique").on(t.number, t.version)],
@@ -1460,7 +1465,7 @@ export const quoteItems = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     quoteId: integer("quote_id").notNull().references(() => quotes.id, { onDelete: "cascade" }),
     productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
-    /** supply · labour · prep · removal · accessory · other */
+    /** supply · labour · prep · removal · accessory · delivery · other */
     kind: text("kind").notNull().default("supply"),
     description: text("description").notNull(),
     qty: real("qty").notNull().default(1),
@@ -1471,7 +1476,7 @@ export const quoteItems = sqliteTable(
     unitCost: real("unit_cost"),
     /** Markup % this line was priced at (cost -> sell). Null on older lines: work it out from cost and sell. */
     markupPercent: real("markup_percent"),
-    /** material · labour. Drives split material and labour invoices. Copied from the price book, editable per line. */
+    /** material · labour · delivery. Copied from the price book, editable per line. Delivery lines are always delivery. */
     lineType: text("line_type").notNull().default("material"),
     total: real("total").notNull().default(0),
     sortOrder: integer("sort_order").notNull().default(0),
@@ -2110,7 +2115,7 @@ export const variationItems = sqliteTable(
     productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
     /** The rate book item a labour line was priced off. */
     rateItemId: integer("rate_item_id").references(() => labourRateItems.id, { onDelete: "set null" }),
-    /** supply · labour · prep · removal · accessory · other */
+    /** supply · labour · prep · removal · accessory · delivery · other */
     kind: text("kind").notNull().default("supply"),
     /** material · labour */
     lineType: text("line_type").notNull().default("material"),

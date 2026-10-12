@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import {
   ALL,
   BUNDLE_TITLES,
+  defaultBundleTitle,
   EXTRAS,
   FLOOR_CATEGORIES,
   LINE_CATEGORIES,
@@ -26,6 +27,7 @@ export {
   bundleCategoryOf,
   BUNDLE_TITLES,
   CATEGORY_LABELS,
+  defaultBundleTitle,
   EXTRAS,
   FLOOR_CATEGORIES,
   LINE_CATEGORIES,
@@ -183,6 +185,8 @@ export type SavedBundle = {
 export type Bundle = {
   key: string;
   title: string;
+  /** What the title is when none is typed. "X supply" when the section has no install line (item 2). */
+  defaultTitle: string;
   wording: string;
   wordingSource: string;
   /** Ex GST. */
@@ -196,7 +200,7 @@ export type Bundle = {
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 /** The bundles a quote shows the client right now, in print order. */
-export function buildBundles(mode: string, lines: BundleLine[], saved: SavedBundle[]): Bundle[] {
+export function buildBundles(mode: string, lines: BundleLine[], saved: SavedBundle[], opts: { legacyTitles?: boolean } = {}): Bundle[] {
   const savedBy = new Map(saved.map((s) => [s.bundleKey, s]));
   const ordered = [...lines].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.id - b.id);
 
@@ -221,9 +225,12 @@ export function buildBundles(mode: string, lines: BundleLine[], saved: SavedBund
   return [...groups.entries()].map(([key, group]) => {
     const s = savedBy.get(key);
     const signature = lineSignature(group);
+    // legacyTitles: the quote went out before item 2, so it keeps "supply and installation".
+    const defaultTitle = opts.legacyTitles ? (BUNDLE_TITLES[key] ?? key) : defaultBundleTitle(key, group.some((l) => l.kind === "labour"));
     return {
       key,
-      title: s?.title || BUNDLE_TITLES[key] || key,
+      title: s?.title || defaultTitle,
+      defaultTitle,
       wording: s?.wording ?? "",
       wordingSource: s?.wordingSource ?? "",
       total: round2(group.reduce((sum, l) => sum + (l.total ?? 0), 0)),
