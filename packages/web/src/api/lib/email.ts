@@ -1,13 +1,14 @@
 import { Resend } from "resend";
 import { inDemo } from "../database";
+import { SENDERS } from "./senders";
 
 /* ---------------------------------------------------------------------------
  * Terra's outbound email. ONE pipe, and every marketing send in the app goes
  * down it so the guards below cannot be sidestepped.
  *
  * Two addresses, two different jobs:
- *   team@terraflooring.com.au    marketing, journeys, blasts. Built here.
- *   damien@terraflooring.com.au  quotes. ALREADY WORKING, untouched by this file.
+ *   team@terraflooring.com.au    quotes, invoices, bookings, journeys. The default.
+ *   damien@terraflooring.com.au  the after-job care emails only. See lib/senders.
  *
  * Resend only SENDS. Terra's actual inboxes stay on whatever hosts the domain,
  * and nothing here touches MX records or mail delivery. Damien reads his mail
@@ -16,8 +17,8 @@ import { inDemo } from "../database";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-export const MARKETING_FROM = "Terra Flooring <team@terraflooring.com.au>";
-export const MARKETING_REPLY_TO = "team@terraflooring.com.au";
+export const MARKETING_FROM = SENDERS.team.from;
+export const MARKETING_REPLY_TO = SENDERS.team.replyTo;
 
 /** Sending-only key on purpose. It cannot read the account or delete anything. */
 export const emailConfigured = () => Boolean(process.env.RESEND_API_KEY);

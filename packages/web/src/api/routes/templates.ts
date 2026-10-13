@@ -12,6 +12,7 @@ import {
   unsubscribeUrl,
 } from "../lib/marketing";
 import { fillMergeFields } from "../lib/email";
+import { SENDER_KEYS } from "../lib/senders";
 
 /**
  * Email templates — the words Terra sends, editable by the office.
@@ -245,6 +246,8 @@ export const templates = {
         subject: z.string().default(""),
         body: z.string().default(""),
         useWrapper: z.boolean().default(true),
+        /** Lets Damien check how a care email from damien@ lands, before any go out. */
+        sender: z.enum(SENDER_KEYS).default("team"),
       }),
     )
     .handler(async ({ input, context }) => {
@@ -276,6 +279,7 @@ export const templates = {
         subject: input.subject || "Test from Terra Ops",
         body: input.body,
         useWrapper: input.useWrapper,
+        sender: input.sender,
         test: true,
         merge: {
           contact: self,
@@ -292,6 +296,6 @@ export const templates = {
         });
       }
 
-      return { sentTo: to };
+      return { sentTo: to, sender: input.sender };
     }),
 };

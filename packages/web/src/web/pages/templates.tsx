@@ -4,7 +4,8 @@ import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Checkbox, Field, Input, Textarea } from "../components/ui/field";
+import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
+import { SENDER_KEYS, SENDERS, type SenderKey } from "../../api/lib/senders";
 import { Modal } from "../components/ui/modal";
 import {
   useCreateTemplate,
@@ -217,6 +218,7 @@ function Editor({ id, onClose }: { id?: number; onClose: () => void }) {
   const [ready, setReady] = React.useState(id === undefined);
   const [error, setError] = React.useState<string | null>(null);
   const [testedTo, setTestedTo] = React.useState<string | null>(null);
+  const [testSender, setTestSender] = React.useState<SenderKey>("team");
   const bodyRef = React.useRef<HTMLTextAreaElement>(null);
 
   /* Fill the form once the record arrives, and not again on every refetch. */
@@ -286,8 +288,9 @@ function Editor({ id, onClose }: { id?: number; onClose: () => void }) {
         subject: draft.subject,
         body: draft.body,
         useWrapper: draft.useWrapper,
+        sender: testSender,
       });
-      setTestedTo(out.sentTo);
+      setTestedTo(`${out.sentTo}, from ${SENDERS[out.sender].from.replace(/.*</, "").replace(">", "")}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not send the test.");
     }
@@ -326,6 +329,19 @@ function Editor({ id, onClose }: { id?: number; onClose: () => void }) {
                 Delete
               </Button>
             ) : null}
+            <Select
+              aria-label="Send the test as"
+              title="Who the test comes from"
+              className="h-8 w-auto"
+              value={testSender}
+              onChange={(e) => setTestSender(e.target.value as SenderKey)}
+            >
+              {SENDER_KEYS.map((k) => (
+                <option key={k} value={k}>
+                  From {SENDERS[k].label}
+                </option>
+              ))}
+            </Select>
             <Button variant="outline" size="sm" onClick={test} disabled={sendTest.isPending}>
               <Send className="size-4" />
               {sendTest.isPending ? "Sending…" : "Send test to me"}

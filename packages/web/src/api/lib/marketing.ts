@@ -10,6 +10,7 @@ import {
 } from "./email";
 import { SMS_OPT_OUT, normaliseMobile, sendSms, smsParts } from "./sms";
 import { clientAutoSmsOn } from "./notify";
+import { senderFor, type SenderKey } from "./senders";
 
 /* ---------------------------------------------------------------------------
  * The gate every marketing message passes through.
@@ -294,6 +295,8 @@ export interface MarketingSendArgs {
   test?: boolean;
   /** SMS copy that asks a question, which forces the two-way number. */
   needsReply?: boolean;
+  /** Email only. team@ unless the caller names "care" (after-job care emails). */
+  sender?: SenderKey;
 }
 
 export type MarketingResult =
@@ -358,13 +361,16 @@ export async function sendMarketing(args: MarketingSendArgs): Promise<MarketingR
   const token = await unsubscribeToken(contact.id);
   const unsubUrl = unsubscribeUrl(token);
 
-  /* ---- 6. Write the row BEFORE sending ---- */
+  /* ---- 6. Write the row BEFORE sending ----
+   * Except a test to staff: its contact is synthetic (id -1), there is no
+   * contacts row to point at, and a test is not marketing history anyway. */
   const toAddress =
     channel === "email"
       ? (contact.email ?? "").trim()
       : (normaliseMobile(contact.mobile ?? contact.phone) ?? "");
 
-  const [row] = await db
+  const audit = !(test && contact.id <= 0);
+  const [row] = !audit ? [{ id: 0 }] : await db
     .insert(schema.sends)
     .values({
       contactId: contact.id,
@@ -389,7 +395,8 @@ export async function sendMarketing(args: MarketingSendArgs): Promise<MarketingR
     const html = renderMarketingEmail(bodyText, unsubUrl, args.useWrapper !== false);
     const text = bodyText + footerText(unsubUrl);
 
-    const out = await sendEmail({ to: toAddress, subject, html, text, unsubscribeUrl: unsubUrl });
+    const who = senderFor(args.sender);
+    const out = await sendEmail({ to: toAddress, subject, html, text, unsubscribeUrl: unsubUrl, from: who.from, replyTo: who.replyTo });
 
     if (out.ok) {
       await db
