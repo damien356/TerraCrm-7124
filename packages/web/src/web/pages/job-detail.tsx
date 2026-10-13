@@ -39,6 +39,7 @@ import { CreateQuoteButton } from "../components/create-quote";
 import { jobText, quoteRef, taskRef } from "../../api/lib/refs";
 import { useCreateTask, useRemoveTask } from "../queries/tasks";
 import { useBootstrap } from "../queries/settings";
+import { sourceName } from "../../api/lib/lead-codes";
 import { JobPeopleCard } from "../components/job-people";
 import { DispatchWork, MergeDispatchesModal, SplitDispatchModal } from "../components/dispatch-split";
 import { CancelJobButton } from "../components/job-cancel";
@@ -543,6 +544,7 @@ export default function JobDetailPage() {
                 <span className="font-medium text-foreground">Access:</span> {j.accessNotes}
               </p>
             ) : null}
+            <LeadFacts job={j} />
           </Card>
 
           {/* supply only: where the job is up to, with a jump to each card (item 14) */}
@@ -812,5 +814,71 @@ export default function JobDetailPage() {
         </div>
       ) : null}
     </Page>
+  );
+}
+
+/** JSON list on a job (tags, lead flags). Anything that is not a list of strings reads as empty. */
+function jsonList(raw: string | null | undefined): string[] {
+  try {
+    const v = JSON.parse(raw || "[]") as unknown;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** UTM fields off the form, as "source google, campaign x". */
+function utmText(raw: string | null | undefined): string {
+  if (!raw) return "";
+  try {
+    const v = JSON.parse(raw) as Record<string, unknown>;
+    return Object.entries(v)
+      .filter(([, x]) => typeof x === "string" && x)
+      .map(([k, x]) => `${k.replace(/^utm_/, "")} ${String(x)}`)
+      .join(", ");
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * Where the job came from (notes 18.38): the lead source, the landing page
+ * tags, any flags for the office, the Google click id and UTM fields, and the
+ * link to the timber repair. Office web only; never sent to Crew.
+ */
+function LeadFacts({
+  job,
+}: {
+  job: { source: string; tags: string; leadFlags: string; gclid: string; utm: string; repair: { id: number; status: string } | null };
+}) {
+  const tags = jsonList(job.tags);
+  const flags = jsonList(job.leadFlags);
+  const utm = utmText(job.utm);
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-border pt-2.5 text-xs">
+      <span>
+        <span className="text-muted-foreground">Source </span>
+        <span className="font-medium">{sourceName(job.source)}</span>
+      </span>
+      {tags.map((t) => (
+        <Badge key={t}>{t}</Badge>
+      ))}
+      {flags.map((f) => (
+        <Badge key={f} colour="#B4442C">
+          {f}
+        </Badge>
+      ))}
+      {job.repair ? (
+        <Link to={`/repairs/${job.repair.id}`} className="font-medium text-primary hover:underline">
+          Open the timber repair
+        </Link>
+      ) : null}
+      {job.gclid ? (
+        <span className="max-w-[260px] truncate text-muted-foreground" title={job.gclid}>
+          Google click {job.gclid}
+        </span>
+      ) : null}
+      {utm ? <span className="text-muted-foreground">UTM {utm}</span> : null}
+    </div>
   );
 }

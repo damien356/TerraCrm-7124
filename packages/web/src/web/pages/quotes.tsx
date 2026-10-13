@@ -10,7 +10,7 @@ import { Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { Combobox } from "../components/ui/combobox";
 import { QuotePeopleDraft, draftsToInput, type PersonDraft } from "../components/job-people";
-import { LEAD_SOURCES } from "../components/new-job-modal";
+import { LeadSourceSelect } from "../components/lead-source-select";
 import { depositHint } from "../components/deposit-default";
 import { useCreateQuote, useDepositDefault, useQuoteStats, useQuotes } from "../queries/quotes";
 import { ContactPicker } from "../components/contact-picker";
@@ -71,7 +71,7 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
   async function submit() {
     setError(null);
     if (!form.source) {
-      setError("Pick where the job came from. Unknown is fine.");
+      setError('Pick where the job came from. "Other" is fine.');
       return;
     }
     try {
@@ -169,16 +169,7 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
           <Input type="number" value={form.validDays} onChange={(e) => set("validDays", e.target.value)} />
         </Field>
         <Field label="Where it came from (required)">
-          <Select id="newquote_source" value={form.source} onChange={(e) => set("source", e.target.value)} aria-invalid={!form.source && !!error}>
-            <option value="" disabled>
-              Pick one…
-            </option>
-            {LEAD_SOURCES.map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-          </Select>
+          <LeadSourceSelect id="newquote_source" value={form.source} onChange={(v) => set("source", v)} invalid={!form.source && !!error} />
         </Field>
         <Field label="Notes for the customer" className="sm:col-span-2">
           <Textarea rows={2} value={form.notes} onChange={(e) => set("notes", e.target.value)} />

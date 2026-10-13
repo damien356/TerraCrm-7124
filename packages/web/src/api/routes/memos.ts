@@ -288,7 +288,7 @@ async function runOne(captureId: number, m: StoredMemo, a: StoredAction, actor: 
           description: a.detail ?? null,
           contactId: contact?.id ?? null,
           siteId,
-          source: "phone",
+          source: "Phone",
         },
         actor,
       );

@@ -36,6 +36,8 @@ import {
   Users,
   Wallet,
   Workflow,
+  Hammer,
+  ChartColumn,
   X,
 } from "lucide-react";
 import { authClient } from "../lib/auth";
@@ -78,6 +80,7 @@ const NAV: NavEntry[] = [
     children: [
       { to: "/quotes", label: "Quotes", icon: FileText },
       { to: "/voice-quotes", label: "Voice drafts", icon: Mic },
+      { to: "/repairs", label: "Timber repairs", icon: Hammer },
     ],
   },
   { to: "/jobs", label: "Jobs", icon: ClipboardList },
@@ -123,6 +126,7 @@ const NAV: NavEntry[] = [
       { to: "/marketing/templates", label: "Email templates", icon: Mail },
       { to: "/marketing/segments", label: "Segments", icon: Users },
       { to: "/marketing/care", label: "Care emails", icon: HeartHandshake },
+      { to: "/reports/leads", label: "Leads report", icon: ChartColumn },
     ],
   },
   { to: "/terra-ai", label: "Terra AI", icon: Sparkles },
@@ -153,6 +157,7 @@ const ADMIN_ONLY_PATHS = [
   "/finance/suppliers-owed",
   "/marketing",
   "/terra-ai",
+  "/reports",
   "/settings",
   "/products",
   "/team",

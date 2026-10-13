@@ -611,6 +611,18 @@ export const jobs = sqliteTable(
     callbackChargeable: integer("callback_chargeable", { mode: "boolean" }),
     /** Installer error only: does the installer get paid for the return visit. Decided per callback. */
     callbackPayInstaller: integer("callback_pay_installer", { mode: "boolean" }),
+    /**
+     * LEAD SOURCES AND LANDING PAGES (lib/lead-intake.ts, section 18.38).
+     * tags: JSON list, e.g. ["Timber repair"], copied from the landing page.
+     */
+    tags: text("tags").notNull().default("[]"),
+    /** The landing page the form came in on. Null for jobs made by hand. */
+    landingPageId: integer("landing_page_id").references((): AnySQLiteColumn => landingPages.id, { onDelete: "set null" }),
+    /** Google Ads click id and UTM fields (JSON) off the form. Never sent to Crew. */
+    gclid: text("gclid").notNull().default(""),
+    utm: text("utm").notNull().default(""),
+    /** JSON list of flags for the office, e.g. "Unknown landing page". */
+    leadFlags: text("lead_flags").notNull().default("[]"),
     ...timestamps,
   },
   (t) => [
@@ -911,6 +923,8 @@ export const jobMedia = sqliteTable(
     uploaderName: text("uploader_name"),
     /** Crew can never delete. Admin archives instead — the record survives. */
     archivedAt: integer("archived_at", { mode: "timestamp" }),
+    /** JSON list of tags, e.g. the repair type on a timber repair photo. */
+    tags: text("tags").notNull().default("[]"),
     ...timestamps,
   },
   (t) => [
@@ -2905,6 +2919,121 @@ export const careTemplates = sqliteTable("care_templates", {
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().$defaultFn(now),
 });
+
+/* ---------------------------------------------------------------------------
+ * Lead sources, landing pages and timber repairs (spec 14 Oct). Section 18.38.
+ * lib/lead-intake.ts takes the form posts, lib/timber-repair.ts runs Marc.
+ * ------------------------------------------------------------------------- */
+
+/** Where a job came from. jobs.source holds the name, so a rename moves the jobs with it. */
+export const leadSources = sqliteTable(
+  "lead_sources",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull(),
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [unique("lead_sources_name_uq").on(t.name)],
+);
+
+/** One row per landing page. The page posts its form to /api/leads/<formKey>. */
+export const landingPages = sqliteTable(
+  "landing_pages",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    url: text("url").notNull().default(""),
+    /** A lead_sources name. */
+    leadSource: text("lead_source").notNull().default(""),
+    /** healthcare · commercial · homeowner · builder */
+    clientType: text("client_type").notNull().default("homeowner"),
+    /** JSON list, copied onto every job the page makes. */
+    tags: text("tags").notNull().default("[]"),
+    /** Off keeps the page's leads out of the quote follow-up emails. */
+    followUpOn: integer("follow_up_on", { mode: "boolean" }).notNull().default(true),
+    formKey: text("form_key").notNull(),
+    /** Google Ads send_to, e.g. AW-859821500/xxxx. */
+    conversionLabel: text("conversion_label").notNull().default(""),
+    /** Timber repair page: photos, repair type, and Marc prices it. */
+    timber: integer("timber", { mode: "boolean" }).notNull().default(false),
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    ...timestamps,
+  },
+  (t) => [unique("landing_pages_form_key_uq").on(t.formKey)],
+);
+
+/** Every form post as it was sent, spam included, so nothing real is lost. */
+export const leadSubmissions = sqliteTable(
+  "lead_submissions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    formKey: text("form_key").notNull().default(""),
+    landingPageId: integer("landing_page_id").references(() => landingPages.id, { onDelete: "set null" }),
+    raw: text("raw").notNull().default("{}"),
+    /** ok · spam · duplicate · released */
+    verdict: text("verdict").notNull().default("ok"),
+    reason: text("reason").notNull().default(""),
+    ip: text("ip").notNull().default(""),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [index("lead_submissions_created_idx").on(t.createdAt), index("lead_submissions_ip_idx").on(t.ip, t.createdAt)],
+);
+
+/** Monthly ad spend per landing page. month is YYYY-MM. */
+export const adSpend = sqliteTable(
+  "ad_spend",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    landingPageId: integer("landing_page_id").notNull().references(() => landingPages.id, { onDelete: "cascade" }),
+    month: text("month").notNull(),
+    amount: real("amount").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [unique("ad_spend_page_month_uq").on(t.landingPageId, t.month)],
+);
+
+/** One per timber repair lead: what Marc was asked, his answer, and the quote it made. */
+export const repairRequests = sqliteTable(
+  "repair_requests",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    /** Who was asked to price it (Marc). */
+    installerId: integer("installer_id").references(() => installers.id, { onDelete: "set null" }),
+    /** scratches · water_damage · pot_plant */
+    repairType: text("repair_type").notNull().default(""),
+    area: text("area").notNull().default(""),
+    floorType: text("floor_type").notNull().default(""),
+    suburb: text("suburb").notNull().default(""),
+    /** sha256 of the photo link token. The link itself is only in the text. */
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    /** new · asked · not_sent · priced · see · quoted · sent · accepted · offered */
+    status: text("status").notNull().default("new"),
+    marcPrice: real("marc_price"),
+    marcNote: text("marc_note").notNull().default(""),
+    /** What the client pays, incl GST. */
+    clientPrice: real("client_price"),
+    smsOutId: text("sms_out_id").notNull().default(""),
+    /** Every text on this lead, Marc's and the replies to him, in AUD. */
+    smsCost: real("sms_cost").notNull().default(0),
+    smsCount: integer("sms_count").notNull().default(0),
+    lastReply: text("last_reply").notNull().default(""),
+    askedAt: integer("asked_at", { mode: "timestamp" }),
+    repliedAt: integer("replied_at", { mode: "timestamp" }),
+    nudgedAt: integer("nudged_at", { mode: "timestamp" }),
+    quoteId: integer("quote_id").references(() => quotes.id, { onDelete: "set null" }),
+    taskId: integer("task_id").references(() => jobTasks.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [
+    unique("repair_requests_job_uq").on(t.jobId),
+    unique("repair_requests_token_uq").on(t.tokenHash),
+    index("repair_requests_status_idx").on(t.status),
+  ],
+);
 
 /* ---------------------------------------------------------------------------
  * Native app devices

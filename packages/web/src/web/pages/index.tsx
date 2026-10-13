@@ -10,6 +10,9 @@ import { useDashboard } from "../queries/dashboard";
 import { useExpiringDocs } from "../queries/installers";
 import { useGoneQuiet } from "../queries/intel";
 import { histDate } from "../lib/money";
+import { useBootstrap } from "../queries/settings";
+import { useTopSources } from "../queries/leads";
+import { sourceName } from "../../api/lib/lead-codes";
 
 const money = (n: number) =>
   n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
@@ -126,6 +129,8 @@ export default function DashboardPage() {
           <AlertsCard />
 
           <OfficeTasksCard />
+
+          <TopSourcesCard />
 
           <Card>
             <CardHeader
@@ -260,5 +265,39 @@ export default function DashboardPage() {
         )}
       </Card>
     </Page>
+  );
+}
+
+/** Admin only: the top 3 lead sources this month by won value (notes 18.38). */
+function TopSourcesCard() {
+  const isAdmin = useBootstrap().data?.actor.role === "admin";
+  const top = useTopSources(isAdmin);
+  if (!isAdmin || !top.data) return null;
+  const t = top.data;
+  return (
+    <Card>
+      <CardHeader
+        title="Top lead sources"
+        subtitle={`This month by won value. ${t.leads} lead${t.leads === 1 ? "" : "s"} so far.`}
+        action={<Link to="/reports/leads" className="text-xs text-primary hover:underline">Report</Link>}
+      />
+      {t.rows.length === 0 ? (
+        <Empty>No leads yet this month.</Empty>
+      ) : (
+        <div className="divide-y divide-border">
+          {t.rows.map((r) => (
+            <Link key={r.source} to="/reports/leads" className="flex items-center justify-between gap-2 px-4 py-2.5 transition-colors hover:bg-secondary/60">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{sourceName(r.source)}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {r.leads} lead{r.leads === 1 ? "" : "s"}, {r.won} won
+                </p>
+              </div>
+              <span className="tabular shrink-0 text-sm font-semibold">{money(r.wonValue)}</span>
+            </Link>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }

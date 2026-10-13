@@ -360,8 +360,17 @@ export const jobs = {
         .limit(50),
     ]);
 
+    const [repair] = await db
+      .select({ id: schema.repairRequests.id, status: schema.repairRequests.status })
+      .from(schema.repairRequests)
+      .where(eq(schema.repairRequests.jobId, input.id))
+      .orderBy(desc(schema.repairRequests.id))
+      .limit(1);
+
     return {
       ...row.job,
+      /** The timber repair on this job, for the link to /repairs/:id. */
+      repair: repair ?? null,
       status: row.status,
       site: row.site,
       contact: row.contact,

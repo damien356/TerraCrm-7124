@@ -189,6 +189,12 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     }
   }
 
+  // Timber repairs priced by Marc: the dispatch goes straight to him (notes 18.38).
+  if (built?.tasksCreated) {
+    const { afterRepairAccepted } = await import("./timber-repair");
+    await afterRepairAccepted(locked.id, jobId, args.actor).catch((e) => console.error("[quote-accept] timber repair offer failed:", e));
+  }
+
   // The Order product task. The material selection form is never sent by
   // itself (fix list 13 Oct, item 10): the office sends it from the job page.
   const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, jobId));

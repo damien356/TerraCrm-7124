@@ -143,68 +143,77 @@ async function expireStale() {
   return taskIds;
 }
 
+/**
+ * Send one task to one installer. The Send to installer button and the timber
+ * repair accept (lib/timber-repair.ts) both come here.
+ */
+export async function sendDirectOffer(
+  input: { taskId: number; installerId: number; payAmount?: number | null },
+  actor: { name: string; role: string },
+) {
+  const [task] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, input.taskId));
+  if (!task) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
+
+  if (task.skillId) {
+    const [tick] = await db
+      .select()
+      .from(schema.installerSkills)
+      .where(
+        and(
+          eq(schema.installerSkills.installerId, input.installerId),
+          eq(schema.installerSkills.skillId, task.skillId),
+        ),
+      );
+    if (!tick) throw new ORPCError("BAD_REQUEST", { message: "That installer isn't ticked for this skill." });
+  }
+
+  const expiresAt = new Date(Date.now() + OFFER_TTL_HOURS * 3600_000);
+  const pay = input.payAmount ?? (await derivePay(input.taskId, input.installerId));
+
+  const [offer] = await db
+    .insert(schema.taskOffers)
+    .values({
+      taskId: input.taskId,
+      installerId: input.installerId,
+      mode: "direct",
+      status: "pending",
+      payAmount: pay,
+      expiresAt,
+    })
+    .returning();
+
+  await db
+    .update(schema.jobTasks)
+    .set({ status: "offered", updatedAt: new Date() })
+    .where(eq(schema.jobTasks.id, input.taskId));
+
+  const [installer] = await db.select().from(schema.installers).where(eq(schema.installers.id, input.installerId));
+  await db.insert(schema.activityLog).values({
+    jobId: task.jobId,
+    taskId: input.taskId,
+    entityType: "offer",
+    entityId: offer!.id,
+    action: "offer_sent",
+    detail: `Offered "${task.title}" to ${installer?.name ?? "installer"}${pay ? `, $${pay}` : ""}`,
+    actorName: actor.name,
+    actorRole: actor.role,
+  });
+
+  // Buzz his phone. A missed offer expires, so this is not optional comms.
+  void pushToInstaller(input.installerId, {
+    title: "New job offer",
+    body: `${task.title}${task.scheduledDate ? ` on ${task.scheduledDate}` : ""}${pay ? `, $${pay}` : ""}`,
+    data: { kind: "offer", taskId: input.taskId, offerId: offer!.id },
+  });
+
+  return offer;
+}
+
 export const offers = {
   /** Send to one installer. */
   sendDirect: staffOnly
     .input(z.object({ taskId: z.number(), installerId: z.number(), payAmount: z.number().nullable().optional() }))
-    .handler(async ({ input, context }) => {
-      const [task] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, input.taskId));
-      if (!task) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
-
-      if (task.skillId) {
-        const [tick] = await db
-          .select()
-          .from(schema.installerSkills)
-          .where(
-            and(
-              eq(schema.installerSkills.installerId, input.installerId),
-              eq(schema.installerSkills.skillId, task.skillId),
-            ),
-          );
-        if (!tick) throw new ORPCError("BAD_REQUEST", { message: "That installer isn't ticked for this skill." });
-      }
-
-      const expiresAt = new Date(Date.now() + OFFER_TTL_HOURS * 3600_000);
-      const pay = input.payAmount ?? (await derivePay(input.taskId, input.installerId));
-
-      const [offer] = await db
-        .insert(schema.taskOffers)
-        .values({
-          taskId: input.taskId,
-          installerId: input.installerId,
-          mode: "direct",
-          status: "pending",
-          payAmount: pay,
-          expiresAt,
-        })
-        .returning();
-
-      await db
-        .update(schema.jobTasks)
-        .set({ status: "offered", updatedAt: new Date() })
-        .where(eq(schema.jobTasks.id, input.taskId));
-
-      const [installer] = await db.select().from(schema.installers).where(eq(schema.installers.id, input.installerId));
-      await db.insert(schema.activityLog).values({
-        jobId: task.jobId,
-        taskId: input.taskId,
-        entityType: "offer",
-        entityId: offer!.id,
-        action: "offer_sent",
-        detail: `Offered "${task.title}" to ${installer?.name ?? "installer"}${pay ? `, $${pay}` : ""}`,
-        actorName: context.actor.name,
-        actorRole: context.actor.role,
-      });
-
-      // Buzz his phone. A missed offer expires, so this is not optional comms.
-      void pushToInstaller(input.installerId, {
-        title: "New job offer",
-        body: `${task.title}${task.scheduledDate ? ` on ${task.scheduledDate}` : ""}${pay ? `, $${pay}` : ""}`,
-        data: { kind: "offer", taskId: input.taskId, offerId: offer!.id },
-      });
-
-      return offer;
-    }),
+    .handler(async ({ input, context }) => sendDirectOffer(input, context.actor)),
 
   /** Blast every installer ticked for the task's skill. First accept wins. */
   broadcast: staffOnly

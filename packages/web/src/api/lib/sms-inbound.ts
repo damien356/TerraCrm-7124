@@ -63,6 +63,14 @@ export async function handleInboundSms(raw: Record<string, unknown>) {
     if (dupe) return { stored: false as const, reason: "duplicate" };
   }
 
+  /* Marc answering a timber repair price text (notes 18.38). Read before the
+   * normal routing, so his price never lands on a client thread. */
+  if (!isStop(msg.body)) {
+    const { handleMarcReply } = await import("./timber-repair");
+    const marc = await handleMarcReply({ mobile, body: msg.body, messageId: msg.messageId, originalMessageId: msg.originalMessageId });
+    if (marc) return { stored: true as const, conversationId: null, jobId: null, optOut: false, repair: marc };
+  }
+
   let original: { conversationId: number | null; jobId: number | null; contactId: number | null } | null = null;
   if (msg.originalMessageId) {
     const [row] = await db

@@ -29,6 +29,7 @@ import { useCreateJob } from "../queries/jobs";
 import { useBootstrap } from "../queries/settings";
 import { useCompanies, useSites } from "../queries/companies";
 import type { PersonTag } from "../../api/lib/person-tags";
+import { LeadSourceSelect } from "./lead-source-select";
 
 /**
  * NEW JOB.
@@ -44,17 +45,6 @@ import type { PersonTag } from "../../api/lib/person-tags";
  * reuse the same pieces.
  */
 
-/** Where the job came from. Required, nothing picked to start with. */
-export const LEAD_SOURCES = [
-  ["phone", "Phone"],
-  ["website", "Website"],
-  ["repeat", "Repeat customer"],
-  ["referral", "Referral"],
-  ["builder", "Builder"],
-  ["walk_in", "Walk in"],
-  ["other", "Other"],
-  ["unknown", "Unknown"],
-] as const;
 
 type ContactChoice = { mode: "pick"; id: string; name: string } | { mode: "new"; draft: NewContactDraft };
 type CompanyChoice = { mode: "pick"; id: string; name: string } | { mode: "new"; draft: NewCompanyDraft };
@@ -185,7 +175,7 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
       if (p) return p;
     }
     if (site.mode === "new" && !site.draft.address.trim()) return "Type the street address for the new site, or pick an existing site.";
-    if (!form.source) return "Pick where the job came from. Unknown is fine.";
+    if (!form.source) return 'Pick where the job came from. "Other" is fine.';
     return null;
   }
 
@@ -409,16 +399,7 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
           </Select>
         </Field>
         <Field label="Where it came from (required)">
-          <Select id="newjob_source" value={form.source} onChange={(e) => set("source", e.target.value)} aria-invalid={!form.source && !!error}>
-            <option value="" disabled>
-              Pick one…
-            </option>
-            {LEAD_SOURCES.map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-          </Select>
+          <LeadSourceSelect id="newjob_source" value={form.source} onChange={(v) => set("source", v)} invalid={!form.source && !!error} />
         </Field>
         <Field label="Who gets the invoice" hint="Carol's own house bills Carol. Her builder job bills the company.">
           <Select

@@ -45,6 +45,10 @@ import PublicQuotePage from "./pages/public-quote";
 import PublicSelectionPage from "./pages/public-selection";
 import PublicPayPage from "./pages/public-pay";
 import PublicVariationPage from "./pages/public-variation";
+import PublicRepairPage from "./pages/public-repair";
+import RepairsPage from "./pages/repairs";
+import RepairDetailPage from "./pages/repair-detail";
+import LeadsReportPage from "./pages/leads-report";
 
 // Finish a returning managed sign-in before anything renders. This top-level
 // await resolves before __main.tsx mounts React (app.tsx is its dependency).
@@ -67,6 +71,7 @@ function App() {
         <Route path="/m/:token" component={PublicSelectionPage} />
         <Route path="/pay/:token" component={PublicPayPage} />
         <Route path="/v/:token" component={PublicVariationPage} />
+        <Route path="/r/:token" component={PublicRepairPage} />
         <Route>
           <Layout>
             <Switch>
@@ -96,6 +101,9 @@ function App() {
               <Route path="/finance/suppliers-owed" component={SuppliersOwedPage} />
               <Route path="/finance/profitability" component={ProfitabilityPage} />
               <Route path="/finance/callbacks" component={CallbacksReportPage} />
+              <Route path="/reports/leads" component={LeadsReportPage} />
+              <Route path="/repairs" component={RepairsPage} />
+              <Route path="/repairs/:id" component={RepairDetailPage} />
               <Route path="/marketing/templates" component={TemplatesPage} />
               <Route path="/marketing/segments" component={SegmentsPage} />
               <Route path="/marketing/care" component={CarePage} />

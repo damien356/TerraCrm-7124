@@ -75,6 +75,10 @@ import { finishConnect } from "./lib/gmail";
 import { bootReminders } from "./lib/reminders";
 import { bootDailySummary } from "./lib/notify";
 import { handleInboundSms, inboundSecretOk } from "./lib/sms-inbound";
+import { takeLead, type LeadFile } from "./lib/lead-intake";
+import { bootTimberRepair } from "./lib/timber-repair";
+import { leads } from "./routes/leads";
+import { timber } from "./routes/timber";
 
 // Terra Ops — Terra Flooring only. Admin procedures are built on `adminOnly`,
 // the installer app talks exclusively to `field` (installerOnly, scoped to the
@@ -204,6 +208,10 @@ export const router = {
   underlayUpgrades,
   /** After the job care series: who is in it, the emails, opens and unsubscribes, the wool question. */
   care,
+  /** Lead sources, landing pages, ad spend and the leads report. Admin only, bar the source list. */
+  leads,
+  /** Timber repairs priced by Marc: the repair screen, Approve, and the no-login photo page. */
+  timber,
   /** No-login pages for clients: /q/<token> read and sign a quote, /m/<token> choose flooring. Never returns cost. */
   publicPages,
   jobCancel,
@@ -237,6 +245,57 @@ app.post("/api/webhooks/clicksend/inbound/:secret", async (c) => {
     console.error("[sms-inbound] failed", e);
     /* A 500 makes ClickSend retry, which is what we want for a hiccup. */
     return c.json({ ok: false }, 500);
+  }
+});
+
+// Landing page forms (notes 18.38). Public: each page posts its own fields here,
+// as JSON, a plain form or a form with photos. Spam checks are in lib/lead-intake.
+const LEAD_ORIGIN_RE = /^https:\/\/([a-z0-9-]+\.)*terraflooring\.com\.au$/i;
+const leadCors = (origin: string | undefined): Record<string, string> =>
+  origin && LEAD_ORIGIN_RE.test(origin)
+    ? {
+        "access-control-allow-origin": origin,
+        "access-control-allow-methods": "POST, OPTIONS",
+        "access-control-allow-headers": "content-type",
+        "access-control-max-age": "86400",
+        vary: "origin",
+      }
+    : {};
+app.options("/api/leads/:formKey", (c) => c.body(null, 204, leadCors(c.req.header("origin"))));
+app.post("/api/leads/:formKey", async (c) => {
+  const headers = leadCors(c.req.header("origin"));
+  const size = Number(c.req.header("content-length") ?? 0);
+  if (size > 120 * 1024 * 1024) return c.json({ ok: false, reason: "too big" }, 413, headers);
+  const type = c.req.header("content-type") ?? "";
+  const raw: Record<string, unknown> = {};
+  const files: LeadFile[] = [];
+  try {
+    if (type.includes("application/json")) {
+      Object.assign(raw, (await c.req.json()) as Record<string, unknown>);
+    } else {
+      const body = await c.req.parseBody({ all: true });
+      for (const [k, v] of Object.entries(body)) {
+        for (const item of Array.isArray(v) ? v : [v]) {
+          if (typeof item === "string") raw[k] = raw[k] == null ? item : `${String(raw[k])}, ${item}`;
+          else if (item && typeof item === "object" && "arrayBuffer" in item && files.length < 12) {
+            const f = item as File;
+            files.push({ name: f.name || "photo.jpg", type: f.type || "", bytes: Buffer.from(await f.arrayBuffer()) });
+          }
+        }
+      }
+    }
+  } catch {
+    return c.json({ ok: false, reason: "unreadable" }, 400, headers);
+  }
+  const fwd = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
+  const ip = (c.req.header("cf-connecting-ip") || fwd || c.req.header("x-real-ip") || "").slice(0, 64);
+  try {
+    const out = await takeLead(c.req.param("formKey"), raw, files, { ip, userAgent: c.req.header("user-agent"), origin: c.req.header("origin") });
+    // Spam gets the same answer as a real lead, so a bot learns nothing.
+    return c.json({ ok: true, ...(out.verdict === "ok" ? { ref: out.jobNumber } : {}) }, 200, headers);
+  } catch (e) {
+    console.error("[leads] intake failed", e);
+    return c.json({ ok: false }, 500, headers);
   }
 });
 
@@ -311,5 +370,7 @@ bootOfferTimer();
 bootDailySummary();
 // The after job care series, every 10 minutes. Same gate, and off until switched on in Marketing, Care.
 bootCareEngine();
+// Timber repairs: pushes the office when Marc has not priced one in 2 hours. Same gate.
+bootTimberRepair();
 
 export default app;
