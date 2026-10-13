@@ -10,7 +10,7 @@
  * errors skip the row, warnings still import, nothing is written until Confirm.
  * Added on top: `terra_id` (the product's own number, so an exported sheet always
  * finds its row, even where two products share a name or a code) and
- * `trim_length_m`.
+ * `trim_length_m`. Then `thickness_mm` and `wear_layer_mm` (188001 list item 4).
  */
 import type { products } from "../database/schema";
 import { boxM2Of } from "./flooring-qty";
@@ -46,6 +46,8 @@ export const SHEET_COLUMNS = [
   "notes",
   "terra_id",
   "trim_length_m",
+  "thickness_mm",
+  "wear_layer_mm",
 ] as const;
 export type SheetColumn = (typeof SHEET_COLUMNS)[number];
 
@@ -205,6 +207,8 @@ export function productRow(p: Product): string[] {
     notes: p.notes,
     terra_id: String(p.id),
     trim_length_m: num(p.pieceLengthM),
+    thickness_mm: num(p.thicknessMm),
+    wear_layer_mm: num(p.wearLayerMm),
   };
   return SHEET_COLUMNS.map((c) => cells[c]);
 }
@@ -240,6 +244,8 @@ export type Patch = Partial<{
   active: boolean;
   notes: string;
   pieceLengthM: number | null;
+  thicknessMm: number | null;
+  wearLayerMm: number | null;
 }>;
 type PatchKey = keyof Patch;
 
@@ -267,6 +273,8 @@ export const FIELD_LABELS: Record<PatchKey, string> = {
   active: "Discontinued",
   notes: "Notes",
   pieceLengthM: "Trim length (m)",
+  thicknessMm: "Thickness (mm)",
+  wearLayerMm: "Wear layer (mm)",
 };
 
 export const PRICE_FIELDS: PatchKey[] = ["costPrice", "sellPrice", "cutCostPrice", "rollPrice"];
@@ -475,6 +483,8 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
       "default_wastage_pct",
       "lead_time_days",
       "trim_length_m",
+      "thickness_mm",
+      "wear_layer_mm",
       "terra_id",
     ] as SheetColumn[]) {
       const v = parseNum(cell(c));
@@ -484,6 +494,10 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
     }
     const wp = nums.default_wastage_pct;
     if (wp != null && wp > 100) problems.push("default_wastage_pct is over 100");
+    for (const c of ["thickness_mm", "wear_layer_mm"] as const) {
+      const v = nums[c];
+      if (v != null && v > 100) problems.push(`${c} is over 100 mm`);
+    }
     const flags: Partial<Record<"stocked" | "discontinued", boolean | null>> = {};
     for (const c of ["stocked", "discontinued"] as const) {
       const v = parseYn(cell(c));
@@ -579,6 +593,8 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
       ["roll_price", "rollPrice", 4],
       ["default_wastage_pct", "defaultWastagePct", 2],
       ["trim_length_m", "pieceLengthM", 4],
+      ["thickness_mm", "thicknessMm", 2],
+      ["wear_layer_mm", "wearLayerMm", 2],
     ];
     for (const [c, f, places] of numField) {
       const v = nums[c];

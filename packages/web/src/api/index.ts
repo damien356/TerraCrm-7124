@@ -60,6 +60,7 @@ import { clientInvoices } from "./routes/clientInvoices";
 import { delivery } from "./routes/delivery";
 import { siteFill } from "./routes/siteFill";
 import { emailCheck } from "./routes/emailCheck";
+import { productFind } from "./routes/productFind";
 import { publicPages } from "./routes/publicPages";
 import { jobCancel } from "./routes/jobCancel";
 import { variations } from "./routes/variations";
@@ -187,6 +188,8 @@ export const router = {
   /** A quote with a delivery line and no site asks for one, and a job with no site offers one (188001 list item 12). */
   siteFill,
   emailCheck,
+  /** One search box for the supply pickers, and what a range was last quoted at (188001 list items 3, 4, 18). */
+  productFind,
   /** Variations on a job after its quote is accepted: priced off the books, sent, accepted, billed (item 12). */
   variations,
   /** No-login pages for clients: /q/<token> read and sign a quote, /m/<token> choose flooring. Never returns cost. */

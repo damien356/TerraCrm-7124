@@ -190,6 +190,9 @@ export const settings = {
         widthM: z.number().positive().max(10).nullable().optional(),
         rollLengthM: z.number().positive().max(1000).nullable().optional(),
         pieceLengthM: z.number().positive().max(20).nullable().optional(),
+        /** 188001 list item 4. Board or plank thickness and wear layer, in mm. */
+        thicknessMm: z.number().positive().max(100).nullable().optional(),
+        wearLayerMm: z.number().positive().max(100).nullable().optional(),
         defaultWastagePct: z.number().min(0).max(100).nullable().optional(),
         /** Terra keeps it in the warehouse, so it is cut from stock, not ordered in whole rolls. */
         heldInWarehouse: z.boolean().optional(),
@@ -237,6 +240,9 @@ export const settings = {
         widthM: z.number().positive().max(10).nullable().optional(),
         rollLengthM: z.number().positive().max(1000).nullable().optional(),
         pieceLengthM: z.number().positive().max(20).nullable().optional(),
+        /** 188001 list item 4. Board or plank thickness and wear layer, in mm. */
+        thicknessMm: z.number().positive().max(100).nullable().optional(),
+        wearLayerMm: z.number().positive().max(100).nullable().optional(),
         defaultWastagePct: z.number().min(0).max(100).nullable().optional(),
         /** Terra keeps it in the warehouse, so it is cut from stock, not ordered in whole rolls. */
         heldInWarehouse: z.boolean().optional(),

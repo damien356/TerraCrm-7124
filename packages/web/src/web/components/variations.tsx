@@ -9,9 +9,10 @@ import { Combobox } from "./ui/combobox";
 import { Field, Input, Select, Textarea } from "./ui/field";
 import { Modal } from "./ui/modal";
 import { downloadBase64, errorText } from "./public-shell";
-import { GROUP_LABEL, GroupToggles, PRODUCT_CATEGORIES, unitLabel, useDebounced } from "./quote-pickers";
+import { GROUP_LABEL, GroupToggles, unitLabel, useDebounced } from "./quote-pickers";
 import { moneyExact } from "../lib/money";
-import { useProducts } from "../queries/products";
+import type { FoundProduct } from "../queries/productFind";
+import { ProductFinder } from "./product-finder";
 import { useRatePicker } from "../queries/labour";
 import { uploadToStorage, useAttachMedia, useJobMedia } from "../queries/media";
 import {
@@ -578,27 +579,21 @@ function LineRow({ line, canEdit, canSeeCosts, onError }: { line: Line; canEdit:
 
 function VariationProductPicker({ variationId }: { variationId: number }) {
   const add = useAddVariationProduct();
-  const [search, setSearch] = React.useState("");
-  const debounced = useDebounced(search);
-  const [category, setCategory] = React.useState("");
-  const [picked, setPicked] = React.useState<number | null>(null);
+  const [chosen, setChosen] = React.useState<FoundProduct | null>(null);
   const [qty, setQty] = React.useState("1");
   const [note, setNote] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const products = useProducts({ search: debounced, category });
-  const rows = React.useMemo(() => products.data ?? [], [products.data]);
-  const chosen = rows.find((r) => r.id === picked) ?? null;
 
   async function submit() {
-    if (picked == null) return;
+    if (chosen == null) return;
     const n = num(qty);
     if (!(n > 0)) return setError("Type a quantity.");
     setError(null);
     setNote(null);
     try {
-      const r = await add.mutateAsync({ variationId, productId: picked, qty: n });
+      const r = await add.mutateAsync({ variationId, productId: chosen.id, qty: n });
       setNote([r.note, r.flag].filter(Boolean).join(" ") || null);
-      setPicked(null);
+      setChosen(null);
       setQty("1");
     } catch (e) {
       setError(errorText(e));
@@ -611,39 +606,24 @@ function VariationProductPicker({ variationId }: { variationId: number }) {
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Supply</span>
         <span className="text-xs text-muted-foreground">off the price list, today's sell</span>
       </div>
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input className="pl-9" placeholder="Search the price list, a range, a colour, a supplier" value={search} onChange={(e) => setSearch(e.target.value)} />
-      </div>
-      <GroupToggles
-        groups={PRODUCT_CATEGORIES}
-        labels={Object.fromEntries(PRODUCT_CATEGORIES.map((c) => [c.name, c.label]))}
-        value={category}
-        onChange={(c) => {
-          setCategory(c);
-          setPicked(null);
+      <ProductFinder
+        picked={chosen}
+        onPick={(p) => {
+          setChosen(p);
+          setNote(null);
+          setError(null);
         }}
       />
-      <div className="flex flex-wrap items-end gap-2">
-        <Combobox
-          className="min-w-[280px] flex-1"
-          value={picked == null ? "" : String(picked)}
-          onChange={(val) => setPicked(val ? Number(val) : null)}
-          emptyLabel="Nothing picked"
-          placeholder={products.isLoading ? "Loading the price list…" : rows.length === 0 ? "Nothing matches that" : `Pick one of ${rows.length}`}
-          options={rows.map((p) => ({
-            value: String(p.id),
-            label: [p.brand, p.range, p.colour].filter(Boolean).join(" · ") || p.supplier,
-            sublabel: [p.supplier, p.sellExGst != null ? `${moneyExact(p.sellExGst)}/${unitLabel(p.unit)}` : "no sell price"].filter(Boolean).join(" · "),
-          }))}
-        />
-        <Input className="tabular w-[80px] text-right" aria-label="Supply quantity" value={qty} onChange={(e) => setQty(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
-        <span className="pb-2 text-xs text-muted-foreground">{chosen ? unitLabel(chosen.unit) : ""}</span>
-        <Button variant="outline" disabled={picked == null || add.isPending} onClick={submit}>
-          {add.isPending ? <Spinner /> : <Plus className="size-4" />}
-          Add supply
-        </Button>
-      </div>
+      {chosen ? (
+        <div className="flex flex-wrap items-end justify-end gap-2">
+          <Input className="tabular w-[80px] text-right" aria-label="Supply quantity" value={qty} onChange={(e) => setQty(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
+          <span className="pb-2 text-xs text-muted-foreground">{unitLabel(chosen.unit)}</span>
+          <Button variant="outline" disabled={add.isPending} onClick={submit}>
+            {add.isPending ? <Spinner /> : <Plus className="size-4" />}
+            Add supply
+          </Button>
+        </div>
+      ) : null}
       {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
     </div>

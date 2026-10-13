@@ -38,6 +38,8 @@ import {
   useUpdateQuoteItem,
 } from "../queries/quotes";
 import { useProducts } from "../queries/products";
+import { useLastQuoted, type LastQuoted } from "../queries/productFind";
+import { LastQuotedNote } from "../components/product-finder";
 import { QUOTE_STATUS_COLOUR } from "./quotes";
 import { CancelJobButton } from "../components/job-cancel";
 
@@ -291,9 +293,12 @@ function LineRow({
   locked,
   wordingOpen = false,
   onNotice,
+  lastQuoted,
 }: {
   item: Item;
   locked: boolean;
+  /** Item 18: the range's last quoted price. Undefined for anyone who can't see costs. */
+  lastQuoted?: LastQuoted;
   /** Accepted quote: the description can still be fixed, nothing else (188001 list item 7). */
   wordingOpen?: boolean;
   onNotice: (text: string) => void;
@@ -391,6 +396,7 @@ function LineRow({
             Includes {money(item.freightSell)} supplier freight
           </p>
         ) : null}
+        {cost.show ? <LastQuotedNote entry={lastQuoted} className="mt-1" /> : null}
         {item.belowStandard ? (
           <p className="mt-1 text-[11px] text-amber-700" title="Priced by markup, under the markup the price list sell works out at on this cost.">
             Markup {item.belowStandard.markup}%, standard {item.belowStandard.standard}%
@@ -657,6 +663,16 @@ export default function QuoteBuilderPage() {
   const convert = useConvertQuote();
   const removeQuote = useRemoveQuote();
   const siteNeed = useQuoteSiteNeed(Number.isFinite(id) ? id : null);
+  // Item 18: what each line's range was last quoted at. Cost viewers only.
+  const lastQuoted = useLastQuoted(
+    {
+      productIds: (quote.data?.items ?? []).map((i) => i.productId).filter((n): n is number => n != null),
+      companyId: quote.data?.companyId ?? null,
+      contactId: quote.data?.contactId ?? null,
+      excludeQuoteNumber: quote.data?.number ?? null,
+    },
+    cost.show,
+  );
 
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
@@ -952,7 +968,14 @@ export default function QuoteBuilderPage() {
                 </thead>
                 <tbody>
                   {q.items.map((item) => (
-                    <LineRow key={item.id} item={item} locked={locked} wordingOpen={wordingOpen} onNotice={setLineNotice} />
+                    <LineRow
+                      key={item.id}
+                      item={item}
+                      locked={locked}
+                      wordingOpen={wordingOpen}
+                      onNotice={setLineNotice}
+                      lastQuoted={item.productId != null ? lastQuoted.data?.[item.productId] : undefined}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -968,7 +991,7 @@ export default function QuoteBuilderPage() {
           ) : null}
           {locked ? null : (
             <>
-              <ProductPicker quoteId={q.id} />
+              <ProductPicker quoteId={q.id} context={{ companyId: q.companyId, contactId: q.contactId, excludeQuoteNumber: q.number }} />
               <LabourPicker quoteId={q.id} category={q.job?.category ?? null} />
               <AddLine quoteId={q.id} />
             </>

@@ -4,7 +4,8 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/field";
 import { Spinner } from "./ui/card";
 import { Combobox } from "./ui/combobox";
-import { useProducts } from "../queries/products";
+import type { FoundProduct } from "../queries/productFind";
+import { ProductFinder, type LastQuotedContext } from "./product-finder";
 import { useRatePicker } from "../queries/labour";
 import { useAddQuoteLabour, useAddQuoteProduct } from "../queries/quotes";
 import { ProductAreaFields, useAreaDraft } from "./floor-area";
@@ -118,23 +119,17 @@ export function GroupToggles({
 /* ---------------------------- product picker ---------------------------- */
 
 /**
- * Supply, off the price list. A search box rather than a dropdown: a native
- * select only jumps to whatever starts with the last key pressed, which is no
- * use at all against a few thousand variants.
+ * Supply, off the price list. Fix list item 3: one search box with the
+ * matches listed under it as you type, tap one to pick it. Item 4: a Filter
+ * button for type, thickness, sell range and sort. Staff only on the server,
+ * no costs in it, so Office can use it too.
  */
-export function ProductPicker({ quoteId }: { quoteId: number }) {
+export function ProductPicker({ quoteId, context }: { quoteId: number; context?: LastQuotedContext }) {
   const add = useAddQuoteProduct();
-  const [search, setSearch] = React.useState("");
-  const debounced = useDebounced(search);
-  const [category, setCategory] = React.useState("");
-  const [picked, setPicked] = React.useState<number | null>(null);
+  const [chosen, setChosen] = React.useState<FoundProduct | null>(null);
   const [qty, setQty] = React.useState("1");
   const [error, setError] = React.useState<string | null>(null);
 
-  const products = useProducts({ search: debounced, category });
-
-  const rows = React.useMemo(() => products.data ?? [], [products.data]);
-  const chosen = rows.find((r) => r.id === picked) ?? null;
   // Items 8 and 9: a Box or Broadloom product is measured, not counted.
   const area = useAreaDraft(chosen);
   const rates = useRatePicker({ includeUnpriced: true });
@@ -143,19 +138,19 @@ export function ProductPicker({ quoteId }: { quoteId: number }) {
     [rates.data],
   );
   const [done, setDone] = React.useState<string | null>(null);
-  const canAdd = picked != null && (!area.active || (area.measured != null && area.measured > 0));
+  const canAdd = chosen != null && (!area.active || (area.measured != null && area.measured > 0));
   // Measuring: the line is what the area works out to, nothing until an area is in.
   const lineQty = area.active ? (area.result?.qty ?? 0) : Number(qty) || 0;
 
   async function submit() {
-    if (picked == null || !canAdd) return;
+    if (chosen == null || !canAdd) return;
     setError(null);
     setDone(null);
     try {
-      const r = await add.mutateAsync({ quoteId, productId: picked, qty: Number(qty) || 1, ...area.submit() });
+      const r = await add.mutateAsync({ quoteId, productId: chosen.id, qty: Number(qty) || 1, ...area.submit() });
       const bits = [r.qtyNote, r.labour ? `${r.labour.description} added underneath.` : null, r.item?.flagged ? r.item.flagReason : null];
       setDone(bits.filter(Boolean).join(" ") || null);
-      setPicked(null);
+      setChosen(null);
       setQty("1");
       area.reset();
     } catch (e) {
@@ -170,73 +165,35 @@ export function ProductPicker({ quoteId }: { quoteId: number }) {
         <span className="text-xs text-muted-foreground">off the price list</span>
       </div>
 
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          className="pl-9"
-          placeholder="Search the price list, a range, a colour, a supplier"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-      </div>
-
-      <GroupToggles
-        groups={PRODUCT_CATEGORIES}
-        labels={Object.fromEntries(PRODUCT_CATEGORIES.map((c) => [c.name, c.label]))}
-        value={category}
-        onChange={(v) => {
-          setCategory(v);
-          setPicked(null);
+      <ProductFinder
+        picked={chosen}
+        onPick={(p) => {
+          setChosen(p);
+          setDone(null);
+          setError(null);
         }}
+        context={context}
       />
 
-      <div className="flex flex-wrap items-end gap-2">
-        <Combobox
-          className="min-w-[320px] flex-1"
-          value={picked == null ? "" : String(picked)}
-          onChange={(v) => setPicked(v ? Number(v) : null)}
-          emptyLabel="Nothing picked"
-          placeholder={
-            products.isLoading
-              ? "Loading the price list…"
-              : rows.length === 0
-                ? "Nothing matches that"
-                : `Pick one of ${rows.length}`
-          }
-          options={rows.map((p) => ({
-            value: String(p.id),
-            label: [p.brand, p.range, p.colour].filter(Boolean).join(" · ") || p.supplier,
-            sublabel: [
-              p.supplier,
-              p.sellExGst != null ? `${money(p.sellExGst)}/${unitLabel(p.unit)}` : "no sell price",
-              p.onSpecial ? "on special" : "",
-            ]
-              .filter(Boolean)
-              .join(" · "),
-          }))}
-        />
-        {area.active ? null : (
-          <>
-            <Input
-              className="tabular w-[80px] text-right"
-              aria-label="Quantity"
-              value={qty}
-              onChange={(e) => setQty(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && submit()}
-            />
-            <span className="pb-2 text-xs text-muted-foreground">{chosen ? unitLabel(chosen.unit) : ""}</span>
-          </>
-        )}
-        <Button variant="outline" disabled={!canAdd || add.isPending} onClick={submit}>
-          {add.isPending ? <Spinner /> : <Plus className="size-4" />}
-          Add supply
-        </Button>
-      </div>
-
-      {rows.length >= 500 ? (
-        <p className="text-xs text-muted-foreground">
-          First 500 only. Type a range, a colour or a supplier, or tap a category, to get at the rest.
-        </p>
+      {chosen ? (
+        <div className="flex flex-wrap items-end justify-end gap-2">
+          {area.active ? null : (
+            <>
+              <Input
+                className="tabular w-[80px] text-right"
+                aria-label="Quantity"
+                value={qty}
+                onChange={(e) => setQty(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && submit()}
+              />
+              <span className="pb-2 text-xs text-muted-foreground">{unitLabel(chosen.unit)}</span>
+            </>
+          )}
+          <Button variant="outline" disabled={!canAdd || add.isPending} onClick={submit}>
+            {add.isPending ? <Spinner /> : <Plus className="size-4" />}
+            Add supply
+          </Button>
+        </div>
       ) : null}
 
       {chosen ? <ProductAreaFields product={chosen} area={area} installNames={installNames} /> : null}

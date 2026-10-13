@@ -768,6 +768,8 @@ type ProductRow = {
   widthM: number | null;
   rollLengthM: number | null;
   pieceLengthM: number | null;
+  thicknessMm: number | null;
+  wearLayerMm: number | null;
   defaultWastagePct: number | null;
   heldInWarehouse: boolean;
   swatchKey: string | null;
@@ -783,6 +785,8 @@ function ProductSizesModal({ product, onClose }: { product: ProductRow; onClose:
     widthM: shown(product.widthM),
     rollLengthM: shown(product.rollLengthM),
     pieceLengthM: shown(product.pieceLengthM),
+    thicknessMm: shown(product.thicknessMm),
+    wearLayerMm: shown(product.wearLayerMm),
     defaultWastagePct: shown(product.defaultWastagePct),
   });
   const [error, setError] = React.useState<string | null>(null);
@@ -796,6 +800,8 @@ function ProductSizesModal({ product, onClose }: { product: ProductRow; onClose:
         widthM: numOrNull(form.widthM),
         rollLengthM: numOrNull(form.rollLengthM),
         pieceLengthM: numOrNull(form.pieceLengthM),
+        thicknessMm: numOrNull(form.thicknessMm),
+        wearLayerMm: numOrNull(form.wearLayerMm),
         defaultWastagePct: numOrNull(form.defaultWastagePct),
       });
       onClose();
@@ -835,6 +841,12 @@ function ProductSizesModal({ product, onClose }: { product: ProductRow; onClose:
         <Field label="Wastage (%)" hint="Blank uses the wastage for the floor type in Settings.">
           <Input inputMode="decimal" value={form.defaultWastagePct} onChange={set("defaultWastagePct")} />
         </Field>
+        <Field label="Thickness (mm)" hint="The whole board or plank. The quote picker filters on it.">
+          <Input inputMode="decimal" value={form.thicknessMm} onChange={set("thicknessMm")} />
+        </Field>
+        <Field label="Wear layer (mm)" hint="Vinyl, hybrid and engineered timber.">
+          <Input inputMode="decimal" value={form.wearLayerMm} onChange={set("wearLayerMm")} />
+        </Field>
       </div>
       {error ? <p className="mt-3 text-xs font-medium text-destructive">{error}</p> : null}
     </Modal>
@@ -862,7 +874,19 @@ function ProductLine({ product }: { product: ProductRow }) {
         {product.range ? <span className="text-muted-foreground"> · {product.range}</span> : null}
         {product.sku ? <div className="text-xs text-muted-foreground">{product.sku}</div> : null}
       </td>
-      <td className="px-4 py-2">{product.colour || "-"}</td>
+      <td className="px-4 py-2">
+        {product.colour || "-"}
+        {product.thicknessMm != null || product.wearLayerMm != null ? (
+          <div className="text-xs text-muted-foreground">
+            {[
+              product.thicknessMm != null ? `${product.thicknessMm} mm` : "",
+              product.wearLayerMm != null ? `${product.wearLayerMm} mm wear` : "",
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </div>
+        ) : null}
+      </td>
       <td className="px-4 py-2">
         <Select
           value={product.category}
@@ -1008,6 +1032,8 @@ function NewProductModal({ open, onClose }: { open: boolean; onClose: () => void
     widthM: "",
     rollLengthM: "",
     pieceLengthM: "",
+    thicknessMm: "",
+    wearLayerMm: "",
     defaultWastagePct: "",
     heldInWarehouse: false,
   });
@@ -1043,6 +1069,8 @@ function NewProductModal({ open, onClose }: { open: boolean; onClose: () => void
         widthM: numOrNull(form.widthM),
         rollLengthM: numOrNull(form.rollLengthM),
         pieceLengthM: numOrNull(form.pieceLengthM),
+        thicknessMm: numOrNull(form.thicknessMm),
+        wearLayerMm: numOrNull(form.wearLayerMm),
         defaultWastagePct: numOrNull(form.defaultWastagePct),
         heldInWarehouse: form.heldInWarehouse,
         ...(form.soldAs === "auto"
@@ -1156,6 +1184,12 @@ function NewProductModal({ open, onClose }: { open: boolean; onClose: () => void
         </Field>
         <Field label="Wastage (%)" hint="Blank uses the floor type's wastage.">
           <Input inputMode="decimal" value={form.defaultWastagePct} onChange={(e) => set("defaultWastagePct", e.target.value)} />
+        </Field>
+        <Field label="Thickness (mm)" hint="The whole board or plank.">
+          <Input inputMode="decimal" value={form.thicknessMm} onChange={(e) => set("thicknessMm", e.target.value)} />
+        </Field>
+        <Field label="Wear layer (mm)" hint="Vinyl, hybrid and engineered timber.">
+          <Input inputMode="decimal" value={form.wearLayerMm} onChange={(e) => set("wearLayerMm", e.target.value)} />
         </Field>
         <label htmlFor="new_product_stocked" className="flex items-center gap-2 text-sm sm:col-span-2">
           <Checkbox
