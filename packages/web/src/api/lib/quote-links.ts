@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminUserIds, sendPush } from "./push";
+import { notifyOffice } from "./notify";
 import { quoteRefOf } from "./quote-number";
 import { OPS_URL } from "./swms-checks";
 
@@ -67,7 +67,7 @@ export async function recordQuoteView(link: typeof schema.quoteLinks.$inferSelec
   if (!quote) return row;
   const ref = await quoteRefOf(quote);
   const who = await clientNameFor(quote);
-  await sendPush(await adminUserIds(), {
+  await notifyOffice("quote_viewed", {
     title: `Quote ${ref} opened ${row.views} times`,
     body: `${who || "The client"} keeps looking at quote ${ref}. Good time to call.`,
     data: quote.jobId ? { kind: "job", jobId: quote.jobId } : { kind: "quote", quoteId: quote.id },
@@ -78,7 +78,7 @@ export async function recordQuoteView(link: typeof schema.quoteLinks.$inferSelec
     entityType: "quote",
     entityId: quote.id,
     action: "quote_viewed",
-    detail: `Quote ${ref} opened ${row.views} times by the client. Damien was sent a push.`,
+    detail: `Quote ${ref} opened ${row.views} times by the client. Damien was sent an alert and a push.`,
     actorName: "System",
     actorRole: "system",
   });

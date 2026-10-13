@@ -4,6 +4,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { markInvoicePaid } from "./client-invoices";
 import { OPS_URL } from "./swms-checks";
+import { notifyOffice } from "./notify";
 
 /* ---------------------------------------------------------------------------
  * Pay by card (fix list item 6, 11 Oct). Stripe Checkout, no surcharge.
@@ -210,6 +211,12 @@ export async function applySession(s: Session): Promise<Applied> {
       actorName: who,
       actorRole: "customer",
     });
+    await notifyOffice("payment_received", {
+      title: `Card payment on ${inv.number} needs you`,
+      body: `${who} paid ${money(amount)} by card but only ${money(owing)} was owing. Refund or credit the difference in Stripe.`,
+      jobId: inv.jobId,
+      path: inv.jobId ? undefined : "/finance/invoices",
+    });
     if (owing > 0.005) {
       await markInvoicePaid({ id: inv.id, amount: owing, method: "card", byName: `${who} (Stripe)`, actorRole: "customer" });
     }
@@ -238,6 +245,12 @@ export async function applySession(s: Session): Promise<Applied> {
     detail: `${inv.number}: ${money(amount)} paid by card online (Stripe ${pi})`,
     actorName: who,
     actorRole: "customer",
+  });
+  await notifyOffice("payment_received", {
+    title: `${money(amount)} paid on ${inv.number}`,
+    body: `${who} paid ${money(amount)} by card on invoice ${inv.number}.${row.status === "paid" ? " It is now paid in full." : ` ${money(owingOn(row))} still owing.`}`,
+    jobId: inv.jobId,
+    path: inv.jobId ? undefined : "/finance/invoices",
   });
   return { ok: true, invoiceId, state: row.status === "paid" ? "paid" : "part_paid", amount };
 }

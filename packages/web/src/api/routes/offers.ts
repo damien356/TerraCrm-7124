@@ -4,7 +4,8 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { staffOnly } from "../middleware/auth";
-import { pushToInstaller, pushToOffice } from "../lib/push";
+import { pushToInstaller } from "../lib/push";
+import { notifyOffice } from "../lib/notify";
 import { blockedReason } from "../lib/availability";
 import { lockTaskLabour } from "./costing";
 import { syncJobForTask } from "../lib/job-stage";
@@ -121,7 +122,7 @@ async function expireStale() {
           )
           .returning({ id: schema.jobTasks.id });
         if (moved.length === 0) continue;
-        void pushToOffice({
+        void notifyOffice("offer_expired", {
           title: "Nobody took it",
           body: `"${task.title}" got no taker within ${OFFER_TTL_HOURS}h. It is back in the queue.`,
           data: { kind: "task", taskId, jobId: task.jobId },
@@ -480,7 +481,7 @@ async function lockTask(args: {
     actorRole: "installer",
   });
 
-  void pushToOffice({
+  void notifyOffice("offer_accepted", {
     title: args.promotedFromHold ? "Hold confirmed" : "Offer accepted",
     body: `${installer?.name ?? "Installer"} has "${args.taskTitle}"${args.day ? ` on ${args.day}` : ""}`,
     data: { kind: "task", taskId: args.taskId, jobId: args.jobId },
@@ -703,7 +704,7 @@ export async function declineOffer(offerId: number, installerId: number, reason:
     actorRole: "installer",
   });
 
-  void pushToOffice({
+  void notifyOffice("offer_declined", {
     title: "Offer declined",
     body: `${installer?.name ?? "Installer"} knocked back "${row.task.title}": ${reason}`,
     data: { kind: "task", taskId: row.offer.taskId, jobId: row.task.jobId },
@@ -741,7 +742,7 @@ export async function releaseTask(taskId: number, installerId: number, reason: s
     actorRole: "installer",
   });
 
-  void pushToOffice({
+  void notifyOffice("handed_back", {
     title: "Task handed back",
     body: `${installer?.name ?? "Installer"} gave back "${task.title}": ${reason}. It needs covering.`,
     data: { kind: "task", taskId, jobId: task.jobId },

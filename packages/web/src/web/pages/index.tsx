@@ -2,6 +2,7 @@ import { Link } from "wouter";
 import { AlertTriangle, ArrowRight, Clock, MapPin, Radio, Users2 } from "lucide-react";
 import { Page } from "../components/layout";
 import { OfficeTasksCard } from "../components/office-tasks";
+import { AlertsCard } from "../components/alerts-card";
 import { CrewUpdatesCard } from "../components/crew-updates";
 import { Card, CardHeader, Empty, Loading, Stat } from "../components/ui/card";
 import { Badge, TASK_STATUS_COLOUR, TASK_STATUS_LABEL } from "../components/ui/badge";
@@ -122,6 +123,8 @@ export default function DashboardPage() {
         </div>
 
         <div className="space-y-4">
+          <AlertsCard />
+
           <OfficeTasksCard />
 
           <Card>

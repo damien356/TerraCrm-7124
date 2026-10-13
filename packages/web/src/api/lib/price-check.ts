@@ -2,7 +2,7 @@ import { and, eq, inArray, ne } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { isChargeLive, priceProduct, sellExGst, todayISO, type SpecialRow } from "./pricing";
-import { sendSms } from "./sms";
+import { notifyOffice } from "./notify";
 
 /* ---------------------------------------------------------------------------
  * PRICE CHECKS.
@@ -31,8 +31,9 @@ const squash = (s: string | null | undefined) => (s ?? "").toLowerCase().replace
 
 /** Damien's line: flag anything over $10 on the invoice. Compares invoice totals, not rates. */
 export const FLAG_OVER_EX_GST = 10;
-/** A new flag over this also texts him. */
-export const TEXT_OVER_EX_GST = 50;
+/** A new flag over this also emails him straight away (item 15: email, not a text). */
+export const EMAIL_OVER_EX_GST = 50;
+/** The old texting setting. No longer read: price flags never text. Kept so Settings can say it is off. */
 export const PRICE_SMS_KEY = "price_flag_sms_to";
 
 export function worthFlagging(opsExGst: number, billedExGst: number) {
@@ -456,7 +457,7 @@ export async function checkInvoicePrices(invoiceId: number) {
     }
     const stale = existing.filter((e) => e.status === "open" && !keep.has(e.dedupeKey)).map((e) => e.id);
     if (stale.length) await db.delete(schema.priceFlags).where(inArray(schema.priceFlags.id, stale));
-    await textBigFlags(invoiceId, fresh);
+    await alertFlags(invoiceId, fresh);
     return drafts.length;
   } catch (e) {
     console.error(`[price-check] invoice ${invoiceId}:`, (e as Error).message);
@@ -465,28 +466,32 @@ export async function checkInvoicePrices(invoiceId: number) {
 }
 
 /**
- * Text Damien when a NEW flag is over $50. One text per invoice, never on a
- * recheck of a flag he has already seen. A special billed under the price
- * list is good news with nothing to decide, so it never texts. No mobile set
- * under Settings > Email agent means no text. Never throws.
+ * Tell the office about NEW flags on an invoice. One alert per invoice, never
+ * on a recheck of a flag already seen. A special billed under the price list
+ * is good news with nothing to decide, so it never alerts. Over $50 is its own
+ * kind, urgent by default, so it emails straight away. Never texts. Never throws.
  */
-async function textBigFlags(invoiceId: number, fresh: FlagDraft[]) {
-  const big = fresh.filter((d) => d.kind !== "invoice_special" && Math.abs(d.impactExGst) > TEXT_OVER_EX_GST);
-  if (!big.length) return;
+async function alertFlags(invoiceId: number, fresh: FlagDraft[]) {
+  const real = fresh.filter((d) => d.kind !== "invoice_special");
+  if (!real.length) return;
   try {
-    const [to] = await db.select().from(schema.settings).where(eq(schema.settings.key, PRICE_SMS_KEY));
-    if (!to?.value?.trim()) return;
+    const big = real.filter((d) => Math.abs(d.impactExGst) > EMAIL_OVER_EX_GST);
+    const shown = big.length ? big : real;
     const [inv] = await db.select().from(schema.supplierInvoices).where(eq(schema.supplierInvoices.id, invoiceId));
     const [sup] = inv?.supplierId ? await db.select({ name: schema.suppliers.name }).from(schema.suppliers).where(eq(schema.suppliers.id, inv.supplierId)) : [];
-    const total = r2(big.reduce((t, d) => t + d.impactExGst, 0));
-    const first = big[0]!.title.length > 70 ? `${big[0]!.title.slice(0, 67)}...` : big[0]!.title;
-    const body =
-      `Terra Ops: ${sup?.name ?? "Supplier"} invoice ${inv?.invoiceNumber ?? ""} is ${$(total)} ex GST ${total >= 0 ? "over" : "under"} the price list. ` +
-      `${first}${big.length > 1 ? ` (+${big.length - 1} more)` : ""}. Approve or ignore under Suppliers owed.`;
-    const out = await sendSms({ to: to.value, body, sender: "auto" });
-    if (!out.ok) console.error(`[price-check] text for invoice ${invoiceId} not sent: ${out.reason}`);
+    const total = r2(shown.reduce((t, d) => t + d.impactExGst, 0));
+    const first = shown[0]!.title.length > 70 ? `${shown[0]!.title.slice(0, 67)}...` : shown[0]!.title;
+    const lead = `${first}${real.length > 1 ? ` (+${real.length - 1} more)` : ""}`;
+    await notifyOffice(big.length ? "price_flag_big" : "price_flag", {
+      title: `Price check: ${sup?.name ?? "Supplier"} invoice ${inv?.invoiceNumber ?? ""}`.trim(),
+      body:
+        `${sup?.name ?? "Supplier"} invoice ${inv?.invoiceNumber ?? ""} is ${$(total)} ex GST ${total >= 0 ? "over" : "under"} the price list. ` +
+        `${lead}${/[.]$/.test(lead) ? "" : "."} Approve or ignore under Suppliers owed.`,
+      path: "/finance/suppliers-owed",
+      data: { kind: "payables", invoiceId },
+    });
   } catch (e) {
-    console.error(`[price-check] text for invoice ${invoiceId}:`, (e as Error).message);
+    console.error(`[price-check] alert for invoice ${invoiceId}:`, (e as Error).message);
   }
 }
 

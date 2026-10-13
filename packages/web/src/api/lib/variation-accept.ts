@@ -5,7 +5,7 @@ import { assertBillable } from "./callbacks";
 import { addDeliveryCosts } from "./delivery-cost";
 import { insertDispatchForLines, type WorkLine } from "./dispatch-build";
 import { DELIVERY } from "./line-kinds";
-import { pushToOffice } from "./push";
+import { notifyOffice } from "./notify";
 import { jobText } from "./refs";
 import { applyAcceptedColours } from "./selection-colours";
 import { addressedFor } from "./variation-send";
@@ -151,7 +151,7 @@ export async function acceptVariation(args: { id: number; actor: VariationActor;
     .returning();
 
   if (args.via === "online") {
-    await pushToOffice({
+    await notifyOffice("variation_accepted", {
       title: `Variation ${locked.ref} accepted online`,
       body: `${args.actor.name} accepted ${money(locked.total)}.${billedToCompany ? " Get an updated work order before invoicing." : ""}`,
       data: { kind: "job", jobId: locked.jobId },
@@ -184,7 +184,7 @@ export async function rejectVariation(args: { id: number; actor: VariationActor;
     actorRole: args.actor.role,
   });
   if (args.via === "online") {
-    await pushToOffice({
+    await notifyOffice("variation_declined", {
       title: `Variation ${v.ref} declined online`,
       body: `${args.actor.name} declined ${money(v.total)}${why ? `: ${why.slice(0, 140)}` : "."}`,
       data: { kind: "job", jobId: v.jobId },

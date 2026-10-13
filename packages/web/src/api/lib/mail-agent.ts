@@ -8,6 +8,7 @@ import { getMessage, header, listMessageIds, MailboxNotConnected, mailboxFor, pd
 import { isTerraOwn, recordInvoice, recordStatement } from "./invoice-match";
 import { sendAsTeam } from "./agent-mail";
 import { isLiveServer } from "./runtime";
+import { NOTIFY_FROM_ADDRESS, isTerraOpsMail } from "./notify-kinds";
 
 /* ---------------------------------------------------------------------------
  * The email agent. Every 15 minutes it reads new mail with a PDF in billing@,
@@ -33,7 +34,8 @@ const MAX_PDF_BYTES = 20 * 1024 * 1024;
 export const AUTO_SEND_KEY = "invoice_requests_auto";
 
 function queryFor(address: string, since: number) {
-  const base = `has:attachment filename:pdf -in:sent -in:drafts after:${since}`;
+  // Never Terra Ops' own notifications (item 15, loop protection). readOne checks again by subject.
+  const base = `has:attachment filename:pdf -in:sent -in:drafts -from:${NOTIFY_FROM_ADDRESS} after:${since}`;
   // billing@ is nothing but supplier paperwork. The other two get everything, so narrow them.
   return address.startsWith("billing@") ? base : `${base} (invoice OR statement OR "tax invoice" OR credit OR remittance)`;
 }
@@ -110,7 +112,8 @@ async function readOne(accountId: number, address: string, gmailId: string, prio
   const from = header(msg, "From");
   const subject = header(msg, "Subject");
   const receivedAt = msg.internalDate ? new Date(Number(msg.internalDate)) : null;
-  const pdfs = pdfParts(msg).slice(0, 6);
+  const own = isTerraOpsMail(from, subject);
+  const pdfs = own ? [] : pdfParts(msg).slice(0, 6);
 
   const base = { accountId, gmailId, threadId: msg.threadId ?? null, fromAddress: from.slice(0, 300), subject: subject.slice(0, 300), receivedAt };
   // Every try is counted here, so a message that keeps failing is left alone after 3.
@@ -139,7 +142,7 @@ async function readOne(accountId: number, address: string, gmailId: string, prio
   }
   await db
     .update(schema.mailMessages)
-    .set({ status: pdfs.length ? "done" : "skipped", note: (found.join("; ") || "no PDF").slice(0, 900), updatedAt: new Date() })
+    .set({ status: pdfs.length ? "done" : "skipped", note: own ? "Terra Ops' own email, ignored" : (found.join("; ") || "no PDF").slice(0, 900), updatedAt: new Date() })
     .where(eq(schema.mailMessages.id, mailMessageId));
   return { invoices, statements };
 }

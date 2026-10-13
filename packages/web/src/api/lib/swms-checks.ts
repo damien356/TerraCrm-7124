@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { parseJson, type Library, type SwmsSnapshot } from "./swms-content";
+import { notifyOffice } from "./notify";
 
 /* ---------------------------------------------------------------------------
  * SWMS Stage 3: site checks, red cards, "what changed", and who the builder is.
@@ -204,6 +205,11 @@ export async function raiseFlag(args: {
     actorRole: "installer",
   });
   await emailTeam(flag!, args.job);
+  await notifyOffice("swms_red", {
+    title: `${args.check.blocks ? "SWMS red card, job stopped" : "SWMS red card"}: Job #${args.job.number}`,
+    body: `${args.installerName || "Crew"} answered ${answerLabel(args.answer)} to "${args.check.question}" at ${args.job.siteAddress || args.job.title}.${args.check.blocks ? " The job is stopped until it is cleared." : ""} Call the crew.`,
+    jobId: args.jobId,
+  });
   return { flag: flag!, created: true };
 }
 

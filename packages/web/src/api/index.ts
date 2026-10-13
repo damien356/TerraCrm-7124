@@ -44,6 +44,7 @@ import { segments } from "./routes/segments";
 import { voiceQuotes } from "./routes/voiceQuotes";
 import { memos } from "./routes/memos";
 import { officeTasks } from "./routes/officeTasks";
+import { alerts } from "./routes/alerts";
 import { voice } from "./routes/voice";
 import { visits } from "./routes/visits";
 import { purchasing } from "./routes/purchasing";
@@ -67,6 +68,7 @@ import { variations } from "./routes/variations";
 import { bootMailAgent } from "./lib/mail-agent";
 import { finishConnect } from "./lib/gmail";
 import { bootReminders } from "./lib/reminders";
+import { bootDailySummary } from "./lib/notify";
 import { handleInboundSms, inboundSecretOk } from "./lib/sms-inbound";
 
 // Terra Ops — Terra Flooring only. Admin procedures are built on `adminOnly`,
@@ -100,6 +102,7 @@ export const router = {
   memos,
   /** Office to-dos and timed reminders, mostly made by voice memos. */
   officeTasks,
+  alerts,
   field,
   /** Hands-free crew: Siri asks, confirm-back before anything is sent. */
   voice,
@@ -271,5 +274,7 @@ bootMailAgent();
 bootOffsiteBackup();
 // Expires offers and locks lapsed 2-hour holds once a minute. Same gate.
 bootOfferTimer();
+// The 7am summary email to the office (item 15). Same gate.
+bootDailySummary();
 
 export default app;

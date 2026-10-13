@@ -4,7 +4,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { sendAsTeam } from "./agent-mail";
 import { addParticipant, ensureForJob, logMessage, subjectWithRef } from "./conversations";
-import { pushToOffice } from "./push";
+import { notifyOffice } from "./notify";
 import { newToken, selectionUrl } from "./quote-links";
 import { jobText } from "./refs";
 import { isProductForm, productItemsFor } from "./selection-colours";
@@ -195,7 +195,7 @@ export async function submitSelection(sel: typeof schema.materialSelections.$inf
     actorName: name.trim() || "Client",
     actorRole: "customer",
   });
-  await pushToOffice({
+  await notifyOffice("selection_done", {
     title: `Flooring chosen for job ${ref}`,
     body: `${name.trim() || "The client"} filled in the material selection. Ready to order.`,
     data: { kind: "job", jobId: sel.jobId },

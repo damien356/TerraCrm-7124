@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { conversationIdFromAddress } from "./email";
+import { isTerraOpsMail } from "./notify-kinds";
 
 /* ---------------------------------------------------------------------------
  * The conversation service. Everything that writes to a thread goes through
@@ -306,6 +307,8 @@ export async function matchInboundEmail(input: {
   /** Every address the mail was addressed to, including the reply-to we set. */
   toAddresses?: string[];
 }) {
+  /* Terra Ops' own notifications never become a conversation (item 15, loop protection). */
+  if (isTerraOpsMail(input.fromEmail, input.subject)) return null;
   /* 0. The address they replied TO. The strongest signal there is, because we
    * put the conversation id in it ourselves. */
   for (const addr of input.toAddresses ?? []) {

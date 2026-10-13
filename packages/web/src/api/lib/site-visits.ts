@@ -3,7 +3,8 @@ import { and, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import { db, inDemo } from "../database";
 import * as schema from "../database/schema";
 import { localDate, localDayBounds } from "./local-date";
-import { pushToInstaller, pushToOffice } from "./push";
+import { pushToInstaller } from "./push";
+import { notifyOffice } from "./notify";
 
 /* ---------------------------------------------------------------------------
  * Site visits: arrived, left, and the every-day completion photo rule.
@@ -174,7 +175,7 @@ export async function announceArrival(visitId: number) {
   });
 
   if (!v.leftAt) {
-    void pushToOffice({
+    void notifyOffice("crew_on_site", {
       title: "Crew on site",
       body: `${who} arrived at ${placeOf(task)}`,
       data: { kind: "task", taskId: task.id, jobId: task.jobId },

@@ -6,7 +6,7 @@ import * as schema from "../database/schema";
 import { adminOnly, installerOnly } from "../middleware/auth";
 import { crewVoice, hashSecret, newConfirmToken, newVoiceKey } from "../middleware/voice";
 import { ownTaskOrThrow } from "./field";
-import { pushToOffice } from "../lib/push";
+import { notifyOffice } from "../lib/notify";
 import { normaliseMobile, sendSms, SMS_OPT_OUT, type SmsOutcome } from "../lib/sms";
 import { contactByMobile, ensureForJob, logMessage } from "../lib/conversations";
 import { draftLateText, gsmSafe } from "../agent/late-text";
@@ -357,7 +357,7 @@ export const voice = {
         return refuse("The text didn't go through. Do you want to call the office?");
       }
       await finish("confirmed", `sent ${out.providerId}`);
-      void pushToOffice({
+      void notifyOffice("running_late", {
         title: "Running late",
         body: `${who} texted ${p.contactName}: about ${p.minutes} min late`,
         data: { kind: "job", jobId: action.jobId },
@@ -390,7 +390,7 @@ export const voice = {
         });
       }
       await finish("confirmed", "logged");
-      void pushToOffice({
+      void notifyOffice("running_late", {
         title: `${who} is running late`,
         body: String(p.body),
         data: { kind: "job", jobId: action.jobId },
@@ -425,7 +425,7 @@ export const voice = {
         actorName: who,
         actorRole: "installer",
       });
-      void pushToOffice({
+      void notifyOffice("crew_note", {
         title: `Note from ${who}`,
         body: String(p.note).slice(0, 140),
         data: { kind: "job", jobId: action.jobId },

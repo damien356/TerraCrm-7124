@@ -7,7 +7,7 @@ import { depositInvoiceFor, raiseInvoice, type InvoiceRow } from "./client-invoi
 import { depositSplit } from "./deposits";
 import { carryQuotePeopleToJob } from "./job-people";
 import { moveJobForward } from "./job-stage";
-import { pushToOffice } from "./push";
+import { notifyOffice } from "./notify";
 import { buildWorkFromQuote, convertQuoteToJob } from "./quote-convert";
 import { quoteRefOf } from "./quote-number";
 import { doublesBeforeBuild, reworkJobForVersion, reworkSummary, workBaseQuoteId, type Rework } from "./quote-rework";
@@ -225,7 +225,7 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
   if (rework?.flags.length) {
     const shown = rework.flags.slice(0, 4);
     const more = rework.flags.length - shown.length;
-    await pushToOffice({
+    await notifyOffice("quote_rework", {
       title: `Job ${jobRef}: ${rework.flags.length} thing${rework.flags.length === 1 ? "" : "s"} to sort after quote ${ref}`,
       body: [...shown, more > 0 ? `And ${more} more on the job.` : ""].filter(Boolean).join("\n"),
       data: { kind: "job", jobId },
@@ -233,7 +233,7 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
   }
 
   if (args.via === "online") {
-    await pushToOffice({
+    await notifyOffice("quote_accepted", {
       title: `Quote ${ref} accepted online`,
       body: `${args.actor.name} accepted ${money(locked.total)}${invoice?.kind === "deposit" ? `. Deposit ${invoice.number} is waiting.` : "."}`,
       data: { kind: "job", jobId },

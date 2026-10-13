@@ -2226,6 +2226,36 @@ export const officeTasks = sqliteTable(
 );
 
 /* ---------------------------------------------------------------------------
+ * Alerts to the office (fix list 11 Oct, item 15). Every notification Terra
+ * Ops sends Damien lands here first, then goes out as a push, and as an
+ * instant email only for the kinds marked urgent in Settings. The kinds live
+ * in lib/notify-kinds.ts. Nothing here is ever texted.
+ * ------------------------------------------------------------------------- */
+
+export const alerts = sqliteTable(
+  "alerts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** A key from lib/notify-kinds.ts ALERT_KINDS. */
+    kind: text("kind").notNull(),
+    title: text("title").notNull().default(""),
+    body: text("body").notNull().default(""),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "cascade" }),
+    /** The push payload, JSON. Tells the phone where to open. */
+    data: text("data").notNull().default("{}"),
+    /** Null until someone in the office clears it. */
+    readAt: integer("read_at", { mode: "timestamp" }),
+    readByName: text("read_by_name").notNull().default(""),
+    /** Set when the instant email went. Null for kinds that are not urgent. */
+    emailedAt: integer("emailed_at", { mode: "timestamp" }),
+    /** How many phones accepted the push. */
+    pushed: integer("pushed").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [index("alerts_open_idx").on(t.readAt, t.createdAt), index("alerts_job_idx").on(t.jobId)],
+);
+
+/* ---------------------------------------------------------------------------
  * FINANCE — the cashflow engine's inputs.
  *
  * The forecast is not built off invoice due dates. It is built off what has

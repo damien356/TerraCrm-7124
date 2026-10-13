@@ -6,7 +6,7 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { installerOnly } from "../middleware/auth";
-import { pushToOffice } from "../lib/push";
+import { notifyOffice } from "../lib/notify";
 import { signMany } from "../lib/s3";
 import { acceptOffer, declineOffer, expireStale, releaseTask } from "./offers";
 import { OFFICE_ONLY_BUCKETS } from "./media";
@@ -531,7 +531,7 @@ export const field = {
         actorRole: "installer",
       });
 
-      void pushToOffice({
+      void notifyOffice("task_finished", {
         title: "Task finished",
         body: `${installer?.name ?? "Installer"} finished "${task.title}"`,
         data: { kind: "task", taskId: input.taskId, jobId: task.jobId },
@@ -561,7 +561,7 @@ export const field = {
           actorName: "System",
           actorRole: "system",
         });
-        void pushToOffice({
+        void notifyOffice("ready_to_invoice", {
           title: "Job ready to invoice",
           body: `Every task on job ${task.jobId} is finished.`,
           data: { kind: "job", jobId: task.jobId },

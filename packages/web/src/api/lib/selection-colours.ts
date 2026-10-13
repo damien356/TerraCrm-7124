@@ -3,7 +3,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { categoryLabel } from "./product-categories";
 import { markupOf } from "./pricing";
-import { pushToOffice } from "./push";
+import { notifyOffice } from "./notify";
 import { jobText } from "./refs";
 import { signGet } from "./s3";
 import {
@@ -482,7 +482,7 @@ export async function submitProductSelection(sel: Selection, name: string, picks
     actorName: who || "Client",
     actorRole: "customer",
   });
-  await pushToOffice({
+  await notifyOffice("selection_done", {
     title: changed ? `Colour change on job ${jobRef}` : `Colours confirmed for job ${jobRef}`,
     body: changed
       ? `${who || "The client"} changed ${changed} colour${changed === 1 ? "" : "s"}. There is a task on the job.`

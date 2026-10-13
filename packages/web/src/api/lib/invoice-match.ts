@@ -6,6 +6,7 @@ import { settleDate } from "./cashflow";
 import { termsForSupplier } from "./supplier-terms";
 import { INVOICES_TO } from "./gmail";
 import { checkInvoicePrices } from "./price-check";
+import { notifyOffice } from "./notify";
 
 /* ---------------------------------------------------------------------------
  * Matching supplier paperwork to POs.
@@ -413,6 +414,7 @@ export async function applyStatement(statementId: number) {
   const name = sup?.name ?? st.supplierNameRaw;
 
   let requested = 0;
+  const missing: string[] = [];
   const listedKeys = new Set<string>();
   for (const l of lines) {
     if (l.isPayment || !l.invoiceNumber) continue;
@@ -443,6 +445,7 @@ export async function applyStatement(statementId: number) {
       status: sup?.email ? "waiting_ok" : "no_email",
     });
     requested++;
+    missing.push(l.invoiceNumber);
   }
 
   // Open-item statement: an unpaid invoice dated before it that is no longer listed has been paid.
@@ -468,6 +471,15 @@ export async function applyStatement(statementId: number) {
       await markPaid(i.id, `Not on the statement of ${auDate(st.statementDate)}, so it has been paid.`);
       markedPaid++;
     }
+  }
+  if (missing.length) {
+    const shown = missing.slice(0, 5).join(", ");
+    await notifyOffice("missing_invoice", {
+      title: `Missing invoice${missing.length === 1 ? "" : "s"} from ${name}`,
+      body: `${name}'s statement lists ${missing.length === 1 ? "invoice" : `${missing.length} invoices`} ${shown}${missing.length > 5 ? " and more" : ""} that Terra never got. The request is on Suppliers owed.`,
+      path: "/finance/suppliers-owed",
+      data: { kind: "payables", statementId },
+    });
   }
   return { requested, markedPaid, rowsAddUp: adds };
 }

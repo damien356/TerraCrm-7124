@@ -8,6 +8,7 @@ import { withUser } from "../middleware/auth";
 import { isLiveServer } from "../lib/runtime";
 import { mailAgentTicking } from "../lib/mail-agent";
 import { remindersTicking } from "../lib/reminders";
+import { dailySummaryTicking } from "../lib/notify";
 import { journeysTicking } from "../lib/journey-boot";
 import { offsiteBackupTicking } from "../lib/offsite-backup-boot";
 import { offerTimerTicking } from "../lib/offer-timer";
@@ -83,6 +84,7 @@ export const diag = base.handler(async () => {
     journeys: journeysTicking(),
     offsiteBackup: offsiteBackupTicking(),
     offers: offerTimerTicking(),
+    dailySummary: dailySummaryTicking(),
   };
 
   return { diagVersion, env, databaseHost, database, steps, timers };

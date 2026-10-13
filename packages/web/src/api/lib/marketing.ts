@@ -9,6 +9,7 @@ import {
   wrapEmail,
 } from "./email";
 import { SMS_OPT_OUT, normaliseMobile, sendSms, smsParts } from "./sms";
+import { clientAutoSmsOn } from "./notify";
 
 /* ---------------------------------------------------------------------------
  * The gate every marketing message passes through.
@@ -309,6 +310,12 @@ export type MarketingResult =
  */
 export async function sendMarketing(args: MarketingSendArgs): Promise<MarketingResult> {
   const { contact, channel, test = false } = args;
+
+  /* ---- 0. Client texts switched off under Settings, Notifications (item 15). Tests still go. ---- */
+  /* Checked before consent: nothing is written for a text that was never going to go. */
+  if (!test && channel === "sms" && !(await clientAutoSmsOn())) {
+    return { ok: false, sendId: null, deferred: false, reason: "client texts are switched off in Settings" };
+  }
 
   /* ---- 1. Consent, unless this is a test to Terra's own address ---- */
   if (!test) {

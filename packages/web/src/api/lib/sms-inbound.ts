@@ -4,7 +4,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { contactByMobile, ensureForContact, logMessage, openUnassigned } from "./conversations";
 import { normaliseMobile } from "./sms";
-import { pushToOffice } from "./push";
+import { notifyOffice } from "./notify";
 
 /* ---------------------------------------------------------------------------
  * TEXTS COMING BACK IN.
@@ -154,7 +154,7 @@ export async function handleInboundSms(raw: Record<string, unknown>) {
     actorRole: "customer",
   });
 
-  void pushToOffice({
+  void notifyOffice("client_text", {
     title: stop ? "Text opt-out" : `Text from ${name || mobile}`,
     body: stop ? `${name || mobile} replied STOP.` : msg.body.slice(0, 140),
     data: jobId ? { kind: "job", jobId } : { kind: "conversation", conversationId },

@@ -1,0 +1,334 @@
+import { and, asc, eq, gte, inArray, isNull, lt, lte, ne, sql } from "drizzle-orm";
+import { db } from "../database";
+import * as schema from "../database/schema";
+import { sendEmail } from "./email";
+import { jobNumberSql, taskRefSql } from "./job-ref";
+import { localDate, localDayBounds, addLocalDays } from "./local-date";
+import {
+  ALERT_KINDS,
+  CLIENT_AUTO_SMS_KEY,
+  NOTIFY_DAILY_KEY,
+  NOTIFY_DAILY_SENT_KEY,
+  NOTIFY_EMAIL_TO_DEFAULT,
+  NOTIFY_EMAIL_TO_KEY,
+  NOTIFY_FROM,
+  NOTIFY_SUBJECT_TAG,
+  NOTIFY_URGENT_KEY,
+  parseUrgent,
+  type AlertKind,
+} from "./notify-kinds";
+import { pushToOffice } from "./push";
+import { isLiveServer } from "./runtime";
+
+/* ---------------------------------------------------------------------------
+ * Telling the office something happened. Fix list 11 Oct, item 15.
+ *
+ * One way in: notifyOffice(kind, ...). It always
+ *   1. writes an alert row, so it shows on the Dashboard even with no phone,
+ *   2. pushes to every office phone (free),
+ *   3. emails only when the kind is on the urgent list in Settings.
+ * Nothing here ever sends a text. Every email goes from one fixed address with
+ * a "[Terra Ops]" subject, so the mail agent can tell it is ours and skip it.
+ *
+ * On top of that, one summary email a day at 7am Gold Coast time: open tasks,
+ * today's jobs and anything overdue. Same published-server-only gate as the
+ * reminder timer, see lib/runtime.ts.
+ *
+ *   NOTIFY_DAILY=off   never send the summary
+ *   NOTIFY_DAILY=on    tick regardless of the entry script
+ * ------------------------------------------------------------------------- */
+
+export const OPS_URL = (process.env.MAIL_OAUTH_BASE ?? "https://ops.terraflooring.com.au").replace(/\/+$/, "");
+
+async function readSetting(key: string): Promise<string | null> {
+  const [row] = await db.select({ value: schema.settings.value }).from(schema.settings).where(eq(schema.settings.key, key));
+  return row?.value ?? null;
+}
+
+async function writeSetting(key: string, value: string) {
+  await db
+    .insert(schema.settings)
+    .values({ key, value })
+    .onConflictDoUpdate({ target: schema.settings.key, set: { value, updatedAt: new Date() } });
+}
+
+export type NotifySettings = {
+  emailTo: string;
+  dailyOn: boolean;
+  urgent: AlertKind[];
+  clientAutoSms: boolean;
+};
+
+export async function notifySettings(): Promise<NotifySettings> {
+  const rows = await db
+    .select()
+    .from(schema.settings)
+    .where(inArray(schema.settings.key, [NOTIFY_EMAIL_TO_KEY, NOTIFY_DAILY_KEY, NOTIFY_URGENT_KEY, CLIENT_AUTO_SMS_KEY]));
+  const v = new Map(rows.map((r) => [r.key, r.value]));
+  return {
+    emailTo: (v.get(NOTIFY_EMAIL_TO_KEY) ?? "").trim() || NOTIFY_EMAIL_TO_DEFAULT,
+    dailyOn: v.get(NOTIFY_DAILY_KEY) !== "0",
+    urgent: parseUrgent(v.get(NOTIFY_URGENT_KEY)),
+    clientAutoSms: v.get(CLIENT_AUTO_SMS_KEY) !== "0",
+  };
+}
+
+export async function saveNotifySettings(s: NotifySettings) {
+  await writeSetting(NOTIFY_EMAIL_TO_KEY, s.emailTo.trim());
+  await writeSetting(NOTIFY_DAILY_KEY, s.dailyOn ? "1" : "0");
+  await writeSetting(NOTIFY_URGENT_KEY, JSON.stringify(s.urgent.filter((k) => k in ALERT_KINDS)));
+  await writeSetting(CLIENT_AUTO_SMS_KEY, s.clientAutoSms ? "1" : "0");
+}
+
+/** Client texts that go out on their own (journeys). Office and crew texts are not affected. */
+export async function clientAutoSmsOn(): Promise<boolean> {
+  return (await readSetting(CLIENT_AUTO_SMS_KEY)) !== "0";
+}
+
+const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+
+const tagged = (subject: string) => `${NOTIFY_SUBJECT_TAG} ${subject}`.slice(0, 200);
+
+/** Every email to the office goes through here: fixed from, tagged subject. */
+async function emailOffice(to: string, subject: string, lines: string[], url: string | null) {
+  const text = [...lines, url ?? ""].filter(Boolean).join("\n\n");
+  const html =
+    lines.map((l) => `<p style="margin:0 0 12px;">${esc(l).replace(/\n/g, "<br>")}</p>`).join("") +
+    (url ? `<p><a href="${esc(url)}">${esc(url)}</a></p>` : "");
+  return sendEmail({ to, from: NOTIFY_FROM, replyTo: to, subject: tagged(subject), text, html });
+}
+
+export type NotifyMessage = {
+  title: string;
+  body: string;
+  jobId?: number | null;
+  /** Where the phone opens when the push is tapped. */
+  data?: Record<string, unknown>;
+  /** Page the email and the Dashboard link open, e.g. "/finance/suppliers-owed". The job page when left out. */
+  path?: string;
+  /** Email even when the kind is not on the urgent list. */
+  forceEmail?: boolean;
+};
+
+/**
+ * Tell the office. Never throws: a notification failing must not take down the
+ * thing that triggered it. Returns what happened, for tests and logs.
+ */
+export async function notifyOffice(kind: AlertKind, msg: NotifyMessage) {
+  const out = { alertId: null as number | null, pushed: 0, emailed: false };
+  try {
+    const jobId = msg.jobId ?? (typeof msg.data?.jobId === "number" ? (msg.data.jobId as number) : null);
+    const data = { ...(msg.data ?? (jobId ? { kind: "job", jobId } : {})), ...(msg.path ? { path: msg.path } : {}) };
+    const [row] = await db
+      .insert(schema.alerts)
+      .values({ kind, title: msg.title.slice(0, 300), body: msg.body.slice(0, 2000), jobId, data: JSON.stringify(data) })
+      .returning({ id: schema.alerts.id });
+    out.alertId = row?.id ?? null;
+
+    out.pushed = await pushToOffice({ title: msg.title, body: msg.body, data: { ...data, alertId: out.alertId } });
+
+    const s = await notifySettings();
+    if (msg.forceEmail || s.urgent.includes(kind)) {
+      const url = `${OPS_URL}${msg.path ?? (jobId ? `/jobs/${jobId}` : "/")}`;
+      const sent = await emailOffice(s.emailTo, msg.title, [msg.body], url);
+      out.emailed = sent.ok;
+      if (!sent.ok) console.error(`[notify] ${kind} email not sent: ${sent.reason}`);
+    }
+    if (out.alertId) {
+      await db
+        .update(schema.alerts)
+        .set({ pushed: out.pushed, emailedAt: out.emailed ? new Date() : null, updatedAt: new Date() })
+        .where(eq(schema.alerts.id, out.alertId));
+    }
+  } catch (e) {
+    console.error(`[notify] ${kind} failed:`, (e as Error).message ?? e);
+  }
+  return out;
+}
+
+/* ---------------------------------------------------------------------------
+ * The 7am summary
+ * ------------------------------------------------------------------------- */
+
+const SEND_FROM_HOUR = 7;
+/** A server that was down at 7 still sends, but not once the morning is over. */
+const SEND_UNTIL_HOUR = 12;
+
+const auDay = (iso: string) =>
+  new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" });
+const shortDay = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-AU", { day: "numeric", month: "short", timeZone: "UTC" });
+const money = (n: number) => `$${n.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** Everything the summary says, as data. Exported for tests. */
+export async function buildDailySummary(now = new Date()) {
+  const today = localDate(now);
+  const { start: dayStart } = localDayBounds(today);
+
+  const [tasks, todayJobs, lateCrew, lateInvoices, recentAlerts] = await Promise.all([
+    db
+      .select({ id: schema.officeTasks.id, title: schema.officeTasks.title, dueDate: schema.officeTasks.dueDate, assignedName: schema.officeTasks.assignedName, jobId: schema.officeTasks.jobId })
+      .from(schema.officeTasks)
+      .where(eq(schema.officeTasks.status, "open"))
+      .orderBy(asc(sql`coalesce(${schema.officeTasks.dueDate}, '9999')`), asc(schema.officeTasks.id))
+      .limit(60),
+    db
+      .select({
+        id: schema.jobTasks.id,
+        title: schema.jobTasks.title,
+        startTime: schema.jobTasks.startTime,
+        installerName: schema.installers.name,
+        jobNumber: jobNumberSql,
+        ref: taskRefSql,
+        suburb: schema.sites.suburb,
+      })
+      .from(schema.jobTasks)
+      .leftJoin(schema.installers, eq(schema.installers.id, schema.jobTasks.assignedInstallerId))
+      .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
+      .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
+      .where(and(eq(schema.jobTasks.scheduledDate, today), ne(schema.jobTasks.status, "cancelled")))
+      .orderBy(asc(schema.jobTasks.startTime)),
+    db
+      .select({ id: schema.jobTasks.id, title: schema.jobTasks.title, scheduledDate: schema.jobTasks.scheduledDate, ref: taskRefSql, installerName: schema.installers.name })
+      .from(schema.jobTasks)
+      .leftJoin(schema.installers, eq(schema.installers.id, schema.jobTasks.assignedInstallerId))
+      .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
+      .where(
+        and(
+          lte(schema.jobTasks.scheduledDate, addLocalDays(today, -1)),
+          gte(schema.jobTasks.scheduledDate, addLocalDays(today, -60)),
+          inArray(schema.jobTasks.status, ["unassigned", "offered", "assigned", "in_progress"]),
+        ),
+      )
+      .orderBy(asc(schema.jobTasks.scheduledDate))
+      .limit(20),
+    db
+      .select({ id: schema.invoices.id, number: schema.invoices.number, total: schema.invoices.total, amountPaid: schema.invoices.amountPaid, dueDate: schema.invoices.dueDate })
+      .from(schema.invoices)
+      .where(and(inArray(schema.invoices.status, ["sent", "part_paid", "overdue"]), lt(schema.invoices.dueDate, dayStart)))
+      .orderBy(asc(schema.invoices.dueDate))
+      .limit(20),
+    db
+      .select({ id: schema.alerts.id, title: schema.alerts.title })
+      .from(schema.alerts)
+      .where(and(isNull(schema.alerts.readAt), gte(schema.alerts.createdAt, new Date(now.getTime() - 86_400_000))))
+      .orderBy(asc(schema.alerts.createdAt))
+      .limit(30),
+  ]);
+
+  const overdueTasks = tasks.filter((t) => t.dueDate && t.dueDate < today);
+  const otherTasks = tasks.filter((t) => !(t.dueDate && t.dueDate < today));
+  return { today, overdueTasks, otherTasks, todayJobs, lateCrew, lateInvoices, recentAlerts };
+}
+
+export function dailySummaryText(s: Awaited<ReturnType<typeof buildDailySummary>>) {
+  const out: string[] = [];
+  const overdueCount = s.overdueTasks.length + s.lateCrew.length + s.lateInvoices.length;
+  out.push(`Good morning. ${auDay(s.today)}.`);
+  out.push(
+    `${s.todayJobs.length} job${s.todayJobs.length === 1 ? "" : "s"} on today. ` +
+      `${s.overdueTasks.length + s.otherTasks.length} open task${s.overdueTasks.length + s.otherTasks.length === 1 ? "" : "s"}. ` +
+      `${overdueCount} overdue.`,
+  );
+
+  out.push(
+    "TODAY'S JOBS\n" +
+      (s.todayJobs.length
+        ? s.todayJobs
+            .map((j) => `${j.startTime ? `${j.startTime} ` : ""}${j.ref ?? j.jobNumber}: ${j.title}${j.suburb ? `, ${j.suburb}` : ""}. ${j.installerName ?? "Nobody on it yet"}`)
+            .join("\n")
+        : "Nothing booked."),
+  );
+
+  const overdue: string[] = [
+    ...s.overdueTasks.map((t) => `Task: ${t.title || "Follow up"} (due ${shortDay(t.dueDate!)}${t.assignedName ? `, ${t.assignedName}` : ""})`),
+    ...s.lateCrew.map((t) => `Crew task not finished: ${t.ref ?? ""} ${t.title} (${t.scheduledDate ? shortDay(t.scheduledDate) : "no date"}${t.installerName ? `, ${t.installerName}` : ""})`),
+    ...s.lateInvoices.map(
+      (i) => `Invoice ${i.number}: ${money(Math.max(0, i.total - i.amountPaid))} owing, due ${i.dueDate ? i.dueDate.toLocaleDateString("en-AU", { day: "numeric", month: "short", timeZone: "Australia/Brisbane" }) : "?"}`,
+    ),
+  ];
+  out.push("OVERDUE\n" + (overdue.length ? overdue.join("\n") : "Nothing overdue."));
+
+  out.push(
+    "OPEN TASKS\n" +
+      (s.otherTasks.length
+        ? s.otherTasks.map((t) => `${t.title || "Follow up"}${t.dueDate ? ` (due ${shortDay(t.dueDate)})` : ""}${t.assignedName ? `, ${t.assignedName}` : ""}`).join("\n")
+        : "None."),
+  );
+
+  if (s.recentAlerts.length) {
+    out.push("NOT CLEARED FROM THE LAST DAY\n" + s.recentAlerts.map((a) => a.title).join("\n"));
+  }
+  return out;
+}
+
+/** Send the summary now. Exported so it can be sent by hand from Settings. */
+export async function sendDailySummary(now = new Date()) {
+  const s = await notifySettings();
+  const summary = await buildDailySummary(now);
+  const lines = dailySummaryText(summary);
+  const sent = await emailOffice(s.emailTo, `Daily summary, ${shortDay(summary.today)}`, lines, `${OPS_URL}/`);
+  return { ...sent, to: s.emailTo };
+}
+
+let running = false;
+
+/** One pass of the timer. Sends at most once per Gold Coast day. */
+export async function tickDailySummary(now = new Date()) {
+  if (running) return false;
+  running = true;
+  try {
+    const hour = Number(new Date(now.getTime() + 10 * 3600_000).toISOString().slice(11, 13));
+    if (hour < SEND_FROM_HOUR || hour >= SEND_UNTIL_HOUR) return false;
+    const s = await notifySettings();
+    if (!s.dailyOn) return false;
+    const today = localDate(now);
+    // Claim the day first, so two servers or a slow send never mail twice.
+    const claimed = await db
+      .insert(schema.settings)
+      .values({ key: NOTIFY_DAILY_SENT_KEY, value: today })
+      .onConflictDoUpdate({
+        target: schema.settings.key,
+        set: { value: today, updatedAt: new Date() },
+        setWhere: ne(schema.settings.value, today),
+      })
+      .returning({ key: schema.settings.key });
+    if (!claimed.length) return false;
+    const out = await sendDailySummary(now);
+    if (!out.ok) {
+      console.error(`[notify] daily summary not sent: ${out.reason}`);
+      // Give the day back so the next tick tries again, still only until noon.
+      await db
+        .update(schema.settings)
+        .set({ value: "", updatedAt: new Date() })
+        .where(and(eq(schema.settings.key, NOTIFY_DAILY_SENT_KEY), eq(schema.settings.value, today)));
+    }
+    return out.ok;
+  } catch (e) {
+    console.error("[notify] daily summary failed:", (e as Error).message ?? e);
+    return false;
+  } finally {
+    running = false;
+  }
+}
+
+let booted = false;
+let ticking = false;
+export const dailySummaryTicking = () => ticking;
+
+export function bootDailySummary() {
+  if (booted) return;
+  booted = true;
+  const mode = process.env.NOTIFY_DAILY;
+  if (mode === "off") {
+    console.log("[notify] daily summary disabled by NOTIFY_DAILY=off");
+    return;
+  }
+  if (mode !== "on" && !isLiveServer()) {
+    console.log("[notify] daily summary idle, not the published server");
+    return;
+  }
+  ticking = true;
+  console.log("[notify] daily summary checks every 5 minutes, sends at 7am");
+  setInterval(() => void tickDailySummary(), 5 * 60_000);
+  setTimeout(() => void tickDailySummary(), 30_000);
+}

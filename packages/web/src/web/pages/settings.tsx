@@ -10,6 +10,7 @@ import { Modal } from "../components/ui/modal";
 import { downloadText, useDatasets, useExportCsv, useExportSnapshot } from "../queries/backups";
 import { LabourRatesTab, RATE_UNITS, UNIT_LABEL } from "../components/labour";
 import { EmailAgentCard } from "../components/email-agent";
+import { NotifySettingsCard } from "../components/notify-settings";
 import { PriceListTools } from "../components/price-import";
 import { QuoteEmailCard } from "../components/quote-email-settings";
 import { QUOTE_EMAIL_BODY_KEY, QUOTE_EMAIL_SUBJECT_KEY } from "../../api/lib/quote-email-template";
@@ -109,7 +110,7 @@ const UNITS = ["m2", "lm", "each", "roll", "box", "hour"];
 /** Item 9. How a product is sold, which decides the wastage and labour sums on a quote. */
 const SOLD_AS_LABEL: Record<string, string> = { box: "Box", broadloom: "Broadloom", "": "Neither" };
 
-type Tab = "skills" | "statuses" | "products" | "labour" | "business" | "email" | "backups";
+type Tab = "skills" | "statuses" | "products" | "labour" | "business" | "notifications" | "email" | "backups";
 
 const TABS: Array<{ id: Tab; label: string; blurb: string }> = [
   { id: "skills", label: "Skills", blurb: "What a task can be. Installers get ticked against these." },
@@ -124,6 +125,11 @@ const TABS: Array<{ id: Tab; label: string; blurb: string }> = [
     id: "business",
     label: "Business rules",
     blurb: "Bank balance the forecast starts from, quote discounts, supervisors, offer rules, site circle, your details.",
+  },
+  {
+    id: "notifications",
+    label: "Notifications",
+    blurb: "Alerts on the Dashboard and your phone, the 7am summary email, which alerts email you straight away, and texts to clients.",
   },
   {
     id: "email",
@@ -180,6 +186,7 @@ export default function SettingsPage() {
       {tab === "products" ? <ProductsTab /> : null}
       {tab === "labour" ? <LabourRatesTab /> : null}
       {boot.data && tab === "business" ? <BusinessTab settings={boot.data.settings} /> : null}
+      {tab === "notifications" ? <NotifySettingsCard /> : null}
       {tab === "email" ? <EmailAgentCard /> : null}
       {tab === "backups" ? <BackupsTab /> : null}
     </Page>
