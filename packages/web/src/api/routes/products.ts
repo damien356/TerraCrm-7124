@@ -22,6 +22,7 @@ import {
   type SpecialRow,
 } from "../lib/pricing";
 import { editedCost, specialCost } from "../lib/bulk-price";
+import { FIBRES, PILES } from "../lib/care-codes";
 import { productSwatchKey, signPut } from "../lib/s3";
 import { swatchUrlOf } from "../lib/selection-colours";
 
@@ -806,6 +807,35 @@ export const products = {
         .returning({ id: schema.products.id, swatchKey: schema.products.swatchKey });
       if (!row) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
       return { id: row.id, swatchUrl: await swatchUrlOf(row) };
+    }),
+
+  /**
+   * Carpet fibre and pile for the care emails (section 18.37). Blank is "not known".
+   * wholeRange sets every variant of the same supplier and range, because fibre
+   * is a property of the range, not the colour.
+   */
+  setFibre: adminOnly
+    .input(
+      z.object({
+        id: z.number(),
+        fibre: z.union([z.enum(FIBRES), z.literal("")]),
+        pile: z.union([z.enum(PILES), z.literal("")]),
+        wholeRange: z.boolean().default(true),
+      }),
+    )
+    .handler(async ({ input }) => {
+      const [p] = await db.select().from(schema.products).where(eq(schema.products.id, input.id));
+      if (!p) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
+      const where =
+        input.wholeRange && p.range.trim()
+          ? and(eq(schema.products.supplier, p.supplier), eq(schema.products.range, p.range))
+          : eq(schema.products.id, p.id);
+      const rows = await db
+        .update(schema.products)
+        .set({ fibre: input.fibre, pile: input.pile, updatedAt: new Date() })
+        .where(where)
+        .returning({ id: schema.products.id });
+      return { updated: rows.length };
     }),
 
   rollQuote: adminOnly

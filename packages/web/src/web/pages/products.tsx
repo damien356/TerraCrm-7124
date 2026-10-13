@@ -18,8 +18,10 @@ import {
   useRollQuote,
   useSpecialsBoard,
   useSetSoldAs,
+  useSetProductFibre,
 } from "../queries/products";
 import { PRODUCT_CATEGORIES, PRODUCT_CATEGORY_LABELS } from "../../api/lib/product-categories";
+import { FIBRES, FIBRE_LABELS, PILES, PILE_LABELS } from "../../api/lib/care-codes";
 import { boardSizeText } from "../../api/lib/board-size";
 
 const money = (n: number | null | undefined) =>
@@ -667,6 +669,63 @@ function RollQuote({
   );
 }
 
+/** Fibre and pile for the care emails (section 18.37). Usually the same across a range. */
+function FibreEditor({ id, fibre, pile, tier }: { id: number; fibre: string; pile: string; tier: string }) {
+  const save = useSetProductFibre();
+  const [f, setF] = React.useState(fibre);
+  const [pl, setPl] = React.useState(pile);
+  const [whole, setWhole] = React.useState(true);
+  const [msg, setMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
+  React.useEffect(() => {
+    setF(fibre);
+    setPl(pile);
+  }, [fibre, pile]);
+
+  async function submit() {
+    setMsg(null);
+    try {
+      const r = await save.mutateAsync({ id, fibre: f as (typeof FIBRES)[number] | "", pile: pl as (typeof PILES)[number] | "", wholeRange: whole });
+      setMsg({ ok: true, text: r.updated === 1 ? "Saved." : `Saved on ${r.updated} colours.` });
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  return (
+    <div>
+      <p className="label-xs mb-2">Fibre and pile, for the care emails</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <Select value={f} onChange={(e) => setF(e.target.value)}>
+          <option value="">Fibre not known{tier ? ` (tier says ${tier})` : ""}</option>
+          {FIBRES.map((x) => (
+            <option key={x} value={x}>
+              {FIBRE_LABELS[x]}
+            </option>
+          ))}
+        </Select>
+        <Select value={pl} onChange={(e) => setPl(e.target.value)}>
+          <option value="">Pile not known</option>
+          {PILES.map((x) => (
+            <option key={x} value={x}>
+              {PILE_LABELS[x]}
+            </option>
+          ))}
+        </Select>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        <label htmlFor={`fibre_whole_${id}`} className="flex items-center gap-2 text-xs">
+          <Checkbox id={`fibre_whole_${id}`} checked={whole} onChange={(e) => setWhole(e.target.checked)} />
+          Every colour in this range
+        </label>
+        <Button size="sm" variant="outline" onClick={submit} disabled={save.isPending || (f === fibre && pl === pile && !whole)}>
+          Save
+        </Button>
+        {msg ? <span className={msg.ok ? "text-xs text-[var(--success)]" : "text-xs text-destructive"}>{msg.text}</span> : null}
+      </div>
+    </div>
+  );
+}
+
 function VariantModal({ id, onClose }: { id: number | null; onClose: () => void }) {
   const product = useProduct(id);
   const endSpecial = useEndSpecial();
@@ -777,6 +836,8 @@ function VariantModal({ id, onClose }: { id: number | null; onClose: () => void 
               Minimum order {p.minOrderQty} {unit(p.unit)}.
             </p>
           ) : null}
+
+          {p.category.includes("carpet") ? <FibreEditor id={p.id} fibre={p.fibre} pile={p.pile} tier={p.tier} /> : null}
 
           <div>
             <p className="label-xs mb-2">Colour swatch</p>

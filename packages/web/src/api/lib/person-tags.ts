@@ -9,6 +9,8 @@
 
 export const PERSON_TAGS = [
   "owner",
+  /** Owns it and rents it out (investment property). Gets the landlord care emails. */
+  "landlord",
   "tenant",
   "supervisor",
   "property_manager",
@@ -21,6 +23,7 @@ export type PersonTag = (typeof PERSON_TAGS)[number];
 
 export const PERSON_TAG_LABELS: Record<PersonTag, string> = {
   owner: "Owner",
+  landlord: "Landlord (investment property)",
   tenant: "Tenant",
   supervisor: "Supervisor",
   property_manager: "Property manager / Real estate agent",
@@ -32,6 +35,7 @@ export const PERSON_TAG_LABELS: Record<PersonTag, string> = {
 /** Short labels for chips on narrow screens. */
 export const PERSON_TAG_SHORT: Record<PersonTag, string> = {
   owner: "Owner",
+  landlord: "Landlord",
   tenant: "Tenant",
   supervisor: "Supervisor",
   property_manager: "Property manager",
@@ -52,6 +56,7 @@ export function legacyRoleToTag(role: string | null | undefined, companyJob: boo
     case "tenant":
     case "supervisor":
     case "owner":
+    case "landlord":
     case "accounts":
     case "builder_contact":
     case "other":

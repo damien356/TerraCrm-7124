@@ -1,4 +1,5 @@
 import * as React from "react";
+import { CareCard } from "../components/care-card";
 import { Link, useParams, useSearch } from "wouter";
 import { AlertTriangle, ArrowLeft, LifeBuoy, MessagesSquare, Plus, Sofa, Trash2, Users } from "lucide-react";
 import { Page } from "../components/layout";
@@ -701,6 +702,7 @@ export default function JobDetailPage() {
         <div className="grid gap-4">
           {isCallback ? null : <CallbacksListCard jobId={j.id} />}
           {isCallback && isAdmin ? <ReworkCostCard jobId={j.id} /> : null}
+          {isCallback ? null : <CareCard jobId={j.id} isAdmin={isAdmin} />}
 
           <Card>
             <CardHeader title="Quotes" action={<CreateQuoteButton jobId={j.id} size="sm" />} />

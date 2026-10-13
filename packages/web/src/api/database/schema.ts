@@ -573,6 +573,22 @@ export const jobs = sqliteTable(
     externalRef: text("external_ref"),
     /** ServiceM8's own job category, e.g. "broadloom carpet install". */
     category: text("category"),
+    /**
+     * AFTER-JOB CARE SERIES (lib/care-engine.ts).
+     * care_floors: JSON list of floor keys (lib/care-codes.ts) the office set. Blank = worked out
+     * from the quote products and the job text.
+     */
+    careFloors: text("care_floors").notNull().default(""),
+    /** Carpet fibre on this job, same values as products.fibre plus not_wool and unknown. */
+    fibre: text("fibre").notNull().default(""),
+    /** Carpet pile on this job: cut · loop · cut_loop. */
+    pile: text("pile").notNull().default(""),
+    /** Null follows the Landlord tag on the job contact. True or false set on the job wins. */
+    careLandlord: integer("care_landlord", { mode: "boolean" }),
+    /** Blank until the care engine has looked at the completed job: added · waiting_wool · skipped. */
+    careState: text("care_state").notNull().default(""),
+    /** Why it was skipped, in plain words. */
+    careNote: text("care_note").notNull().default(""),
     /** SWMS override for this job. Null follows the client and company, true or false wins. */
     requiresSwms: integer("requires_swms", { mode: "boolean" }),
     /**
@@ -1129,6 +1145,14 @@ export const products = sqliteTable(
     category: text("category").notNull().default("carpet"),
     /** The supplier's own grade band where it has one, e.g. Belgotex PREMIUM / WOOL. */
     tier: text("tier").notNull().default(""),
+    /**
+     * Carpet only, for the after-job care emails (lib/care-codes.ts):
+     * wool · wool_blend · nylon · polypropylene · polyester, blank = not known.
+     * Blank falls back to the tier (EC Carpets keep the fibre there) and the words in the range.
+     */
+    fibre: text("fibre").notNull().default(""),
+    /** Carpet only: cut · loop · cut_loop, blank = not known. */
+    pile: text("pile").notNull().default(""),
     /** m2 · lm · each · roll — lm for broadloom and sheet vinyl, which are sold by the metre. */
     unit: text("unit").notNull().default("m2"),
     /**
@@ -2811,6 +2835,76 @@ export const unsubscribes = sqliteTable(
     index("unsub_token_idx").on(t.token),
   ],
 );
+
+/* ---------------------------------------------------------------------------
+ * After-job care series (lib/care-engine.ts). Section 18.37.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * One row per homeowner in the care series. A second job adds its floors with
+ * their own start date and never restarts the emails already sent.
+ */
+export const careMembers = sqliteTable(
+  "care_members",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    contactId: integer("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
+    /** active · stopped · unsubscribed */
+    status: text("status").notNull().default("active"),
+    stopReason: text("stop_reason").notNull().default(""),
+    /** JSON [{ floor, jobId, startedAt (ms) }], one entry per floor type. */
+    floors: text("floors").notNull().default("[]"),
+    /** Best known fibre across their carpet jobs. wool and wool_blend get the wool advice. */
+    fibre: text("fibre").notNull().default(""),
+    pile: text("pile").notNull().default(""),
+    landlord: integer("landlord", { mode: "boolean" }).notNull().default(false),
+    /** When their first job in the series was completed. */
+    startedAt: integer("started_at", { mode: "timestamp" }).notNull(),
+    lastJobId: integer("last_job_id").references(() => jobs.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [unique("care_members_contact_uq").on(t.contactId)],
+);
+
+/** Every care email sent, resent or skipped, and when it was opened. */
+export const careSends = sqliteTable(
+  "care_sends",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    memberId: integer("member_id").notNull().references(() => careMembers.id, { onDelete: "cascade" }),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    /** C1, A1, H2, R4 and so on (lib/care-codes.ts). */
+    code: text("code").notNull(),
+    /** series · fixed · holiday · bank */
+    kind: text("kind").notNull().default("series"),
+    dueAt: integer("due_at", { mode: "timestamp" }),
+    /** sent · failed · skipped */
+    status: text("status").notNull().default("sent"),
+    sendId: integer("send_id").references(() => sends.id, { onDelete: "set null" }),
+    sentAt: integer("sent_at", { mode: "timestamp" }),
+    openedAt: integer("opened_at", { mode: "timestamp" }),
+    /** The one resend when the first was not opened in 7 days. */
+    resendSendId: integer("resend_send_id").references(() => sends.id, { onDelete: "set null" }),
+    resentAt: integer("resent_at", { mode: "timestamp" }),
+    note: text("note").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [
+    index("care_sends_member_idx").on(t.memberId),
+    index("care_sends_send_idx").on(t.sendId),
+    index("care_sends_resend_idx").on(t.resendSendId),
+  ],
+);
+
+/** Damien's edits to a care email. No row means the email as written in lib/care-templates.ts. */
+export const careTemplates = sqliteTable("care_templates", {
+  code: text("code").primaryKey(),
+  subject: text("subject").notNull().default(""),
+  body: text("body").notNull().default(""),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+});
 
 /* ---------------------------------------------------------------------------
  * Native app devices

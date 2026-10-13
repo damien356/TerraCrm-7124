@@ -19,6 +19,7 @@ export const ALERT_KINDS = {
   variation_declined: { label: "Client declined a variation online", group: "Clients", urgent: false },
   selection_done: { label: "Client filled in flooring or colours", group: "Clients", urgent: false },
   client_text: { label: "Text from a client", group: "Clients", urgent: false },
+  care_wool: { label: "Is this carpet wool? (care emails)", group: "Clients", urgent: false },
   offer_accepted: { label: "Crew took a job or locked a hold", group: "Crew", urgent: false },
   offer_declined: { label: "Crew declined an offer", group: "Crew", urgent: false },
   offer_expired: { label: "Offer got no taker", group: "Crew", urgent: false },

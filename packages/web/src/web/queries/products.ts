@@ -113,6 +113,15 @@ export function useBulkEditPreview(input: BulkEditInput | null) {
     }),
   );
 }
+/** Carpet fibre and pile for the care emails, on the variant or the whole range. */
+export function useSetProductFibre() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.products.setFibre.mutationOptions({
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: orpc.products.key() }),
+    }),
+  );
+}
 export function useBulkEditApply() {
   const queryClient = useQueryClient();
   return useMutation(

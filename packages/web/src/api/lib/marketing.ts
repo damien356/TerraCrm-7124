@@ -11,6 +11,7 @@ import {
 import { SMS_OPT_OUT, normaliseMobile, sendSms, smsParts } from "./sms";
 import { clientAutoSmsOn } from "./notify";
 import { senderFor, type SenderKey } from "./senders";
+import { readState, signState } from "./secret-box";
 
 /* ---------------------------------------------------------------------------
  * The gate every marketing message passes through.
@@ -50,9 +51,9 @@ function brisbaneDay(at = new Date()) {
   return new Date(at.getTime() + 10 * 3600_000).getUTCDay();
 }
 
-export function withinSendingHours(at = new Date()) {
+export function withinSendingHours(at = new Date(), startHour: number = QUIET_HOURS.startSending) {
   const h = brisbaneHour(at);
-  return h >= QUIET_HOURS.startSending && h < QUIET_HOURS.stopSending;
+  return h >= startHour && h < QUIET_HOURS.stopSending;
 }
 
 /** No texts on a Sunday. A marketing SMS on a weekend morning is a complaint. */
@@ -157,23 +158,36 @@ export async function checkConsent(
  *
  * One stable token per contact. Stable so the link in an email sent last year
  * still works, which the Act effectively requires.
+ *
+ * Signed (lib/secret-box.ts), not random. The old random token was never
+ * stored anywhere, so a click had nothing to look it up against, and there
+ * was no /api/unsubscribe route either. A signed token carries the contact id
+ * and proves Terra minted it, so the link works with nothing stored at send
+ * time. The route is in api/index.ts and the handling in lib/unsubscribe.ts.
  * ------------------------------------------------------------------------- */
 
 export async function unsubscribeToken(contactId: number): Promise<string> {
-  const [existing] = await db
-    .select({ token: schema.unsubscribes.token })
-    .from(schema.unsubscribes)
-    .where(and(eq(schema.unsubscribes.contactId, contactId), sql`${schema.unsubscribes.token} != ''`))
-    .limit(1);
-  if (existing?.token) return existing.token;
+  return signState({ u: contactId });
+}
 
-  /* Not an opt-out row yet. The token is minted here and only becomes an
-   * opt-out when the link is actually clicked. */
-  return `u${contactId}-${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+/** The contact id behind an unsubscribe token, or null when it is not one of ours. */
+export function readUnsubscribeToken(token: string): number | null {
+  const v = readState<{ u?: unknown }>(token);
+  return v && typeof v.u === "number" && Number.isInteger(v.u) && v.u > 0 ? v.u : null;
 }
 
 export function unsubscribeUrl(token: string) {
   return `${siteUrl()}/api/unsubscribe/${token}`;
+}
+
+/** The invisible open pixel for one send. Only the care emails carry one. */
+export function openPixelUrl(sendId: number) {
+  return `${siteUrl()}/api/o/${signState({ s: sendId })}.gif`;
+}
+
+export function readOpenToken(token: string): number | null {
+  const v = readState<{ s?: unknown }>(token.replace(/\.gif$/, ""));
+  return v && typeof v.s === "number" && Number.isInteger(v.s) && v.s > 0 ? v.s : null;
 }
 
 /* ---------------------------------------------------------------------------
@@ -297,6 +311,18 @@ export interface MarketingSendArgs {
   needsReply?: boolean;
   /** Email only. team@ unless the caller names "care" (after-job care emails). */
   sender?: SenderKey;
+  /**
+   * Email only. Builds the finished email instead of the team@ wrapper. The
+   * care emails use it (lib/care-render.ts). Gets the send id so it can add the
+   * open pixel.
+   */
+  render?: (o: { bodyText: string; unsubUrl: string; sendId: number }) => { html: string; text: string };
+  /**
+   * Email only. Earliest Brisbane hour it may go, when that is not the usual 8am.
+   * The care holiday emails go at 7am (lib/care-codes.ts HOLIDAY_SEND_HOUR).
+   * Never earlier than 7.
+   */
+  startHour?: number;
 }
 
 export type MarketingResult =
@@ -330,7 +356,8 @@ export async function sendMarketing(args: MarketingSendArgs): Promise<MarketingR
 
   /* ---- 2. Quiet hours ---- */
   if (!test) {
-    if (channel === "email" && !withinSendingHours()) {
+    const startHour = Math.max(7, Math.min(QUIET_HOURS.startSending, args.startHour ?? QUIET_HOURS.startSending));
+    if (channel === "email" && !withinSendingHours(new Date(), startHour)) {
       return { ok: false, sendId: null, deferred: true, reason: "outside sending hours" };
     }
     if (channel === "sms" && !smsAllowedNow()) {
@@ -392,8 +419,10 @@ export async function sendMarketing(args: MarketingSendArgs): Promise<MarketingR
 
   /* ---- 7. On the wire ---- */
   if (channel === "email") {
-    const html = renderMarketingEmail(bodyText, unsubUrl, args.useWrapper !== false);
-    const text = bodyText + footerText(unsubUrl);
+    const built = args.render
+      ? args.render({ bodyText, unsubUrl, sendId })
+      : { html: renderMarketingEmail(bodyText, unsubUrl, args.useWrapper !== false), text: bodyText + footerText(unsubUrl) };
+    const { html, text } = built;
 
     const who = senderFor(args.sender);
     const out = await sendEmail({ to: toAddress, subject, html, text, unsubscribeUrl: unsubUrl, from: who.from, replyTo: who.replyTo });

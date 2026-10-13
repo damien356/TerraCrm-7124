@@ -66,6 +66,10 @@ import { publicPages } from "./routes/publicPages";
 import { jobCancel } from "./routes/jobCancel";
 import { variations } from "./routes/variations";
 import { underlayUpgrades } from "./routes/underlayUpgrades";
+import { care } from "./routes/care";
+import { bootCareEngine } from "./lib/care-boot";
+import { PIXEL_GIF, recordOpen, unsubscribeContact, unsubscribePage } from "./lib/unsubscribe";
+import { readUnsubscribeToken } from "./lib/marketing";
 import { bootMailAgent } from "./lib/mail-agent";
 import { finishConnect } from "./lib/gmail";
 import { bootReminders } from "./lib/reminders";
@@ -198,6 +202,8 @@ export const router = {
   variations,
   /** Settings: which underlay upgrades to which, for the offer on the material selection form (item 9). */
   underlayUpgrades,
+  /** After the job care series: who is in it, the emails, opens and unsubscribes, the wool question. */
+  care,
   /** No-login pages for clients: /q/<token> read and sign a quote, /m/<token> choose flooring. Never returns cost. */
   publicPages,
   jobCancel,
@@ -267,6 +273,30 @@ app.get("/api/mail/oauth/callback", async (c) => {
   }
 });
 
+// The unsubscribe link in every marketing email. The GET only shows a button, because mail
+// scanners open every link. The POST unsubscribes, and is also Gmail's one-click (RFC 8058).
+app.get("/api/unsubscribe/:token", (c) => {
+  const ok = readUnsubscribeToken(c.req.param("token")) !== null;
+  return c.html(ok ? unsubscribePage("ask") : unsubscribePage("bad", "That link is not one of ours, or it was cut short."), ok ? 200 : 400);
+});
+app.post("/api/unsubscribe/:token", async (c) => {
+  try {
+    const oneClick = (c.req.header("content-type") ?? "").includes("form") && (await c.req.text()).includes("List-Unsubscribe=One-Click");
+    const out = await unsubscribeContact(c.req.param("token"), oneClick ? "one_click" : "link");
+    if (!out.ok) return c.html(unsubscribePage("bad", out.reason), 400);
+    return c.html(unsubscribePage("done"), 200);
+  } catch (e) {
+    console.error("[unsubscribe] failed", e);
+    return c.html(unsubscribePage("bad", "We could not save that just now. Please try again in a minute."), 500);
+  }
+});
+
+// The care emails' open pixel. Always answers with the GIF, whatever happens.
+app.get("/api/o/:file", async (c) => {
+  await recordOpen(c.req.param("file"));
+  return c.body(PIXEL_GIF, 200, { "content-type": "image/gif", "cache-control": "no-store, no-cache, must-revalidate, max-age=0" });
+});
+
 // Marketing journeys tick here. Gated to the published server only — see lib/journey-boot.
 bootJourneyEngine();
 // Timed reminders push to the phone. Same published-server-only gate, see lib/reminders.
@@ -279,5 +309,7 @@ bootOffsiteBackup();
 bootOfferTimer();
 // The 7am summary email to the office (item 15). Same gate.
 bootDailySummary();
+// The after job care series, every 10 minutes. Same gate, and off until switched on in Marketing, Care.
+bootCareEngine();
 
 export default app;

@@ -13,6 +13,7 @@ import {
   Handshake,
   CopyCheck,
   HardHat,
+  HeartHandshake,
   MessagesSquare,
   KeyRound,
   LayoutDashboard,
@@ -121,6 +122,7 @@ const NAV: NavEntry[] = [
     children: [
       { to: "/marketing/templates", label: "Email templates", icon: Mail },
       { to: "/marketing/segments", label: "Segments", icon: Users },
+      { to: "/marketing/care", label: "Care emails", icon: HeartHandshake },
     ],
   },
   { to: "/terra-ai", label: "Terra AI", icon: Sparkles },
