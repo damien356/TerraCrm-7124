@@ -103,6 +103,8 @@ type Item = {
   size?: LineSize | null;
   /** Fix list item 14. Supplier freight built into the sell, cost viewers only. */
   freightSell?: number | null;
+  /** 188001 list item 5. Priced by a markup under the standard one. Cost viewers only. */
+  belowStandard?: { markup: number; standard: number } | null;
 };
 
 type LineSize = {
@@ -385,6 +387,11 @@ function LineRow({
         {item.freightSell ? (
           <p className="mt-1 text-[11px] text-muted-foreground" title="Supplier freight and charges, built into this price. The client does not see it.">
             Includes {money(item.freightSell)} supplier freight
+          </p>
+        ) : null}
+        {item.belowStandard ? (
+          <p className="mt-1 text-[11px] text-amber-700" title="Priced by markup, under the markup the price list sell works out at on this cost.">
+            Markup {item.belowStandard.markup}%, standard {item.belowStandard.standard}%
           </p>
         ) : null}
       </td>
@@ -727,13 +734,14 @@ export default function QuoteBuilderPage() {
           ) : null}
           {q.discountNeedsApproval ? (
             <span className="text-xs text-amber-700">
-              Discount {q.discountPercent}% is over your {q.discountLimit}% limit. An Admin needs to approve it.
+              {q.discountKind === "markup" ? `Priced ${q.discountPercent}% under the price list (markup below standard)` : `Discount ${q.discountPercent}%`} is over the{" "}
+              {q.discountLimit}% limit. {actor?.role === "admin" ? "Approve it before sending." : "An Admin needs to approve it."}
             </span>
           ) : null}
-          {q.discountPercent > 0 && actor?.role === "admin" && q.discountPercent > q.discountApprovedPercent && q.discountPercent > q.discountLimit ? (
+          {q.discountNeedsApproval && actor?.role === "admin" ? (
             <Button variant="outline" onClick={() => run(() => approveDiscount.mutateAsync({ id: q.id }))} disabled={approveDiscount.isPending}>
               <Check className="size-4" />
-              Approve {q.discountPercent}% discount
+              {q.discountKind === "markup" ? `Approve ${q.discountPercent}% under list` : `Approve ${q.discountPercent}% discount`}
             </Button>
           ) : null}
           {q.status === "draft" ? (
@@ -791,7 +799,8 @@ export default function QuoteBuilderPage() {
                     );
                   })
                 }
-                disabled={accept.isPending}
+                disabled={accept.isPending || q.discountNeedsApproval}
+                title={q.discountNeedsApproval ? "Approve the discount first" : undefined}
               >
                 <Check className="size-4" />
                 Accepted

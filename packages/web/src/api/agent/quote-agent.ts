@@ -9,7 +9,7 @@ import type { Actor } from "../middleware/auth";
 import { checkQuote, type CheckLine } from "../lib/quote-check";
 import { liveSellFor } from "../lib/live-sell";
 import { sellExGstWithMarkup, markupOf } from "../lib/pricing";
-import { discountLimit, discountPercentOf } from "../routes/quotes";
+import { discountLimit, discountPercentOf, markupBelowStandard } from "../routes/quotes";
 import { bundlesFor } from "../routes/quoteBundles";
 import { quoteRef } from "../lib/refs";
 import { categoriesForHint, categoryMatchesHint } from "../lib/product-categories";
@@ -202,6 +202,7 @@ export function runCheck(state: QuoteState, actor: Pick<Actor, "role" | "canSeeC
     liveSell: i.liveSell,
     flagged: i.flagged,
     flagReason: i.flagReason,
+    belowStandard: markupBelowStandard(i),
   }));
   return checkQuote({
     hasCustomer: !!(state.quote.contactId || state.quote.companyId),

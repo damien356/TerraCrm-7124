@@ -81,6 +81,36 @@ export function discountPercentOf(items: { qty: number; unitPrice: number; listU
   return list > 0 ? Math.round((off / list) * 10000) / 100 : 0;
 }
 
+/**
+ * 188001 list item 5: a line priced by markup that sits under the price list
+ * sell is "markup below standard", not a hand discount. Standard is the
+ * markup the price list sell works out at on this cost, to the whole percent.
+ * Older lines with no price_by count as markup priced when their stored
+ * markup is not the one worked back from the price (a typed price always
+ * stores the worked back one).
+ */
+export function markupBelowStandard(i: {
+  unitPrice: number;
+  unitCost: number | null;
+  markupPercent: number | null;
+  listUnitPrice: number | null;
+  priceBy?: string | null;
+}): { markup: number; standard: number } | null {
+  if (i.listUnitPrice == null || i.unitCost == null || i.unitCost <= 0 || i.markupPercent == null) return null;
+  if (i.unitPrice >= i.listUnitPrice - 0.005) return null;
+  const byMarkup = i.priceBy === "markup" || (!i.priceBy && i.markupPercent !== markupOf(i.unitCost, i.unitPrice));
+  if (!byMarkup) return null;
+  return { markup: Math.round(i.markupPercent * 10) / 10, standard: Math.round((i.listUnitPrice / i.unitCost - 1) * 100) };
+}
+
+/** How the quote sits under the price list: all markup lines, all hand discounts, or both. */
+export function belowListKind(items: Parameters<typeof markupBelowStandard>[0][]): "markup" | "discount" | "mixed" | null {
+  const under = items.filter((i) => i.listUnitPrice != null && i.unitPrice < i.listUnitPrice - 0.005);
+  if (!under.length) return null;
+  const m = under.filter((i) => markupBelowStandard(i)).length;
+  return m === under.length ? "markup" : m === 0 ? "discount" : "mixed";
+}
+
 /** Append one history row per product line on this quote. Called when the quote is sent. */
 export async function recordPriceHistory(quote: typeof schema.quotes.$inferSelect, byName: string) {
   const lines = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quote.id));
@@ -168,7 +198,7 @@ export async function editableQuoteOrThrow(id: number) {
 
 type DiscountLine = { id?: number; qty: number; unitPrice: number; listUnitPrice: number | null };
 
-/** Office cannot go past the discount limit, or past what an Admin approved. Admin is never blocked. */
+/** Office cannot edit past the discount limit, or past what an Admin approved. Admin can edit. */
 async function assertDiscountAllowed(quote: typeof schema.quotes.$inferSelect, items: DiscountLine[], actor: Actor) {
   if (actor.role === "admin") return;
   const pct = discountPercentOf(items);
@@ -180,10 +210,24 @@ async function assertDiscountAllowed(quote: typeof schema.quotes.$inferSelect, i
   }
 }
 
-/** The checks every path to a customer goes through: Send, Accept and Convert to job. */
+/**
+ * The checks every path to a customer goes through: Send, Accept and Convert
+ * to job. 188001 list item 5: a discount over the limit that nobody approved
+ * stops it for everyone, Admin too. Admin approves with one tap, then sends.
+ */
 export async function assertReadyToGoOut(quote: typeof schema.quotes.$inferSelect, actor: Actor) {
   const items = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quote.id));
-  await assertDiscountAllowed(quote, items, actor);
+  const pct = discountPercentOf(items);
+  const limit = await discountLimit();
+  if (pct > limit && pct > quote.discountApprovedPercent) {
+    const what = belowListKind(items) === "markup" ? `priced ${pct}% under the price list (markup below standard)` : `discounted ${pct}%`;
+    throw new ORPCError("FORBIDDEN", {
+      message:
+        actor.role === "admin"
+          ? `This quote is ${what}, over the ${limit}% limit. Approve it first, then send.`
+          : `This quote is ${what}. Office can go up to ${limit}%. An Admin needs to approve it first.`,
+    });
+  }
 }
 
 /** A quote that has gone out cannot be edited past the discount Office is allowed. */
@@ -417,6 +461,7 @@ export async function reviseQuoteRecord(
           listUnitPrice: i.listUnitPrice,
           unitCost: i.unitCost,
           markupPercent: i.markupPercent,
+          priceBy: i.priceBy,
           total: i.total,
           floorCategory: i.floorCategory,
           sortOrder: idx,
@@ -579,8 +624,8 @@ export const quotes = {
     const sizes = await lineSizes(items);
     const limit = await discountLimit();
     const discountPercent = discountPercentOf(items);
-    const needsApproval =
-      context.actor.role !== "admin" && discountPercent > limit && discountPercent > row.quote.discountApprovedPercent;
+    // Item 5: waiting on approval stops Send for everyone, Admin too.
+    const needsApproval = discountPercent > limit && discountPercent > row.quote.discountApprovedPercent;
 
     const jobRefText = row.job?.id ? row.job.number : null;
     return {
@@ -589,14 +634,15 @@ export const quotes = {
       discountPercent,
       discountLimit: limit,
       discountNeedsApproval: needsApproval,
+      discountKind: belowListKind(items),
       costsHidden: !showCosts,
       contact: row.contact,
       company: row.company,
       site: row.site,
       job: row.job?.id ? row.job : null,
       items: showCosts
-        ? items.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice), area: areas[i.id] ?? null, size: sizes[i.id] ?? null, freightSell: lineFreightSell(i) }))
-        : items.map((i) => ({ ...i, unitCost: null, markupPercent: null, freightUnitCost: null, area: areas[i.id] ?? null, size: sizes[i.id] ?? null, freightSell: null })),
+        ? items.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice), belowStandard: markupBelowStandard(i), area: areas[i.id] ?? null, size: sizes[i.id] ?? null, freightSell: lineFreightSell(i) }))
+        : items.map((i) => ({ ...i, unitCost: null, markupPercent: null, freightUnitCost: null, belowStandard: null, area: areas[i.id] ?? null, size: sizes[i.id] ?? null, freightSell: null })),
       ...depositSplit(row.quote.total, row.quote.depositPercent),
       activity,
       versions: versions.map((v) => ({ ...v, ref: quoteRef(row.quote.number, v.version, jobRefText) })),
@@ -1130,15 +1176,18 @@ export const quotes = {
        */
       let unitPrice = fields.unitPrice ?? before.unitPrice;
       let markupPercent: number | null;
+      let priceBy: string | undefined;
       if (setMarkup !== undefined) {
         if (cost == null || cost <= 0) throw new ORPCError("BAD_REQUEST", { message: "Put a cost on the line first. Markup works off the cost." });
         unitPrice = sellAtMarkup(cost, setMarkup);
         markupPercent = setMarkup;
+        priceBy = "markup";
       } else if (fields.unitCost !== undefined && fields.unitPrice === undefined && before.unitCost != null && beforeMarkup != null && cost != null && cost > 0) {
         unitPrice = sellAtMarkup(cost, beforeMarkup);
         markupPercent = beforeMarkup;
       } else {
         markupPercent = markupOf(cost, unitPrice);
+        if (fields.unitPrice !== undefined && fields.unitPrice !== before.unitPrice) priceBy = "hand";
       }
       if (unitPrice !== before.unitPrice) fields.unitPrice = unitPrice;
       // Remember the price book price the first time a price is hand-edited.
@@ -1155,7 +1204,7 @@ export const quotes = {
 
       const [row] = await db
         .update(schema.quoteItems)
-        .set({ ...fields, ...freightReset, markupPercent, ...(listUnitPrice !== undefined ? { listUnitPrice } : {}), total: round2(qty * unitPrice), updatedAt: new Date() })
+        .set({ ...fields, ...freightReset, markupPercent, ...(priceBy !== undefined ? { priceBy } : {}), ...(listUnitPrice !== undefined ? { listUnitPrice } : {}), total: round2(qty * unitPrice), updatedAt: new Date() })
         .where(eq(schema.quoteItems.id, id))
         .returning();
 
@@ -1494,7 +1543,7 @@ export const quotes = {
 
   /** Admin signs off the quote's current discount so Office can send it. */
   approveDiscount: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
-    await quoteOrThrow(input.id);
+    const quote = await quoteOrThrow(input.id);
     const items = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, input.id));
     const pct = discountPercentOf(items);
     const [row] = await db
@@ -1502,6 +1551,16 @@ export const quotes = {
       .set({ discountApprovedPercent: pct, discountApprovedBy: context.actor.name, discountApprovedAt: new Date(), updatedAt: new Date() })
       .where(eq(schema.quotes.id, input.id))
       .returning();
+    await db.insert(schema.activityLog).values({
+      jobId: quote.jobId,
+      contactId: quote.contactId,
+      entityType: "quote",
+      entityId: quote.id,
+      action: "discount_approved",
+      detail: `${belowListKind(items) === "markup" ? "Markup below standard" : "Discount"} of ${pct}% approved on quote ${await quoteRefOf(quote)}`,
+      actorName: context.actor.name,
+      actorRole: context.actor.role,
+    });
     return row;
   }),
 

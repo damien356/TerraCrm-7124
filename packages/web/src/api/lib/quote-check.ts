@@ -32,6 +32,8 @@ export type CheckLine = {
   liveSell: number | null;
   flagged: boolean;
   flagReason: string | null;
+  /** Item 5: set when the line is priced by a markup under the standard one. Cost viewers only. */
+  belowStandard?: { markup: number; standard: number } | null;
 };
 
 export type CheckInput = {
@@ -134,7 +136,9 @@ export function checkQuote(input: CheckInput): { ok: boolean; items: CheckItem[]
     if (Math.abs(l.unitPrice - l.liveSell) < 0.005) continue;
     if (l.listUnitPrice != null) {
       const pct = Math.round(((l.listUnitPrice - l.unitPrice) / l.listUnitPrice) * 100);
-      if (pct > 0) add("warn", "discounted", `${short(l.description)} is ${pct}% under the price book.`, [l.id]);
+      if (pct > 0 && input.canSeeCosts && l.belowStandard) {
+        add("warn", "discounted", `${short(l.description)} is priced at markup ${l.belowStandard.markup}%, standard ${l.belowStandard.standard}%.`, [l.id]);
+      } else if (pct > 0) add("warn", "discounted", `${short(l.description)} is ${pct}% under the price book.`, [l.id]);
     } else {
       add(
         "warn",
@@ -144,11 +148,14 @@ export function checkQuote(input: CheckInput): { ok: boolean; items: CheckItem[]
       );
     }
   }
-  if (!input.isAdmin && input.discountPct > input.discountLimit && input.discountPct > input.discountApprovedPct) {
+  // Item 5: an unapproved discount over the limit stops the send for Admin too.
+  if (input.discountPct > input.discountLimit && input.discountPct > input.discountApprovedPct) {
     add(
       "stop",
       "discount_limit",
-      `The quote is discounted ${input.discountPct}%. Office can go up to ${input.discountLimit}%. An Admin needs to approve it.`,
+      input.isAdmin
+        ? `The quote is discounted ${input.discountPct}%, over the ${input.discountLimit}% limit. Approve it before sending.`
+        : `The quote is discounted ${input.discountPct}%. Office can go up to ${input.discountLimit}%. An Admin needs to approve it.`,
     );
   }
 

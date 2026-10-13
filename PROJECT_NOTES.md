@@ -708,3 +708,13 @@ Checked on the branch head: lint clean, web build OK, API tsc 0, mobile tsc 0, a
 - commitPo takes over that supplier's expected row (same id, committed, source 'po', due on supplier terms) so stock is never counted twice. cancelPo brings the expected row back from the accepted quote, except in a job cancel. A real job cancel removes the budget rows and says so in the preview.
 - PO cost description no longer doubles "PO PO". Money out shows each row's notes, keeps them on edit, and a PO row's date reads "PO sent, on the supplier's terms".
 - Tests: t-i16.body.ts with t-i913.head.ts (PASS 70), t-cancel.body.ts with t-i8.head.ts still PASS 148. UI check i16ui.py, i16ui2.py.
+
+### 18.25 188001 list item 5: discount approval blocks Send for everyone, markup below standard (16 Oct)
+- Live schema (applied 13 Oct, backup backups/pre-quote-price-by.db): quote_items.price_by ('markup' when the markup was typed, 'hand' when a sell price was typed, '' for price book or older lines). SQL in database/sql/2026-10-16-quote-price-by.sql. Version copies keep it.
+- routes/quotes.ts assertReadyToGoOut: a discount over the limit that nobody approved now stops Send, Mark as sent, Email quote, Accept and Convert to job for Admin too. Admin message: "Approve it first, then send." Editing is unchanged (Admin can still edit past the limit, Office cannot).
+- markupBelowStandard(item) gives { markup, standard } for a line priced by markup under the price list sell. Standard is list sell / cost minus 1, to the whole percent. Older lines with no price_by count as markup priced when the stored markup is not the one worked back from the price. belowListKind(items) is "markup", "discount", "mixed" or null.
+- quotes.get: discountNeedsApproval no longer skips Admin, adds discountKind, and each item has belowStandard (null when costs are hidden).
+- approveDiscount logs "Markup below standard of X% approved" or "Discount of X% approved" in the quote history.
+- Quote builder: amber line note "Markup 35%, standard 91%", the bar says "Priced X% under the price list (markup below standard)" for markup lines, Admin button "Approve X% under list" or "Approve X% discount", and Accepted is disabled too while waiting.
+- lib/quote-check.ts: the discount_limit stop applies to Admin too. The "discounted" warn uses the markup wording for cost viewers (CheckLine.belowStandard, built in agent/quote-agent.ts runCheck).
+- Tests: t-i5.body.ts with t-i913.head.ts (PASS 65). t-i16.body.ts now approves before sending (PASS 71). t-i913 111, t-var 164, t-cancel 148 still pass. UI check i5ui.py (seed t-i5ui.body.ts).

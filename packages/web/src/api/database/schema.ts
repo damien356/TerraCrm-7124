@@ -1483,6 +1483,13 @@ export const quoteItems = sqliteTable(
     unitCost: real("unit_cost"),
     /** Markup % this line was priced at (cost -> sell). Null on older lines: work it out from cost and sell. */
     markupPercent: real("markup_percent"),
+    /**
+     * How the sell price was last set (188001 list item 5): "markup" when the
+     * markup box set it, "hand" when a price was typed, "" when the price book
+     * set it (or an older line). A markup line under the price list shows as
+     * "Markup 35%, standard 91%", a hand price as a discount.
+     */
+    priceBy: text("price_by").notNull().default(""),
     /** material · labour · delivery. Copied from the price book, editable per line. Delivery lines are always delivery. */
     lineType: text("line_type").notNull().default("material"),
     total: real("total").notNull().default(0),
