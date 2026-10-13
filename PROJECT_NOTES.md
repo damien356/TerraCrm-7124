@@ -724,3 +724,11 @@ Checked on the branch head: lint clean, web build OK, API tsc 0, mobile tsc 0, a
 - components/costing.tsx JobForecastCard: the "Price all labour against" picker shows only when comparison has rows. The "What it costs on each installer" table needs hasLabourLines too. With nothing measured every installer priced at $0, so the table said nothing.
 - No schema change.
 - Tests: terra-scratch-tests/fix1011/t-i8c.body.ts with t-i913.head.ts (PASS 13): no lines, lines added, lines removed, office 403.
+
+### 18.27 188001 list item 12: site is blank (16 Oct)
+- New routes/siteFill.ts (siteFill): forQuote (needed when the quote has a delivery line, kind delivery or text starting Delivery, Freight or Cartage, and neither the quote nor its job has a site), forJob (needed when the job has no site, guess off its newest quote with a delivery line), save (quoteId or jobId, plus siteId or newSite). Staff only. Logs "site_added".
+- Save on a quote: sets quotes.site_id (draft, needs_review or sent only), then fillJobFromQuote gives the job the site, access notes and the address as title. Save on a job: sets jobs.site_id, access notes, replaces a "Quote Q..." title, and its open quotes with no site take it. Accepted quotes stay as signed.
+- lib/site-guess.ts siteGuessFromText: strips "Delivery to", reads a state and postcode at the end, and the part after the last comma as suburb when it is a few words with no numbers. Shared with the web.
+- Web: components/site-fill.tsx SiteFillModal (NewSiteFields plus access notes, prefilled from the guess, shows the delivery line) and JobSiteFact on the job page ("No site. Add one"). Quote builder: Mark as sent, Email quote, Email again and Accepted open the form first when needed, then carry on. EmailQuoteButton has a gate prop. The server does not block Send or Accept without a site, and online accept is unchanged.
+- No schema change.
+- Tests: terra-scratch-tests/fix1011/t-i12s.body.ts with t-i913.head.ts (PASS 53). UI check i12ui.py (seed t-i12ui.body.ts). t-i913 still PASS 111.
