@@ -8,6 +8,7 @@ import { Modal } from "./ui/modal";
 import { errorText } from "./public-shell";
 import { moneyExact } from "../lib/money";
 import { useBootstrap } from "../queries/settings";
+import { EmailInput } from "./email-input";
 import {
   useClientInvoices,
   useEmailInvoice,
@@ -46,7 +47,7 @@ function EmailInvoiceModal({ invoice, onClose }: { invoice: Invoice | null; onCl
           Sends {moneyExact(invoice.outstanding)} owing with the Pay by card link and our bank details, from team@. Logged on the job's thread.
         </p>
         <Field label="Send to (leave empty for the client's email on file)">
-          <Input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="client@example.com" />
+          <EmailInput value={to} onValueChange={setTo} placeholder="client@example.com" />
         </Field>
         {error ? <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p> : null}
         {send.data ? <p className="text-sm text-[var(--success)]">Sent to {send.data.to}.</p> : null}
@@ -391,7 +392,7 @@ function RaiseInvoiceModal({
               label="Send to"
               hint={billing.recipient ? `Leave empty to send to ${billing.recipient.who}, ${billing.recipient.email}.` : "No email on file for this client. Type one in."}
             >
-              <Input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder={billing.recipient?.email ?? "client@example.com"} />
+              <EmailInput value={to} onValueChange={setTo} placeholder={billing.recipient?.email ?? "client@example.com"} />
             </Field>
           ) : null}
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
@@ -672,7 +673,7 @@ export function MaterialSelectionCard({ jobId }: { jobId: number }) {
         }
       >
         <Field label="Send to" hint="Leave blank to use the decision-maker's email on the job.">
-          <Input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="client@example.com" />
+          <EmailInput value={to} onValueChange={setTo} placeholder="client@example.com" />
         </Field>
         {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
       </Modal>

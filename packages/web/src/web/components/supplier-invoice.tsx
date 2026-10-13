@@ -11,6 +11,7 @@ import { PAIR_META } from "./purchase-orders";
 import { InvoicePriceChecks } from "./price-checks";
 import { useOpenPosForSupplier } from "../queries/purchasing";
 import { useSuppliers } from "../queries/suppliers";
+import { EmailInput } from "./email-input";
 import {
   useCancelRequest,
   useEditRequest,
@@ -361,7 +362,7 @@ function RequestForm({ r, onClose }: { r: Req; onClose: () => void }) {
       {open ? (
         <>
           <Field label="Send to">
-            <Input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="accounts@supplier.com.au" />
+            <EmailInput value={to} onValueChange={setTo} placeholder="accounts@supplier.com.au" />
           </Field>
           {r.supplierId && to.trim() && to.trim() !== (r.toAddress ?? "") ? (
             <label htmlFor="req_save_email" className="flex cursor-pointer items-center gap-2 text-sm">

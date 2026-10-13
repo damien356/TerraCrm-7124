@@ -6,12 +6,13 @@ import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading, Spinner, Stat } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Field, Input } from "../components/ui/field";
+import { Field } from "../components/ui/field";
 import { Combobox } from "../components/ui/combobox";
 import { money, pct, histDate } from "../lib/money";
 import { useSupervisor } from "../queries/intel";
 import { useCompanies } from "../queries/companies";
 import { useMoveSupervisorCompany } from "../queries/contacts";
+import { EmailInput } from "../components/email-input";
 
 /**
  * ONE SUPERVISOR.
@@ -272,7 +273,7 @@ function MoveForm({ contactId, email, onDone }: { contactId: number; email: stri
           />
         </Field>
         <Field label="Email at the new company" hint="Leave as is if it did not change.">
-          <Input value={newEmail} onChange={(e) => setNewEmail(e.target.value)} />
+          <EmailInput value={newEmail} onValueChange={setNewEmail} />
         </Field>
       </div>
       <p className="text-xs text-muted-foreground">

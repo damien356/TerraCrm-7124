@@ -16,6 +16,7 @@ import { useCompanies } from "../queries/companies";
 import { useClient } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
 import { quoteRef } from "../../api/lib/refs";
+import { EmailInput } from "../components/email-input";
 
 const COMPANY_ROLES = ["owner", "manager", "supervisor", "accounts", "property_manager", "purchasing", "other"];
 const roleLabel = (r: string | null) => (r ?? "").replace(/_/g, " ");
@@ -495,7 +496,7 @@ function EditContactModal({
           <Input value={form.phone} onChange={(e) => set("phone", e.target.value)} />
         </Field>
         <Field label="Email" className="sm:col-span-2">
-          <Input value={form.email} onChange={(e) => set("email", e.target.value)} />
+          <EmailInput value={form.email} onValueChange={(v) => set("email", v)} />
         </Field>
         <Field label="Address" className="sm:col-span-2">
           <Input value={form.address} onChange={(e) => set("address", e.target.value)} />

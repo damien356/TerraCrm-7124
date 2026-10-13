@@ -18,6 +18,7 @@ import {
 } from "../queries/team";
 import { InstallerPanel } from "./installers";
 import { useRevokeVoiceKey, useVoiceKeys } from "../queries/visits";
+import { EmailInput } from "../components/email-input";
 
 function when(iso: string | null) {
   if (!iso) return "-";
@@ -498,7 +499,7 @@ function AddPersonModal({ open, onClose }: { open: boolean; onClose: () => void 
             <Input value={form.name} onChange={(e) => set("name", e.target.value)} />
           </Field>
           <Field label="Email" hint="This is what they sign in with.">
-            <Input type="email" value={form.email} onChange={(e) => set("email", e.target.value)} />
+            <EmailInput value={form.email} onValueChange={(v) => set("email", v)} />
           </Field>
           <Field label="Mobile" hint="The password is texted here.">
             <Input value={form.mobile} onChange={(e) => set("mobile", e.target.value)} placeholder="0412 345 678" />

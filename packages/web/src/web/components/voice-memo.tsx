@@ -47,6 +47,7 @@ import {
   useVoiceMemo,
 } from "../queries/memos";
 import { useParseCommand } from "../queries/tasks";
+import { EmailInput } from "./email-input";
 
 /* ---------------------------------------------------------------------------
  * VOICE MEMOS, the web side.
@@ -542,7 +543,7 @@ function ClientChooser({ memoId, memo, onDone }: { memoId: number; memo: Memo; o
           </div>
           <div>
             <Label>Email</Label>
-            <Input value={form.email} onChange={set("email")} inputMode="email" />
+            <EmailInput value={form.email} onValueChange={(v) => setForm((f) => ({ ...f, email: v }))} />
           </div>
           <div className="col-span-2">
             <Label>Street address</Label>

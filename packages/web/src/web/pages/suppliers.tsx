@@ -8,6 +8,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
+import { EmailInput } from "../components/email-input";
 import {
   useCreateSupplier,
   useCreateSupplierFee,
@@ -163,7 +164,7 @@ function NewSupplierModal({ open, onClose }: { open: boolean; onClose: () => voi
           <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Terramater" />
         </Field>
         <Field label="Order email" hint="Purchase orders are emailed here.">
-          <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="orders@supplier.com.au" />
+          <EmailInput value={form.email} onValueChange={(v) => setForm({ ...form, email: v })} placeholder="orders@supplier.com.au" />
         </Field>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Phone">

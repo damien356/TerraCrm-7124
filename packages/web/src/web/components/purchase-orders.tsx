@@ -6,6 +6,7 @@ import { Button } from "./ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "./ui/field";
 import { Modal } from "./ui/modal";
 import { moneyExact } from "../lib/money";
+import { EmailInput } from "./email-input";
 import {
   type PoPreviewInput,
   useCancelPo,
@@ -852,7 +853,7 @@ function SendPoModal({ po, supplier, onClose }: { po: Po; supplier: Supplier | n
       ) : (
         <div className="space-y-4">
           <Field label="Supplier email">
-            <Input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="orders@supplier.com.au" />
+            <EmailInput value={to} onValueChange={setTo} placeholder="orders@supplier.com.au" />
           </Field>
           {!supplier?.email || (to.trim() && to.trim() !== supplier.email) ? (
             <label htmlFor="po_save_email" className="flex cursor-pointer items-center gap-2 text-sm">

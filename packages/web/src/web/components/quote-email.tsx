@@ -8,6 +8,7 @@ import { Modal } from "./ui/modal";
 import { moneyExact } from "../lib/money";
 import { useQuoteEmailDraft, useQuoteLink, useSendQuoteEmail } from "../queries/quoteSend";
 import { needsScope, SCOPE_FILL } from "../../api/lib/quote-email-template";
+import { EmailInput } from "./email-input";
 
 /**
  * Email quote (spec 2.1): from team@ as "Damien from Terra", PDF attached,
@@ -143,7 +144,7 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
           )}
           {!picked ? (
             <Field label="Email address">
-              <Input type="email" value={toValue} onChange={(e) => setTo(e.target.value)} placeholder="name@example.com" />
+              <EmailInput value={toValue} onValueChange={setTo} placeholder="name@example.com" />
             </Field>
           ) : null}
           <Field label="Subject">

@@ -21,6 +21,7 @@ import { orpc } from "../lib/api";
 import { useCompanies } from "../queries/companies";
 import { useClientIntel, type ListSort } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
+import { EmailInput } from "../components/email-input";
 
 const COMPANY_ROLES = [
   "owner",
@@ -149,10 +150,7 @@ export function NewContactModal({
           />
         </Field>
         <Field label="Email">
-          <Input
-            value={form.email}
-            onChange={(e) => set("email", e.target.value)}
-          />
+          <EmailInput value={form.email} onValueChange={(v) => set("email", v)} />
         </Field>
         <div className="sm:col-span-2 empty:hidden">
           <ContactMatches

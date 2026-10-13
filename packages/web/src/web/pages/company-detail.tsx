@@ -15,6 +15,7 @@ import { useCompanyIntelDetail } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
 import { typeLabel } from "./companies";
 import { COMPANY_TYPES } from "../../api/lib/person-tags";
+import { EmailInput } from "../components/email-input";
 
 const roleLabel = (r: string) => r.replace(/_/g, " ");
 
@@ -487,13 +488,13 @@ function EditCompanyModal({
           <Input value={form.phone} onChange={(e) => set("phone", e.target.value)} />
         </Field>
         <Field label="Accounts email">
-          <Input value={form.email} onChange={(e) => set("email", e.target.value)} />
+          <EmailInput value={form.email} onValueChange={(v) => set("email", v)} />
         </Field>
         <Field label="Compliance email">
-          <Input value={form.complianceEmail} onChange={(e) => set("complianceEmail", e.target.value)} />
+          <EmailInput value={form.complianceEmail} onValueChange={(v) => set("complianceEmail", v)} />
         </Field>
         <Field label="Admin email">
-          <Input value={form.adminEmail} onChange={(e) => set("adminEmail", e.target.value)} />
+          <EmailInput value={form.adminEmail} onValueChange={(v) => set("adminEmail", v)} />
         </Field>
         <Field label="Work order number looks like">
           <Input value={form.workOrderPrefix} onChange={(e) => set("workOrderPrefix", e.target.value)} />

@@ -8,6 +8,7 @@ import { useCompanyMatches } from "../queries/people";
 import { usePlaceDetails, usePlaceSuggestions, usePlacesEnabled } from "../queries/places";
 import { useSites } from "../queries/companies";
 import { COMPANY_TYPES, COMPANY_TYPE_LABELS } from "../../api/lib/person-tags";
+import { EmailInput } from "./email-input";
 
 /**
  * NEW RECORDS, TYPED IN PLACE.
@@ -154,7 +155,7 @@ export function NewContactFields({
         />
       </Field>
       <Field label="Email">
-        <Input id={`${id}_email`} value={value.email} inputMode="email" onChange={(e) => set("email", e.target.value)} autoComplete="off" />
+        <EmailInput id={`${id}_email`} value={value.email} onValueChange={(v) => set("email", v)} autoComplete="off" />
       </Field>
       <Field label={sup ? "Office phone" : "Other phone"}>
         <Input id={`${id}_phone`} value={value.phone} inputMode="tel" onChange={(e) => set("phone", e.target.value)} autoComplete="off" />
@@ -349,7 +350,7 @@ export function NewCompanyFields({
         <Input id="newco_phone" value={value.phone} inputMode="tel" onChange={(e) => set("phone", e.target.value)} autoComplete="off" />
       </Field>
       <Field label="Accounts email">
-        <Input id="newco_email" value={value.email} inputMode="email" onChange={(e) => set("email", e.target.value)} autoComplete="off" />
+        <EmailInput id="newco_email" value={value.email} onValueChange={(v) => set("email", v)} autoComplete="off" />
       </Field>
       <div className="empty:hidden sm:col-span-2">
         <CompanyMatches input={{ name: value.name, phone: value.phone, email: value.email }} onUse={onUseExisting} />

@@ -4,6 +4,7 @@ import { Button } from "./ui/button";
 import { Input, Label } from "./ui/field";
 import { useContacts } from "../queries/contacts";
 import { useQuoteCustomerHelp, useSetQuoteCustomer } from "../queries/quotes";
+import { EmailInput } from "./email-input";
 
 /**
  * Shown on a quote with nobody on it. When the quote came from a recording,
@@ -161,7 +162,7 @@ export function QuoteCustomerPanel({ quoteId, onDone }: { quoteId: number; onDon
           </div>
           <div>
             <Label>Email</Label>
-            <Input value={form.email} onChange={set("email")} inputMode="email" />
+            <EmailInput value={form.email} onValueChange={(v) => setForm((f) => ({ ...f, email: v }))} />
           </div>
           <div className="col-span-2">
             <Label>Street address</Label>

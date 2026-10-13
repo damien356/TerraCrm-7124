@@ -10,6 +10,7 @@ import { useCreateCompany } from "../queries/companies";
 import { useCompanyIntel, type ListSort } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
 import { COMPANY_TYPES, COMPANY_TYPE_LABELS } from "../../api/lib/person-tags";
+import { EmailInput } from "../components/email-input";
 
 export const typeLabel = (t: string) => COMPANY_TYPE_LABELS[t] ?? t.replace(/_/g, " ");
 
@@ -114,10 +115,7 @@ export function NewCompanyModal({
           />
         </Field>
         <Field label="Accounts email">
-          <Input
-            value={form.email}
-            onChange={(e) => set("email", e.target.value)}
-          />
+          <EmailInput value={form.email} onValueChange={(v) => set("email", v)} />
         </Field>
         <Field label="Website">
           <Input

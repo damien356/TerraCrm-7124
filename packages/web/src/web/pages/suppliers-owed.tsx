@@ -6,7 +6,6 @@ import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading, Spinner, Stat } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/field";
 import { money, moneyExact, shortDate } from "../lib/money";
 import { orpc } from "../lib/api";
 import { PAIR_META } from "../components/purchase-orders";
@@ -14,6 +13,7 @@ import { InvoicePanel, RequestModal, UploadPdfButton, errText, requestStatus } f
 import { PriceFlagRow } from "../components/price-checks";
 import { useOwed, useSupplierOwed } from "../queries/payables";
 import { usePriceChecks } from "../queries/price-checks";
+import { EmailInput } from "../components/email-input";
 
 /**
  * SUPPLIERS OWED.
@@ -515,7 +515,7 @@ function AddEmail({ supplierId, name }: { supplierId: number; name: string }) {
             <span className="font-semibold text-foreground">No email on file for {name}.</span> POs and missing-invoice requests need one.
           </p>
           <div className="flex flex-wrap gap-2">
-            <Input className="max-w-xs" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="orders@supplier.com.au" />
+            <EmailInput wrapperClassName="w-full max-w-xs" value={email} onValueChange={setEmail} placeholder="orders@supplier.com.au" />
             <Button
               size="sm"
               disabled={!ok || save.isPending}
