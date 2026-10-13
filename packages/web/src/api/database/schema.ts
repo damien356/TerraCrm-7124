@@ -982,6 +982,13 @@ export const suppliers = sqliteTable(
     priceListValidUntil: integer("price_list_valid_until", { mode: "timestamp" }),
     /** Filename of the document the prices were read from — dispute evidence. */
     priceListSource: text("price_list_source").notNull().default(""),
+    /**
+     * Payment terms (188001 fix list item 16), for example Karndean 30 days
+     * EOM. Null days = not set yet, and Terra uses 30 days EOM. Decides when a
+     * PO or an expected materials cost leaves the account.
+     */
+    termsDays: integer("terms_days"),
+    termsEom: integer("terms_eom", { mode: "boolean" }).notNull().default(true),
     notes: text("notes").notNull().default(""),
     active: integer("active", { mode: "boolean" }).notNull().default(true),
     ...timestamps,
@@ -2325,6 +2332,14 @@ export const jobCosts = sqliteTable(
     paidAt: integer("paid_at", { mode: "timestamp" }),
     invoiceRef: text("invoice_ref"),
     notes: text("notes").notNull().default(""),
+    /**
+     * Where the row came from (188001 fix list item 16):
+     *   ""     typed in by hand
+     *   quote  expected cost made from the accepted quote's cost prices
+     *   po     a purchase order sent to the supplier
+     * A PO sent to a supplier takes over that supplier's quote row.
+     */
+    source: text("source").notNull().default(""),
     ...timestamps,
   },
   (t) => [

@@ -5,7 +5,8 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
-import { addDays, settleDate, SUPPLIER_TERMS, today } from "../lib/cashflow";
+import { addDays, settleDate, today } from "../lib/cashflow";
+import { DEFAULT_SUPPLIER_TERMS, supplierTermsMap, type SupplierTerms } from "../lib/supplier-terms";
 import { dedupeKey, invoiceExGst, markPaid, placeInvoice, round2, safeJson, squash } from "../lib/invoice-match";
 import { AUTO_SEND_KEY, ingestPdf, sendInvoiceRequest } from "../lib/mail-agent";
 import { gmailLink } from "../lib/gmail";
@@ -22,8 +23,13 @@ import { signGet } from "../lib/s3";
 type Inv = typeof schema.supplierInvoices.$inferSelect;
 
 const signed = (i: Pick<Inv, "docType" | "totalIncGst">) => (i.docType === "credit" ? -1 : 1) * i.totalIncGst;
-const dueOf = (i: Pick<Inv, "dueDate" | "invoiceDate">) =>
-  i.dueDate ?? (i.invoiceDate ? settleDate(i.invoiceDate, SUPPLIER_TERMS.days, SUPPLIER_TERMS.eom) : null);
+/** The printed due date, else the supplier's own terms (item 16), else 30 days EOM. */
+const dueOf = (i: Pick<Inv, "dueDate" | "invoiceDate" | "supplierId">, tm: Map<number, SupplierTerms>) => {
+  if (i.dueDate) return i.dueDate;
+  if (!i.invoiceDate) return null;
+  const t = (i.supplierId && tm.get(i.supplierId)) || DEFAULT_SUPPLIER_TERMS;
+  return settleDate(i.invoiceDate, t.days, t.eom);
+};
 const groupKey = (supplierId: number | null, raw: string) => (supplierId ? `s:${supplierId}` : `n:${squash(raw)}`);
 
 /** How an invoice and its PO sit together, in the words on the screen. */
@@ -55,6 +61,7 @@ async function refreshRequestEmails() {
 export const payables = {
   /** One row per supplier, plus everything that needs a person. */
   owed: adminOnly.handler(async () => {
+    const tm = await supplierTermsMap();
     await refreshRequestEmails();
     const now = today();
     const soon = addDays(now, 14);
@@ -117,7 +124,7 @@ export const payables = {
     for (const i of unpaid) {
       const r = row(i.supplierId, i.supplierNameRaw);
       const amt = signed(i);
-      const due = dueOf(i);
+      const due = dueOf(i, tm);
       r.owedIncGst += amt;
       r.invoices++;
       if (due && due < now) r.overdueIncGst += amt;
@@ -214,6 +221,7 @@ export const payables = {
 
   /** One supplier: its POs next to their invoices, and invoices with no PO. */
   supplier: adminOnly.input(z.object({ key: z.string() })).handler(async ({ input }) => {
+    const tm = await supplierTermsMap();
     const sid = input.key.startsWith("s:") ? Number(input.key.slice(2)) : null;
     const rawKey = input.key.startsWith("n:") ? input.key.slice(2) : null;
     if (!sid && !rawKey) throw new ORPCError("BAD_REQUEST", { message: "Bad supplier key" });
@@ -256,9 +264,9 @@ export const payables = {
       invoiceNumber: i.invoiceNumber,
       docType: i.docType,
       invoiceDate: i.invoiceDate,
-      dueDate: dueOf(i),
+      dueDate: dueOf(i, tm),
       dueDatePrinted: Boolean(i.dueDate),
-      overdue: i.payState === "unpaid" && (dueOf(i) ?? "9999") < now,
+      overdue: i.payState === "unpaid" && (dueOf(i, tm) ?? "9999") < now,
       totalIncGst: signed(i),
       totalExGst: invoiceExGst(i),
       freightExGst: i.freightExGst,
@@ -316,6 +324,7 @@ export const payables = {
   invoice: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
     const [i] = await db.select().from(schema.supplierInvoices).where(eq(schema.supplierInvoices.id, input.id));
     if (!i) throw new ORPCError("NOT_FOUND", { message: "Invoice not found" });
+    const tm = await supplierTermsMap();
     const [po] = i.poId ? await db.select().from(schema.purchaseOrders).where(eq(schema.purchaseOrders.id, i.poId)) : [];
     const poLines = po ? await db.select().from(schema.purchaseOrderLines).where(eq(schema.purchaseOrderLines.poId, po.id)) : [];
     let link: string | null = null;
@@ -331,7 +340,7 @@ export const payables = {
       ...i,
       lines: safeJson<Array<{ description: string; qty: number | null; unit: string | null; unitPriceExGst: number | null; totalExGst: number | null }>>(i.lines, []),
       exGst: invoiceExGst(i),
-      due: dueOf(i),
+      due: dueOf(i, tm),
       pair: pairState(i),
       po: po ? { id: po.id, number: po.number, totalExGst: po.totalExGst, goodsExGst: po.goodsExGst, freightExGst: po.freightExGst, chargesExGst: po.chargesExGst, lines: poLines } : null,
       pdfUrl: i.pdfKey ? await signGet(i.pdfKey).catch(() => null) : null,

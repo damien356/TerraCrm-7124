@@ -491,11 +491,21 @@ function ContactCard({
     accountNumber: string | null;
     shipsFrom: string | null;
     active: boolean;
+    termsDays: number | null;
+    termsEom: boolean;
   };
 }) {
   const update = useUpdateSupplier();
   const [saved, setSaved] = React.useState<string | null>(null);
-  type Patch = { name?: string; email?: string | null; phone?: string | null; accountNumber?: string | null; active?: boolean };
+  type Patch = {
+    name?: string;
+    email?: string | null;
+    phone?: string | null;
+    accountNumber?: string | null;
+    active?: boolean;
+    termsDays?: number | null;
+    termsEom?: boolean;
+  };
   const save = (patch: Patch, label: string) =>
     update.mutate(
       { id: supplier.id, ...patch },
@@ -558,6 +568,44 @@ function ContactCard({
               if (v !== (supplier.accountNumber ?? null)) save({ accountNumber: v }, "Account number");
             }}
           />
+        </Field>
+        <Field
+          label="Payment terms"
+          hint={
+            supplier.termsDays == null
+              ? "Not set. Terra uses 30 days EOM for their POs and bills. For COD, enter 0 and untick EOM."
+              : supplier.termsDays === 0 && !supplier.termsEom
+                ? "COD. Their POs and bills fall due the day they are ordered or billed."
+                : `Their POs and bills fall due ${supplier.termsEom ? `${supplier.termsDays} days after the end of the month` : `${supplier.termsDays} days after the date`}. For COD, enter 0 and untick EOM.`
+          }
+        >
+          <div className="flex items-center gap-3">
+            <Input
+              aria-label="Payment terms days"
+              inputMode="numeric"
+              className="w-24"
+              defaultValue={supplier.termsDays == null ? "" : String(supplier.termsDays)}
+              placeholder="30"
+              onBlur={(e) => {
+                const raw = e.target.value.trim();
+                const v = raw === "" ? null : Number(raw);
+                if (v != null && (!Number.isInteger(v) || v < 0 || v > 365)) {
+                  setSaved("Payment terms: enter whole days, 0 to 365");
+                  return;
+                }
+                if (v !== supplier.termsDays) save({ termsDays: v }, "Payment terms");
+              }}
+            />
+            <span className="text-sm text-muted-foreground">days</span>
+            <label htmlFor={`sup_eom_${supplier.id}`} className="flex items-center gap-2 text-sm">
+              <Checkbox
+                id={`sup_eom_${supplier.id}`}
+                checked={supplier.termsEom}
+                onChange={(e) => save({ termsEom: e.target.checked }, "Payment terms")}
+              />
+              EOM
+            </label>
+          </div>
         </Field>
         <label htmlFor={`sup_active_${supplier.id}`} className="flex items-center gap-2 text-sm md:col-span-2">
           <Checkbox

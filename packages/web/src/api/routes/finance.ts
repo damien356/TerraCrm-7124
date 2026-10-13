@@ -7,6 +7,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
 import { costCashOut, costHasGst, exGst } from "../lib/gst";
+import { termsOf } from "../lib/supplier-terms";
 import {
   acceptedQuoteDeposits,
   addDays,
@@ -524,8 +525,9 @@ export const finance = {
 
   /**
    * The job's money-out side, with the gross profit that falls out of it.
-   * Nothing is estimated on Terra's behalf: a job with no costs entered shows
-   * no margin rather than a flattering guess.
+   * Costs come from the accepted quote's cost prices (item 16), sent POs and
+   * what the office types. A job with no costs shows no margin rather than a
+   * flattering guess.
    */
   jobBudget: adminOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
     const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, input.jobId));
@@ -536,6 +538,8 @@ export const finance = {
         .select({
           cost: schema.jobCosts,
           supplierName: schema.suppliers.name,
+          termsDays: schema.suppliers.termsDays,
+          termsEom: schema.suppliers.termsEom,
           installerName: schema.installers.name,
           installerGst: schema.installers.gstRegistered,
         })
@@ -580,7 +584,7 @@ export const finance = {
         .filter((c) => {
           if (c.cost.state === "paid") return false;
           const d =
-            c.cost.dueDate ?? costDueDate(c.cost.kind, start, completion, today()).date;
+            c.cost.dueDate ?? costDueDate(c.cost.kind, start, completion, today(), termsOf(c)).date;
           return d <= receiptDate;
         })
         // Cash: the deposit comes in inc GST, so the bills go out inc GST too.
@@ -594,7 +598,7 @@ export const finance = {
         supplierName: c.supplierName,
         installerName: c.installerName,
         hasGst: costHasGst(c.cost.kind, c.installerGst),
-        computedDue: costDueDate(c.cost.kind, start, completion, today()),
+        computedDue: costDueDate(c.cost.kind, start, completion, today(), termsOf(c)),
       })),
       suppliers,
       installers,

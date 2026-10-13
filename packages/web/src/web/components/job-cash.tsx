@@ -61,6 +61,8 @@ type CostRow = {
   dueDateLocked: boolean;
   invoiceRef: string | null;
   notes: string;
+  /** "" by hand, "quote" expected from the quote, "po" from a sent PO (item 16). */
+  source?: string;
   computedDue: { date: string; basis: string };
   hasGst?: boolean;
 };
@@ -75,6 +77,8 @@ type Draft = {
   state: State;
   dueDate: string;
   invoiceRef: string;
+  /** Kept on edit, so the line still knows where it came from. */
+  notes: string;
 };
 
 const blank = (kind: Kind = "materials"): Draft => ({
@@ -86,6 +90,7 @@ const blank = (kind: Kind = "materials"): Draft => ({
   state: "budget",
   dueDate: "",
   invoiceRef: "",
+  notes: "",
 });
 
 const fromRow = (r: CostRow): Draft => ({
@@ -98,6 +103,7 @@ const fromRow = (r: CostRow): Draft => ({
   state: (STATE_META[r.state] ? r.state : "budget") as State,
   dueDate: r.dueDate ?? "",
   invoiceRef: r.invoiceRef ?? "",
+  notes: r.notes ?? "",
 });
 
 export function JobCashCard({ jobId }: { jobId: number }) {
@@ -128,7 +134,7 @@ export function JobCashCard({ jobId }: { jobId: number }) {
         dueDate: draft.dueDate || null,
         dueDateLocked: !!draft.dueDate,
         invoiceRef: draft.invoiceRef || null,
-        notes: "",
+        notes: draft.notes,
       },
       { onSuccess: () => setDraft(null) },
     );
@@ -245,6 +251,7 @@ export function JobCashCard({ jobId }: { jobId: number }) {
                               {c.installerName ? ` · ${c.installerName}` : ""}
                               {c.invoiceRef ? ` · ${c.invoiceRef}` : ""}
                             </p>
+                            {c.notes ? <p className="text-[11px] text-muted-foreground">{c.notes}</p> : null}
                           </td>
                           <td className="px-2 py-2.5">
                             <Badge colour={meta.colour}>{meta.label}</Badge>
@@ -252,7 +259,7 @@ export function JobCashCard({ jobId }: { jobId: number }) {
                           <td className="px-2 py-2.5">
                             <p className="tabular text-[13px]">{shortDate(due)}</p>
                             <p className="text-[11px] text-muted-foreground">
-                              {c.dueDate ? "date you set" : c.computedDue.basis}
+                              {c.dueDate ? (c.source === "po" && !c.dueDateLocked ? "PO sent, on the supplier's terms" : "date you set") : c.computedDue.basis}
                             </p>
                           </td>
                           <td className="tabular px-2 py-2.5 text-right font-medium">

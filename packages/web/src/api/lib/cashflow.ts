@@ -4,6 +4,7 @@ import * as schema from "../database/schema";
 import { depositDefaultOf } from "./deposits";
 import { quoteRef } from "./refs";
 import { costCashOut, costHasGst } from "./gst";
+import { DEFAULT_SUPPLIER_TERMS, supplierTermsMap, supplierTermsText, type SupplierTerms } from "./supplier-terms";
 
 /**
  * THE CASHFLOW ENGINE.
@@ -269,8 +270,11 @@ export async function loadTermsMaps() {
 
 /* ------------------------------ cost timing ----------------------------- */
 
-/** Supplier terms, one rule for everyone: 30 days EOM. */
-export const SUPPLIER_TERMS = { days: 30, eom: true };
+/**
+ * Supplier terms when a supplier has none set: 30 days EOM. Each supplier's
+ * own terms are on the supplier card (lib/supplier-terms.ts, item 16).
+ */
+export const SUPPLIER_TERMS = { days: DEFAULT_SUPPLIER_TERMS.days, eom: DEFAULT_SUPPLIER_TERMS.eom };
 /** Installers are paid within 7 days of THEIR invoice, not of completion. */
 export const INSTALLER_TERMS_DAYS = 7;
 
@@ -278,19 +282,21 @@ export const INSTALLER_TERMS_DAYS = 7;
  * When a cost leaves, when nobody has typed a date.
  *
  * Material is ordered before the job starts and falls due on the supplier's
- * 30 days EOM. The installer invoices at completion and is paid a week later.
+ * terms (30 days EOM when none are set). The installer invoices at
+ * completion and is paid a week later.
  */
 export function costDueDate(
   kind: string,
   start: string | null,
   completion: string | null,
   fallback: string,
+  terms: SupplierTerms = DEFAULT_SUPPLIER_TERMS,
 ): { date: string; basis: string } {
   if (kind === "materials") {
     const order = start ? addDays(start, -7) : fallback;
     return {
-      date: settleDate(order, SUPPLIER_TERMS.days, SUPPLIER_TERMS.eom),
-      basis: `material ordered ${order}, supplier 30 days EOM`,
+      date: settleDate(order, terms.days, terms.eom),
+      basis: `material ordered ${order}, supplier ${supplierTermsText(terms)}${terms.set ? "" : " (terms not set)"}`,
     };
   }
   if (kind === "installer") {
@@ -407,6 +413,7 @@ export async function rebuildForecast(): Promise<RebuildResult> {
     for (const i of inst) installerGst.set(i.id, !!i.gst);
   }
 
+  const supTerms = costRows.some((c) => c.supplierId) ? await supplierTermsMap() : new Map<number, SupplierTerms>();
   const costsByJob = new Map<number, typeof costRows>();
   for (const c of costRows) {
     const list = costsByJob.get(c.jobId) ?? [];
@@ -575,7 +582,7 @@ export async function rebuildForecast(): Promise<RebuildResult> {
     for (const c of costs) {
       const cc = confidenceForCost(c.state ?? "budget");
       if (!cc) continue;
-      const computed = costDueDate(c.kind ?? "other", start, completion, now);
+      const computed = costDueDate(c.kind ?? "other", start, completion, now, (c.supplierId && supTerms.get(c.supplierId)) || DEFAULT_SUPPLIER_TERMS);
       const date = c.dueDateLocked && c.dueDate ? c.dueDate : (c.dueDate ?? computed.date);
       const gstOn = c.installerId ? (installerGst.get(c.installerId) ?? false) : false;
       const dateBasis = c.dueDateLocked && c.dueDate ? `date set by hand` : computed.basis;

@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { syncDeliveryCosts } from "./delivery-cost";
+import { syncExpectedCosts } from "./expected-costs";
 import { quoteLines, type QuoteLine } from "./quote-convert";
 import { addLabour, insertDispatchForLines, labourQtys, quoteDispatchIds, rateItemsFor, SIDE_GROUPS, taskLock, withFreeTextNote } from "./dispatch-build";
 
@@ -351,6 +352,12 @@ export async function reworkJobForVersion(args: { jobId: number; fromQuoteId: nu
   if (del.added) out.changes.push(`${del.added} delivery cost${del.added === 1 ? "" : "s"} added to Money out.`);
   if (del.changed) out.changes.push(`${del.changed} delivery cost${del.changed === 1 ? "" : "s"} updated.`);
   if (del.removed) out.changes.push(`${del.removed} delivery cost${del.removed === 1 ? "" : "s"} removed, not on the new quote.`);
+
+  /* ------------------------ expected costs (fix list item 16) ------------------------ */
+  const exp = await syncExpectedCosts(args.jobId, args.toQuoteId);
+  out.flags.push(...exp.flags);
+  const moved = exp.added + exp.changed + exp.removed;
+  if (moved) out.changes.push(`Expected costs on Money out updated from the new quote (${moved} change${moved === 1 ? "" : "s"}).`);
 
   return out;
 }

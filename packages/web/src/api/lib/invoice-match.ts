@@ -2,7 +2,8 @@ import { and, eq, inArray, isNotNull, lt, ne } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import type { SupplierDoc } from "../agent/supplier-docs";
-import { SUPPLIER_TERMS, settleDate } from "./cashflow";
+import { settleDate } from "./cashflow";
+import { termsForSupplier } from "./supplier-terms";
 import { INVOICES_TO } from "./gmail";
 import { checkInvoicePrices } from "./price-check";
 
@@ -241,8 +242,9 @@ export async function settlePo(poId: number) {
   if (po.jobCostId) {
     const [line] = await db.select({ dueDateLocked: schema.jobCosts.dueDateLocked }).from(schema.jobCosts).where(eq(schema.jobCosts.id, po.jobCostId));
     const allPaid = invs.length > 0 && invs.every((i) => i.payState === "paid");
+    const terms = await termsForSupplier(po.supplierId);
     const due = invs
-      .map((i) => i.dueDate ?? (i.invoiceDate ? settleDate(i.invoiceDate, SUPPLIER_TERMS.days, SUPPLIER_TERMS.eom) : null))
+      .map((i) => i.dueDate ?? (i.invoiceDate ? settleDate(i.invoiceDate, terms.days, terms.eom) : null))
       .filter(Boolean)
       .sort()[0];
     await db

@@ -184,6 +184,9 @@ export const suppliers = {
         deliversTo: z.enum(["warehouse", "site", "both"]).optional(),
         freightMethod: z.string().optional(),
         freightNote: z.string().optional(),
+        /** Item 16: payment terms. Null days = not set, Terra uses 30 days EOM. */
+        termsDays: z.number().int().min(0).max(365).nullable().optional(),
+        termsEom: z.boolean().optional(),
         priceListExGst: z.boolean().optional(),
         /** ISO date strings — the date printed on the list, not today. */
         priceListEffectiveFrom: z.string().nullable().optional(),

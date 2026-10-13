@@ -13,7 +13,9 @@ import {
   type ResolvedCharge,
   type SpecialRow,
 } from "./pricing";
-import { rebuildForecast, settleDate, SUPPLIER_TERMS } from "./cashflow";
+import { rebuildForecast, settleDate } from "./cashflow";
+import { acceptedQuoteIdOf, expectedCostFor, syncExpectedCosts } from "./expected-costs";
+import { termsForSupplier } from "./supplier-terms";
 import { isUnderlayCategory, ordersByRoll, rollOrder, wholeUnits } from "./order-sizes";
 
 /* ---------------------------------------------------------------------------
@@ -357,30 +359,46 @@ export async function writeLines(poId: number, lines: PricedLine[]) {
  * A PO has gone to the supplier: it is now money Terra owes. Feeds the forecast
  * as a committed materials cost on the job, and the job's materials move to
  * ordered.
+ *
+ * Item 16: the supplier's expected cost from the quote is replaced. The PO
+ * takes that row over, so Money out never counts the same stock twice. Its
+ * due date follows the supplier's own terms (30 days EOM when none are set).
  */
 export async function commitPo(poId: number, via: "email" | "other", to: string | null) {
   const [po] = await db.select().from(schema.purchaseOrders).where(eq(schema.purchaseOrders.id, poId));
   if (!po) throw new Error("PO not found");
   const [sup] = await db.select({ name: schema.suppliers.name }).from(schema.suppliers).where(eq(schema.suppliers.id, po.supplierId));
   const today = todayISO();
+  const terms = await termsForSupplier(po.supplierId);
   const cost = {
     jobId: po.jobId,
     kind: "materials",
-    description: `PO ${po.number} ${sup?.name ?? ""}`.trim(),
+    description: `${/^PO/i.test(po.number) ? po.number : `PO ${po.number}`} ${sup?.name ?? ""}`.trim(),
     supplierId: po.supplierId,
     amount: po.totalExGst,
     notes: "From the purchase order.",
+    source: "po",
     updatedAt: new Date(),
   };
+  const due = settleDate(today, terms.days, terms.eom);
   let jobCostId = po.jobCostId;
   if (jobCostId) {
     await db.update(schema.jobCosts).set(cost).where(eq(schema.jobCosts.id, jobCostId));
   } else {
-    const [row] = await db
-      .insert(schema.jobCosts)
-      .values({ ...cost, state: "committed", dueDate: settleDate(today, SUPPLIER_TERMS.days, SUPPLIER_TERMS.eom) })
-      .returning();
-    jobCostId = row!.id;
+    const expected = await expectedCostFor(po.jobId, po.supplierId);
+    if (expected) {
+      await db
+        .update(schema.jobCosts)
+        .set({ ...cost, state: "committed", ...(expected.dueDateLocked && expected.dueDate ? {} : { dueDate: due, dueDateLocked: false }) })
+        .where(eq(schema.jobCosts.id, expected.id));
+      jobCostId = expected.id;
+    } else {
+      const [row] = await db
+        .insert(schema.jobCosts)
+        .values({ ...cost, state: "committed", dueDate: due })
+        .returning();
+      jobCostId = row!.id;
+    }
   }
   await db
     .update(schema.purchaseOrders)
@@ -399,8 +417,13 @@ export async function commitPo(poId: number, via: "email" | "other", to: string 
   await rebuildForecast();
 }
 
-/** Cancel a PO nobody has invoiced. Its forecast line goes, its materials go back to "to order". */
-export async function cancelPo(poId: number) {
+/**
+ * Cancel a PO nobody has invoiced. Its forecast line goes, its materials go
+ * back to "to order". Item 16: when no other sent PO to that supplier is left,
+ * the supplier's expected cost from the accepted quote comes back. Cancelling
+ * the whole job passes restoreExpected false.
+ */
+export async function cancelPo(poId: number, opts: { restoreExpected?: boolean } = {}) {
   const [po] = await db.select().from(schema.purchaseOrders).where(eq(schema.purchaseOrders.id, poId));
   if (!po) throw new Error("PO not found");
   const [inv] = await db.select({ id: schema.supplierInvoices.id }).from(schema.supplierInvoices).where(eq(schema.supplierInvoices.poId, poId)).limit(1);
@@ -428,6 +451,10 @@ export async function cancelPo(poId: number) {
   await db.update(schema.purchaseOrders).set({ status: "cancelled", jobCostId: null, updatedAt: new Date() }).where(eq(schema.purchaseOrders.id, poId));
   if (po.jobCostId) {
     await db.delete(schema.jobCosts).where(eq(schema.jobCosts.id, po.jobCostId));
+    if (opts.restoreExpected ?? true) {
+      const quoteId = await acceptedQuoteIdOf(po.jobId);
+      if (quoteId) await syncExpectedCosts(po.jobId, quoteId, { onlySupplierId: po.supplierId });
+    }
     await rebuildForecast();
   }
 }

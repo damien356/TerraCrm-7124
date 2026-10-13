@@ -313,6 +313,10 @@ function planFor(f: Facts, mode: CancelMode): CancelPlan {
   if (clear) {
     if (f.costs.length) steps.push(`${plural(f.costs.length, "job cost")} removed.`);
     for (const b of f.looseBills) steps.push(`Supplier bill ${b.number} still points at this job with no PO. That link is cleared.`);
+  } else {
+    // Item 16: expected costs are only estimates, so they go with the job.
+    const budget = f.costs.filter((c) => c.state === "budget");
+    if (budget.length) steps.push(`${plural(budget.length, "expected cost")} (budget, nothing ordered) removed from Money out.`);
   }
   if (steps.length || f.eventCount) steps.push("The cashflow forecast is rebuilt.");
   if (toSort.length) steps.push(`One office task lists the ${plural(toSort.length, "thing")} to sort by hand.`);
@@ -420,7 +424,7 @@ export async function cancelJob(args: { jobId: number; mode: CancelMode; confirm
   for (const { po } of f.pos) {
     if (f.bills.some((b) => b.poId === po.id)) continue;
     if (poSent(po) && !clear) continue;
-    await cancelPo(po.id);
+    await cancelPo(po.id, { restoreExpected: false });
     await db.insert(schema.activityLog).values({
       jobId: f.job.id,
       entityType: "purchase_order",
@@ -486,7 +490,11 @@ export async function cancelJob(args: { jobId: number; mode: CancelMode; confirm
     }
   }
 
-  // 8. A test clear takes every cost and forecast line off the job.
+  // 8. A test clear takes every cost and forecast line off the job. A real
+  // cancel takes off the expected (budget) costs, which were only estimates.
+  if (!clear) {
+    await db.delete(schema.jobCosts).where(and(eq(schema.jobCosts.jobId, f.job.id), eq(schema.jobCosts.state, "budget")));
+  }
   if (clear) {
     await db.delete(schema.cashEvents).where(eq(schema.cashEvents.jobId, f.job.id));
     await db.delete(schema.jobCosts).where(eq(schema.jobCosts.jobId, f.job.id));
