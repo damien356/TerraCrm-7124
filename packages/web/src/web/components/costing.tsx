@@ -366,16 +366,18 @@ export function JobForecastCard({ jobId }: { jobId: number }) {
           subtitle="Sale off the quote, materials off its cost prices, labour off the rate book."
           action={
             <div className="flex flex-wrap items-end gap-2">
-              <Field label="Price all labour against" className="w-[190px]">
-                <Select value={against} onChange={(e) => setAgainst(e.target.value)} className="h-8">
-                  <option value="">Whoever is on each one</option>
-                  {(f?.comparison ?? []).map((c) => (
-                    <option key={c.installerId} value={c.installerId}>
-                      {c.name}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
+              {f?.comparison.length ? (
+                <Field label="Price all labour against" className="w-[190px]">
+                  <Select value={against} onChange={(e) => setAgainst(e.target.value)} className="h-8">
+                    <option value="">Whoever is on each one</option>
+                    {(f?.comparison ?? []).map((c) => (
+                      <option key={c.installerId} value={c.installerId}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              ) : null}
               <Field label="Rates as at" className="w-[140px]">
                 <Input id="forecast_on" type="date" value={on} onChange={(e) => setOn(e.target.value)} className="h-8" />
               </Field>
@@ -465,8 +467,8 @@ export function JobForecastCard({ jobId }: { jobId: number }) {
               )}
             </div>
 
-            {/* swap the installer */}
-            {f.comparison.length ? (
+            {/* swap the installer. Item 8: only once a dispatch has labour lines. */}
+            {f.hasLabourLines && f.comparison.length ? (
               <div>
                 <p className="label-xs mb-1">What it costs on each installer, whole job</p>
                 <div className="overflow-x-auto rounded-lg border border-border">

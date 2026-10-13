@@ -446,7 +446,11 @@ export const costing = {
       /**
        * What each installer would cost on this job. Only the men ticked for
        * every skill on it, since anyone else can't be given the whole job.
+       * 188001 list item 8: only once a dispatch has labour lines. With
+       * nothing measured every installer prices at $0 and the table says
+       * nothing useful.
        */
+      const hasLabourLines = allLines.length > 0;
       const neededSkills = Array.from(new Set(tasks.map((t) => t.task.skillId).filter((id): id is number => id != null)));
       const ticks = installerRows.length
         ? await db
@@ -455,7 +459,7 @@ export const costing = {
             .where(inArray(schema.installerSkills.installerId, installerRows.map((i) => i.id)))
         : [];
 
-      const comparison = installerRows
+      const comparison = (hasLabourLines ? installerRows : [])
         .map((inst) => {
           const his = new Set(ticks.filter((t) => t.installerId === inst.id).map((t) => t.skillId));
           const canDoAll = neededSkills.every((s) => his.has(s));
@@ -499,6 +503,7 @@ export const costing = {
         /** True when something is missing, so the GP on screen is not the real one. */
         incomplete: taskViews.some((t) => t.incomplete) || materialsUnknown || revenue === 0,
         tasks: taskViews,
+        hasLabourLines,
         comparison,
       };
     }),
