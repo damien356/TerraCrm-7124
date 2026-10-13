@@ -6,6 +6,7 @@ import * as schema from "../database/schema";
 import { staffOnly } from "../middleware/auth";
 import { depositDefaultOf } from "../lib/deposits";
 import { rebuildForecast } from "../lib/cashflow";
+import { siteGeoFields, withGeoSource } from "../lib/job-new-records";
 
 /**
  * Companies are an OPTIONAL wrapper around contacts. A company never owns a
@@ -234,10 +235,11 @@ export const sites = {
         accessNotes: z.string().nullable().optional(),
         propertyType: z.string().default("residential"),
         notes: z.string().nullable().optional(),
+        ...siteGeoFields,
       }),
     )
     .handler(async ({ input }) => {
-      const [row] = await db.insert(schema.sites).values(input).returning();
+      const [row] = await db.insert(schema.sites).values(withGeoSource(input)).returning();
       return row;
     }),
 
@@ -255,13 +257,23 @@ export const sites = {
         accessNotes: z.string().nullable().optional(),
         propertyType: z.string().optional(),
         notes: z.string().nullable().optional(),
+        ...siteGeoFields,
       }),
     )
     .handler(async ({ input }) => {
-      const { id, ...rest } = input;
+      const { id, lat, lng, placeId, ...rest } = input;
+      // A new pin comes with a pick. A typed change to the address drops the old pin.
+      const moved = ["address", "suburb", "state", "postcode"].some((k) => k in rest && rest[k as keyof typeof rest] !== undefined);
+      const pin = withGeoSource({ lat, lng, placeId });
+      const geo =
+        lat !== undefined || lng !== undefined
+          ? { lat: pin.lat, lng: pin.lng, placeId: pin.placeId, geoSource: pin.geoSource }
+          : moved
+            ? { lat: null, lng: null, placeId: null, geoSource: "" }
+            : {};
       const [row] = await db
         .update(schema.sites)
-        .set({ ...rest, updatedAt: new Date() })
+        .set({ ...rest, ...geo, updatedAt: new Date() })
         .where(eq(schema.sites.id, id))
         .returning();
       if (!row) throw new ORPCError("NOT_FOUND", { message: "Site not found" });

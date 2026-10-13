@@ -103,8 +103,17 @@ export const places = {
       const url = `https://places.googleapis.com/v1/places/${encodeURIComponent(input.placeId)}?sessionToken=${encodeURIComponent(input.sessionToken)}&languageCode=en-AU`;
       const data = await google(url, {
         method: "GET",
-        headers: { "X-Goog-Api-Key": key(), "X-Goog-FieldMask": "addressComponents,formattedAddress" },
+        // location and id are in the same Essentials tier as the address parts.
+        headers: { "X-Goog-Api-Key": key(), "X-Goog-FieldMask": "id,addressComponents,formattedAddress,location" },
       });
-      return addressFromComponents(data?.addressComponents ?? [], data?.formattedAddress ?? "");
+      const lat = Number(data?.location?.latitude);
+      const lng = Number(data?.location?.longitude);
+      const pinned = Number.isFinite(lat) && Number.isFinite(lng) && data?.location;
+      return {
+        ...addressFromComponents(data?.addressComponents ?? [], data?.formattedAddress ?? ""),
+        lat: pinned ? lat : null,
+        lng: pinned ? lng : null,
+        placeId: String(data?.id ?? input.placeId),
+      };
     }),
 };

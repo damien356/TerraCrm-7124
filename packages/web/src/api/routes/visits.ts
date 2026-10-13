@@ -91,6 +91,9 @@ export const visits = {
       date: string;
       label: string;
       destination: string | null;
+      /** The site's map pin. The phone uses it and skips its own address lookup. */
+      lat: number | null;
+      lng: number | null;
       radiusM: number;
     }[] = [];
     for (const d of days) {
@@ -99,7 +102,16 @@ export const visits = {
       seen.add(key);
       const b = await briefFor(d.taskId);
       if (!b) continue;
-      out.push({ taskId: b.taskId, jobId: b.jobId, date: d.date, label: sayPlace(b), destination: b.destination, radiusM });
+      out.push({
+        taskId: b.taskId,
+        jobId: b.jobId,
+        date: d.date,
+        label: sayPlace(b),
+        destination: b.destination,
+        lat: b.pin?.lat ?? null,
+        lng: b.pin?.lng ?? null,
+        radiusM,
+      });
     }
     const open = await db
       .select()

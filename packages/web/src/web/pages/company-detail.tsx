@@ -16,6 +16,7 @@ import { histDate, money, pct } from "../lib/money";
 import { typeLabel } from "./companies";
 import { COMPANY_TYPES } from "../../api/lib/person-tags";
 import { EmailInput } from "../components/email-input";
+import { AddressAutocomplete, billingLine } from "../components/address-autocomplete";
 
 const roleLabel = (r: string) => r.replace(/_/g, " ");
 
@@ -509,7 +510,11 @@ function EditCompanyModal({
           <Input type="number" value={form.paymentTerms} onChange={(e) => set("paymentTerms", e.target.value)} />
         </Field>
         <Field label="Billing address" className="sm:col-span-2">
-          <Input value={form.billingAddress} onChange={(e) => set("billingAddress", e.target.value)} />
+          <AddressAutocomplete
+            value={form.billingAddress}
+            onType={(v) => set("billingAddress", v)}
+            onPick={(a) => set("billingAddress", billingLine(a))}
+          />
         </Field>
         <Field label="Credit limit">
           <Input type="number" value={form.creditLimit} onChange={(e) => set("creditLimit", e.target.value)} />

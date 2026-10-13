@@ -22,6 +22,7 @@ import { useCompanies } from "../queries/companies";
 import { useClientIntel, type ListSort } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
 import { EmailInput } from "../components/email-input";
+import { AddressAutocomplete } from "../components/address-autocomplete";
 
 const COMPANY_ROLES = [
   "owner",
@@ -161,9 +162,10 @@ export function NewContactModal({
           />
         </div>
         <Field label="Address" className="sm:col-span-2">
-          <Input
+          <AddressAutocomplete
             value={form.address}
-            onChange={(e) => set("address", e.target.value)}
+            onType={(v) => set("address", v)}
+            onPick={(a) => setForm((f) => ({ ...f, address: a.address, suburb: a.suburb, postcode: a.postcode }))}
           />
         </Field>
         <Field label="Suburb">

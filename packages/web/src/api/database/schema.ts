@@ -183,6 +183,13 @@ export const sites = sqliteTable(
     accessNotes: text("access_notes"),
     propertyType: text("property_type").notNull().default("residential"),
     notes: text("notes"),
+    /** Map pin for Navigate and arrive or leave site. Null until checked with Google. */
+    lat: real("lat"),
+    lng: real("lng"),
+    /** Google's id for the picked address. */
+    placeId: text("place_id"),
+    /** google (picked from the list), lookup (found by the backfill), not_found, or blank (typed, not checked). */
+    geoSource: text("geo_source").notNull().default(""),
     ...timestamps,
   },
   (t) => [index("sites_address_idx").on(t.address)],

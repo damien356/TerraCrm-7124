@@ -17,6 +17,7 @@ import { useClient } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
 import { quoteRef } from "../../api/lib/refs";
 import { EmailInput } from "../components/email-input";
+import { AddressAutocomplete } from "../components/address-autocomplete";
 
 const COMPANY_ROLES = ["owner", "manager", "supervisor", "accounts", "property_manager", "purchasing", "other"];
 const roleLabel = (r: string | null) => (r ?? "").replace(/_/g, " ");
@@ -499,7 +500,11 @@ function EditContactModal({
           <EmailInput value={form.email} onValueChange={(v) => set("email", v)} />
         </Field>
         <Field label="Address" className="sm:col-span-2">
-          <Input value={form.address} onChange={(e) => set("address", e.target.value)} />
+          <AddressAutocomplete
+            value={form.address}
+            onType={(v) => set("address", v)}
+            onPick={(a) => setForm((f) => ({ ...f, address: a.address, suburb: a.suburb, postcode: a.postcode }))}
+          />
         </Field>
         <Field label="Suburb">
           <Input value={form.suburb} onChange={(e) => set("suburb", e.target.value)} />

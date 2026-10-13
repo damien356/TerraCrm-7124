@@ -58,8 +58,19 @@ async function setting(key: string) {
 
 const firstWord = (s: string) => s.trim().split(/\s+/)[0] ?? "";
 
-function navUrl(app: NavApp, destination: string) {
+/** Directions in their maps app. A site with a map pin goes to the pin, so a new estate or a big site lands right. */
+function navUrl(app: NavApp, destination: string, pin?: Brief["pin"]) {
   const q = encodeURIComponent(destination);
+  if (pin) {
+    const ll = `${pin.lat},${pin.lng}`;
+    if (app === "google") {
+      return pin.placeId
+        ? `https://www.google.com/maps/dir/?api=1&destination=${q}&destination_place_id=${encodeURIComponent(pin.placeId)}&travelmode=driving`
+        : `https://www.google.com/maps/dir/?api=1&destination=${ll}&travelmode=driving`;
+    }
+    if (app === "waze") return `https://waze.com/ul?ll=${ll}&navigate=yes`;
+    return `https://maps.apple.com/?daddr=${ll}&dirflg=d`;
+  }
   if (app === "google") return `https://www.google.com/maps/dir/?api=1&destination=${q}&travelmode=driving`;
   if (app === "waze") return `https://waze.com/ul?q=${q}&navigate=yes`;
   return `https://maps.apple.com/?daddr=${q}&dirflg=d`;
@@ -137,7 +148,7 @@ export const voice = {
       bookedStart: bookedStart(day, brief)?.toISOString() ?? null,
       destination: brief.destination,
       navApp: app,
-      navUrl: brief.destination ? navUrl(app, brief.destination) : null,
+      navUrl: brief.destination ? navUrl(app, brief.destination, brief.pin) : null,
       speech: `Your next job is ${sayWhen(day, brief)}, ${sayPlace(brief)}.${contact}${run}`,
     };
   }),
@@ -158,7 +169,7 @@ export const voice = {
     return {
       found: true as const,
       taskId: next.brief.taskId,
-      navUrl: navUrl(app, next.brief.destination),
+      navUrl: navUrl(app, next.brief.destination, next.brief.pin),
       speech: `Opening ${appName} to ${sayPlace(next.brief)}.`,
     };
   }),

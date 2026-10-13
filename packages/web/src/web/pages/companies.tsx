@@ -11,6 +11,7 @@ import { useCompanyIntel, type ListSort } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
 import { COMPANY_TYPES, COMPANY_TYPE_LABELS } from "../../api/lib/person-tags";
 import { EmailInput } from "../components/email-input";
+import { AddressAutocomplete, billingLine } from "../components/address-autocomplete";
 
 export const typeLabel = (t: string) => COMPANY_TYPE_LABELS[t] ?? t.replace(/_/g, " ");
 
@@ -131,9 +132,10 @@ export function NewCompanyModal({
           />
         </Field>
         <Field label="Billing address" className="sm:col-span-2">
-          <Input
+          <AddressAutocomplete
             value={form.billingAddress}
-            onChange={(e) => set("billingAddress", e.target.value)}
+            onType={(v) => set("billingAddress", v)}
+            onPick={(a) => set("billingAddress", billingLine(a))}
           />
         </Field>
         <Field label="Credit limit" hint="Leave blank for none">

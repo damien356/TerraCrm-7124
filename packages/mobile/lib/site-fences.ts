@@ -143,7 +143,9 @@ export async function syncSiteFences(): Promise<{ state: FenceState; count: numb
     for (const t of targets) {
       if (seen.has(t.taskId) || !t.destination || regions.length >= MAX_REGIONS) continue;
       seen.add(t.taskId);
-      const at = await coordsFor(t.destination, cache);
+      // The office's map pin when the site has one. Otherwise the phone looks the address up.
+      const at: [number, number] | null =
+        t.lat != null && t.lng != null ? [t.lat, t.lng] : await coordsFor(t.destination, cache);
       if (!at) continue;
       regions.push({
         identifier: `t${t.taskId}`,

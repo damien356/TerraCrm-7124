@@ -118,14 +118,23 @@ export function SiteFillModal({
 }
 
 /** The job page's Site block: the address, or "No site. Add one" with the same form. */
-export function JobSiteFact({ jobId, site }: { jobId: number; site: { address: string; suburb: string | null } | null }) {
+export function JobSiteFact({
+  jobId,
+  site,
+}: {
+  jobId: number;
+  site: { address: string; suburb: string | null; geoSource?: string | null } | null;
+}) {
   const need = useJobSiteNeed(jobId);
   const [open, setOpen] = React.useState(false);
   if (site) {
+    // Typed by hand, or the backfill could not find it: Navigate goes by the text, so it may land wrong.
+    const unchecked = site.geoSource !== "google" && site.geoSource !== "lookup";
     return (
       <>
         <p className="mt-0.5 text-sm">{site.address}</p>
         <p className="text-xs text-muted-foreground">{site.suburb ?? ""}</p>
+        {unchecked ? <p className="mt-0.5 text-xs text-amber-700">Not checked with Google</p> : null}
       </>
     );
   }

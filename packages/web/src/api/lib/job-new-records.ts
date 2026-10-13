@@ -63,6 +63,25 @@ export const newCompanyInput = z.object({
   notes: optText,
 });
 
+/** Map pin from a Google pick. Sent only when the address was picked, never typed. */
+export const siteGeoFields = {
+  lat: z.number().min(-90).max(90).nullable().optional(),
+  lng: z.number().min(-180).max(180).nullable().optional(),
+  placeId: z.string().trim().max(300).nullable().optional(),
+};
+
+/** A pin from a pick marks the site "google". No pin means typed, shown "Not checked with Google". */
+export function withGeoSource<T extends { lat?: number | null; lng?: number | null; placeId?: string | null }>(v: T) {
+  const pinned = typeof v.lat === "number" && typeof v.lng === "number";
+  return {
+    ...v,
+    lat: pinned ? v.lat! : null,
+    lng: pinned ? v.lng! : null,
+    placeId: pinned ? v.placeId || null : null,
+    geoSource: pinned ? "google" : "",
+  };
+}
+
 export const newSiteInput = z.object({
   label: optText,
   address: z.string().trim().min(1, "The new site needs a street address."),
@@ -73,7 +92,8 @@ export const newSiteInput = z.object({
   /** Lockbox, gate code, parking. Kept on the site for every future job there. */
   accessNotes: optText,
   notes: optText,
-});
+  ...siteGeoFields,
+}).transform(withGeoSource);
 
 export type NewContact = z.output<typeof newContactInput>;
 export type NewCompany = z.output<typeof newCompanyInput>;

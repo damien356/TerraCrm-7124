@@ -120,14 +120,27 @@ export default function TaskScreen() {
   const done = t.status === "complete";
   const outstanding = t.checklist.filter((i) => i.required && !i.done).length;
 
+  const pinLat = t.siteLat;
+  const pinLng = t.siteLng;
+  const pinPlaceId = t.sitePlaceId;
+
   function openMaps() {
     if (!address) return;
     const q = encodeURIComponent(address);
     // The maps app they picked on the Me tab, same as Siri's "direct me".
     const picked = voiceSettings.data?.navApp ?? "apple";
     const app = picked === "apple" && Platform.OS !== "ios" ? "google" : picked;
-    const url =
-      app === "waze"
+    // A site checked with Google has a map pin. Go to the pin, not the typed text.
+    const ll = pinLat != null && pinLng != null ? `${pinLat},${pinLng}` : null;
+    const url = ll
+      ? app === "waze"
+        ? `https://waze.com/ul?ll=${ll}&navigate=yes`
+        : app === "google"
+          ? pinPlaceId
+            ? `https://www.google.com/maps/dir/?api=1&destination=${q}&destination_place_id=${encodeURIComponent(pinPlaceId)}&travelmode=driving`
+            : `https://www.google.com/maps/dir/?api=1&destination=${ll}&travelmode=driving`
+          : `https://maps.apple.com/?daddr=${ll}&dirflg=d`
+      : app === "waze"
         ? `https://waze.com/ul?q=${q}&navigate=yes`
         : app === "google"
           ? `https://www.google.com/maps/dir/?api=1&destination=${q}&travelmode=driving`

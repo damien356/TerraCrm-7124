@@ -80,6 +80,8 @@ export interface Brief {
   suburb: string | null;
   /** One line a maps app can find. */
   destination: string | null;
+  /** The site's map pin when it has one (checked with Google). Maps use it over the text. */
+  pin: { lat: number; lng: number; placeId: string | null } | null;
   contact: SiteContact | null;
   startTime: string | null;
 }
@@ -105,6 +107,9 @@ export async function briefFor(taskId: number): Promise<Brief | null> {
       postcode: schema.sites.postcode,
       state: schema.sites.state,
       siteAccess: schema.sites.accessNotes,
+      lat: schema.sites.lat,
+      lng: schema.sites.lng,
+      placeId: schema.sites.placeId,
     })
     .from(schema.jobTasks)
     .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
@@ -156,6 +161,7 @@ export async function briefFor(taskId: number): Promise<Brief | null> {
     street,
     suburb,
     destination,
+    pin: street && row.lat != null && row.lng != null ? { lat: row.lat, lng: row.lng, placeId: row.placeId ?? null } : null,
     contact,
     startTime: row.startTime,
   };

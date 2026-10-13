@@ -2,10 +2,9 @@ import * as React from "react";
 import { Building2, MapPin } from "lucide-react";
 import { Button } from "./ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "./ui/field";
-import { Spinner } from "./ui/card";
 import { ContactMatches, type ContactMatch } from "./contact-matches";
 import { useCompanyMatches } from "../queries/people";
-import { usePlaceDetails, usePlaceSuggestions, usePlacesEnabled } from "../queries/places";
+import { AddressAutocomplete, billingLine, usePlacesOn } from "./address-autocomplete";
 import { useSites } from "../queries/companies";
 import { COMPANY_TYPES, COMPANY_TYPE_LABELS } from "../../api/lib/person-tags";
 import { EmailInput } from "./email-input";
@@ -206,7 +205,12 @@ export function NewContactFields({
       ) : more ? (
         <>
           <Field label="Home address" className="sm:col-span-2">
-            <Input id={`${id}_addr`} value={value.address} onChange={(e) => set("address", e.target.value)} autoComplete="off" />
+            <AddressAutocomplete
+              id={`${id}_addr`}
+              value={value.address}
+              onType={(v) => set("address", v)}
+              onPick={(a) => onChange({ ...value, address: a.address, suburb: a.suburb, postcode: a.postcode })}
+            />
           </Field>
           <Field label="Suburb">
             <Input id={`${id}_suburb`} value={value.suburb} onChange={(e) => set("suburb", e.target.value)} autoComplete="off" />
@@ -362,7 +366,12 @@ export function NewCompanyFields({
         <Input id="newco_terms" type="number" min={0} value={value.paymentTerms} onChange={(e) => set("paymentTerms", e.target.value)} />
       </Field>
       <Field label="Billing address" className="sm:col-span-2">
-        <Input id="newco_bill" value={value.billingAddress} onChange={(e) => set("billingAddress", e.target.value)} autoComplete="off" />
+        <AddressAutocomplete
+          id="newco_bill"
+          value={value.billingAddress}
+          onType={(v) => set("billingAddress", v)}
+          onPick={(a) => set("billingAddress", billingLine(a))}
+        />
       </Field>
       <Field label="Notes" className="sm:col-span-2">
         <Textarea id="newco_notes" rows={2} value={value.notes} onChange={(e) => set("notes", e.target.value)} />
@@ -379,9 +388,16 @@ export interface NewSiteDraft {
   state: string;
   postcode: string;
   propertyType: string;
+  /** Map pin from a Google pick. Cleared as soon as the address is typed over. */
+  lat?: number | null;
+  lng?: number | null;
+  placeId?: string | null;
 }
 
 export const blankSite = (): NewSiteDraft => ({ address: "", suburb: "", state: "QLD", postcode: "", propertyType: "residential" });
+
+/** Whether the draft was picked from Google's list (it has a map pin). */
+export const sitePinned = (s: NewSiteDraft) => typeof s.lat === "number" && typeof s.lng === "number";
 
 export function sitePayload(s: NewSiteDraft) {
   return {
@@ -390,6 +406,9 @@ export function sitePayload(s: NewSiteDraft) {
     state: s.state.trim() || "QLD",
     postcode: s.postcode.trim() || null,
     propertyType: s.propertyType || "residential",
+    lat: sitePinned(s) ? s.lat! : null,
+    lng: sitePinned(s) ? s.lng! : null,
+    placeId: sitePinned(s) ? s.placeId || null : null,
   };
 }
 
@@ -400,9 +419,6 @@ const PROPERTY_TYPES = [
   ["strata", "Strata / body corporate"],
   ["other", "Other"],
 ] as const;
-
-const token = () =>
-  typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 /** Waits for a pause in typing. */
 function useDebounced<T>(value: T, ms = 250) {
@@ -429,87 +445,42 @@ export function NewSiteFields({
   onChange: (next: NewSiteDraft) => void;
   onUseExisting: (site: { id: number; label: string }) => void;
 }) {
-  const set = <K extends keyof NewSiteDraft>(k: K, v: NewSiteDraft[K]) => onChange({ ...value, [k]: v });
-  const enabled = usePlacesEnabled();
-  const on = !!enabled.data?.enabled;
-  const [session, setSession] = React.useState(token);
-  const [open, setOpen] = React.useState(false);
-  const [picked, setPicked] = React.useState(false);
-  const typed = useDebounced(value.address);
-  const suggestions = usePlaceSuggestions(typed, session, on && open && !picked);
-  const details = usePlaceDetails();
-  const [lookupError, setLookupError] = React.useState<string | null>(null);
+  // Typing over a picked address drops its pin: the pin belongs to Google's address, not the new text.
+  const set = <K extends keyof NewSiteDraft>(k: K, v: NewSiteDraft[K]) =>
+    onChange({ ...value, [k]: v, ...(k === "propertyType" ? {} : { lat: null, lng: null, placeId: null }) });
+  const on = usePlacesOn();
 
   // An existing site at this street address is offered before a second one is made.
   const street = useDebounced(value.address.trim().toLowerCase(), 300);
   const existing = useSites({ search: street }, street.length >= 6);
   const sameSites = street.length >= 6 ? (existing.data ?? []).slice(0, 4) : [];
 
-  async function pick(placeId: string) {
-    setLookupError(null);
-    setOpen(false);
-    try {
-      const a = await details.mutateAsync({ placeId, sessionToken: session });
-      onChange({ ...value, address: a.address, suburb: a.suburb, state: a.state || "QLD", postcode: a.postcode });
-      setPicked(true);
-    } catch (e) {
-      setLookupError(e instanceof Error ? e.message : String(e));
-    } finally {
-      // A pick ends Google's billing session. The next search starts a new one.
-      setSession(token());
-    }
-  }
-
-  const list = on && open && !picked ? (suggestions.data ?? []) : [];
-
   return (
     <div className="grid gap-2.5 sm:grid-cols-4">
       <Field
         label="Street address (required)"
-        className="relative sm:col-span-4"
+        className="sm:col-span-4"
         hint={on ? "Start typing and pick the address. Suburb and postcode fill in." : "Type the street, then the suburb and postcode."}
       >
-        <div className="relative">
-          <MapPin className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            id="newsite_address"
-            className="pl-8"
-            value={value.address}
-            onChange={(e) => {
-              setPicked(false);
-              setOpen(true);
-              set("address", e.target.value);
-            }}
-            onFocus={() => setOpen(true)}
-            onBlur={() => setTimeout(() => setOpen(false), 150)}
-            placeholder="14 Smith Street"
-            autoComplete="off"
-            aria-describedby={list.length ? "newsite_suggestions" : undefined}
-          />
-          {details.isPending ? <Spinner className="absolute right-2.5 top-1/2 -translate-y-1/2" /> : null}
-        </div>
-        {list.length ? (
-          <ul
-            id="newsite_suggestions"
-            aria-label="Address suggestions"
-            className="absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden rounded-md border border-border bg-card shadow-lg"
-          >
-            {list.map((s) => (
-              <li key={s.placeId}>
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => pick(s.placeId)}
-                  className="block w-full px-3 py-2 text-left text-sm hover:bg-secondary"
-                >
-                  <span className="font-medium">{s.main}</span>
-                  {s.secondary ? <span className="text-muted-foreground"> {s.secondary}</span> : null}
-                </button>
-              </li>
-            ))}
-            <li className="px-3 py-1 text-right text-[10px] text-muted-foreground">Powered by Google</li>
-          </ul>
-        ) : null}
+        <AddressAutocomplete
+          id="newsite_address"
+          icon
+          value={value.address}
+          onType={(v) => set("address", v)}
+          onPick={(a) =>
+            onChange({
+              ...value,
+              address: a.address,
+              suburb: a.suburb,
+              state: a.state || "QLD",
+              postcode: a.postcode,
+              lat: a.lat,
+              lng: a.lng,
+              placeId: a.placeId,
+            })
+          }
+          placeholder="14 Smith Street"
+        />
       </Field>
       <Field label="Suburb" className="sm:col-span-2">
         <Input id="newsite_suburb" value={value.suburb} onChange={(e) => set("suburb", e.target.value)} autoComplete="off" />
@@ -529,7 +500,17 @@ export function NewSiteFields({
           ))}
         </Select>
       </Field>
-      {lookupError ? <p className="text-xs text-destructive sm:col-span-4">{lookupError}</p> : null}
+      {on && value.address.trim() ? (
+        sitePinned(value) ? (
+          <p className="flex items-center gap-1.5 text-xs text-[var(--success)] sm:col-span-4">
+            <MapPin className="size-3.5" /> Checked with Google. Navigate goes to this pin.
+          </p>
+        ) : (
+          <p className="flex items-center gap-1.5 rounded-md bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900 sm:col-span-4">
+            <MapPin className="size-3.5" /> Not checked with Google. Pick it from the list if you can, or save it as typed.
+          </p>
+        )
+      ) : null}
       {sameSites.length ? (
         <div className="rounded-lg border border-[var(--gold)]/60 bg-[var(--gold)]/10 p-3 sm:col-span-4" aria-live="polite">
           <p className="flex items-center gap-1.5 text-[13px] font-semibold">
