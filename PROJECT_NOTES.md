@@ -732,3 +732,12 @@ Checked on the branch head: lint clean, web build OK, API tsc 0, mobile tsc 0, a
 - Web: components/site-fill.tsx SiteFillModal (NewSiteFields plus access notes, prefilled from the guess, shows the delivery line) and JobSiteFact on the job page ("No site. Add one"). Quote builder: Mark as sent, Email quote, Email again and Accepted open the form first when needed, then carry on. EmailQuoteButton has a gate prop. The server does not block Send or Accept without a site, and online accept is unchanged.
 - No schema change.
 - Tests: terra-scratch-tests/fix1011/t-i12s.body.ts with t-i913.head.ts (PASS 53). UI check i12ui.py (seed t-i12ui.body.ts). t-i913 still PASS 111.
+
+### 18.28 Email check on every email field (17 Oct, ask B)
+- Like ServiceM8. Red when the address is not an email (after leaving the field) or its domain can't take mail. "Did you mean bob@gmail.com?" shows for common typos and a tap fixes the field. Never blocks saving, and the input is type text so the browser never blocks it either.
+- lib/email-typo.ts (shared with the web, no network): emailFormatOk and suggestEmail (known AU and global mail providers, edit distance 1 or 2 with letter swaps, ending fixes like .con, .comau, .com.u, comma for dot, "gmail" with no ending). A known domain is never changed.
+- lib/email-check.ts checkEmail: MX lookup, then A or AAAA when there is no MX (RFC 5321). Null MX or no such domain is no_mail. A slow or failed lookup is unknown and never red. Cached per domain (6 h ok, 30 min no mail, 2 min unknown). Free, no key.
+- routes/emailCheck.ts emailCheck.check (staff only). Web: queries/emailCheck.ts useEmailCheck, components/email-input.tsx EmailInput (value, onValueChange, 600 ms debounce). An address already on file is checked straight away.
+- Fields: new contact and new company (new-records), clients New contact, contact edit, companies New company, company edit (accounts, compliance and admin), quote customer, voice memo, quote email, client invoice emails (3), supervisor move, team, supplier add, supplier owed, PO send, supplier invoice send. Not on login, public pages, the supplier detail (saves on blur) or the SWMS add list.
+- No schema change.
+- Tests: terra-scratch-tests/fix1011/t-em.body.ts with t-i913.head.ts (PASS 48). UI check emui.py. t-i913 PASS 111, t-i12s PASS 53.
