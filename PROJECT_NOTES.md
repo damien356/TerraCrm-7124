@@ -718,3 +718,9 @@ Checked on the branch head: lint clean, web build OK, API tsc 0, mobile tsc 0, a
 - Quote builder: amber line note "Markup 35%, standard 91%", the bar says "Priced X% under the price list (markup below standard)" for markup lines, Admin button "Approve X% under list" or "Approve X% discount", and Accepted is disabled too while waiting.
 - lib/quote-check.ts: the discount_limit stop applies to Admin too. The "discounted" warn uses the markup wording for cost viewers (CheckLine.belowStandard, built in agent/quote-agent.ts runCheck).
 - Tests: t-i5.body.ts with t-i913.head.ts (PASS 65). t-i16.body.ts now approves before sending (PASS 71). t-i913 111, t-var 164, t-cancel 148 still pass. UI check i5ui.py (seed t-i5ui.body.ts).
+
+### 18.26 188001 list item 8: installer cost table only once a dispatch has labour lines (16 Oct)
+- routes/costing.ts forecast: hasLabourLines is true when any dispatch on the job has a labour line. comparison is empty until then, and the result returns hasLabourLines.
+- components/costing.tsx JobForecastCard: the "Price all labour against" picker shows only when comparison has rows. The "What it costs on each installer" table needs hasLabourLines too. With nothing measured every installer priced at $0, so the table said nothing.
+- No schema change.
+- Tests: terra-scratch-tests/fix1011/t-i8c.body.ts with t-i913.head.ts (PASS 13): no lines, lines added, lines removed, office 403.
