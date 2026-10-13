@@ -8,6 +8,7 @@ import { rebuildForecast } from "../lib/cashflow";
 import { invoicesForJob, markInvoicePaid, PAYMENT_METHODS, shapeInvoice, voidInvoice } from "../lib/client-invoices";
 import { createSelection, selectionForJob, sendSelection } from "../lib/material-selection";
 import { isProductForm, lockState, staffSections } from "../lib/selection-colours";
+import { staffOffers } from "../lib/underlay-upgrade";
 import { EMAIL_RE } from "../lib/quote-email";
 import { sendInvoiceEmail } from "../lib/invoice-email";
 import { cardPaymentsOn, payUrl } from "../lib/stripe";
@@ -26,9 +27,10 @@ const rebuild = () => rebuildForecast().catch((e) => console.error("[cashflow] r
 async function shapeSelection(s: Awaited<ReturnType<typeof selectionForJob>>) {
   if (!s) return null;
   const productForm = isProductForm(s.items);
-  const [lock, sections, variation, task] = await Promise.all([
+  const [lock, sections, upgrades, variation, task] = await Promise.all([
     lockState(s.jobId),
     productForm ? staffSections(s.items) : Promise.resolve([]),
+    productForm ? staffOffers(s.items) : Promise.resolve([]),
     s.variationId
       ? db.select({ id: schema.variations.id, ref: schema.variations.ref, status: schema.variations.status }).from(schema.variations).where(eq(schema.variations.id, s.variationId))
       : Promise.resolve([]),
@@ -48,6 +50,7 @@ async function shapeSelection(s: Awaited<ReturnType<typeof selectionForJob>>) {
     notes: s.notes,
     locked: lock.locked,
     sections,
+    upgrades,
     variation: variation[0] ?? null,
     task: task[0] ?? null,
     items: s.items.map((i) => ({ id: i.id, areaId: i.areaId, room: i.room, product: i.product, colour: i.colour, notes: i.notes })),

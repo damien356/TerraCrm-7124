@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { sendAsTeam } from "./agent-mail";
@@ -7,7 +7,8 @@ import { addParticipant, ensureForJob, logMessage, subjectWithRef } from "./conv
 import { notifyOffice } from "./notify";
 import { newToken, selectionUrl } from "./quote-links";
 import { jobText } from "./refs";
-import { isProductForm, productItemsFor } from "./selection-colours";
+import { isProductForm, lockState, productItemsFor } from "./selection-colours";
+import { addMissingUpgradeRows } from "./underlay-upgrade";
 
 const bad = (message: string) => new ORPCError("BAD_REQUEST", { message });
 
@@ -71,7 +72,11 @@ export async function createSelection(args: { jobId: number }) {
   // Checked before anything is written, so a job with nothing to choose gets no form.
   const probe = await productItemsFor(args.jobId, 0);
   const existing = await selectionForJob(args.jobId);
-  if (existing && isProductForm(existing.items) && existing.quoteId === probe.quoteId) return existing;
+  if (existing && isProductForm(existing.items) && existing.quoteId === probe.quoteId) {
+    // Item 9: a form made before the upgrade pairs were set gets its offers on a resend.
+    if (!(await lockState(args.jobId)).locked && (await addMissingUpgradeRows(existing, existing.items))) return (await selectionForJob(args.jobId))!;
+    return existing;
+  }
 
   const who = await decisionMakerFor(args.jobId);
   const [sel] = await db
@@ -109,6 +114,11 @@ export async function sendSelection(selectionId: number, by: { name: string }): 
   const url = selectionUrl(sel.token);
   const conv = await ensureForJob(job.id);
   const subject = subjectWithRef(`Check your flooring colours, job ${ref}`, conv.ref);
+  // Item 9: say there is an underlay upgrade to answer on the form.
+  const offers = await db
+    .select({ id: schema.materialSelectionItems.id })
+    .from(schema.materialSelectionItems)
+    .where(and(eq(schema.materialSelectionItems.selectionId, sel.id), isNotNull(schema.materialSelectionItems.offerProductId), eq(schema.materialSelectionItems.answer, "")));
   const text = [
     `Hi ${first},`,
     "",
@@ -117,6 +127,7 @@ export async function sendSelection(selectionId: number, by: { name: string }): 
     "Before we order, please check the colour of each floor on your quote. If you would like a different colour from the same range, you can change it there. It takes a couple of minutes:",
     url,
     "",
+    ...(offers.length ? ["There is also an underlay upgrade offer on the form. Tap Yes or No thanks.", ""] : []),
     "If you are not sure yet, leave us a note on the form and we will call you.",
     "",
     "Kind regards,",

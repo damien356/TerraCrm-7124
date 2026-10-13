@@ -94,7 +94,11 @@ export async function makeVariationWork(v: Variation) {
   return { taskId, materials: supply.length, deliveryCosts, skipped: false };
 }
 
-export async function acceptVariation(args: { id: number; actor: VariationActor; via: "staff" | "online"; note?: string | null }) {
+/**
+ * via "form": the client said yes to an underlay upgrade on the material
+ * selection form (item 9), with the price on screen. Accepted from draft.
+ */
+export async function acceptVariation(args: { id: number; actor: VariationActor; via: "staff" | "online" | "form"; note?: string | null }) {
   const v = await variationOrThrow(args.id);
   if (v.status === "approved" || v.status === "invoiced") throw bad(`Variation ${v.ref} is already accepted.`);
   if (v.status === "rejected") throw bad(`Variation ${v.ref} was declined. Make a new one.`);
@@ -105,7 +109,7 @@ export async function acceptVariation(args: { id: number; actor: VariationActor;
   const now = new Date();
   const [locked] = await db
     .update(schema.variations)
-    .set({ status: "approved", approvedAt: now, approvedByName: args.actor.name, approvalChannel: args.via === "online" ? "online" : "staff", updatedAt: now })
+    .set({ status: "approved", approvedAt: now, approvedByName: args.actor.name, approvalChannel: args.via, updatedAt: now })
     .where(and(eq(schema.variations.id, v.id), eq(schema.variations.status, v.status)))
     .returning();
   if (!locked) throw bad("This variation just changed. Refresh and try again.");
@@ -127,7 +131,7 @@ export async function acceptVariation(args: { id: number; actor: VariationActor;
     entityType: "variation",
     entityId: locked.id,
     action: "variation_accepted",
-    detail: `Variation ${locked.ref} accepted${args.via === "online" ? ` online by ${args.actor.name}` : " by the office"}, ${money(locked.total)}. Job value now ${money(job?.value ?? 0)}${args.note?.trim() ? `. ${args.note.trim()}` : ""}`,
+    detail: `Variation ${locked.ref} accepted${args.via === "online" ? ` online by ${args.actor.name}` : args.via === "form" ? ` on the material selection form by ${args.actor.name}` : " by the office"}, ${money(locked.total)}. Job value now ${money(job?.value ?? 0)}${args.note?.trim() ? `. ${args.note.trim()}` : ""}`,
     actorName: args.actor.name,
     actorRole: args.actor.role,
   });
@@ -141,7 +145,8 @@ export async function acceptVariation(args: { id: number; actor: VariationActor;
     work.deliveryCosts ? `Delivery is on Money out as ${work.deliveryCosts === 1 ? "an Other cost" : `${work.deliveryCosts} Other costs`}.` : "",
     work.taskId ? "A new dispatch is on the job for the extra work. Book it in." : "",
     colours.items ? `The colour change${colours.items === 1 ? " is" : "s are"} now on the materials to order${colours.moved ? "" : ". None was found to change, check the order by hand"}.` : "",
-    lines.some((l) => !SUPPLY_KINDS.has(l.kind) && !WORK_KINDS.has(l.kind) && l.kind !== DELIVERY) && !colours.items ? "It has other lines. Check if anything else needs doing." : "",
+    colours.upgrades ? `The underlay upgrade${colours.upgrades === 1 ? " is" : "s are"} now on the materials to order${colours.moved ? "" : ". None was found to change, check the order by hand"}.` : "",
+    lines.some((l) => !SUPPLY_KINDS.has(l.kind) && !WORK_KINDS.has(l.kind) && l.kind !== DELIVERY) && !colours.items && !colours.upgrades ? "It has other lines. Check if anything else needs doing." : "",
   ]
     .filter(Boolean)
     .join("\n");

@@ -65,6 +65,7 @@ import { productFind } from "./routes/productFind";
 import { publicPages } from "./routes/publicPages";
 import { jobCancel } from "./routes/jobCancel";
 import { variations } from "./routes/variations";
+import { underlayUpgrades } from "./routes/underlayUpgrades";
 import { bootMailAgent } from "./lib/mail-agent";
 import { finishConnect } from "./lib/gmail";
 import { bootReminders } from "./lib/reminders";
@@ -195,6 +196,8 @@ export const router = {
   productFind,
   /** Variations on a job after its quote is accepted: priced off the books, sent, accepted, billed (item 12). */
   variations,
+  /** Settings: which underlay upgrades to which, for the offer on the material selection form (item 9). */
+  underlayUpgrades,
   /** No-login pages for clients: /q/<token> read and sign a quote, /m/<token> choose flooring. Never returns cost. */
   publicPages,
   jobCancel,

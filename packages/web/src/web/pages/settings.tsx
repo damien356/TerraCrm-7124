@@ -13,6 +13,7 @@ import { EmailAgentCard } from "../components/email-agent";
 import { NotifySettingsCard } from "../components/notify-settings";
 import { PriceListTools } from "../components/price-import";
 import { QuoteEmailCard } from "../components/quote-email-settings";
+import { UnderlayUpgradesCard } from "../components/underlay-upgrades-card";
 import { QUOTE_EMAIL_BODY_KEY, QUOTE_EMAIL_SUBJECT_KEY } from "../../api/lib/quote-email-template";
 import { useOpeningBalance, useSetOpeningBalance } from "../queries/finance";
 import { longDate, moneyExact } from "../lib/money";
@@ -31,6 +32,7 @@ import {
 } from "../queries/settings";
 import { useCreateSupplier, useSuppliers } from "../queries/suppliers";
 import { SUPPLIER_CHARGES_MARKUP_DEFAULT, SUPPLIER_CHARGES_MARKUP_KEY } from "../../api/lib/charge-fold";
+import { UNDERLAY_UPGRADES_KEY } from "../../api/lib/underlay-pairs";
 import { autoSoldAs, boxM2Of, FLOOR_TYPE_LABELS, FLOOR_TYPES, wastageKey } from "../../api/lib/flooring-qty";
 import { categoryLabel, PRODUCT_CATEGORIES } from "../../api/lib/product-categories";
 
@@ -1332,6 +1334,7 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
       <JobNumbersCard />
 
       <QuoteEmailCard settings={settings} />
+      <UnderlayUpgradesCard />
 
       <Card>
         <CardHeader
@@ -1457,6 +1460,8 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
                   QUOTE_EMAIL_BODY_KEY,
                   // Edited on the Supplier charges card.
                   SUPPLIER_CHARGES_MARKUP_KEY,
+                  // Edited on the Underlay upgrades card.
+                  UNDERLAY_UPGRADES_KEY,
                 ].includes(k) && !k.startsWith("wastage_pct_"),
             )
             .map((k) => (

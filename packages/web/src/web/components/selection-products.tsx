@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Check, Lock, Palette } from "lucide-react";
+import { Check, Layers, Lock, Palette } from "lucide-react";
 import { Button } from "./ui/button";
 import { Field, Input, Textarea } from "./ui/field";
 import { Spinner } from "./ui/card";
@@ -19,6 +19,75 @@ import { usePublicSelection, useSubmitSelection } from "../queries/publicPages";
 type Data = NonNullable<ReturnType<typeof usePublicSelection>["data"]>;
 type Section = Data["sections"][number];
 type Option = Section["options"][number];
+type Upgrade = Data["upgrades"][number];
+
+/** Item 9: "Upgrade to Gold underlay for an extra $X". One tap, Yes or No. */
+function UpgradeCard({
+  u,
+  answer,
+  locked,
+  onAnswer,
+}: {
+  u: Upgrade;
+  answer: "" | "yes" | "no";
+  locked: boolean;
+  onAnswer: (a: "yes" | "no") => void;
+}) {
+  const price = u.extraIncGst != null ? ` for an extra ${moneyExact(u.extraIncGst)} inc GST` : "";
+  const fixed = locked || u.settled;
+  return (
+    <PublicCard>
+      <div className="flex gap-4">
+        <div className="flex size-14 shrink-0 items-center justify-center rounded-lg bg-[var(--gold)]/15 text-[var(--gold-deep)]">
+          <Layers className="size-6" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="label-xs">Underlay upgrade</p>
+          <h2 className="text-lg font-bold leading-tight tracking-[-0.01em]">
+            {u.settled ? (
+              <>Upgraded to {u.toName}</>
+            ) : (
+              <>
+                Upgrade to {u.toName}
+                {price}?
+              </>
+            )}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Your quote has {u.fromName}
+            {u.qtyText ? `, ${u.qtyText}` : ""}. A better underlay feels softer underfoot and helps your carpet last.
+          </p>
+          {u.settled ? (
+            <p className="mt-2 flex items-center gap-1.5 rounded-md bg-[#3F7D3A]/10 px-2.5 py-1.5 text-sm text-[#2E6B4F]">
+              <Check className="size-4 shrink-0" />
+              Upgraded. It is added to your job as a variation and goes on your final invoice.
+            </p>
+          ) : fixed ? (
+            <p className="mt-2 text-sm">{answer === "yes" ? "You said yes to the upgrade." : answer === "no" ? "You said no thanks." : "No answer was given."}</p>
+          ) : (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button variant={answer === "yes" ? "default" : "outline"} onClick={() => onAnswer("yes")} aria-pressed={answer === "yes"}>
+                {answer === "yes" ? <Check className="size-4" /> : null}
+                Yes, upgrade
+              </Button>
+              <Button variant={answer === "no" ? "default" : "outline"} onClick={() => onAnswer("no")} aria-pressed={answer === "no"}>
+                {answer === "no" ? <Check className="size-4" /> : null}
+                No thanks
+              </Button>
+            </div>
+          )}
+          {!fixed && answer === "yes" ? (
+            <p className="mt-2 rounded-md bg-[var(--gold)]/10 px-2.5 py-1.5 text-xs">
+              {u.extraIncGst != null
+                ? "When you send this form the upgrade is added to your job as a variation. It goes on your final invoice. Your deposit does not change."
+                : "We will add it as a variation and send it for approval before we order."}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </PublicCard>
+  );
+}
 
 function Swatch({ option, size = "lg" }: { option: Pick<Option, "colour" | "swatchUrl">; size?: "lg" | "sm" }) {
   const box = size === "lg" ? "size-28 sm:size-32" : "aspect-square w-full";
@@ -106,7 +175,10 @@ export function ProductSelection({ token, d }: { token: string; d: Data }) {
   const [name, setName] = React.useState(d.submittedName ?? "");
   const [open, setOpen] = React.useState<number | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const [sent, setSent] = React.useState<null | { changed: number }>(null);
+  const [answers, setAnswers] = React.useState<Record<number, "" | "yes" | "no">>(() =>
+    Object.fromEntries(d.upgrades.map((u) => [u.itemId, u.answer])),
+  );
+  const [sent, setSent] = React.useState<null | { changed: number; upgraded: number }>(null);
 
   if (sent) {
     return (
@@ -115,6 +187,11 @@ export function ProductSelection({ token, d }: { token: string; d: Data }) {
           {sent.changed
             ? "We will check your colour change against your quote and be in touch before we order."
             : "We will order what is on your quote."}{" "}
+          {sent.upgraded
+            ? d.showPrices
+              ? "Your underlay upgrade is added to your job as a variation and goes on your final invoice."
+              : "We have your underlay upgrade and will send it for approval before we order."
+            : ""}{" "}
           You can open this link again to make changes until we order.
         </PublicMessage>
         {!d.locked ? (
@@ -129,18 +206,24 @@ export function ProductSelection({ token, d }: { token: string; d: Data }) {
   }
 
   const changed = d.sections.filter((s) => picks[s.itemId] !== s.quotedProductId).length;
+  const openOffers = d.upgrades.filter((u) => !u.settled);
 
   async function onSubmit() {
     setError(null);
     if (name.trim().length < 2) return setError("Type your name so we know who confirmed.");
+    if (openOffers.some((u) => !answers[u.itemId])) return setError("Tap Yes, upgrade or No thanks on the underlay upgrade.");
     try {
       await submit.mutateAsync({
         token,
         name: name.trim(),
         picks: d.sections.map((s) => ({ itemId: s.itemId, productId: picks[s.itemId] ?? s.productId })),
         notes,
+        upgrades: openOffers.flatMap((u) => {
+          const a = answers[u.itemId];
+          return a ? [{ itemId: u.itemId, answer: a }] : [];
+        }),
       });
-      setSent({ changed });
+      setSent({ changed, upgraded: openOffers.filter((u) => answers[u.itemId] === "yes").length + d.upgrades.filter((u) => u.settled).length });
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) {
       setError(errorText(e));
@@ -157,6 +240,7 @@ export function ProductSelection({ token, d }: { token: string; d: Data }) {
         <p className="mt-1 text-sm text-muted-foreground">
           {d.firstName ? `Hi ${d.firstName}. ` : ""}Here is what is on your quote{d.siteAddress ? ` for ${d.siteAddress}` : ""}. If it all looks right,
           type your name at the bottom and send. If you would like a different colour from the same range, you can change it here.
+          {d.upgrades.some((u) => !u.settled) ? " There is an underlay upgrade offer below too." : ""}
         </p>
         {d.status === "submitted" && d.submittedAt ? (
           <p className="mt-3 rounded-md bg-[#3F7D3A]/10 px-3 py-2 text-sm text-[#2E6B4F]">
@@ -217,6 +301,19 @@ export function ProductSelection({ token, d }: { token: string; d: Data }) {
         );
       })}
 
+      {d.upgrades.map((u) => (
+        <UpgradeCard
+          key={u.itemId}
+          u={u}
+          answer={answers[u.itemId] ?? ""}
+          locked={d.locked}
+          onAnswer={(a) => {
+            setAnswers({ ...answers, [u.itemId]: a });
+            setError(null);
+          }}
+        />
+      ))}
+
       {!d.locked ? (
         <PublicCard>
           <div className="flex flex-col gap-3">
@@ -229,7 +326,7 @@ export function ProductSelection({ token, d }: { token: string; d: Data }) {
             {error ? <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p> : null}
             <Button size="lg" onClick={onSubmit} disabled={submit.isPending} className="w-full sm:w-auto sm:self-end">
               {submit.isPending ? <Spinner /> : <Check className="size-4" />}
-              {changed ? "Send my colour change" : "Confirm these colours"}
+              {changed ? "Send my colour change" : d.sections.length ? "Confirm these colours" : "Send my answer"}
             </Button>
           </div>
         </PublicCard>

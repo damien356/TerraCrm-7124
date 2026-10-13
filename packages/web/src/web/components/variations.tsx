@@ -163,7 +163,12 @@ export function VariationsCard({ jobId }: { jobId: number }) {
 
 function rowNote(v: Variation) {
   if (v.status === "approved" || v.status === "invoiced") {
-    const how = v.approvalChannel === "online" ? `signed online by ${v.approvedByName ?? "the client"}` : `marked by ${v.approvedByName ?? "the office"}`;
+    const how =
+      v.approvalChannel === "online"
+        ? `signed online by ${v.approvedByName ?? "the client"}`
+        : v.approvalChannel === "form"
+          ? `accepted on the material selection form by ${v.approvedByName ?? "the client"}`
+          : `marked by ${v.approvedByName ?? "the office"}`;
     return [`Accepted ${dateOf(v.approvedAt) ?? ""}, ${how}`, v.billedToCompany ? "On the end invoice" : "On the final invoice"].join(". ");
   }
   if (v.status === "rejected") return `Declined ${dateOf(v.rejectedAt) ?? ""}`;

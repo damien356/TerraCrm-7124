@@ -19,6 +19,7 @@ import {
   round2,
   type Variation,
 } from "./variations";
+import { applyAcceptedUpgrade, applyUpgradeAnswers, isUpgradeRow, upgradeRowsFor, type UpgradeAnswer } from "./underlay-upgrade";
 
 /* ---------------------------------------------------------------------------
  * Item 8 (fix list 13 Oct). The material selection form is one section per
@@ -190,28 +191,33 @@ export async function productItemsFor(jobId: number, selectionId: number) {
   const quote = await acceptedQuoteFor(jobId);
   if (!quote) throw bad("This job has no accepted quote, so there is nothing for the client to choose.");
   const sections = await quoteSections(quote.id);
-  if (!sections.length) throw bad("The accepted quote has no floors or coloured trims to choose.");
+  // Item 9: an underlay that Settings pairs with a better one gets an upgrade offer.
+  const upgrades = await upgradeRowsFor(jobId, quote.id, selectionId, sections.length);
+  if (!sections.length && !upgrades.length) throw bad("The accepted quote has no floors or coloured trims to choose.");
   const mats = await db
     .select({ id: schema.jobMaterials.id, productId: schema.jobMaterials.productId })
     .from(schema.jobMaterials)
     .where(and(eq(schema.jobMaterials.jobId, jobId), eq(schema.jobMaterials.status, "to_order")));
   return {
     quoteId: quote.id,
-    rows: sections.map((s, i) => ({
-      selectionId,
-      room: "",
-      product: sectionTitle(s.product),
-      colour: s.product.colour,
-      notes: "",
-      sortOrder: i,
-      quoteItemId: s.lines[0]?.id ?? null,
-      quotedProductId: s.product.id,
-      productId: s.product.id,
-      qty: s.qty,
-      unit: s.unit,
-      extraExGst: 0,
-      materialIds: JSON.stringify(mats.filter((m) => m.productId === s.product.id).map((m) => m.id)),
-    })),
+    rows: [
+      ...sections.map((s, i) => ({
+        selectionId,
+        room: "",
+        product: sectionTitle(s.product),
+        colour: s.product.colour,
+        notes: "",
+        sortOrder: i,
+        quoteItemId: s.lines[0]?.id ?? null,
+        quotedProductId: s.product.id,
+        productId: s.product.id,
+        qty: s.qty,
+        unit: s.unit,
+        extraExGst: 0,
+        materialIds: JSON.stringify(mats.filter((m) => m.productId === s.product.id).map((m) => m.id)),
+      })),
+      ...upgrades,
+    ],
   };
 }
 
@@ -247,6 +253,7 @@ export async function publicSections(sel: Selection, items: SelItem[]) {
   const byId = await productsById(items.flatMap((i) => [i.quotedProductId, i.productId]));
   const out = [];
   for (const i of items) {
+    if (isUpgradeRow(i)) continue;
     const quoted = i.quotedProductId ? byId.get(i.quotedProductId) : undefined;
     if (!quoted) continue;
     const lines = await quoteLinesOf(sel.quoteId, quoted.id);
@@ -284,7 +291,7 @@ export async function staffSections(items: SelItem[]) {
   const vids = [...new Set(items.map((i) => i.variationId).filter((n): n is number => !!n))];
   const vars = vids.length ? await db.select().from(schema.variations).where(inArray(schema.variations.id, vids)) : [];
   return items
-    .filter((i) => i.quotedProductId)
+    .filter((i) => i.quotedProductId && !isUpgradeRow(i))
     .map((i) => {
       const quoted = byId.get(i.quotedProductId!);
       const picked = byId.get(i.productId ?? i.quotedProductId!) ?? quoted;
@@ -333,7 +340,7 @@ async function moveMaterials(jobId: number, item: SelItem, from: number[], to: P
 export type Pick_ = { itemId: number; productId: number };
 
 /** The client sends the new form. Works out each change, then materials, the variation and the office task. */
-export async function submitProductSelection(sel: Selection, name: string, picks: Pick_[], notesIn: string) {
+export async function submitProductSelection(sel: Selection, name: string, picks: Pick_[], notesIn: string, upgradesIn: UpgradeAnswer[] = []) {
   const lock = await lockState(sel.jobId);
   if (lock.locked) throw bad(lock.reason ?? "This form can no longer be changed.");
   const who = name.trim().slice(0, 120);
@@ -344,8 +351,7 @@ export async function submitProductSelection(sel: Selection, name: string, picks
       .from(schema.materialSelectionItems)
       .where(eq(schema.materialSelectionItems.selectionId, sel.id))
       .orderBy(asc(schema.materialSelectionItems.sortOrder), asc(schema.materialSelectionItems.id))
-  ).filter((i) => i.quotedProductId);
-  if (!items.length) throw bad("This form has nothing to choose.");
+  ).filter((i) => i.quotedProductId && !isUpgradeRow(i));
   const byId = await productsById(items.flatMap((i) => [i.quotedProductId, i.productId]));
 
   const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, sel.jobId));
@@ -440,6 +446,12 @@ export async function submitProductSelection(sel: Selection, name: string, picks
     log.push(`${title}: ${quoted.colour} to ${picked.colour}${kind === "dearer" ? ` (+${money(round2(extra * 1.1))})` : kind === "cheaper" ? ` (${money(round2(extra * 1.1))})` : ""}`);
   }
 
+  // Item 9: the underlay upgrade answers.
+  const up = await applyUpgradeAnswers({ sel, who, answers: upgradesIn, showPrices: prices.show, company: prices.company, variationId });
+  variationId = up.variationId;
+  report.push(...up.report);
+  log.push(...up.log);
+
   // A draft this form made that has nothing left on it goes.
   const v = await variationRow(variationId);
   if (v && v.status === "draft" && !v.sentAt && !(await itemsOf(v.id)).length) {
@@ -457,7 +469,11 @@ export async function submitProductSelection(sel: Selection, name: string, picks
     ]
       .filter(Boolean)
       .join("\n");
-    const title = changed ? `Colour change${changed === 1 ? "" : "s"} to check, job ${jobRef}` : `Material selection note, job ${jobRef}`;
+    const title = changed
+      ? `Colour change${changed === 1 ? "" : "s"} to check, job ${jobRef}`
+      : up.report.length
+        ? `Underlay upgrade to check, job ${jobRef}`
+        : `Material selection note, job ${jobRef}`;
     const [open] = taskId ? await db.select().from(schema.officeTasks).where(eq(schema.officeTasks.id, taskId)) : [];
     if (open && open.status === "open") {
       await db.update(schema.officeTasks).set({ title, detail, updatedAt: new Date() }).where(eq(schema.officeTasks.id, open.id));
@@ -482,21 +498,51 @@ export async function submitProductSelection(sel: Selection, name: string, picks
     actorName: who || "Client",
     actorRole: "customer",
   });
+
+  // The client's yes with the price on screen is their acceptance. Its own
+  // variation, accepted now: job value up, final invoice, the underlay changes.
+  const { acceptVariation } = await import("./variation-accept");
+  const failed: string[] = [];
+  for (const id of up.toAccept) {
+    try {
+      await acceptVariation({ id, actor: { name: who || "Client", role: "customer" }, via: "form" });
+    } catch (e) {
+      const ref = (await variationRow(id))?.ref ?? "";
+      const why = (e as { message?: string })?.message ?? String(e);
+      console.error("[selection] upgrade accept failed:", e);
+      failed.push(`The client said yes to the underlay upgrade, but variation ${ref} could not be accepted: ${why} It is a draft. Check it and send it.`);
+    }
+  }
+  if (failed.length) {
+    await db.insert(schema.officeTasks).values({ jobId: sel.jobId, title: `Underlay upgrade to check, job ${jobRef}`, detail: failed.join("\n"), createdByName: who || "Client" });
+  }
+
+  const upgraded = up.upgraded > 0 && (up.toAccept.length > 0 || up.report.length > 0);
   await notifyOffice("selection_done", {
-    title: changed ? `Colour change on job ${jobRef}` : `Colours confirmed for job ${jobRef}`,
+    title: changed ? `Colour change on job ${jobRef}` : upgraded ? `Underlay upgrade on job ${jobRef}` : `Colours confirmed for job ${jobRef}`,
     body: changed
-      ? `${who || "The client"} changed ${changed} colour${changed === 1 ? "" : "s"}. There is a task on the job.`
-      : `${who || "The client"} confirmed the quoted colours.${notes ? " They left a note." : " Ready to order."}`,
+      ? `${who || "The client"} changed ${changed} colour${changed === 1 ? "" : "s"}.${upgraded ? " They also said yes to the underlay upgrade." : ""} There is a task on the job.`
+      : upgraded
+        ? `${who || "The client"} said yes to the underlay upgrade. There is a task on the job.`
+        : `${who || "The client"} confirmed the quoted colours.${notes ? " They left a note." : " Ready to order."}`,
     data: { kind: "job", jobId: sel.jobId },
   }).catch((e) => console.error("[selection] push failed:", e));
-  return { changed };
+  return { changed, upgraded: up.upgraded };
 }
 
 /** A variation is accepted. Any dearer colour it carries goes onto the materials to order now. */
 export async function applyAcceptedColours(v: Variation) {
   const items = await db.select().from(schema.materialSelectionItems).where(eq(schema.materialSelectionItems.variationId, v.id));
   let moved = 0;
+  let upgrades = 0;
   for (const item of items) {
+    if (isUpgradeRow(item)) {
+      // Item 9: an underlay upgrade the client said yes to.
+      if (item.answer !== "yes") continue;
+      upgrades++;
+      moved += await applyAcceptedUpgrade(v, item);
+      continue;
+    }
     if (!item.productId || !item.quotedProductId || item.productId === item.quotedProductId) continue;
     const [to] = await db.select().from(schema.products).where(eq(schema.products.id, item.productId));
     if (!to) continue;
@@ -512,5 +558,5 @@ export async function applyAcceptedColours(v: Variation) {
       actorRole: "system",
     });
   }
-  return { items: items.length, moved };
+  return { items: items.length - upgrades, moved, upgrades };
 }

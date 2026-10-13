@@ -11,6 +11,7 @@ import { depositSplit } from "../lib/deposits";
 import { auDate } from "../lib/invoice-match";
 import { selectionForJob, submitSelection } from "../lib/material-selection";
 import { isProductForm, lockState, publicSections, submitProductSelection } from "../lib/selection-colours";
+import { publicOffers } from "../lib/underlay-upgrade";
 import { todayISO } from "../lib/pricing";
 import { acceptQuote } from "../lib/quote-accept";
 import { EMAIL_RE, sendSignedCopy } from "../lib/quote-email";
@@ -308,9 +309,13 @@ const selectionPage = {
     const productForm = isProductForm(items);
     const products = productForm ? await publicSections(sel, items) : null;
     const lock = productForm ? await lockState(sel.jobId) : { locked: false, reason: null };
+    // Item 9: the underlay upgrade offers. No price when the client may not see prices.
+    const upgrades = productForm ? await publicOffers(items, products?.showPrices ?? false) : [];
     return {
       kind: productForm ? ("products" as const) : ("rooms" as const),
       sections: products?.sections ?? [],
+      upgrades,
+      company: products?.company ?? null,
       showPrices: products?.showPrices ?? false,
       notes: sel.notes,
       locked: lock.locked,
@@ -347,6 +352,8 @@ const selectionPage = {
           .optional(),
         /** The product form (item 8): the colour picked in each section. */
         picks: z.array(z.object({ itemId: z.number().int(), productId: z.number().int() })).max(60).optional(),
+        /** Item 9: Yes, upgrade or No thanks on each underlay upgrade offer. */
+        upgrades: z.array(z.object({ itemId: z.number().int(), answer: z.enum(["yes", "no"]) })).max(20).optional(),
         notes: z.string().max(2000).optional(),
       }),
     )
@@ -355,8 +362,8 @@ const selectionPage = {
       const latest = await selectionForJob(sel.jobId);
       if (latest && latest.id !== sel.id) throw bad("This form has been replaced by a newer one. Open the newest email from us.");
       if (latest && isProductForm(latest.items)) {
-        await submitProductSelection(sel, input.name, input.picks ?? [], input.notes ?? "");
-        return { status: "submitted", submittedAt: new Date() };
+        const out = await submitProductSelection(sel, input.name, input.picks ?? [], input.notes ?? "", input.upgrades ?? []);
+        return { status: "submitted", submittedAt: new Date(), upgraded: out.upgraded };
       }
       if (!input.items?.length) throw bad("Fill in at least one room.");
       const out = await submitSelection(sel, input.name, input.items);

@@ -1874,6 +1874,14 @@ export const materialSelectionItems = sqliteTable(
     /** The variation and its line that carry a dearer pick. */
     variationId: integer("variation_id"),
     variationItemId: integer("variation_item_id"),
+    /*
+     * Item 9 (fix list 11 Oct). Set on an underlay upgrade row: the better
+     * underlay offered for the quoted one (quotedProductId), from the pairs
+     * in Settings. extraExGst is the offer price. Null on every other row.
+     */
+    offerProductId: integer("offer_product_id"),
+    /** The client's answer to the upgrade: "" not yet, "yes" or "no". */
+    answer: text("answer").notNull().default(""),
     ...timestamps,
   },
   (t) => [index("material_selection_items_sel_idx").on(t.selectionId)],

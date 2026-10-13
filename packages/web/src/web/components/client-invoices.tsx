@@ -720,6 +720,30 @@ function SelectionSections({ s }: { s: SelectionView }) {
           </li>
         ))}
       </ul>
+      {s.upgrades.length ? (
+        <ul className="divide-y divide-border rounded-md border border-border">
+          {s.upgrades.map((u) => (
+            <li key={u.id} className="px-3 py-2 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-medium">Underlay upgrade offer</p>
+                <Badge colour={u.answer === "yes" ? "#3F7D3A" : u.answer === "no" ? "#6B6B6B" : "#D08A1E"}>
+                  {u.answer === "yes" ? "Yes, upgrade" : u.answer === "no" ? "No thanks" : "Not answered"}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {u.fromName} to <span className="font-semibold text-foreground">{u.toName}</span>
+                {u.qtyText ? `, ${u.qtyText}` : ""}, {moneyExact(u.extraIncGst)} inc GST extra
+              </p>
+              {u.variation ? (
+                <p className="mt-0.5 text-xs">
+                  Variation {u.variation.ref}, {u.variation.status}
+                  {u.variation.status === "draft" ? ". Check it and send it from Variations." : ""}
+                </p>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {s.notes ? (
         <p className="rounded-md bg-secondary px-3 py-2 text-xs">
           <span className="font-semibold">Client note:</span> {s.notes}
