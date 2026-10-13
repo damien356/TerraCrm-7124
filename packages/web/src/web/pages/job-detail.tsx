@@ -13,6 +13,7 @@ import { PurchaseOrdersCard } from "../components/purchase-orders";
 import { PaymentTermsCard } from "../components/payment-terms";
 import { ClientInvoicesCard, MaterialSelectionCard } from "../components/client-invoices";
 import { DeliveryCard } from "../components/delivery";
+import { JobSiteFact } from "../components/site-fill";
 import { STEP_ANCHOR, SupplyStepsCard } from "../components/supply-steps";
 import { useDeliveryStatus } from "../queries/delivery";
 import { VariationsCard } from "../components/variations";
@@ -514,8 +515,8 @@ export default function JobDetailPage() {
               </div>
               <div>
                 <p className="label-xs">Site</p>
-                <p className="mt-0.5 text-sm">{j.site?.address ?? "-"}</p>
-                <p className="text-xs text-muted-foreground">{j.site?.suburb ?? ""}</p>
+                {/* 188001 list item 12: no site offers the form, filled in from the delivery line. */}
+                <JobSiteFact jobId={j.id} site={j.site} />
               </div>
               <div>
                 <p className="label-xs">Value</p>

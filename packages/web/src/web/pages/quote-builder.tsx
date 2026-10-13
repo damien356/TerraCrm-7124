@@ -18,6 +18,8 @@ import { QuoteBundlesCard } from "../components/quote-bundles";
 import { DELIVERY, KIND_LABELS } from "../../api/lib/line-kinds";
 import { QuoteAgentCard } from "../components/quote-agent";
 import { EmailQuoteButton, QuoteLinkCard } from "../components/quote-email";
+import { SiteFillModal } from "../components/site-fill";
+import { useQuoteSiteNeed } from "../queries/siteFill";
 import { useQuoteLink } from "../queries/quoteSend";
 import {
   useAcceptQuote,
@@ -654,6 +656,7 @@ export default function QuoteBuilderPage() {
   const revise = useReviseQuote();
   const convert = useConvertQuote();
   const removeQuote = useRemoveQuote();
+  const siteNeed = useQuoteSiteNeed(Number.isFinite(id) ? id : null);
 
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
@@ -663,6 +666,8 @@ export default function QuoteBuilderPage() {
   const [convertForm, setConvertForm] = React.useState({ title: "", furnitureOnSite: false, createTasks: true });
   const [notes, setNotes] = React.useState<string | null>(null);
   const [lineNotice, setLineNotice] = React.useState<string | null>(null);
+  /** 188001 list item 12: Send and Accept ask for the site first, then carry on. */
+  const [siteAsk, setSiteAsk] = React.useState<{ saveLabel: string; next: () => void } | null>(null);
 
   if (quote.isLoading) return <Loading label="Opening quote…" />;
   if (!quote.data) {
@@ -685,6 +690,17 @@ export default function QuoteBuilderPage() {
   // 188001 list item 7: on an accepted quote the words can still be fixed and re-sent.
   const wordingOpen = q.status === "accepted";
   const customer = q.contact ? `${q.contact.firstName} ${q.contact.lastName}` : q.company ? "" : "No customer yet";
+  // A delivery line and no site on the quote or its job.
+  const needsSite = !!siteNeed.data?.needed && !locked;
+  function withSite(saveLabel: string, next: () => void) {
+    if (needsSite) setSiteAsk({ saveLabel, next });
+    else next();
+  }
+  const emailGate = (openForm: () => void) => {
+    if (!needsSite) return false;
+    setSiteAsk({ saveLabel: "Save site, then email", next: openForm });
+    return true;
+  };
 
   async function run(fn: () => Promise<unknown>) {
     setError(null);
@@ -712,6 +728,7 @@ export default function QuoteBuilderPage() {
             {q.company ? `${customer ? " · " : ""}billed to ${q.company.name}` : ""}
             {q.site ? ` · ${q.site.address}` : ""}
           </span>
+          {needsSite ? <span className="text-amber-700">· No site yet. Send and Accept will ask for it.</span> : null}
         </span>
       }
       actions={
@@ -749,7 +766,7 @@ export default function QuoteBuilderPage() {
               <Button
                 variant="outline"
                 title="It went out some other way. Marks it sent without emailing."
-                onClick={() => run(() => send.mutateAsync({ id: q.id }))}
+                onClick={() => withSite("Save site and mark sent", () => run(() => send.mutateAsync({ id: q.id })))}
                 disabled={send.isPending || q.discountNeedsApproval}
               >
                 <Send className="size-4" />
@@ -758,6 +775,7 @@ export default function QuoteBuilderPage() {
               <EmailQuoteButton
                 quoteId={q.id}
                 disabled={q.discountNeedsApproval || q.items.length === 0}
+                gate={emailGate}
                 onSent={(m) => {
                   setError(null);
                   setNotice(m);
@@ -771,6 +789,7 @@ export default function QuoteBuilderPage() {
                 quoteId={q.id}
                 again
                 disabled={q.discountNeedsApproval}
+                gate={emailGate}
                 onSent={(m) => {
                   setError(null);
                   setNotice(m);
@@ -782,22 +801,24 @@ export default function QuoteBuilderPage() {
               </Button>
               <Button
                 onClick={() =>
-                  run(async () => {
-                    const out = await accept.mutateAsync({ id: q.id });
-                    setNotice(
-                      [
-                        `Accepted.`,
-                        out.replacedRef ? `${out.replacedRef} is now replaced.` : "",
-                        out.invoiceRef ? `Invoice ${out.invoiceRef} raised.` : "",
-                        out.workChanges ? `${out.workChanges} dispatch and material change${out.workChanges === 1 ? "" : "s"} made from this version.` : "",
-                        out.toSort
-                          ? `${out.toSort} thing${out.toSort === 1 ? "" : "s"} to sort by hand. The office has a task and a notification listing them. Crew have not been told.`
-                          : "Order product task added.",
-                      ]
-                        .filter(Boolean)
-                        .join(" "),
-                    );
-                  })
+                  withSite("Save site and accept", () =>
+                    run(async () => {
+                      const out = await accept.mutateAsync({ id: q.id });
+                      setNotice(
+                        [
+                          `Accepted.`,
+                          out.replacedRef ? `${out.replacedRef} is now replaced.` : "",
+                          out.invoiceRef ? `Invoice ${out.invoiceRef} raised.` : "",
+                          out.workChanges ? `${out.workChanges} dispatch and material change${out.workChanges === 1 ? "" : "s"} made from this version.` : "",
+                          out.toSort
+                            ? `${out.toSort} thing${out.toSort === 1 ? "" : "s"} to sort by hand. The office has a task and a notification listing them. Crew have not been told.`
+                            : "Order product task added.",
+                        ]
+                          .filter(Boolean)
+                          .join(" "),
+                      );
+                    })
+                  )
                 }
                 disabled={accept.isPending || q.discountNeedsApproval}
                 title={q.discountNeedsApproval ? "Approve the discount first" : undefined}
@@ -1140,6 +1161,22 @@ export default function QuoteBuilderPage() {
           </Card>
         </div>
       </div>
+
+      <SiteFillModal
+        open={!!siteAsk}
+        onClose={() => setSiteAsk(null)}
+        quoteId={q.id}
+        deliveryText={siteNeed.data?.deliveryText ?? null}
+        guess={siteNeed.data?.guess ?? null}
+        title="Where is it going?"
+        subtitle="This quote has a delivery line but no site. Filled in from the delivery line. Check it and save."
+        saveLabel={siteAsk?.saveLabel ?? "Save site"}
+        onSaved={() => {
+          const next = siteAsk?.next;
+          setSiteAsk(null);
+          next?.();
+        }}
+      />
 
       <Modal
         open={declining}

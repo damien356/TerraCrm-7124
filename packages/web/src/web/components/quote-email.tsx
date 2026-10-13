@@ -20,6 +20,7 @@ export function EmailQuoteButton({
   resend = false,
   disabled,
   onSent,
+  gate,
 }: {
   quoteId: number;
   again?: boolean;
@@ -27,13 +28,21 @@ export function EmailQuoteButton({
   resend?: boolean;
   disabled?: boolean;
   onSent?: (msg: string) => void;
+  /**
+   * Runs before the email form opens. Return true to hold it, and call
+   * openForm once ready (188001 list item 12: add the site first).
+   */
+  gate?: (openForm: () => void) => boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   return (
     <>
       <Button
         variant={again || resend ? "outline" : "default"}
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          if (gate?.(() => setOpen(true))) return;
+          setOpen(true);
+        }}
         disabled={disabled}
         title={resend ? "Emails the client the updated copy. Logged as wording edited, re-sent." : undefined}
       >
