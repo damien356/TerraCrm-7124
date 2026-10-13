@@ -15,7 +15,7 @@ import { JobPeopleCard, QuotePeopleCard } from "../components/job-people";
 import { useJob } from "../queries/jobs";
 import { QuoteCustomerPanel } from "../components/quote-customer";
 import { QuoteBundlesCard } from "../components/quote-bundles";
-import { DELIVERY, KIND_LABELS } from "../../api/lib/line-kinds";
+import { DELIVERY, KIND_LABELS, SUPPLIER_CHARGE } from "../../api/lib/line-kinds";
 import { QuoteAgentCard } from "../components/quote-agent";
 import { EmailQuoteButton, QuoteLinkCard } from "../components/quote-email";
 import { SiteFillModal } from "../components/site-fill";
@@ -105,8 +105,10 @@ type Item = {
   /** Fix list items 2 and 3. */
   followsItemId?: number | null;
   size?: LineSize | null;
-  /** Fix list item 14. Supplier freight built into the sell, cost viewers only. */
-  freightSell?: number | null;
+  /** Notes 18.33. Set on a supplier charge line (freight and fees), cost viewers only. */
+  chargeSupplierId?: number | null;
+  /** The charge line was typed over, so recalc leaves it alone. */
+  chargeTyped?: boolean;
   /** 188001 list item 5. Priced by a markup under the standard one. Cost viewers only. */
   belowStandard?: { markup: number; standard: number } | null;
 };
@@ -337,6 +339,7 @@ function LineRow({
   const remove = useRemoveQuoteItem();
   const [changing, setChanging] = React.useState(false);
   const isProductLine = item.kind === "supply" || item.productId != null || Boolean(item.voicePhrase);
+  const charge = item.kind === SUPPLIER_CHARGE || item.chargeSupplierId != null;
   const [draft, setDraft] = React.useState({
     description: item.description,
     qty: padTo(item.qty, places.qty),
@@ -358,6 +361,13 @@ function LineRow({
   return (
     <tr className={item.flagged ? "border-b border-border bg-[#D08A1E]/10 last:border-0" : "border-b border-border last:border-0"}>
       <td className="px-2 py-1.5">
+        {charge ? (
+          <div className="w-[104px]">
+            <span className="block text-xs font-medium">Supplier charge</span>
+            <span className="block text-[11px] text-muted-foreground">{item.chargeTyped ? "Typed over" : "Worked out"}</span>
+          </div>
+        ) : (
+        <>
         <Select
           className="h-8 w-[104px]"
           value={item.kind}
@@ -384,6 +394,8 @@ function LineRow({
         >
           {item.lineType === "labour" ? "Labour" : "Material"}
         </button>
+        )}
+        </>
         )}
       </td>
       <td className="min-w-[240px] px-2 py-1.5">
@@ -420,9 +432,11 @@ function LineRow({
         {item.area ? <LineAreaStrip item={item} locked={locked} /> : null}
         {item.labourForItemId != null ? <LinkedInstallMark /> : null}
         {item.size ? <LineSizeStrip item={item} locked={locked} /> : null}
-        {item.freightSell ? (
-          <p className="mt-1 text-[11px] text-muted-foreground" title="Supplier freight and charges, built into this price. The client does not see it.">
-            Includes {money(item.freightSell)} supplier freight
+        {charge ? (
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {item.chargeTyped
+              ? "Typed over, so it stays as typed. Delete it to go back to the worked out line."
+              : "Worked out from the supplier's charges. Type over the qty or price to change it, or set the price to 0."}
           </p>
         ) : null}
         {cost.show ? <LastQuotedNote entry={lastQuoted} className="mt-1" /> : null}
@@ -442,6 +456,9 @@ function LineRow({
         />
       </td>
       <td className="px-2 py-1.5 text-left">
+        {charge ? (
+          <span className="block w-[80px] px-2 text-sm">{item.unit}</span>
+        ) : (
         <Select
           className="h-8 w-[80px]"
           value={item.unit}
@@ -454,6 +471,7 @@ function LineRow({
             </option>
           ))}
         </Select>
+        )}
       </td>
       <td className="px-2 py-1.5 text-right">
         <Input
@@ -506,7 +524,7 @@ function LineRow({
       ) : null}
       <td className="tabular whitespace-nowrap px-3 py-1.5 text-right font-medium">{money(item.total)}</td>
       <td className="px-2 py-1.5 text-right">
-        {locked ? null : (
+        {locked || (charge && !item.chargeTyped) ? null : (
           <button
             type="button"
             onClick={() =>
@@ -1114,19 +1132,28 @@ export default function QuoteBuilderPage() {
               </div>
               {q.freightIncluded?.length ? (
                 <div className="mt-1 rounded-md bg-secondary/60 px-3 py-2 text-[13px]">
-                  <p className="font-medium">Supplier freight in the prices</p>
+                  <p className="font-medium">Supplier charges</p>
                   {q.freightIncluded.map((f) => (
-                    <div key={f.supplier} className="mt-1 flex justify-between gap-3">
-                      <span className="text-muted-foreground">
-                        {f.supplier}
-                        {f.charges ? `: ${f.charges}` : ""}
-                      </span>
-                      <span className="tabular whitespace-nowrap" title={`Adds ${money(f.sellExGst)} to the client price`}>
-                        {money(f.costExGst)}
-                      </span>
+                    <div key={f.supplier} className="mt-1">
+                      <div className="flex justify-between gap-3">
+                        <span className="text-muted-foreground">
+                          {f.supplier}
+                          {f.typed ? " (typed over)" : ""}
+                        </span>
+                        <span className="tabular whitespace-nowrap" title={`Cost ${money(f.costExGst)}, sell ${money(f.sellExGst)}`}>
+                          {money(f.costExGst)} / {money(f.sellExGst)}
+                        </span>
+                      </div>
+                      {f.flag ? (
+                        <p className="mt-0.5 flex items-center gap-1 text-xs text-[#D08A1E]">
+                          <AlertTriangle className="size-3.5 shrink-0" /> {f.flag}
+                        </p>
+                      ) : null}
                     </div>
                   ))}
-                  <p className="mt-1 text-xs text-muted-foreground">Built into the material lines. The client never sees a freight line.</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Its own lines, at cost + {q.supplierChargesPct ?? 15}%. The client copy spreads them into that supplier&apos;s lines.
+                  </p>
                 </div>
               ) : null}
               <p className="text-xs text-muted-foreground">

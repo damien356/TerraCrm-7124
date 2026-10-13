@@ -41,7 +41,8 @@ import {
 } from "../lib/quote-labour";
 import { floorLineFor, followsAFloor, followUnderlay, lineSizes, refollow, sizeFlag, startLine, wholeUnits } from "../lib/quote-sizes";
 import { isUnderlayCategory, underlayName } from "../lib/order-sizes";
-import { lineFreightSell, quoteFreightView, refreshQuoteFreight } from "../lib/quote-freight";
+import { foldForClient, quoteFreightView, refreshQuoteFreight, supplierChargesMarkupPct } from "../lib/quote-freight";
+import { isChargeLine } from "../lib/charge-fold";
 
 /**
  * Quotes are for Admin and Office. Field crew must never reach any procedure
@@ -142,7 +143,7 @@ export async function recordPriceHistory(quote: typeof schema.quotes.$inferSelec
  *  Exported for the voice quote pipeline, which inserts lines directly and
  *  then needs the same header maths this file already does. */
 export async function recalc(quoteId: number) {
-  // Fix list item 14: supplier freight goes into the material lines first.
+  // Notes 18.33: the supplier charge lines (freight and fees) are put right first.
   await refreshQuoteFreight(quoteId);
   const items = await db
     .select({ total: schema.quoteItems.total })
@@ -470,6 +471,10 @@ export async function reviseQuoteRecord(
           rollWidthM: i.rollWidthM,
           rateItemId: i.rateItemId,
           freightUnitCost: i.freightUnitCost,
+          chargeSupplierId: i.chargeSupplierId,
+          chargeKey: i.chargeKey,
+          chargeTyped: i.chargeTyped,
+          ...(isChargeLine(i) ? { flagged: i.flagged, flagReason: i.flagReason } : {}),
         })),
       )
       .returning({ id: schema.quoteItems.id, sortOrder: schema.quoteItems.sortOrder });
@@ -620,6 +625,8 @@ export const quotes = {
 
     const cost = items.reduce((sum, i) => sum + (i.unitCost ?? 0) * (i.qty ?? 0), 0);
     const showCosts = context.actor.canSeeCosts;
+    // Notes 18.33: no cost, no supplier charge lines. Their sell sits in the supplier's lines, as on the client copy.
+    const shown = showCosts ? items : (await foldForClient(items)).lines;
     const areas = await lineAreas(items);
     const sizes = await lineSizes(items);
     const limit = await discountLimit();
@@ -641,8 +648,8 @@ export const quotes = {
       site: row.site,
       job: row.job?.id ? row.job : null,
       items: showCosts
-        ? items.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice), belowStandard: markupBelowStandard(i), area: areas[i.id] ?? null, size: sizes[i.id] ?? null, freightSell: lineFreightSell(i) }))
-        : items.map((i) => ({ ...i, unitCost: null, markupPercent: null, freightUnitCost: null, belowStandard: null, area: areas[i.id] ?? null, size: sizes[i.id] ?? null, freightSell: null })),
+        ? items.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice), belowStandard: markupBelowStandard(i), area: areas[i.id] ?? null, size: sizes[i.id] ?? null }))
+        : shown.map((i) => ({ ...i, unitCost: null, markupPercent: null, freightUnitCost: null, belowStandard: null, area: areas[i.id] ?? null, size: sizes[i.id] ?? null })),
       ...depositSplit(row.quote.total, row.quote.depositPercent),
       activity,
       versions: versions.map((v) => ({ ...v, ref: quoteRef(row.quote.number, v.version, jobRefText) })),
@@ -653,8 +660,10 @@ export const quotes = {
       itemRows: bundleView.items,
       /** Only for Admin, or Office with the cost switch on. Never expose these through field.ts. */
       estimatedCost: showCosts ? round2(cost) : null,
-      /** Fix list item 14: supplier freight and charges inside the line prices. Cost viewers only. */
+      /** Notes 18.33: the supplier charge lines per supplier, and what the client copy spreads. Cost viewers only. */
       freightIncluded,
+      /** Settings, Business rules. What the charge lines sell at over cost. Cost viewers only. */
+      supplierChargesPct: showCosts ? await supplierChargesMarkupPct() : null,
       estimatedMargin: showCosts ? round2(row.quote.subtotal - cost) : null,
       estimatedMarginPercent: !showCosts ? null : row.quote.subtotal > 0 ? round2(((row.quote.subtotal - cost) / row.quote.subtotal) * 100) : 0,
     };
@@ -1110,10 +1119,28 @@ export const quotes = {
         };
       }
       const quote = await editableQuoteOrThrow(before.quoteId);
+      // Notes 18.33. A supplier charge line keeps its kind and has no product.
+      // Typing over its qty, price or words keeps it as typed.
+      const charge = isChargeLine(before);
+      if (charge) {
+        if (!context.actor.canSeeCosts) throw new ORPCError("FORBIDDEN", { message: "Supplier charge lines are for cost viewers only." });
+        delete rest.kind;
+        delete rest.lineType;
+        delete rest.productId;
+        delete rest.measuredM2;
+        delete rest.wastagePct;
+        delete rest.rollWidthM;
+        delete rest.followsItemId;
+      } else if (!context.actor.canSeeCosts && rest.unitPrice !== undefined && rest.unitPrice !== before.unitPrice && before.qty > 0) {
+        // Staff without costs see this line with the supplier charges spread in. Take that back out of a typed price.
+        const peers = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, before.quoteId));
+        const share = (await foldForClient(peers)).shares.get(before.id) ?? 0;
+        if (share) rest.unitPrice = round2(rest.unitPrice - share / before.qty);
+      }
       // Only an Admin can change what Terra pays or the markup on it. Office edits price and quantity only.
       const { markupPercent: markupIn, ...fields } = rest;
       if (context.actor.role !== "admin") delete fields.unitCost;
-      // A typed cost is the supplier price. Freight is added back on top by recalc.
+      // A typed cost is the supplier price. On an older line with freight built in, the freight goes with it.
       const freightReset = fields.unitCost !== undefined ? { freightUnitCost: null } : {};
       const setMarkup = context.actor.role === "admin" ? markupIn : undefined;
 
@@ -1193,9 +1220,16 @@ export const quotes = {
       // Remember the price book price the first time a price is hand-edited.
       // The gap between it and the new price is the discount.
       const listUnitPrice =
-        fields.unitPrice !== undefined && fields.unitPrice !== before.unitPrice && before.listUnitPrice === null
+        !charge && fields.unitPrice !== undefined && fields.unitPrice !== before.unitPrice && before.listUnitPrice === null
           ? before.unitPrice
           : undefined;
+      const typedOver =
+        charge &&
+        ((fields.qty !== undefined && fields.qty !== before.qty) ||
+          (fields.unitPrice !== undefined && fields.unitPrice !== before.unitPrice) ||
+          (fields.unitCost !== undefined && fields.unitCost !== before.unitCost) ||
+          (fields.description !== undefined && fields.description !== before.description) ||
+          setMarkup !== undefined);
       await assertSentEditAllowed(
         quote,
         { id, qty, unitPrice, listUnitPrice: listUnitPrice ?? before.listUnitPrice },
@@ -1204,7 +1238,7 @@ export const quotes = {
 
       const [row] = await db
         .update(schema.quoteItems)
-        .set({ ...fields, ...freightReset, markupPercent, ...(priceBy !== undefined ? { priceBy } : {}), ...(listUnitPrice !== undefined ? { listUnitPrice } : {}), total: round2(qty * unitPrice), updatedAt: new Date() })
+        .set({ ...fields, ...freightReset, markupPercent, ...(priceBy !== undefined ? { priceBy } : {}), ...(listUnitPrice !== undefined ? { listUnitPrice } : {}), ...(typedOver ? { chargeTyped: true } : {}), total: round2(qty * unitPrice), updatedAt: new Date() })
         .where(eq(schema.quoteItems.id, id))
         .returning();
 
@@ -1364,6 +1398,7 @@ export const quotes = {
       const quote = await quoteOrThrow(before.quoteId);
       if (quote.status !== "draft" && quote.status !== "needs_review")
         throw new ORPCError("BAD_REQUEST", { message: "This quote has gone out. Revise it to change a product." });
+      if (isChargeLine(before)) throw new ORPCError("BAD_REQUEST", { message: "A supplier charge line has no product." });
       const [product] = await db.select().from(schema.products).where(eq(schema.products.id, input.productId));
       if (!product) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
 
@@ -1508,6 +1543,13 @@ export const quotes = {
     const [before] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, input.id));
     if (!before) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
     await editableQuoteOrThrow(before.quoteId);
+    // Notes 18.33. A worked out supplier charge comes back on the next change, so removing it does nothing.
+    // A typed over one can go: it comes back as worked out while the supplier's goods are on the quote.
+    if (isChargeLine(before) && !before.chargeTyped) {
+      throw new ORPCError("BAD_REQUEST", {
+        message: "This line is worked out from the supplier's charges and comes back on its own. Type over the qty or price to change it, or set the price to 0.",
+      });
+    }
     // Item 8: the install added with a product line goes with it.
     const linked = await db
       .delete(schema.quoteItems)

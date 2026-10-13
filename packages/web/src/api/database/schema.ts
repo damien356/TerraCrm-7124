@@ -1547,6 +1547,17 @@ export const quoteItems = sqliteTable(
      * carries it at the line's markup. Never shown to the client.
      */
     freightUnitCost: real("freight_unit_cost"),
+    /**
+     * Notes 18.33. Set on a supplier charge line (kind supplier_charge): the
+     * supplier whose freight or charge this is. Worked out from the rules by
+     * api/lib/quote-freight.ts. The client never sees the line: its sell is
+     * spread into that supplier's product lines (api/lib/charge-fold.ts).
+     */
+    chargeSupplierId: integer("charge_supplier_id"),
+    /** Which charge: "rule:<supplier_fee_rules.id>". */
+    chargeKey: text("charge_key"),
+    /** Someone typed over the line. Recalc leaves it as typed. */
+    chargeTyped: integer("charge_typed", { mode: "boolean" }).notNull().default(false),
     ...timestamps,
   },
   (t) => [index("quote_items_quote_idx").on(t.quoteId)],

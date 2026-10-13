@@ -35,18 +35,28 @@ const keyOf = (kind: string, supplierId: number | null) => `${kind}:${supplierId
 
 /** What the quote says the job should cost, grouped the way Money out shows it. */
 export async function expectedFromQuote(quoteId: number): Promise<Want[]> {
-  const items: Line[] = await db
+  const raw = await db
     .select({
       kind: schema.quoteItems.kind,
       description: schema.quoteItems.description,
       qty: schema.quoteItems.qty,
       unitCost: schema.quoteItems.unitCost,
       supplierId: schema.products.supplierId,
+      chargeSupplierId: schema.quoteItems.chargeSupplierId,
     })
     .from(schema.quoteItems)
     .leftJoin(schema.products, eq(schema.products.id, schema.quoteItems.productId))
     .where(eq(schema.quoteItems.quoteId, quoteId))
     .orderBy(asc(schema.quoteItems.sortOrder), asc(schema.quoteItems.id));
+  // A supplier charge line (freight and the like) has no product, so it goes
+  // with the supplier it was worked out for. That supplier's PO then replaces it.
+  const items: Line[] = raw.map((r) => ({
+    kind: r.kind,
+    description: r.description,
+    qty: r.qty,
+    unitCost: r.unitCost,
+    supplierId: r.supplierId ?? r.chargeSupplierId ?? null,
+  }));
   if (!items.length) return [];
 
   const ref = await quoteRefById(quoteId);

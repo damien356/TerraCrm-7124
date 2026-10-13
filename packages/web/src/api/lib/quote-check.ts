@@ -162,6 +162,9 @@ export function checkQuote(input: CheckInput): { ok: boolean; items: CheckItem[]
   // Margin. Only for people who can see costs, and never with the cost figure in the words.
   if (input.canSeeCosts) {
     for (const l of lines) {
+      // Supplier charge lines are set by the Settings markup, and 0 is how a
+      // typed-over one is switched off, so they are not margin checked.
+      if (l.kind === "supplier_charge") continue;
       if (l.unitCost == null || l.unitCost <= 0 || l.qty <= 0) continue;
       if (l.unitPrice < l.unitCost) add("stop", "below_cost", `${short(l.description)} sells below cost.`, [l.id]);
       else if ((l.unitPrice - l.unitCost) / l.unitCost < 0.15 && !isRemoval(l)) {

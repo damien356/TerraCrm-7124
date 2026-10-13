@@ -12,6 +12,7 @@ import { sellExGstWithMarkup, markupOf } from "../lib/pricing";
 import { discountLimit, discountPercentOf, markupBelowStandard } from "../routes/quotes";
 import { bundlesFor } from "../routes/quoteBundles";
 import { quoteRef } from "../lib/refs";
+import { foldCharges, isChargeLine } from "../lib/charge-fold";
 import { categoriesForHint, categoryMatchesHint } from "../lib/product-categories";
 
 /**
@@ -165,6 +166,7 @@ export async function loadQuoteState(quoteId: number) {
     rows.map(async ({ item, product }) => ({
       ...item,
       productCategory: product?.category ?? null,
+      productSupplierId: product?.supplierId ?? null,
       liveSell: product ? await liveSellFor(product) : null,
     })),
   );
@@ -225,10 +227,13 @@ export function runCheck(state: QuoteState, actor: Pick<Actor, "role" | "canSeeC
 }
 
 /** The quote as the model sees it. Cost and markup only for an Admin. */
-function quoteBrief(state: QuoteState, actor: Pick<Actor, "role">) {
+function quoteBrief(state: QuoteState, actor: Pick<Actor, "role" | "canSeeCosts">) {
   const q = state.quote;
   const cost = seesCost(actor);
-  const lines = state.items.map((i) => {
+  // Staff who cannot see costs read the lines the way the client does, with
+  // supplier charges spread into that supplier's lines (notes 18.33).
+  const shown = cost || actor.canSeeCosts ? state.items : foldCharges(state.items.map((i) => ({ ...i, supplierId: i.productSupplierId }))).lines;
+  const lines = shown.map((i) => {
     const bits = [
       `#${i.id}`,
       i.kind,
@@ -240,6 +245,7 @@ function quoteBrief(state: QuoteState, actor: Pick<Actor, "role">) {
     ];
     if (cost) bits.push(i.unitCost != null ? `cost ${money(i.unitCost)}/${i.unit}, markup ${markupOf(i.unitCost, i.unitPrice) ?? "?"}%` : "no cost");
     if (i.flagged) bits.push(`FLAGGED: ${i.flagReason ?? "needs checking"}`);
+    if (isChargeLine(i)) bits.push("supplier charge, worked out on its own from the supplier's freight and fees");
     return `- ${bits.join(" | ")}`;
   });
   const bundles = state.bundles.map(

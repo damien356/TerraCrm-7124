@@ -362,7 +362,7 @@ export const costing = {
       /** Sale ex GST. The quote's subtotal, or the job value (stored inc GST) taken back to ex GST. */
       const revenue = round2(quote ? quote.subtotal : exGst(job.value));
       // Delivery (fix list item 11) is a cost of the goods too, so it stays in here.
-      const goods = (k: string) => k === "supply" || k === "accessory" || k === "delivery";
+      const goods = (k: string) => k === "supply" || k === "accessory" || k === "delivery" || k === "supplier_charge";
       const materials = round2(
         quoteItems
           .filter((i) => goods(i.kind))

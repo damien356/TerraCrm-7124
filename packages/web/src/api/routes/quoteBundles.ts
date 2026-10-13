@@ -22,6 +22,7 @@ import { depositInvoiceFor } from "../lib/client-invoices";
 import { linkForQuote, quoteUrl } from "../lib/quote-links";
 import { itemRows, LAYOUT_LABELS, layoutUsed, QUOTE_LAYOUTS, type ItemRow } from "../lib/quote-layout";
 import { cardPaymentsOn, owingOn, payUrl } from "../lib/stripe";
+import { foldCharges } from "../lib/charge-fold";
 
 /**
  * Client bundles on a quote: the mode, which bundle each line sits in, and
@@ -46,19 +47,29 @@ async function quoteRow(id: number, editable: boolean | "wording") {
   return q;
 }
 
-/** Lines in the shape the bundle maths needs, with each product's category. */
-export async function bundleLinesFor(quoteId: number): Promise<BundleLine[]> {
-  const items = await db
+/**
+ * The client's lines: supplier charge lines folded into that supplier's
+ * product lines (notes 18.33, lib/charge-fold.ts). Everything client facing
+ * reads its lines through here.
+ */
+async function clientLines(quoteId: number) {
+  const rows = await db
     .select({
       id: schema.quoteItems.id,
       kind: schema.quoteItems.kind,
       description: schema.quoteItems.description,
       productId: schema.quoteItems.productId,
       floorCategory: schema.quoteItems.floorCategory,
+      qty: schema.quoteItems.qty,
+      unit: schema.quoteItems.unit,
+      unitPrice: schema.quoteItems.unitPrice,
+      unitCost: schema.quoteItems.unitCost,
       total: schema.quoteItems.total,
       sortOrder: schema.quoteItems.sortOrder,
       productCategory: schema.products.category,
       soldAs: schema.products.soldAs,
+      supplierId: schema.products.supplierId,
+      chargeSupplierId: schema.quoteItems.chargeSupplierId,
       labourForItemId: schema.quoteItems.labourForItemId,
       followsItemId: schema.quoteItems.followsItemId,
     })
@@ -66,7 +77,24 @@ export async function bundleLinesFor(quoteId: number): Promise<BundleLine[]> {
     .leftJoin(schema.products, eq(schema.products.id, schema.quoteItems.productId))
     .where(eq(schema.quoteItems.quoteId, quoteId))
     .orderBy(asc(schema.quoteItems.sortOrder), asc(schema.quoteItems.id));
-  return items.map(({ soldAs, ...i }) => ({ ...i, productCategory: bundleCategoryOf(i.productCategory, soldAs) }));
+  return foldCharges(rows).lines;
+}
+
+/** Lines in the shape the bundle maths needs, with each product's category. */
+export async function bundleLinesFor(quoteId: number): Promise<BundleLine[]> {
+  const items = await clientLines(quoteId);
+  return items.map((i) => ({
+    id: i.id,
+    kind: i.kind,
+    description: i.description,
+    productId: i.productId,
+    floorCategory: i.floorCategory,
+    total: i.total,
+    sortOrder: i.sortOrder,
+    productCategory: bundleCategoryOf(i.productCategory, i.soldAs),
+    labourForItemId: i.labourForItemId,
+    followsItemId: i.followsItemId,
+  }));
 }
 
 /**
@@ -93,20 +121,7 @@ function wentOutBeforeTitleChange(q: QuoteLike) {
 
 /** One row per line for the itemised layout (item 1). The client sees these, so no cost. */
 export async function itemRowsFor(quoteId: number): Promise<ItemRow[]> {
-  const rows = await db
-    .select({
-      id: schema.quoteItems.id,
-      kind: schema.quoteItems.kind,
-      description: schema.quoteItems.description,
-      qty: schema.quoteItems.qty,
-      unit: schema.quoteItems.unit,
-      unitPrice: schema.quoteItems.unitPrice,
-      total: schema.quoteItems.total,
-      sortOrder: schema.quoteItems.sortOrder,
-    })
-    .from(schema.quoteItems)
-    .where(eq(schema.quoteItems.quoteId, quoteId));
-  return itemRows(rows);
+  return itemRows(await clientLines(quoteId));
 }
 
 /**

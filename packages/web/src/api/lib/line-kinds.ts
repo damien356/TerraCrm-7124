@@ -9,6 +9,15 @@
 
 export const DELIVERY = "delivery";
 
+/**
+ * Notes 18.33. A supplier's freight or charge, worked out from its rules
+ * (lib/quote-freight.ts). Internal: the client copy spreads its sell into that
+ * supplier's product lines (lib/charge-fold.ts). It never goes on Materials to
+ * order or a PO, which adds the supplier charges itself. Its cost counts with
+ * that supplier's materials in Money out, so the PO replaces it.
+ */
+export const SUPPLIER_CHARGE = "supplier_charge";
+
 /** Labour, prep and removal are labour. Delivery is delivery. Everything else is material. */
 export function lineTypeOfKind(kind: string): "labour" | "material" | "delivery" {
   if (kind === "labour" || kind === "prep" || kind === "removal") return "labour";
@@ -28,4 +37,5 @@ export const KIND_LABELS: Record<string, string> = {
   removal: "Removal",
   delivery: "Delivery",
   other: "Other",
+  supplier_charge: "Supplier charge",
 };

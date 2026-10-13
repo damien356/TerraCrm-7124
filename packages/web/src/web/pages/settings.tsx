@@ -29,6 +29,7 @@ import {
   useUpdateStatus,
 } from "../queries/settings";
 import { useCreateSupplier, useSuppliers } from "../queries/suppliers";
+import { SUPPLIER_CHARGES_MARKUP_DEFAULT, SUPPLIER_CHARGES_MARKUP_KEY } from "../../api/lib/charge-fold";
 import { autoSoldAs, boxM2Of, FLOOR_TYPE_LABELS, FLOOR_TYPES, wastageKey } from "../../api/lib/flooring-qty";
 import { categoryLabel, PRODUCT_CATEGORIES } from "../../api/lib/product-categories";
 
@@ -1278,6 +1279,33 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
       </Card>
 
       <Card>
+        <CardHeader
+          title="Supplier charges"
+          subtitle="Freight and fees from a supplier go on a quote as their own lines. The client copy spreads them into that supplier's lines."
+        />
+        <div className="space-y-4 px-4 py-4">
+          <Field label="Supplier charges markup (%)" hint="What the client pays over cost. 15% turns $110 freight into $126.50. New quotes only. Accepted and closed quotes keep what they had.">
+            <div className="flex items-center gap-2">
+              <Input
+                aria-label="Supplier charges markup %"
+                inputMode="decimal"
+                value={draft[SUPPLIER_CHARGES_MARKUP_KEY] ?? String(SUPPLIER_CHARGES_MARKUP_DEFAULT)}
+                onChange={(e) => setDraft((d) => ({ ...d, [SUPPLIER_CHARGES_MARKUP_KEY]: e.target.value }))}
+                onBlur={(e) => {
+                  const n = Number(e.target.value);
+                  const v = String(Number.isFinite(n) && e.target.value.trim() !== "" ? Math.min(1000, Math.max(0, Math.round(n * 100) / 100)) : SUPPLIER_CHARGES_MARKUP_DEFAULT);
+                  setDraft((d) => ({ ...d, [SUPPLIER_CHARGES_MARKUP_KEY]: v }));
+                  commit(SUPPLIER_CHARGES_MARKUP_KEY, v);
+                }}
+                className="tabular w-24"
+              />
+              {tick(SUPPLIER_CHARGES_MARKUP_KEY)}
+            </div>
+          </Field>
+        </div>
+      </Card>
+
+      <Card>
         <CardHeader title="Supervisors" subtitle="When a supervisor counts as gone quiet." />
         <div className="space-y-4 px-4 py-4">
           <Field label="Gone quiet after (months)" hint="If a supervisor who has sent work before sends no job or quote request for this long, they show on the Supervisors page and the Dashboard.">
@@ -1420,6 +1448,8 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
                   // Edited on the Quote email card.
                   QUOTE_EMAIL_SUBJECT_KEY,
                   QUOTE_EMAIL_BODY_KEY,
+                  // Edited on the Supplier charges card.
+                  SUPPLIER_CHARGES_MARKUP_KEY,
                 ].includes(k) && !k.startsWith("wastage_pct_"),
             )
             .map((k) => (
