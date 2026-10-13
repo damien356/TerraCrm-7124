@@ -334,6 +334,7 @@ function NewList({ items }: { items: Preview["creates"] }) {
             <td className="px-3 py-1.5 text-xs text-muted-foreground">{n.row}</td>
             <td className="px-3 py-1.5">
               {n.name}
+              {n.sizes ? <p className="text-xs text-muted-foreground">{n.sizes}</p> : null}
               {n.warnings.map((w) => (
                 <p key={w} className="text-xs text-amber-700">
                   {w}

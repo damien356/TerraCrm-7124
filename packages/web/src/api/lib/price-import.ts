@@ -25,6 +25,7 @@ import {
   type Product,
 } from "./price-sheet";
 import { gridToXlsx, xlsxToGrid } from "./price-xlsx";
+import { boxM2Of } from "./flooring-qty";
 
 export type SheetFile = { fileName: string; csv?: string; xlsxBase64?: string };
 type ActorLite = { userId: string; name: string };
@@ -56,6 +57,11 @@ async function planFor(file: SheetFile): Promise<Plan> {
   return planImport(grid, all.products, all.suppliers);
 }
 
+function sizesLine(v: Patch & { category?: string; unit?: string }) {
+  const box = boxM2Of({ category: v.category ?? "", unit: v.unit ?? "", unitsPerPack: v.unitsPerPack, unitM2: v.unitM2, packM2Printed: v.packM2Printed });
+  return [v.size ?? "", v.unitsPerPack ? `${v.unitsPerPack} per box` : "", box ? `${box} m² a box` : ""].filter(Boolean).join(" · ");
+}
+
 /** What the preview screen shows. Before/after stay on the server. */
 function view(plan: Plan, fileName: string) {
   return {
@@ -78,6 +84,8 @@ function view(plan: Plan, fileName: string) {
       unit: c.values.unit ?? "",
       cost: c.values.costPrice ?? null,
       sell: c.values.sellPrice ?? null,
+      /** The Sizes line it will get, "2200 x 194 x 12mm · 5 per box · 2.134 m² a box". Blank when none. */
+      sizes: sizesLine(c.values),
       warnings: c.warnings,
     })),
     errors: plan.errors,

@@ -29,7 +29,7 @@ import {
   useUpdateStatus,
 } from "../queries/settings";
 import { useCreateSupplier, useSuppliers } from "../queries/suppliers";
-import { autoSoldAs, FLOOR_TYPE_LABELS, FLOOR_TYPES, wastageKey } from "../../api/lib/flooring-qty";
+import { autoSoldAs, boxM2Of, FLOOR_TYPE_LABELS, FLOOR_TYPES, wastageKey } from "../../api/lib/flooring-qty";
 import { categoryLabel, PRODUCT_CATEGORIES } from "../../api/lib/product-categories";
 
 const SKILL_GROUPS = Object.keys(SKILL_TINT);
@@ -770,6 +770,12 @@ type ProductRow = {
   pieceLengthM: number | null;
   thicknessMm: number | null;
   wearLayerMm: number | null;
+  size: string;
+  lengthMm: number | null;
+  widthMm: number | null;
+  unitsPerPack: number | null;
+  unitM2: number | null;
+  packM2Printed: number | null;
   defaultWastagePct: number | null;
   heldInWarehouse: boolean;
   swatchKey: string | null;
@@ -787,6 +793,9 @@ function ProductSizesModal({ product, onClose }: { product: ProductRow; onClose:
     pieceLengthM: shown(product.pieceLengthM),
     thicknessMm: shown(product.thicknessMm),
     wearLayerMm: shown(product.wearLayerMm),
+    lengthMm: shown(product.lengthMm),
+    widthMm: shown(product.widthMm),
+    unitsPerPack: shown(product.unitsPerPack),
     defaultWastagePct: shown(product.defaultWastagePct),
   });
   const [error, setError] = React.useState<string | null>(null);
@@ -802,6 +811,9 @@ function ProductSizesModal({ product, onClose }: { product: ProductRow; onClose:
         pieceLengthM: numOrNull(form.pieceLengthM),
         thicknessMm: numOrNull(form.thicknessMm),
         wearLayerMm: numOrNull(form.wearLayerMm),
+        lengthMm: numOrNull(form.lengthMm),
+        widthMm: numOrNull(form.widthMm),
+        unitsPerPack: numOrNull(form.unitsPerPack),
         defaultWastagePct: numOrNull(form.defaultWastagePct),
       });
       onClose();
@@ -847,7 +859,23 @@ function ProductSizesModal({ product, onClose }: { product: ProductRow; onClose:
         <Field label="Wear layer (mm)" hint="Vinyl, hybrid and engineered timber.">
           <Input inputMode="decimal" value={form.wearLayerMm} onChange={set("wearLayerMm")} />
         </Field>
+        <Field label="Board length (mm)" hint="With the width it fills the size, for example 2200 x 194 x 12mm.">
+          <Input inputMode="decimal" value={form.lengthMm} onChange={set("lengthMm")} />
+        </Field>
+        <Field label="Board width (mm)">
+          <Input inputMode="decimal" value={form.widthMm} onChange={set("widthMm")} />
+        </Field>
+        <Field label="Pieces per box" hint="Box m² is pieces x one board. Quotes round to whole boxes.">
+          <Input inputMode="numeric" value={form.unitsPerPack} onChange={set("unitsPerPack")} />
+        </Field>
       </div>
+      {product.size || product.unitsPerPack ? (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Now: {[product.size, product.unitsPerPack ? `${product.unitsPerPack} per box` : "", boxM2Of(product) ? `${boxM2Of(product)} m² a box` : ""]
+            .filter(Boolean)
+            .join(" · ")}
+        </p>
+      ) : null}
       {error ? <p className="mt-3 text-xs font-medium text-destructive">{error}</p> : null}
     </Modal>
   );

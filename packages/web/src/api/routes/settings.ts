@@ -7,6 +7,7 @@ import { adminOnly, authed } from "../middleware/auth";
 import { groupForSkill } from "./labour";
 import { autoSoldAs, SOLD_AS } from "../lib/flooring-qty";
 import { carpetWidthByRule } from "../lib/product-categories";
+import { derivedBoardFields } from "../lib/board-size";
 import { JOB_NUMBER_KEY, JOB_NUMBER_START_KEY, jobNumbering, setJobNumberStart } from "../lib/job-number";
 
 /**
@@ -243,6 +244,10 @@ export const settings = {
         /** 188001 list item 4. Board or plank thickness and wear layer, in mm. */
         thicknessMm: z.number().positive().max(100).nullable().optional(),
         wearLayerMm: z.number().positive().max(100).nullable().optional(),
+        /** 13 Oct. Board length and width (mm) and pieces in a box. Size text and board m² follow them. */
+        lengthMm: z.number().positive().max(20000).nullable().optional(),
+        widthMm: z.number().positive().max(5000).nullable().optional(),
+        unitsPerPack: z.number().int().positive().max(10000).nullable().optional(),
         defaultWastagePct: z.number().min(0).max(100).nullable().optional(),
         /** Terra keeps it in the warehouse, so it is cut from stock, not ordered in whole rolls. */
         heldInWarehouse: z.boolean().optional(),
@@ -255,9 +260,10 @@ export const settings = {
       if (!before) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
       const after = { ...before, ...rest };
       const widthM = before.widthM == null && rest.widthM === undefined ? carpetWidthByRule(after) : null;
+      const sizes = derivedBoardFields(before, rest);
       const [row] = await db
         .update(schema.products)
-        .set({ ...rest, ...(widthM != null ? { widthM } : {}), updatedAt: new Date() })
+        .set({ ...rest, ...sizes, ...(widthM != null ? { widthM } : {}), updatedAt: new Date() })
         .where(eq(schema.products.id, id))
         .returning();
       return row;

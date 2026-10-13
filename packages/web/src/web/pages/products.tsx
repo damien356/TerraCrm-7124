@@ -20,6 +20,7 @@ import {
   useSetSoldAs,
 } from "../queries/products";
 import { PRODUCT_CATEGORIES, PRODUCT_CATEGORY_LABELS } from "../../api/lib/product-categories";
+import { boardSizeText } from "../../api/lib/board-size";
 
 const money = (n: number | null | undefined) =>
   n === null || n === undefined ? "-" : n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
@@ -425,11 +426,13 @@ function VariantTable({
                 ) : null}
               </td>
               <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                {[p.backing, p.size, p.weight].filter(Boolean).join(" · ") || "-"}
+                {[p.backing, p.size || boardSizeText(p.lengthMm, p.widthMm, p.thicknessMm), p.weight].filter(Boolean).join(" · ") || "-"}
                 {p.unitsPerPack ? (
                   <span className="block">
-                    {p.unitsPerPack} per carton · {p.packM2} m²
+                    {p.unitsPerPack} per carton{(p.packM2 ?? p.packM2Printed) ? ` · ${p.packM2 ?? p.packM2Printed} m²` : ""}
                   </span>
+                ) : p.packM2Printed ? (
+                  <span className="block">{p.packM2Printed} m² per carton</span>
                 ) : null}
               </td>
               <td className="tabular px-4 py-2.5 text-right">

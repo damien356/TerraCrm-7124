@@ -11,9 +11,12 @@
  * Added on top: `terra_id` (the product's own number, so an exported sheet always
  * finds its row, even where two products share a name or a code) and
  * `trim_length_m`. Then `thickness_mm` and `wear_layer_mm` (188001 list item 4).
+ * Then `board_length_mm` and `pieces_per_box` (13 Oct): with board width and
+ * thickness they fill the Sizes line, "2200 x 194 x 12mm, 5 per carton".
  */
 import type { products } from "../database/schema";
 import { boxM2Of } from "./flooring-qty";
+import { derivedBoardFields } from "./board-size";
 import { carpetWidthByRule } from "./product-categories";
 import { roundTo, sellExGst } from "./bulk-price";
 
@@ -35,6 +38,8 @@ export const SHEET_COLUMNS = [
   "roll_width_m",
   "roll_length_m",
   "board_width_mm",
+  "board_length_mm",
+  "pieces_per_box",
   "cost",
   "sell",
   "cut_price",
@@ -196,6 +201,8 @@ export function productRow(p: Product): string[] {
     roll_width_m: num(p.widthM),
     roll_length_m: num(p.rollLengthM),
     board_width_mm: num(p.widthMm),
+    board_length_mm: num(p.lengthMm),
+    pieces_per_box: p.unitsPerPack == null ? "" : String(p.unitsPerPack),
     cost: num(p.costPrice),
     sell: num(p.sellPrice),
     cut_price: num(p.cutCostPrice),
@@ -234,6 +241,11 @@ export type Patch = Partial<{
   widthM: number | null;
   rollLengthM: number | null;
   widthMm: number | null;
+  lengthMm: number | null;
+  unitsPerPack: number | null;
+  /** Worked out, never typed: length x width of one board, and the size text. */
+  unitM2: number | null;
+  size: string;
   costPrice: number | null;
   sellPrice: number | null;
   cutCostPrice: number | null;
@@ -263,6 +275,10 @@ export const FIELD_LABELS: Record<PatchKey, string> = {
   widthM: "Roll width (m)",
   rollLengthM: "Roll length (m)",
   widthMm: "Board width (mm)",
+  lengthMm: "Board length (mm)",
+  unitsPerPack: "Pieces per box",
+  unitM2: "Board m²",
+  size: "Size",
   costPrice: "Cost",
   sellPrice: "Sell",
   cutCostPrice: "Cut price",
@@ -407,6 +423,14 @@ function sizeWarnings(p: Patch & { category?: string; unit?: string }, merged: P
   return out;
 }
 
+/** Quotes use boards x board m² when both are known, so a box_m2 that disagrees is only kept on file. */
+function boxMismatch(p: Partial<Product>): string[] {
+  if (!p.packM2Printed || !p.unitsPerPack || !p.unitM2) return [];
+  const box = boxM2Of(p as Product);
+  if (box == null || Math.abs(box - p.packM2Printed) / box < 0.01) return [];
+  return [`Box size comes from ${p.unitsPerPack} boards x ${p.unitM2} m², so box_m2 ${p.packM2Printed} is saved but quotes use ${box} m².`];
+}
+
 function priceWarnings(oldCost: number | null | undefined, cost: number | null | undefined, sell: number | null | undefined): string[] {
   const out: string[] = [];
   if (oldCost != null && oldCost > 0 && cost != null && Math.abs(cost - oldCost) / oldCost > 0.1) {
@@ -476,6 +500,8 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
       "roll_width_m",
       "roll_length_m",
       "board_width_mm",
+      "board_length_mm",
+      "pieces_per_box",
       "cost",
       "sell",
       "cut_price",
@@ -498,6 +524,8 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
       const v = nums[c];
       if (v != null && v > 100) problems.push(`${c} is over 100 mm`);
     }
+    const ppb = nums.pieces_per_box;
+    if (ppb != null && (ppb < 1 || Math.abs(ppb - Math.round(ppb)) > 1e-9)) problems.push(`pieces_per_box "${cell("pieces_per_box")}" should be a whole number, 1 or more`);
     const flags: Partial<Record<"stocked" | "discontinued", boolean | null>> = {};
     for (const c of ["stocked", "discontinued"] as const) {
       const v = parseYn(cell(c));
@@ -588,6 +616,7 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
       ["roll_width_m", "widthM", 4],
       ["roll_length_m", "rollLengthM", 4],
       ["board_width_mm", "widthMm", 2],
+      ["board_length_mm", "lengthMm", 2],
       ["cost", "costPrice", 4],
       ["cut_price", "cutCostPrice", 4],
       ["roll_price", "rollPrice", 4],
@@ -601,6 +630,7 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
       if (v != null) (said as Record<string, number>)[f] = Math.round(v * 10 ** places) / 10 ** places;
     }
     if (nums.lead_time_days != null) said.leadTimeDays = Math.round(nums.lead_time_days);
+    if (ppb != null) said.unitsPerPack = Math.round(ppb);
     if (flags.stocked != null) said.heldInWarehouse = flags.stocked;
     if (flags.discontinued != null) said.active = !flags.discontinued;
 
@@ -612,7 +642,14 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
       claimed.set(match.id, rowNo);
       if (sellIn != null && !same(sellIn, match.sellPrice)) said.sellPrice = roundTo(sellIn, "10c");
       // Box size: compare against the size quotes actually use.
-      if (said.packM2Printed != null && same(said.packM2Printed, boxM2Of(match))) delete said.packM2Printed;
+      // An exported sheet says boards x board m², which can be a hair off the printed figure.
+      if (said.packM2Printed != null && (same(said.packM2Printed, boxM2Of(match)) || same(said.packM2Printed, match.packM2Printed)))
+        delete said.packM2Printed;
+      // The Sizes line: size text and board m² from length x width (x thickness),
+      // when the row moves one of them. An exported sheet sent back changes nothing.
+      const m = match;
+      if ((["lengthMm", "widthMm", "thicknessMm"] as const).some((k) => said[k] !== undefined && !same(said[k], m[k])))
+        Object.assign(said, derivedBoardFields(m, said));
 
       const before: Patch = {};
       const after: Patch = {};
@@ -643,15 +680,16 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
       const merged = { ...match, ...after } as Product;
       const warnings = [
         ...priceWarnings(match.costPrice, merged.costPrice, merged.sellPrice),
-        ...(after.soldAs !== undefined || after.packM2Printed !== undefined || after.widthM !== undefined || after.unit !== undefined
+        ...(after.soldAs !== undefined ||
+        after.packM2Printed !== undefined ||
+        after.widthM !== undefined ||
+        after.unit !== undefined ||
+        after.unitsPerPack !== undefined ||
+        after.unitM2 !== undefined
           ? sizeWarnings(after, merged)
           : []),
+        ...(after.packM2Printed !== undefined || after.unitsPerPack !== undefined || after.unitM2 !== undefined ? boxMismatch(merged) : []),
       ];
-      if (after.packM2Printed != null && match.unitsPerPack && match.unitM2) {
-        warnings.push(
-          `Box size comes from ${match.unitsPerPack} boards x ${match.unitM2} m² on this product, so box_m2 ${after.packM2Printed} is saved but quotes keep ${boxM2Of(match)} m².`,
-        );
-      }
       plan.updates.push({
         row: rowNo,
         productId: match.id,
@@ -690,7 +728,12 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
     if (values.pieceLengthM == null && values.category === "accessory" && values.unit === "lm" && !/weld/i.test(`${values.range} ${values.colour}`)) {
       values.pieceLengthM = 2.4;
     }
-    const warnings = [...priceWarnings(null, cost, values.sellPrice), ...sizeWarnings(values, values as Partial<Product>)];
+    Object.assign(values, derivedBoardFields({}, values));
+    const warnings = [
+      ...priceWarnings(null, cost, values.sellPrice),
+      ...sizeWarnings(values, values as Partial<Product>),
+      ...boxMismatch(values as Partial<Product>),
+    ];
     plan.creates.push({ row: rowNo, name: label, values, warnings });
     for (const w of warnings) plan.warnings.push({ row: rowNo, name: label, message: w });
   }
