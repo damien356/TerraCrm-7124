@@ -228,8 +228,9 @@ export function labourQtyFor(res: QtyResult, unit: string): number | null {
 }
 
 /* ------------------------------ install labour ----------------------------
- * Rate book item ids on live (labour_rate_items). Laminate uses Hybrid
- * installation (15), which Damien renames "hybrid/laminate install" himself.
+ * Rate book item ids on live (labour_rate_items). Each floor only offers its
+ * own install: hybrid 15 (skill Hybrid), laminate 16 (skill Laminate), so the
+ * labour rate and the SWMS follow the floor.
  */
 export const INSTALL_ITEMS: Record<FloorType, number[]> = {
   carpet: [1, 2, 5],
@@ -237,8 +238,8 @@ export const INSTALL_ITEMS: Record<FloorType, number[]> = {
   carpet_tile: [4],
   vinyl_plank: [17, 18],
   sheet_vinyl: [19],
-  hybrid: [15, 16],
-  laminate: [15, 16],
+  hybrid: [15],
+  laminate: [16],
   /** 37 floating, 38 direct stick inc glue. */
   engineered_timber: [37, 38],
   /** 39 solid timber, secret nail and stick. */
@@ -269,8 +270,9 @@ export function defaultInstall(t: FloorType | null, widthM: number | null): Inst
     case "sheet_vinyl":
       return { kind: "item", itemId: 19 };
     case "hybrid":
-    case "laminate":
       return { kind: "item", itemId: 15 };
+    case "laminate":
+      return { kind: "item", itemId: 16 };
     case "engineered_timber":
       return { kind: "ask", reason: TIMBER_FLAG };
     case "solid_timber":

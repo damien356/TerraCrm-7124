@@ -282,6 +282,32 @@ function ChangeProduct({ item, onClose }: { item: Item; onClose: () => void }) {
   );
 }
 
+/** Decimal places a number column shows so its values line up on the point. */
+type Places = { qty: number; unitPrice: number; unitCost: number; markup: number };
+
+const decimalsOf = (n: number | null | undefined) => {
+  if (n == null || !Number.isFinite(n)) return 0;
+  const t = String(n);
+  return t.includes("e") ? 0 : (t.split(".")[1]?.length ?? 0);
+};
+
+/** At least 2 places, up to 4, so a cost of 26.1546 and one of 28 line up. */
+export function columnPlaces(items: Array<Pick<Item, "qty" | "unitPrice" | "unitCost" | "markupPercent">>): Places {
+  const col = (vals: Array<number | null | undefined>) => Math.min(4, Math.max(2, ...vals.map(decimalsOf)));
+  return {
+    qty: col(items.map((i) => i.qty)),
+    unitPrice: col(items.map((i) => i.unitPrice)),
+    unitCost: col(items.map((i) => i.unitCost)),
+    markup: col(items.map((i) => i.markupPercent)),
+  };
+}
+
+/** The value padded to the column's places. More places than that and it shows as is, so nothing gets rounded on save. */
+export function padTo(n: number | null | undefined, places: number): string {
+  if (n == null) return "";
+  return decimalsOf(n) > places ? String(n) : n.toFixed(places);
+}
+
 /** show: cost column visible. edit: may change costs (Admin only). */
 function useCostView() {
   const actor = useBootstrap().data?.actor;
@@ -294,9 +320,12 @@ function LineRow({
   wordingOpen = false,
   onNotice,
   lastQuoted,
+  places,
 }: {
   item: Item;
   locked: boolean;
+  /** Decimal places per number column, the same for every row. */
+  places: Places;
   /** Item 18: the range's last quoted price. Undefined for anyone who can't see costs. */
   lastQuoted?: LastQuoted;
   /** Accepted quote: the description can still be fixed, nothing else (188001 list item 7). */
@@ -310,21 +339,21 @@ function LineRow({
   const isProductLine = item.kind === "supply" || item.productId != null || Boolean(item.voicePhrase);
   const [draft, setDraft] = React.useState({
     description: item.description,
-    qty: String(item.qty),
-    unitPrice: String(item.unitPrice),
-    unitCost: item.unitCost == null ? "" : String(item.unitCost),
-    markup: item.markupPercent == null ? "" : String(item.markupPercent),
+    qty: padTo(item.qty, places.qty),
+    unitPrice: padTo(item.unitPrice, places.unitPrice),
+    unitCost: padTo(item.unitCost, places.unitCost),
+    markup: padTo(item.markupPercent, places.markup),
   });
 
   React.useEffect(() => {
     setDraft({
       description: item.description,
-      qty: String(item.qty),
-      unitPrice: String(item.unitPrice),
-      unitCost: item.unitCost == null ? "" : String(item.unitCost),
-      markup: item.markupPercent == null ? "" : String(item.markupPercent),
+      qty: padTo(item.qty, places.qty),
+      unitPrice: padTo(item.unitPrice, places.unitPrice),
+      unitCost: padTo(item.unitCost, places.unitCost),
+      markup: padTo(item.markupPercent, places.markup),
     });
-  }, [item.id, item.description, item.qty, item.unitPrice, item.unitCost, item.markupPercent]);
+  }, [item.id, item.description, item.qty, item.unitPrice, item.unitCost, item.markupPercent, places.qty, places.unitPrice, places.unitCost, places.markup]);
 
   return (
     <tr className={item.flagged ? "border-b border-border bg-[#D08A1E]/10 last:border-0" : "border-b border-border last:border-0"}>
@@ -403,16 +432,16 @@ function LineRow({
           </p>
         ) : null}
       </td>
-      <td className="px-2 py-1.5">
+      <td className="px-2 py-1.5 text-right">
         <Input
-          className="tabular h-8 w-[76px] text-right"
+          className="tabular ml-auto block h-8 w-[76px] text-right"
           value={draft.qty}
           disabled={locked}
           onChange={(e) => setDraft((d) => ({ ...d, qty: e.target.value }))}
           onBlur={() => Number(draft.qty) !== item.qty && update.mutate({ id: item.id, qty: Number(draft.qty) || 0 })}
         />
       </td>
-      <td className="px-2 py-1.5">
+      <td className="px-2 py-1.5 text-left">
         <Select
           className="h-8 w-[80px]"
           value={item.unit}
@@ -426,9 +455,9 @@ function LineRow({
           ))}
         </Select>
       </td>
-      <td className="px-2 py-1.5">
+      <td className="px-2 py-1.5 text-right">
         <Input
-          className="tabular h-8 w-[92px] text-right"
+          className="tabular ml-auto block h-8 w-[92px] text-right"
           value={draft.unitPrice}
           disabled={locked}
           onChange={(e) => setDraft((d) => ({ ...d, unitPrice: e.target.value }))}
@@ -439,9 +468,9 @@ function LineRow({
         />
       </td>
       {cost.show ? (
-      <td className="px-2 py-1.5">
+      <td className="px-2 py-1.5 text-right">
         <Input
-          className="tabular h-8 w-[92px] text-right"
+          className="tabular ml-auto block h-8 w-[92px] text-right"
           placeholder="cost"
           value={draft.unitCost}
           disabled={locked || !cost.edit}
@@ -454,10 +483,11 @@ function LineRow({
       </td>
       ) : null}
       {cost.show ? (
-      <td className="px-2 py-1.5">
-        <div className="flex items-center gap-1">
+      <td className="px-2 py-1.5 text-right">
+        <div className="flex items-center justify-end gap-1">
           <Input
-            className="tabular h-8 w-[68px] text-right"
+            className="tabular h-8 w-[76px] text-right"
+            aria-label="Markup %"
             placeholder={item.unitCost ? "" : "no cost"}
             title={cost.edit ? "Markup on cost. Changing it sets the sell price." : "Only an Admin can change markup"}
             value={draft.markup}
@@ -471,11 +501,10 @@ function LineRow({
               if (Number(draft.markup) !== item.markupPercent) update.mutate({ id: item.id, markupPercent: Number(draft.markup) });
             }}
           />
-          <span className="text-xs text-muted-foreground">%</span>
         </div>
       </td>
       ) : null}
-      <td className="tabular px-3 py-1.5 text-right font-medium">{money(item.total)}</td>
+      <td className="tabular whitespace-nowrap px-3 py-1.5 text-right font-medium">{money(item.total)}</td>
       <td className="px-2 py-1.5 text-right">
         {locked ? null : (
           <button
@@ -673,6 +702,8 @@ export default function QuoteBuilderPage() {
     },
     cost.show,
   );
+  const lineItems = quote.data?.items;
+  const places = React.useMemo(() => columnPlaces(lineItems ?? []), [lineItems]);
 
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
@@ -957,12 +988,16 @@ export default function QuoteBuilderPage() {
                   <tr className="border-b border-border">
                     <th className="th px-2">Kind</th>
                     <th className="th px-2">Description</th>
-                    <th className="th px-2 text-right">Qty</th>
-                    <th className="th px-2">Unit</th>
-                    <th className="th px-2 text-right">Sell</th>
-                    {cost.show ? <th className="th px-2 text-right">Cost</th> : null}
-                    {cost.show ? <th className="th px-2 text-right" title={`Standard price book markup is ${STANDARD_MARKUP} on cost`}>Markup</th> : null}
-                    <th className="th text-right">Line total</th>
+                    <th className="th tabular px-2 text-right">Qty</th>
+                    <th className="th px-2 text-left">Unit</th>
+                    <th className="th tabular px-2 text-right">Sell</th>
+                    {cost.show ? <th className="th tabular px-2 text-right">Cost</th> : null}
+                    {cost.show ? (
+                      <th className="th tabular px-2 text-right" title={`Standard price book markup is ${STANDARD_MARKUP} on cost`}>
+                        Markup %
+                      </th>
+                    ) : null}
+                    <th className="th tabular whitespace-nowrap px-3 text-right">Line total</th>
                     <th aria-label="Row actions" />
                   </tr>
                 </thead>
@@ -975,6 +1010,7 @@ export default function QuoteBuilderPage() {
                       wordingOpen={wordingOpen}
                       onNotice={setLineNotice}
                       lastQuoted={item.productId != null ? lastQuoted.data?.[item.productId] : undefined}
+                      places={places}
                     />
                   ))}
                 </tbody>
