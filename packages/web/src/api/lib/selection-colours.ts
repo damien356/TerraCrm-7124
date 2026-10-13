@@ -191,7 +191,7 @@ export async function productItemsFor(jobId: number, selectionId: number) {
   const quote = await acceptedQuoteFor(jobId);
   if (!quote) throw bad("This job has no accepted quote, so there is nothing for the client to choose.");
   const sections = await quoteSections(quote.id);
-  // Item 9: an underlay that Settings pairs with a better one gets an upgrade offer.
+  // Item 9: an underlay that Settings pairs with a better one gets an upgrade offer. Homeowners only.
   const upgrades = await upgradeRowsFor(jobId, quote.id, selectionId, sections.length);
   if (!sections.length && !upgrades.length) throw bad("The accepted quote has no floors or coloured trims to choose.");
   const mats = await db
@@ -446,9 +446,8 @@ export async function submitProductSelection(sel: Selection, name: string, picks
     log.push(`${title}: ${quoted.colour} to ${picked.colour}${kind === "dearer" ? ` (+${money(round2(extra * 1.1))})` : kind === "cheaper" ? ` (${money(round2(extra * 1.1))})` : ""}`);
   }
 
-  // Item 9: the underlay upgrade answers.
-  const up = await applyUpgradeAnswers({ sel, who, answers: upgradesIn, showPrices: prices.show, company: prices.company, variationId });
-  variationId = up.variationId;
+  // Item 9: the underlay upgrade answers. Homeowners only, so a company billed job has none.
+  const up = await applyUpgradeAnswers({ sel, who, answers: upgradesIn });
   report.push(...up.report);
   log.push(...up.log);
 
@@ -517,13 +516,13 @@ export async function submitProductSelection(sel: Selection, name: string, picks
     await db.insert(schema.officeTasks).values({ jobId: sel.jobId, title: `Underlay upgrade to check, job ${jobRef}`, detail: failed.join("\n"), createdByName: who || "Client" });
   }
 
-  const upgraded = up.upgraded > 0 && (up.toAccept.length > 0 || up.report.length > 0);
+  const upgraded = up.toAccept.length > 0;
   await notifyOffice("selection_done", {
     title: changed ? `Colour change on job ${jobRef}` : upgraded ? `Underlay upgrade on job ${jobRef}` : `Colours confirmed for job ${jobRef}`,
     body: changed
       ? `${who || "The client"} changed ${changed} colour${changed === 1 ? "" : "s"}.${upgraded ? " They also said yes to the underlay upgrade." : ""} There is a task on the job.`
       : upgraded
-        ? `${who || "The client"} said yes to the underlay upgrade. There is a task on the job.`
+        ? `${who || "The client"} said yes to the underlay upgrade.${failed.length ? " There is a task on the job." : " It is accepted as a variation."}`
         : `${who || "The client"} confirmed the quoted colours.${notes ? " They left a note." : " Ready to order."}`,
     data: { kind: "job", jobId: sel.jobId },
   }).catch((e) => console.error("[selection] push failed:", e));

@@ -309,13 +309,12 @@ const selectionPage = {
     const productForm = isProductForm(items);
     const products = productForm ? await publicSections(sel, items) : null;
     const lock = productForm ? await lockState(sel.jobId) : { locked: false, reason: null };
-    // Item 9: the underlay upgrade offers. No price when the client may not see prices.
-    const upgrades = productForm ? await publicOffers(items, products?.showPrices ?? false) : [];
+    // Item 9: the underlay upgrade offers. Homeowners only, none on a company billed job.
+    const upgrades = productForm ? await publicOffers(sel, items) : [];
     return {
       kind: productForm ? ("products" as const) : ("rooms" as const),
       sections: products?.sections ?? [],
       upgrades,
-      company: products?.company ?? null,
       showPrices: products?.showPrices ?? false,
       notes: sel.notes,
       locked: lock.locked,

@@ -33,7 +33,6 @@ function UpgradeCard({
   locked: boolean;
   onAnswer: (a: "yes" | "no") => void;
 }) {
-  const price = u.extraIncGst != null ? ` for an extra ${moneyExact(u.extraIncGst)} inc GST` : "";
   const fixed = locked || u.settled;
   return (
     <PublicCard>
@@ -48,8 +47,7 @@ function UpgradeCard({
               <>Upgraded to {u.toName}</>
             ) : (
               <>
-                Upgrade to {u.toName}
-                {price}?
+                Upgrade to {u.toName} for an extra {moneyExact(u.extraIncGst)} inc GST?
               </>
             )}
           </h2>
@@ -78,9 +76,7 @@ function UpgradeCard({
           )}
           {!fixed && answer === "yes" ? (
             <p className="mt-2 rounded-md bg-[var(--gold)]/10 px-2.5 py-1.5 text-xs">
-              {u.extraIncGst != null
-                ? "When you send this form the upgrade is added to your job as a variation. It goes on your final invoice. Your deposit does not change."
-                : "We will add it as a variation and send it for approval before we order."}
+              When you send this form the upgrade is added to your job as a variation. It goes on your final invoice. Your deposit does not change.
             </p>
           ) : null}
         </div>
@@ -187,11 +183,7 @@ export function ProductSelection({ token, d }: { token: string; d: Data }) {
           {sent.changed
             ? "We will check your colour change against your quote and be in touch before we order."
             : "We will order what is on your quote."}{" "}
-          {sent.upgraded
-            ? d.showPrices
-              ? "Your underlay upgrade is added to your job as a variation and goes on your final invoice."
-              : "We have your underlay upgrade and will send it for approval before we order."
-            : ""}{" "}
+          {sent.upgraded ? "Your underlay upgrade is added to your job as a variation and goes on your final invoice." : ""}{" "}
           You can open this link again to make changes until we order.
         </PublicMessage>
         {!d.locked ? (

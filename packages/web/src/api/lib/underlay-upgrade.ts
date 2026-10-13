@@ -22,10 +22,10 @@ import { addOtherLine, createVariation, deleteVariation, itemsOf, money, removeL
  *                 variation rules (13 Oct). The underlay to order changes.
  *   No thanks     recorded and logged. Nothing else changes.
  *
- * A company billed job (the client cannot see prices) gets the offer without
- * a price. Yes there makes a draft variation for the office to send to the
- * company, never the homeowner, the same as a dearer colour (item 8). The
- * underlay changes when that variation is accepted.
+ * Homeowners only (Damien, 13 Oct). A company billed job (a builder,
+ * insurer or property manager on the quote, or the job bills a company)
+ * gets no offer at all: no rows, nothing on the form, no variation. That
+ * holds even when the person filling in the form works at that company.
  *
  * One row per offered underlay in material_selection_items, marked by
  * offer_product_id. The price is fixed when the form is made, so the client
@@ -104,8 +104,18 @@ async function quoteUnderlays(quoteId: number) {
   return [...groups.values()];
 }
 
-/** The upgrade rows a new form gets: one per quoted underlay that has a pair in Settings and prices up. */
+/** A company is on the quote, or the job bills a company. Those jobs get no upgrade offer. */
+export async function companyBilled(jobId: number, quoteId: number | null) {
+  const [job] = await db.select({ t: schema.jobs.billToType }).from(schema.jobs).where(eq(schema.jobs.id, jobId));
+  if (job?.t === "company") return true;
+  if (!quoteId) return false;
+  const [quote] = await db.select({ c: schema.quotes.companyId }).from(schema.quotes).where(eq(schema.quotes.id, quoteId));
+  return quote?.c != null;
+}
+
+/** The upgrade rows a new form gets: one per quoted underlay that has a pair in Settings and prices up. Homeowners only. */
 export async function upgradeRowsFor(jobId: number, quoteId: number, selectionId: number, startSort: number) {
+  if (await companyBilled(jobId, quoteId)) return [];
   const pairs = await upgradePairs();
   if (!pairs.length) return [];
   const underlays = await quoteUnderlays(quoteId);
@@ -169,10 +179,10 @@ async function variationsById(list: (number | null | undefined)[]) {
 
 const isAccepted = (v: Variation | undefined) => !!v && (v.status === "approved" || v.status === "invoiced");
 
-/** The client's page. No price when this person may not see prices. */
-export async function publicOffers(items: SelItem[], showPrices: boolean) {
+/** The client's page. Nothing on a company billed job, even from a row made before it was billed to a company. */
+export async function publicOffers(sel: Selection, items: SelItem[]) {
   const rows = items.filter(isUpgradeRow);
-  if (!rows.length) return [];
+  if (!rows.length || (await companyBilled(sel.jobId, sel.quoteId))) return [];
   const byId = await productsById(rows.flatMap((i) => [i.quotedProductId, i.offerProductId]));
   const vars = await variationsById(rows.map((i) => i.variationId));
   return rows.flatMap((i) => {
@@ -186,7 +196,7 @@ export async function publicOffers(items: SelItem[], showPrices: boolean) {
         fromName: underlayName(from),
         toName: underlayName(to),
         qtyText: qtyText(i.qty, i.unit),
-        extraIncGst: showPrices ? round2((i.extraExGst ?? 0) * 1.1) : null,
+        extraIncGst: round2((i.extraExGst ?? 0) * 1.1),
         answer: (ANSWERS as readonly string[]).includes(i.answer) ? (i.answer as Answer) : ("" as Answer),
         /** Yes went through and was accepted, so it cannot be taken back here. */
         settled: i.answer === "yes" && isAccepted(v),
@@ -226,8 +236,6 @@ export type UpgradeOutcome = {
   log: string[];
   upgraded: number;
   declined: number;
-  /** The form's shared draft variation, for a company billed job. */
-  variationId: number | null;
   /** Variations to accept on the spot once the form is saved. */
   toAccept: number[];
 };
@@ -241,13 +249,11 @@ export async function applyUpgradeAnswers(args: {
   sel: Selection;
   who: string;
   answers: UpgradeAnswer[];
-  showPrices: boolean;
-  company: string | null;
-  variationId: number | null;
 }): Promise<UpgradeOutcome> {
-  const out: UpgradeOutcome = { report: [], log: [], upgraded: 0, declined: 0, variationId: args.variationId, toAccept: [] };
+  const out: UpgradeOutcome = { report: [], log: [], upgraded: 0, declined: 0, toAccept: [] };
   const rows = (await db.select().from(schema.materialSelectionItems).where(eq(schema.materialSelectionItems.selectionId, args.sel.id))).filter(isUpgradeRow);
-  if (!rows.length) return out;
+  // Homeowners only: a company billed job ignores any upgrade answer.
+  if (!rows.length || (await companyBilled(args.sel.jobId, args.sel.quoteId))) return out;
   const byId = await productsById(rows.flatMap((i) => [i.quotedProductId, i.offerProductId]));
   const vars = await variationsById(rows.map((i) => i.variationId));
 
@@ -272,8 +278,8 @@ export async function applyUpgradeAnswers(args: {
       if (row.variationItemId && v && (v.status === "draft" || v.status === "sent")) {
         const [line] = await db.select().from(schema.variationItems).where(eq(schema.variationItems.id, row.variationItemId));
         if (line) await removeLine(line.id);
-        // Its own variation (not the form's shared draft) goes when nothing is left on it.
-        if (v.id !== out.variationId && v.status === "draft" && !v.sentAt && !(await itemsOf(v.id)).length) {
+        // Its own variation goes when nothing is left on it.
+        if (v.status === "draft" && !v.sentAt && !(await itemsOf(v.id)).length) {
           await deleteVariation(v.id, { name: "Terra Ops", role: "system" });
         }
         if (v.status === "sent") out.report.push(`Underlay upgrade, ${label}: the client changed to no thanks. The line is out of variation ${v.ref} and it is back to draft.`);
@@ -298,41 +304,22 @@ export async function applyUpgradeAnswers(args: {
       unitPrice: row.extraExGst ?? 0,
       unitCost: null as number | null,
     };
-    let vId: number;
-    if (args.showPrices) {
-      // Its own variation, accepted once the form is saved.
-      const nv = await createVariation({
-        jobId: args.sel.jobId,
-        description: "Underlay upgrade from the material selection form.",
-        byName: args.who || "Client",
-        actorRole: "customer",
-      });
-      vId = nv.id;
-      out.toAccept.push(nv.id);
-    } else {
-      // Company billed: the form's draft for the office to send to the company.
-      let draft = out.variationId ? (await variationsById([out.variationId])).get(out.variationId) : undefined;
-      if (!draft || draft.status !== "draft" || draft.sentAt) {
-        draft = await createVariation({
-          jobId: args.sel.jobId,
-          description: "From the material selection form.",
-          byName: args.who || "Client",
-          actorRole: "customer",
-        });
-        out.variationId = draft.id;
-      }
-      vId = draft.id;
-      out.report.push(
-        `Underlay upgrade, ${label}: the client said yes. ${money(incGst)} inc GST is on draft variation ${draft.ref}. Check it and send it${args.company ? ` to ${args.company}, never the homeowner` : ""}. The underlay to order stays ${underlayName(from)} until it is accepted.`,
-      );
-    }
+    // Its own variation, accepted once the form is saved.
+    const nv = await createVariation({
+      jobId: args.sel.jobId,
+      description: "Underlay upgrade from the material selection form.",
+      byName: args.who || "Client",
+      actorRole: "customer",
+    });
+    const vId = nv.id;
+    out.toAccept.push(nv.id);
     const cost = await costOf(from, to, row);
     const added = await addOtherLine({ variationId: vId, ...line, unitCost: cost });
     await db
       .update(schema.materialSelectionItems)
       .set({ answer: "yes", productId: to.id, variationId: vId, variationItemId: added.item.id, updatedAt: new Date() })
       .where(eq(schema.materialSelectionItems.id, row.id));
-    out.log.push(`Underlay upgrade to ${underlayName(to)}: yes${args.showPrices ? ` (+${money(incGst)})` : ""}`);
+    out.log.push(`Underlay upgrade to ${underlayName(to)}: yes (+${money(incGst)})`);
   }
   return out;
 }

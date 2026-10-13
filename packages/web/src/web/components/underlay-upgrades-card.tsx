@@ -11,6 +11,7 @@ import { useSaveUnderlayUpgrades, useUnderlayUpgrades } from "../queries/underla
  * Settings, Business rules (fix list item 9): which underlay upgrades to
  * which. When the accepted quote has the first one, the material selection
  * form offers the second at the Price list sell difference, inc GST.
+ * Homeowner jobs only (13 Oct).
  */
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -77,7 +78,7 @@ export function UnderlayUpgradesCard() {
     <Card>
       <CardHeader
         title="Underlay upgrades"
-        subtitle="When the accepted quote has the first underlay, the material selection form offers the second for the extra. Priced off the Price list sell prices, inc GST."
+        subtitle="When the accepted quote has the first underlay, the material selection form offers the second for the extra. Priced off the Price list sell prices, inc GST. Homeowner jobs only, never on a builder, insurer or property manager job."
       />
       <div className="space-y-4 px-4 py-4">
         {q.isLoading ? (
