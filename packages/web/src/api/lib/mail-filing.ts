@@ -166,16 +166,18 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** "248/42 Goldmine Rd" to its number and street name, for spotting it in an email. */
 export function addressKey(address: string) {
   const tokens = address.toLowerCase().replace(/,/g, " ").split(/\s+/).filter(Boolean);
-  const i = tokens.findIndex((t) => /\d/.test(t));
-  if (i < 0) return null;
-  const street = tokens.slice(i + 1).find((t) => /^[a-z][a-z'-]{2,}$/.test(t) && !/^(unit|lot|shop|level|suite)$/.test(t));
-  const num = tokens[i]!.replace(/^(unit|lot|u)/, "");
-  return street && /\d/.test(num) ? { num, street } : null;
+  // The street is the first word straight after a number ("6/42 Boundary"), so "unit 4 and 6/42 Boundary St" keys on 6/42.
+  for (let i = 1; i < tokens.length; i++) {
+    const num = tokens[i - 1]!.replace(/^(unit|lot|u)/, "");
+    const street = tokens[i]!;
+    if (/\d/.test(num) && /^[a-z][a-z'-]{2,}$/.test(street) && !/^(and|the|unit|lot|shop|level|suite|to|of)$/.test(street)) return { num, street };
+  }
+  return null;
 }
 
 /** Open jobs whose site address is written in the email, number and street both. */
 export async function jobsByAddress(text: string, skip: number[] = []) {
-  const hay = ` ${text.toLowerCase().replace(/,/g, " ")} `;
+  const hay = ` ${text.toLowerCase().replace(/,/g, " ").replace(/\s+/g, " ")} `;
   const rows = await db
     .select({
       id: schema.jobs.id,
@@ -199,9 +201,9 @@ export async function jobsByAddress(text: string, skip: number[] = []) {
     if (skip.includes(r.id) || r.parentJobId) continue;
     const k = addressKey(r.address);
     if (!k) continue;
-    const numRe = new RegExp(`(^|[^\\d/])${escapeRe(k.num)}([^\\d/]|$)`);
-    const streetRe = new RegExp(`\\b${escapeRe(k.street)}\\b`);
-    if (numRe.test(hay) && streetRe.test(hay)) {
+    // Number and street together, as they are written on an address ("248/42 Goldmine Road").
+    const re = new RegExp(`(^|[^\\d/])${escapeRe(k.num)} ${escapeRe(k.street)}\\b`);
+    if (re.test(hay)) {
       const { address: _a, ...job } = r;
       out.push({ ...job, open: true, byAddress: true });
     }
