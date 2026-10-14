@@ -2,17 +2,19 @@ import { ORPCError } from "@orpc/server";
 import { eq } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { sendAsTeam } from "./agent-mail";
-import { addParticipant, ensureForJob, logMessage, subjectWithRef } from "./conversations";
+import { clientInvoicePdfFor } from "./clientInvoicePdf";
+import { ensureForJob } from "./conversations";
+import { pickedFiles, sendJobEmail, type MailUpload } from "./job-mail";
 import { INVOICE_KIND_LABEL } from "./client-invoices";
 import { SENDER_NAME } from "./material-selection";
 import { TERRA_PRINT } from "./quotePdf";
 import { cardPaymentsOn, owingOn, payUrl } from "./stripe";
 
 /* ---------------------------------------------------------------------------
- * Email a client invoice with its Pay by card link (fix list item 6). Bank
- * transfer details stay in the email as they are on the quote. Goes from
- * team@ like every client email and is logged on the job's thread.
+ * Email a client invoice with its PDF and Pay by card link (fix list item 6,
+ * spec 15 Oct). Bank transfer details stay in the email as they are on the
+ * quote. Goes from team@ like every client email and is logged on the job's
+ * thread.
  * ------------------------------------------------------------------------- */
 
 const bad = (message: string) => new ORPCError("BAD_REQUEST", { message });
@@ -56,7 +58,16 @@ export function invoiceEmailBody(args: { first: string; ref: string; label: stri
   return lines.join("\n");
 }
 
-export async function sendInvoiceEmail(args: { invoiceId: number; to?: string | null; byName: string; actorRole: string; byProfileId?: number | null }) {
+export async function sendInvoiceEmail(args: {
+  invoiceId: number;
+  to?: string | null;
+  cc?: string[];
+  mediaIds?: number[];
+  uploads?: MailUpload[];
+  byName: string;
+  actorRole: string;
+  byProfileId?: number | null;
+}) {
   const [inv] = await db.select().from(schema.invoices).where(eq(schema.invoices.id, args.invoiceId));
   if (!inv) throw bad("Invoice not found");
   if (!inv.jobId) throw bad("This invoice is not on a job.");
@@ -66,44 +77,43 @@ export async function sendInvoiceEmail(args: { invoiceId: number; to?: string | 
   const to = args.to?.trim() || found?.email || "";
   if (!EMAIL_RE.test(to)) throw bad(to ? `"${to}" is not an email address.` : "No email address on file for this client. Type one in.");
 
+  for (const c of args.cc ?? []) if (!EMAIL_RE.test(c.trim())) throw bad(`"${c}" is not an email address.`);
+
   const conv = await ensureForJob(inv.jobId);
-  const subject = subjectWithRef(`Terra Flooring invoice ${inv.number}`, conv.ref);
+  const url = cardPaymentsOn() ? payUrl(inv.id) : null;
   const text = invoiceEmailBody({
     first: found && found.email.toLowerCase() === to.toLowerCase() ? found.first : "",
     ref: inv.number,
     label: inv.label || INVOICE_KIND_LABEL[inv.kind] || "",
     owing,
-    url: cardPaymentsOn() ? payUrl(inv.id) : null,
+    url,
   });
-  const out = await sendAsTeam({ to, subject, text, fromName: SENDER_NAME });
+  /* The invoice itself goes as a PDF, with the pay link in the email (spec 15 Oct). */
+  const { pdf, filename } = await clientInvoicePdfFor(inv.id);
+  const picked = await pickedFiles({ jobId: inv.jobId, mediaIds: args.mediaIds, uploads: args.uploads, byName: args.byName, byProfileId: args.byProfileId });
   const [contact] = await db.select().from(schema.contacts).where(eq(schema.contacts.email, to)).limit(1);
-  await logMessage({
-    conversationId: conv.id,
+  const sent = await sendJobEmail({
+    conv,
     jobId: inv.jobId,
+    to,
+    cc: args.cc,
+    subject: `Terra Flooring invoice ${inv.number}`,
+    text,
+    fromName: SENDER_NAME,
+    files: [{ filename, content: pdf, contentType: "application/pdf", storeAt: `invoices/${inv.jobId}/${inv.id}/sent-${Date.now()}.pdf` }, ...picked],
+    label: `Invoice ${inv.number}`,
     contactId: contact?.id ?? null,
-    channel: "email",
-    audience: "customer",
-    direction: "out",
-    subject,
-    body: text,
     authorName: args.byName,
     authorProfileId: args.byProfileId ?? null,
-    toAddress: to,
-    providerId: out.id,
-    status: "sent",
   });
-  if (contact) {
-    const name = [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim();
-    await addParticipant(conv.id, { role: "customer", contactId: contact.id, name, email: contact.email, mobile: contact.mobile });
-  }
   await db.insert(schema.activityLog).values({
     jobId: inv.jobId,
     entityType: "invoice",
     entityId: inv.id,
     action: "invoice_emailed",
-    detail: `${inv.number} emailed to ${to}${cardPaymentsOn() ? " with the Pay by card link" : ""}`,
+    detail: `${inv.number} emailed to ${to} with the PDF${url ? " and the Pay by card link" : ""}`,
     actorName: args.byName,
     actorRole: args.actorRole,
   });
-  return { to, via: out.via };
+  return { to, via: sent.via, messageId: sent.message.id, linked: sent.linked };
 }

@@ -2,8 +2,8 @@ import { ORPCError } from "@orpc/server";
 import { and, asc, desc, eq, isNotNull } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { sendAsTeam } from "./agent-mail";
-import { addParticipant, ensureForJob, logMessage, subjectWithRef } from "./conversations";
+import { ensureForJob, subjectWithRef } from "./conversations";
+import { sendJobEmail } from "./job-mail";
 import { notifyOffice } from "./notify";
 import { newToken, selectionUrl } from "./quote-links";
 import { jobText } from "./refs";
@@ -24,9 +24,6 @@ const bad = (message: string) => new ORPCError("BAD_REQUEST", { message });
 export const SENDER_NAME = "Damien from Terra";
 
 type Contact = typeof schema.contacts.$inferSelect;
-
-const fullName = (c: { firstName?: string | null; lastName?: string | null } | null | undefined) =>
-  [c?.firstName, c?.lastName].filter(Boolean).join(" ").trim();
 
 /** Who approves colour and product on this job: a ticked decision-maker, else the customer. */
 export async function decisionMakerFor(jobId: number): Promise<Contact | null> {
@@ -136,24 +133,17 @@ export async function sendSelection(selectionId: number, by: { name: string }): 
   ].join("\n");
 
   try {
-    const out = await sendAsTeam({ to, subject, text, fromName: SENDER_NAME });
-    await logMessage({
-      conversationId: conv.id,
+    await sendJobEmail({
+      conv,
       jobId: job.id,
-      contactId: contact?.id ?? null,
-      channel: "email",
-      audience: "customer",
-      direction: "out",
+      to,
       subject,
-      body: text,
+      text,
+      fromName: SENDER_NAME,
+      label: "Colour form",
+      contactId: contact?.id ?? null,
       authorName: by.name,
-      toAddress: to,
-      providerId: out.id,
-      status: "sent",
     });
-    if (contact) {
-      await addParticipant(conv.id, { role: "customer", contactId: contact.id, name: fullName(contact), email: contact.email, mobile: contact.mobile });
-    }
     await db
       .update(schema.materialSelections)
       .set({ sentAt: new Date(), sentTo: to, updatedAt: new Date() })

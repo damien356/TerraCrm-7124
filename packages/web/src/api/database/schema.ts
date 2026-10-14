@@ -2067,9 +2067,20 @@ export const messages = sqliteTable(
     pinnedLabel: text("pinned_label"),
     pinnedByName: text("pinned_by_name"),
     ...timestamps,
+    /** team@ or damien@: the Gmail mailbox an email went out of or came into. */
+    mailbox: text("mailbox"),
+    /** Gmail's own ids, so a reply threads in Gmail and nothing is filed twice. */
+    gmailId: text("gmail_id"),
+    gmailThreadId: text("gmail_thread_id"),
+    /** "Repair R188000-1" or "Variation V188000-01" on the parent job's thread. */
+    label: text("label"),
+    /** An out of office or automatic reply. Logged on the job, never a task. */
+    autoReply: integer("auto_reply", { mode: "boolean" }).notNull().default(false),
   },
   (t) => [
     index("messages_job_idx").on(t.jobId),
+    index("messages_gmail_thread_idx").on(t.gmailThreadId),
+    index("messages_gmail_id_idx").on(t.gmailId),
     index("messages_contact_idx").on(t.contactId),
     index("messages_conversation_idx").on(t.conversationId, t.createdAt),
     index("messages_header_idx").on(t.messageIdHeader),
@@ -3382,8 +3393,39 @@ export const mailAccounts = sqliteTable(
     connectedByProfileId: integer("connected_by_profile_id").references(() => profiles.id, { onDelete: "set null" }),
     connectedAt: integer("connected_at", { mode: "timestamp" }),
     ...timestamps,
+    /** epoch seconds: how far the job email reply pass has read. Apart from invoice reading. */
+    repliesSyncedThrough: integer("replies_synced_through"),
   },
   (t) => [unique("mail_accounts_address_unique").on(t.address)],
+);
+
+/**
+ * Every email the job email reply pass has looked at in team@ or damien@
+ * (spec 15 Oct). Kept apart from mail_messages so invoice reading is untouched.
+ */
+export const mailReplies = sqliteTable(
+  "mail_replies",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    accountId: integer("account_id").notNull().references(() => mailAccounts.id, { onDelete: "cascade" }),
+    gmailId: text("gmail_id").notNull(),
+    threadId: text("thread_id"),
+    fromAddress: text("from_address").notNull().default(""),
+    subject: text("subject").notNull().default(""),
+    receivedAt: integer("received_at", { mode: "timestamp" }),
+    /** filed · unfiled · ignored · error */
+    status: text("status").notNull().default("filed"),
+    /** How it was matched: headers, thread, tag, sender, or blank. */
+    how: text("how").notNull().default(""),
+    note: text("note").notNull().default(""),
+    messageId: integer("message_id").references(() => messages.id, { onDelete: "set null" }),
+    attempts: integer("attempts").notNull().default(1),
+    ...timestamps,
+  },
+  (t) => [
+    unique("mail_replies_account_gmail_unique").on(t.accountId, t.gmailId),
+    index("mail_replies_status_idx").on(t.status),
+  ],
 );
 
 /** Every email the agent has opened, so nothing is read twice. */

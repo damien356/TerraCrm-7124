@@ -140,7 +140,7 @@ export function EmailAgentCard() {
                       <span className="text-sm font-medium">{m.address}</span>
                       {m.connected ? <Badge colour="#3F7D3A">Connected</Badge> : <Badge>Not connected</Badge>}
                       <Badge>{m.wantsSend ? "Read and send" : "Read only"}</Badge>
-                      {m.connected && m.wantsSend && !m.canSend ? <Badge colour="#D08A1E">Send not allowed</Badge> : null}
+                      {m.connected && m.wantsSend && !m.canSend ? <Badge colour="#D08A1E">Sign in again to send</Badge> : null}
                     </div>
                     <p className="mt-0.5 text-xs text-muted-foreground">{m.purpose}</p>
                     {m.connected ? (
@@ -156,7 +156,10 @@ export function EmailAgentCard() {
                       </p>
                     ) : null}
                     {m.connected && m.wantsSend && !m.canSend ? (
-                      <p className="mt-1 text-xs text-[var(--warning)]">Reconnect and allow sending, or POs and requests can't go from {m.address}.</p>
+                      <p className="mt-1 text-xs text-[var(--warning)]">
+                        Press Reconnect, sign in as {m.address} and tick the box that lets Terra Ops send email.
+                        {m.address.startsWith("damien@") ? " Until then job emails can not go from damien@." : " Until then POs and requests can not go from team@."}
+                      </p>
                     ) : null}
                   </div>
                   <div className="flex gap-1.5">

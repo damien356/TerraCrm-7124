@@ -19,6 +19,7 @@ export const ALERT_KINDS = {
   variation_declined: { label: "Client declined a variation online", group: "Clients", urgent: false },
   selection_done: { label: "Client filled in flooring or colours", group: "Clients", urgent: false },
   client_text: { label: "Text from a client", group: "Clients", urgent: false },
+  client_email: { label: "Email from a client", group: "Clients", urgent: false },
   care_wool: { label: "Is this carpet wool? (care emails)", group: "Clients", urgent: false },
   lead_new: { label: "New lead from a landing page", group: "Clients", urgent: true },
   repair_price_ready: { label: "Timber repair price back from Marc", group: "Clients", urgent: false },

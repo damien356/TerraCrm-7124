@@ -3,8 +3,8 @@ import { eq, inArray } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { clientPdfFor } from "../routes/quoteBundles";
-import { sendAsTeam } from "./agent-mail";
-import { addParticipant, ensureForQuote, logMessage, subjectWithRef } from "./conversations";
+import { pickedFiles, sendJobEmail, type MailUpload } from "./job-mail";
+import { ensureForQuote, logMessage, subjectWithRef } from "./conversations";
 import { depositSplit } from "./deposits";
 import { isSupplyOnly } from "./quote-layout";
 import { linkForQuote, quoteUrl } from "./quote-links";
@@ -143,9 +143,20 @@ const stamp = () => new Date().toISOString().replace(/[:.]/g, "-");
  * edited it out), the PDF is attached, and it is logged on the thread.
  * Throws if the email did not go: nothing is marked sent then.
  */
-export async function sendQuoteEmail(args: { quote: Quote; to: string; subject: string; body: string; byName: string; byProfileId?: number | null }) {
+export async function sendQuoteEmail(args: {
+  quote: Quote;
+  to: string;
+  cc?: string[];
+  subject: string;
+  body: string;
+  byName: string;
+  byProfileId?: number | null;
+  mediaIds?: number[];
+  uploads?: MailUpload[];
+}) {
   const to = args.to.trim();
   if (!EMAIL_RE.test(to)) throw bad(`"${to}" is not an email address.`);
+  for (const c of args.cc ?? []) if (!EMAIL_RE.test(c.trim())) throw bad(`"${c}" is not an email address.`);
   if (needsScope(args.subject, args.body)) throw bad(`Type what the quote is for in place of ${SCOPE_FILL} before sending.`);
   const { pdf, filename, ref } = await clientPdfFor(args.quote.id);
   const link = await linkForQuote(args.quote.id);
@@ -153,36 +164,22 @@ export async function sendQuoteEmail(args: { quote: Quote; to: string; subject: 
   const body = args.body.includes(url) ? args.body : `${args.body.trimEnd()}\n\nView and accept your quote online: ${url}`;
 
   const conv = await ensureForQuote(args.quote.id);
-  const subject = subjectWithRef(args.subject.trim() || `Your Terra Flooring quote #${args.quote.number}`, conv.ref);
-  const out = await sendAsTeam({
+  const picked = await pickedFiles({ jobId: args.quote.jobId, mediaIds: args.mediaIds, uploads: args.uploads, byName: args.byName, byProfileId: args.byProfileId });
+  const [contact] = await db.select().from(schema.contacts).where(eq(schema.contacts.email, to)).limit(1);
+  const sent = await sendJobEmail({
+    conv,
+    jobId: args.quote.jobId,
     to,
-    subject,
+    cc: args.cc,
+    subject: args.subject.trim() || `Your Terra Flooring quote #${args.quote.number}`,
     text: body,
     fromName: SENDER_NAME,
-    attachments: [{ filename, content: pdf, contentType: "application/pdf" }],
-  });
-
-  const [contact] = await db.select().from(schema.contacts).where(eq(schema.contacts.email, to)).limit(1);
-  const msg = await logMessage({
-    conversationId: conv.id,
-    jobId: args.quote.jobId,
+    files: [{ filename, content: pdf, contentType: "application/pdf", storeAt: `quotes/${args.quote.number}/${args.quote.id}/sent-${stamp()}.pdf` }, ...picked],
     contactId: contact?.id ?? args.quote.contactId ?? null,
-    channel: "email",
-    audience: "customer",
-    direction: "out",
-    subject,
-    body,
     authorName: args.byName,
     authorProfileId: args.byProfileId ?? null,
-    toAddress: to,
-    providerId: out.id,
-    status: "sent",
   });
-  await attachPdf(msg.id, `quotes/${args.quote.number}/${args.quote.id}/sent-${stamp()}.pdf`, pdf, filename);
-  if (contact) {
-    await addParticipant(conv.id, { role: "customer", contactId: contact.id, name: fullName(contact), email: contact.email, mobile: contact.mobile });
-  }
-  return { ref, to, via: out.via, messageId: msg.id, url };
+  return { ref, to, via: sent.via, messageId: sent.message.id, url, linked: sent.linked };
 }
 
 /**
@@ -226,19 +223,24 @@ export async function sendSignedCopy(args: {
   const body = lines.join("\n");
   const subject = subjectWithRef(`Quote ${args.ref} accepted, your signed copy`, conv.ref);
 
-  let providerId: string | null = null;
   let failed: string | null = null;
   const to = args.signerEmail?.trim() || null;
   if (to && EMAIL_RE.test(to)) {
     try {
-      const out = await sendAsTeam({
+      /* Sent and logged on the thread, with the signed PDF, in one go. */
+      await sendJobEmail({
+        conv,
+        jobId: args.quote.jobId,
         to,
-        subject,
+        subject: `Quote ${args.ref} accepted, your signed copy`,
         text: body,
         fromName: SENDER_NAME,
-        attachments: [{ filename: args.filename, content: args.pdf, contentType: "application/pdf" }],
+        files: [{ filename: args.filename, content: args.pdf, contentType: "application/pdf", storeAt: key }],
+        contactId: args.quote.contactId,
+        authorName: "Terra Ops",
       });
-      providerId = out.id;
+      await db.update(schema.quoteSignatures).set({ pdfKey: key, updatedAt: new Date() }).where(eq(schema.quoteSignatures.id, args.signatureId));
+      return { key, emailed: true, failed };
     } catch (e) {
       failed = String((e as Error)?.message ?? e).slice(0, 300);
       console.error("[quote] signed copy email failed:", failed);
@@ -257,12 +259,11 @@ export async function sendSignedCopy(args: {
     body: to ? body : `${args.signerName} accepted quote ${args.ref} online. Signed copy attached.`,
     authorName: "Terra Ops",
     toAddress: to,
-    providerId,
     status: failed ? "failed" : "sent",
     statusDetail: failed,
     failedAt: failed ? new Date() : null,
   });
   await attachPdf(msg.id, key, args.pdf, args.filename);
   await db.update(schema.quoteSignatures).set({ pdfKey: key, updatedAt: new Date() }).where(eq(schema.quoteSignatures.id, args.signatureId));
-  return { key, emailed: Boolean(providerId), failed };
+  return { key, emailed: false, failed };
 }

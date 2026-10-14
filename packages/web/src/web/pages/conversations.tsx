@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Link } from "wouter";
+import { UnfiledTray } from "../components/mail-filing";
 import { ChevronDown, MessagesSquare, Paperclip, Search, SlidersHorizontal, X } from "lucide-react";
 import { Loading } from "../components/ui/card";
 import { cn } from "@/lib/utils";
@@ -201,7 +202,9 @@ function ThreadRow({ r }: { r: Row }) {
 
 export default function InboxPage() {
   const [lane, setLane] = React.useState<Lane>("all");
-  const [kind, setKind] = React.useState<Kind>("all");
+  const [kind, setKind] = React.useState<Kind>(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("kind") === "unmatched" ? "unmatched" : "all",
+  );
   const [companyId, setCompanyId] = React.useState("");
   const [staffId, setStaffId] = React.useState("");
   const [jobStatus, setJobStatus] = React.useState("");
@@ -251,6 +254,9 @@ export default function InboxPage() {
   return (
     <div className="px-6 py-6">
       <div className="mx-auto w-full max-w-[760px]">
+        <div className="mb-4">
+          <UnfiledTray hideWhenEmpty />
+        </div>
         <div className="card-surface overflow-hidden">
           {/* Header */}
           <div className="flex items-center justify-between gap-3 px-4 pt-4">

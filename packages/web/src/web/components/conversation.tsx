@@ -9,10 +9,14 @@ import {
   useMarkRead,
   usePinMessage,
   useRecipients,
+  useSenders,
   useSendMessage,
   useSmsCost,
   useUnpinMessage,
 } from "../queries/conversations";
+import { EmailInput } from "./email-input";
+import { CcList, EmailAttachments, NO_ATTACHMENTS, type MailAttachments } from "./email-attachments";
+import { MoveToJobButton } from "./mail-filing";
 
 /**
  * THE JOB CONVERSATION.
@@ -23,7 +27,11 @@ import {
  * path at all, so it cannot reach a customer by accident.
  *
  * Nothing here claims more than we know. An email says "sent" because that is
- * all Resend tells us, and no outgoing message is ever shown as read.
+ * all Gmail tells us, and no outgoing message is ever shown as read.
+ *
+ * Every email about the job shows here, in and out, newest at the bottom:
+ * quotes, variations, invoices and colour forms included. A repair's or a
+ * variation's email carries its label. Any email can be moved to another job.
  */
 
 /* What you can be doing. Each one is an audience plus a channel. */
@@ -67,6 +75,7 @@ function Message({
   onPin,
   onUnpin,
   busy,
+  jobId,
 }: {
   m: {
     id: number;
@@ -78,6 +87,10 @@ function Message({
     authorName: string | null;
     fromAddress: string | null;
     toAddress: string | null;
+    ccAddress?: string | null;
+    mailbox?: string | null;
+    label?: string | null;
+    autoReply?: boolean | null;
     status: string | null;
     statusDetail: string | null;
     pinnedAt: string | Date | null;
@@ -89,6 +102,7 @@ function Message({
   onPin: (id: number) => void;
   onUnpin: (id: number) => void;
   busy: boolean;
+  jobId: number;
 }) {
   const Icon = CHANNEL_ICON[m.channel] ?? MessageSquare;
   const inbound = m.direction === "in";
@@ -112,6 +126,8 @@ function Message({
             <span className="text-sm font-medium">{m.authorName || (inbound ? "Them" : "Office")}</span>
             <Badge colour={AUDIENCE_COLOUR[m.audience]}>{note ? "internal" : m.audience}</Badge>
             <Badge>{inbound ? "received" : m.channel}</Badge>
+            {m.label ? <Badge colour="#8A6D3B">{m.label}</Badge> : null}
+            {m.autoReply ? <Badge>automatic reply</Badge> : null}
             {failed ? (
               <Badge colour="#B4472E">
                 <AlertTriangle className="size-3" /> failed
@@ -124,6 +140,7 @@ function Message({
             ) : null}
             <span className="ml-auto flex items-center gap-1">
               <span className="text-[11px] text-muted-foreground">{when(m.createdAt)}</span>
+              {m.channel === "email" ? <MoveToJobButton messageId={m.id} currentJobId={jobId} /> : null}
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -162,8 +179,9 @@ function Message({
                 ? `from ${m.fromAddress}`
                 : null
               : m.toAddress
-                ? `to ${m.toAddress}`
+                ? `to ${m.toAddress}${m.mailbox || m.fromAddress ? ` from ${(m.mailbox || m.fromAddress)!.split("@")[0]}@` : ""}`
                 : null}
+            {m.ccAddress ? ` · cc ${m.ccAddress}` : null}
             {failed && m.statusDetail ? ` · ${m.statusDetail}` : null}
             {m.mentions.length ? ` · ${m.mentions.map((n) => `@${n.split(" ")[0]}`).join(" ")}` : null}
           </p>
@@ -186,36 +204,58 @@ function Composer({ jobId, conversationId }: { jobId: number; conversationId: nu
   const [subject, setSubject] = React.useState("");
   const [body, setBody] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+  const [notice, setNotice] = React.useState<string | null>(null);
+
+  /* Email only: the address typed or picked, copies, which mailbox, files. */
+  const [toEmail, setToEmail] = React.useState("");
+  const [cc, setCc] = React.useState<string[]>([]);
+  const [mailbox, setMailbox] = React.useState("");
+  const [files, setFiles] = React.useState<MailAttachments>(NO_ATTACHMENTS);
 
   const picked = MODES.find((m) => m.id === mode)!;
+  const isEmail = picked.channel === "email";
   const cost = useSmsCost(body, picked.channel === "sms");
+  const senders = useSenders();
 
   const customers = recipients.data?.customers ?? [];
   const crew = recipients.data?.crew ?? [];
+  const emailable = customers.filter((c) => c.email);
 
   /* Who this mode can actually reach, with the reason when it cannot. */
   const options =
     picked.id === "customer-sms"
       ? customers.filter((c) => c.receivesSms).map((c) => ({ value: `contact:${c.contactId}`, label: `${c.name} · ${c.mobile}` }))
-      : picked.id === "customer-email"
-        ? customers.filter((c) => c.receivesEmail).map((c) => ({ value: `contact:${c.contactId}`, label: `${c.name} · ${c.email}` }))
-        : picked.id === "installer-sms"
-          ? crew.map((i) => ({ value: `installer:${i.installerId}`, label: `${i.name} · ${i.mobile ?? "no mobile"}` }))
-          : [];
+      : picked.id === "installer-sms"
+        ? crew.map((i) => ({ value: `installer:${i.installerId}`, label: `${i.name} · ${i.mobile ?? "no mobile"}` }))
+        : [];
 
   const needsRecipient = picked.id !== "note";
 
   React.useEffect(() => {
     setError(null);
+    setNotice(null);
     setTo(options.length === 1 ? options[0]!.value : "");
+    if (isEmail && !toEmail) {
+      const first = customers.filter((c) => c.receivesEmail);
+      if (first.length === 1) setToEmail(first[0]!.email ?? "");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, recipients.dataUpdatedAt]);
 
+  const toContact = emailable.find((c) => (c.email ?? "").trim().toLowerCase() === toEmail.trim().toLowerCase());
+  const senderList = senders.data ?? [];
+  const sender = senderList.find((x) => x.address === mailbox) ?? senderList[0];
+
   async function submit() {
     setError(null);
+    setNotice(null);
     const text = body.trim();
     if (!text) return;
-    if (needsRecipient && !to) {
+    if (isEmail && !toEmail.trim()) {
+      setError("Type or pick who this goes to.");
+      return;
+    }
+    if (!isEmail && needsRecipient && !to) {
       setError("Pick who this goes to.");
       return;
     }
@@ -223,21 +263,41 @@ function Composer({ jobId, conversationId }: { jobId: number; conversationId: nu
     const id = idRaw ? Number(idRaw) : null;
 
     try {
-      const result = await send.mutateAsync({
-        conversationId,
-        audience: picked.audience,
-        channel: picked.channel,
-        body: text,
-        subject: picked.channel === "email" ? subject.trim() || undefined : undefined,
-        contactId: kind === "contact" ? id : null,
-        installerId: kind === "installer" ? id : null,
-      });
+      const result = await send.mutateAsync(
+        isEmail
+          ? {
+              conversationId,
+              jobId,
+              audience: "customer",
+              channel: "email",
+              body: text,
+              subject: subject.trim() || undefined,
+              to: toEmail.trim(),
+              cc: cc.map((c) => c.trim()).filter(Boolean),
+              mailbox: sender?.address,
+              contactId: toContact?.contactId ?? null,
+              mediaIds: files.mediaIds,
+              uploads: files.uploads,
+            }
+          : {
+              conversationId,
+              audience: picked.audience,
+              channel: picked.channel,
+              body: text,
+              contactId: kind === "contact" ? id : null,
+              installerId: kind === "installer" ? id : null,
+            },
+      );
       if (!result.ok) {
         setError(result.reason ?? "That didn't go out. It's logged as failed on the thread.");
         return;
       }
+      const linked = "linked" in result && Array.isArray(result.linked) ? result.linked : [];
+      if (linked.length) setNotice(`Sent. ${linked.length} file${linked.length === 1 ? " was" : "s were"} too big to attach, so ${linked.length === 1 ? "it went" : "they went"} as a 7 day download link.`);
       setBody("");
       setSubject("");
+      setCc([]);
+      setFiles(NO_ATTACHMENTS);
     } catch (e) {
       setError(e instanceof Error ? e.message : "That didn't send.");
     }
@@ -263,7 +323,55 @@ function Composer({ jobId, conversationId }: { jobId: number; conversationId: nu
         })}
       </div>
 
-      {needsRecipient ? (
+      {isEmail ? (
+        <div className="mt-2.5 grid gap-2">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Field label="To">
+              <EmailInput value={toEmail} onValueChange={setToEmail} placeholder="name@example.com" />
+              {emailable.length ? (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {emailable.map((c) => (
+                    <button
+                      key={c.contactId}
+                      type="button"
+                      onClick={() => setToEmail(c.email ?? "")}
+                      className={[
+                        "rounded-full border px-2 py-0.5 text-[11px]",
+                        toContact?.contactId === c.contactId ? "border-foreground bg-foreground text-background" : "border-border bg-card hover:bg-secondary",
+                      ].join(" ")}
+                      title={c.email ?? ""}
+                    >
+                      {c.name || c.email}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </Field>
+            <Field label="From">
+              <Select value={sender?.address ?? ""} onChange={(e) => setMailbox(e.target.value)} disabled={senderList.length < 2}>
+                {senderList.map((x) => (
+                  <option key={x.address} value={x.address} disabled={!x.ready}>
+                    {x.name} ({x.address}){x.ready ? "" : ", needs signing in again in Settings"}
+                  </option>
+                ))}
+              </Select>
+              {senderList.find((x) => !x.ready || x.note)?.note ? (
+                <p className="mt-1 text-[11px] text-muted-foreground">{senderList.find((x) => x.note)?.note}</p>
+              ) : null}
+            </Field>
+          </div>
+          <Field label="CC">
+            <CcList
+              value={cc}
+              onChange={setCc}
+              suggestions={emailable.filter((c) => c.contactId !== toContact?.contactId).map((c) => ({ email: c.email ?? "", name: c.name }))}
+            />
+          </Field>
+          <Field label="Subject" hint="The job number goes on the end for you, so replies come back here.">
+            <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Your floors" />
+          </Field>
+        </div>
+      ) : needsRecipient ? (
         <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
           <Field label="To">
             <Select value={to} onChange={(e) => setTo(e.target.value)}>
@@ -277,17 +385,12 @@ function Composer({ jobId, conversationId }: { jobId: number; conversationId: nu
               ))}
             </Select>
           </Field>
-          {picked.channel === "email" ? (
-            <Field label="Subject" hint="The job number is added for you, so replies come back here.">
-              <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Your floors" />
-            </Field>
-          ) : null}
         </div>
       ) : null}
 
       <Textarea
         className="mt-2.5"
-        rows={3}
+        rows={isEmail ? 6 : 3}
         value={body}
         onChange={(e) => setBody(e.target.value)}
         placeholder={
@@ -299,6 +402,12 @@ function Composer({ jobId, conversationId }: { jobId: number; conversationId: nu
         }
       />
 
+      {isEmail ? (
+        <div className="mt-2">
+          <EmailAttachments jobId={jobId} value={files} onChange={setFiles} note="Files from the device are saved to the job file when it sends." />
+        </div>
+      ) : null}
+
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
           {picked.id === "note" ? (
@@ -309,7 +418,7 @@ function Composer({ jobId, conversationId }: { jobId: number; conversationId: nu
               {picked.audience === "customer" ? " · opt-out line added" : " · no opt-out, this is crew"}
             </>
           ) : (
-            "Goes from the Terra address. Replies land back on this thread."
+            "Nothing goes until you press Send. Replies land back on this thread."
           )}
         </p>
         <Button disabled={!body.trim() || send.isPending} onClick={submit}>
@@ -319,6 +428,7 @@ function Composer({ jobId, conversationId }: { jobId: number; conversationId: nu
       </div>
 
       {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
+      {notice ? <p className="mt-2 text-xs text-[#3E6B4F]">{notice}</p> : null}
     </div>
   );
 }
@@ -334,6 +444,14 @@ export function JobConversation({ jobId }: { jobId: number }) {
   const markRead = useMarkRead();
 
   const conversationId = thread.data?.conversation.id ?? null;
+  const count = thread.data?.messages.length ?? 0;
+
+  /* Newest is at the bottom, so open there and follow new ones in. */
+  const listRef = React.useRef<HTMLUListElement>(null);
+  React.useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [count, conversationId]);
 
   React.useEffect(() => {
     if (conversationId) markRead.mutate({ conversationId });
@@ -357,16 +475,17 @@ export function JobConversation({ jobId }: { jobId: number }) {
       <Card className="overflow-hidden">
         <CardHeader
           title="Conversation"
-          subtitle={`${conversation.ref} · every message on this job, whichever way it came in.`}
+          subtitle={`${conversation.ref} · every message and email on this job, in and out, newest at the bottom.`}
         />
         {messages.length === 0 ? (
           <Empty>Nothing on this thread yet. Write the first message below.</Empty>
         ) : (
-          <ul className="max-h-[560px] divide-y divide-border overflow-y-auto">
+          <ul ref={listRef} className="max-h-[560px] divide-y divide-border overflow-y-auto">
             {messages.map((m) => (
               <Message
                 key={m.id}
                 m={m as never}
+                jobId={jobId}
                 busy={busy}
                 onPin={(id) => pin.mutate({ messageId: id })}
                 onUnpin={(id) => unpin.mutate({ messageId: id })}

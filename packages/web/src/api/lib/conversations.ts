@@ -19,8 +19,28 @@ export const jobRef = (job: { number: number; displayNumber?: string | null }) =
 /** "Terra Q188000". Older threads carry "Terra Q-1042", and both read back the same. */
 export const quoteRef = (number: number) => `Terra Q${number}`;
 
+/**
+ * The tag that goes in a subject line (spec 15 Oct): "#188042", "#R188000-1",
+ * "#Q188000". Read off the thread's ref, so old and new threads agree.
+ */
+export function tagFromRef(ref: string) {
+  const m = ref.match(/terra\s*#\s*([a-z]?\d+(?:-[a-z]?\d+)?)/i);
+  if (m?.[1]) return `#${m[1].toUpperCase()}`;
+  const q = ref.match(/terra\s*q-?\s*(\d+)/i);
+  if (q?.[1]) return `#Q${q[1]}`;
+  return "";
+}
+
 /** Pull a job, repair or quote number back out of a subject line, if it is still intact. */
 export function refInSubject(subject: string): { job?: number; repair?: string; quote?: number } {
+  /* The tag Terra puts on now: [#188042], [#R188000-1], [#Q188000]. An old
+   * callback reads [#3981-C1]. */
+  const tagRepair = subject.match(/\[\s*#\s*((?:r\s*)?\d+\s*-\s*c?\d+)\s*\]/i);
+  if (tagRepair?.[1]) return { repair: tagRepair[1].replace(/\s+/g, "").toUpperCase() };
+  const tagQuote = subject.match(/\[\s*#\s*q\s*(\d+)\s*\]/i);
+  if (tagQuote?.[1]) return { quote: Number(tagQuote[1]) };
+  const tagJob = subject.match(/\[\s*#\s*(\d+)\s*\]/i);
+  if (tagJob?.[1]) return { job: Number(tagJob[1]) };
   const repair = subject.match(/terra\s*#\s*r\s*(\d+)\s*-\s*(\d+)/i);
   if (repair?.[1] && repair[2]) return { repair: `R${repair[1]}-${repair[2]}` };
   const job = subject.match(/terra\s*#\s*(\d+)/i);
@@ -30,10 +50,23 @@ export function refInSubject(subject: string): { job?: number; repair?: string; 
   return {};
 }
 
-/** Put the handle on the subject once, never twice. */
+/** Every tag Terra has ever put on a subject, old "[Terra #4335]" style and new "[#188042]". */
+const OLD_TAGS = [
+  /\s*\[\s*#\s*[qr]?\s*\d+(?:\s*-\s*c?\d+)?\s*\]/gi,
+  /\[?\s*terra\s*#\s*r\s*\d+\s*-\s*\d+\s*\]?/gi,
+  /\[?\s*terra\s*#?\s*q?-?\s*\d+\s*\]?/gi,
+];
+
+/**
+ * Put the tag on the end of the subject once, never twice: "Your quote [#188042]".
+ * `ref` is the thread's ref, or a job's own "Terra #R188000-1" for a repair.
+ */
 export function subjectWithRef(subject: string, ref: string) {
-  const clean = subject.replace(/\[?\s*terra\s*#?\s*q?-?\s*\d+\s*\]?/gi, "").trim();
-  return `[${ref}] ${clean || "Your job with Terra Flooring"}`.trim();
+  let clean = subject;
+  for (const re of OLD_TAGS) clean = clean.replace(re, " ");
+  clean = clean.replace(/\s{2,}/g, " ").trim() || "Your job with Terra Flooring";
+  const tag = tagFromRef(ref);
+  return tag ? `${clean} [${tag}]` : clean;
 }
 
 const preview = (body: string) => body.replace(/\s+/g, " ").trim().slice(0, 160);
@@ -42,7 +75,16 @@ const preview = (body: string) => body.replace(/\s+/g, " ").trim().slice(0, 160)
  * The thread for a job. Opens one if there is none, and adopts the quote's
  * thread when the job came from a quote, so the history is continuous.
  */
-export async function ensureForJob(jobId: number) {
+export async function ensureForJob(jobId: number): Promise<typeof schema.conversations.$inferSelect> {
+  /* A repair (R number) talks on its parent job's thread, labelled, so there is
+   * one place per job (answers 15 Oct). */
+  const [self] = await db
+    .select({ parentJobId: schema.jobs.parentJobId })
+    .from(schema.jobs)
+    .where(eq(schema.jobs.id, jobId))
+    .limit(1);
+  if (self?.parentJobId && self.parentJobId !== jobId) return ensureForJob(self.parentJobId);
+
   const [existing] = await db
     .select()
     .from(schema.conversations)
@@ -213,6 +255,12 @@ export interface LogArgs {
   authorProfileId?: number | null;
   fromAddress?: string | null;
   toAddress?: string | null;
+  ccAddress?: string | null;
+  mailbox?: string | null;
+  gmailId?: string | null;
+  gmailThreadId?: string | null;
+  label?: string | null;
+  autoReply?: boolean;
   messageIdHeader?: string | null;
   inReplyTo?: string | null;
   referencesHeader?: string | null;
@@ -243,6 +291,12 @@ export async function logMessage(args: LogArgs) {
       authorProfileId: args.authorProfileId ?? null,
       fromAddress: args.fromAddress ?? null,
       toAddress: args.toAddress ?? null,
+      ccAddress: args.ccAddress ?? null,
+      mailbox: args.mailbox ?? null,
+      gmailId: args.gmailId ?? null,
+      gmailThreadId: args.gmailThreadId ?? null,
+      label: args.label ?? null,
+      autoReply: args.autoReply ?? false,
       messageIdHeader: args.messageIdHeader ?? null,
       inReplyTo: args.inReplyTo ?? null,
       referencesHeader: args.referencesHeader ?? null,

@@ -6,8 +6,12 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { staffOnly, type Actor } from "../middleware/auth";
 import { parseTags } from "../lib/person-tags";
-import { signGet } from "../lib/s3";
-import { conversationReplyTo, CONVERSATION_FROM, sendEmail } from "../lib/email";
+import { mailUploadKey, bucketForMime } from "../lib/job-mail";
+import { fileHolding, holdingSender, moveMessageToJob, unfiledList } from "../lib/mail-filing";
+import { mediaKey, signGet, signPut } from "../lib/s3";
+import { createJob } from "./jobs";
+import { jobFamily, pickedFiles, sendersFor, sendJobEmail, uploadInput } from "../lib/job-mail";
+import { SEND_FROM } from "../lib/gmail";
 import { normaliseMobile, sendSms, smsParts, SMS_OPT_OUT } from "../lib/sms";
 import {
   addParticipant,
@@ -15,7 +19,6 @@ import {
   ensureForQuote,
   logMessage,
   subjectWithRef,
-  threadHeaders,
 } from "../lib/conversations";
 
 /**
@@ -41,6 +44,8 @@ const ALLOWED: Record<(typeof AUDIENCE)[number], readonly (typeof CHANNEL)[numbe
   supplier: ["email"],
   internal: ["note"],
 };
+
+const EMAIL_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
 
 const fullName = (c: { firstName: string; lastName: string } | null | undefined) =>
   c ? `${c.firstName} ${c.lastName}`.trim() : "";
@@ -157,6 +162,14 @@ export const sendInput = z.object({
   contactId: z.number().nullish(),
   installerId: z.number().nullish(),
   supplierId: z.number().nullish(),
+  /** Email only. A typed address, used in place of the contact's own. */
+  to: z.string().trim().max(200).optional(),
+  cc: z.array(z.string().trim().max(200)).max(10).optional(),
+  /** team@ unless Damien picks himself. Checked against who is sending. */
+  mailbox: z.string().optional(),
+  /** Files from the job file, and from the device (already in storage). */
+  mediaIds: z.array(z.number().int()).max(20).optional(),
+  uploads: z.array(uploadInput).max(20).optional(),
 });
 
 export async function sendConversationMessage(input: z.infer<typeof sendInput>, actor: Actor) {
@@ -272,56 +285,72 @@ export async function sendConversationMessage(input: z.infer<typeof sendInput>, 
       input.audience === "supplier"
         ? (await db.select().from(schema.suppliers).where(eq(schema.suppliers.id, input.supplierId ?? 0)).limit(1))[0]
         : (await db.select().from(schema.contacts).where(eq(schema.contacts.id, input.contactId ?? 0)).limit(1))[0];
-    const to = (person as { email?: string | null } | undefined)?.email;
+    const to = input.to?.trim() || (person as { email?: string | null } | undefined)?.email?.trim();
     if (!to) throw new ORPCError("BAD_REQUEST", { message: "No email address on file for that recipient." });
-
-    const subject = subjectWithRef(input.subject ?? conv.subject, conv.ref);
-    const headers = await threadHeaders(conv.id);
-
-    const out = await sendEmail({
-      to,
-      subject,
-      text: input.body,
-      html: input.body
-        .split(/\n{2,}/)
-        .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
-        .join(""),
-      from: CONVERSATION_FROM,
-      /* Unique per conversation, so their reply identifies itself. */
-      replyTo: conversationReplyTo(conv.id),
-      inReplyTo: headers.inReplyTo,
-      references: headers.references,
-    });
-
-    const msg = await logMessage({
-      ...common,
-      channel: "email",
-      audience: input.audience,
-      subject,
-      body: input.body,
-      toAddress: to,
-      /* Resend's id is what a delivery webhook comes back keyed on. */
-      providerId: out.ok ? out.providerId : null,
-      inReplyTo: headers.inReplyTo ?? null,
-      referencesHeader: headers.references ?? null,
-      status: out.ok ? "sent" : "failed",
-      statusDetail: out.ok ? null : out.reason,
-      failedAt: out.ok ? null : new Date(),
-    });
-
-    if (input.contactId) {
-      const c = person as typeof schema.contacts.$inferSelect | undefined;
-      await addParticipant(conv.id, {
-        role: "customer",
-        contactId: input.contactId,
-        name: fullName(c),
-        email: c?.email ?? null,
-        mobile: c?.mobile ?? null,
-      });
+    for (const addr of [to, ...(input.cc ?? [])]) {
+      if (!EMAIL_RE.test(addr)) throw new ORPCError("BAD_REQUEST", { message: `"${addr}" is not an email address.` });
     }
 
-    if (!out.ok) return { ok: false as const, messageId: msg.id, reason: out.reason };
-    return { ok: true as const, messageId: msg.id };
+    /* damien@ is only offered to Damien, and only once it can send. */
+    const mailbox = (input.mailbox || SEND_FROM).toLowerCase();
+    if (mailbox !== SEND_FROM) {
+      const allowed = (await sendersFor(actor.email)).find((s) => s.address === mailbox);
+      if (!allowed) throw new ORPCError("FORBIDDEN", { message: "You can not send from that mailbox." });
+      if (!allowed.ready) throw new ORPCError("BAD_REQUEST", { message: `${mailbox} ${allowed.note.charAt(0).toLowerCase()}${allowed.note.slice(1)}` });
+    }
+
+    /* A repair talks on its parent's thread, so its own job id rides along. It
+     * must be one of this thread's jobs. */
+    const jobId = input.jobId ?? conv.jobId ?? null;
+    if (input.jobId && conv.jobId && input.jobId !== conv.jobId && !(await jobFamily(conv.jobId)).includes(input.jobId)) {
+      throw new ORPCError("BAD_REQUEST", { message: "That job is not on this thread." });
+    }
+
+    const files = await pickedFiles({
+      jobId,
+      mediaIds: input.mediaIds,
+      uploads: input.uploads,
+      byName: common.authorName,
+      byProfileId: common.authorProfileId,
+    }).catch((e: unknown) => {
+      throw new ORPCError("BAD_REQUEST", { message: String((e as Error)?.message ?? e) });
+    });
+
+    try {
+      const sent = await sendJobEmail({
+        conv,
+        jobId,
+        mailbox,
+        to,
+        cc: input.cc,
+        subject: input.subject?.trim() || conv.subject,
+        text: input.body,
+        files,
+        audience: input.audience === "supplier" ? "supplier" : "customer",
+        contactId: input.contactId ?? null,
+        supplierId: input.supplierId ?? null,
+        authorName: common.authorName,
+        authorProfileId: common.authorProfileId,
+      });
+      return { ok: true as const, messageId: sent.message.id, linked: sent.linked };
+    } catch (e) {
+      /* It did not go. Logged as failed so the thread is honest about it. */
+      const reason = String((e as Error)?.message ?? e).slice(0, 300);
+      const msg = await logMessage({
+        ...common,
+        channel: "email",
+        audience: input.audience,
+        subject: subjectWithRef(input.subject?.trim() || conv.subject, conv.ref),
+        body: input.body,
+        fromAddress: mailbox,
+        toAddress: to,
+        ccAddress: input.cc?.length ? input.cc.join(", ") : null,
+        status: "failed",
+        statusDetail: reason,
+        failedAt: new Date(),
+      });
+      return { ok: false as const, messageId: msg.id, reason };
+    }
   }
 
   throw new ORPCError("BAD_REQUEST", { message: "Nothing sends on that channel yet." });
@@ -719,6 +748,69 @@ export const conversations = {
         lastAuthor: r.lastAuthor ?? "",
         attachmentCount: Number(r.attachmentCount ?? 0),
       }));
+    }),
+
+  /* ------------------------- job email thread (spec 15 Oct) ------------------------- */
+
+  /** Which mailboxes you can send a job email from. damien@ only shows for Damien. */
+  senders: staffOnly.handler(({ context }) => sendersFor(context.actor.email)),
+
+  /** Somewhere for the browser to put a file picked from the device for an email. */
+  uploadSlot: staffOnly
+    .input(z.object({ filename: z.string().min(1).max(200), contentType: z.string().min(1).max(120), jobId: z.number().int().nullish() }))
+    .handler(async ({ input }) => {
+      const key = input.jobId ? mediaKey(input.jobId, bucketForMime(input.contentType), input.filename) : mailUploadKey(input.filename);
+      return { url: await signPut(key, input.contentType), key };
+    }),
+
+  /** "Move to another job" on any email. The email and its files move, never copied. */
+  moveMessage: staffOnly
+    .input(z.object({ messageId: z.number().int(), jobId: z.number().int() }))
+    .handler(async ({ input, context }) => {
+      try {
+        return await moveMessageToJob(input.messageId, input.jobId, context.actor.name);
+      } catch (e) {
+        throw new ORPCError("BAD_REQUEST", { message: (e as Error).message });
+      }
+    }),
+
+  /** Email Terra could not place, with the sender's jobs to pick from. */
+  unfiled: staffOnly.handler(() => unfiledList()),
+
+  /** One tap filing from Unfiled. */
+  fileUnfiled: staffOnly
+    .input(z.object({ conversationId: z.number().int(), jobId: z.number().int() }))
+    .handler(async ({ input, context }) => {
+      try {
+        return await fileHolding(input.conversationId, input.jobId, context.actor.name);
+      } catch (e) {
+        throw new ORPCError("BAD_REQUEST", { message: (e as Error).message });
+      }
+    }),
+
+  /** "New enquiry": a new job for the sender, and the email filed on it. */
+  newEnquiry: staffOnly
+    .input(z.object({ conversationId: z.number().int() }))
+    .handler(async ({ input, context }) => {
+      const who = await holdingSender(input.conversationId);
+      if (!who || who.conv.state !== "unassigned") throw new ORPCError("BAD_REQUEST", { message: "That email has already been filed." });
+      let contactId = who.contact?.id ?? null;
+      if (!contactId) {
+        if (!who.email) throw new ORPCError("BAD_REQUEST", { message: "There is no sender to make the enquiry for." });
+        const parts = (who.name || who.email.split("@")[0] || "").trim().split(/\s+/);
+        const [c] = await db
+          .insert(schema.contacts)
+          .values({ firstName: (parts[0] || who.email).slice(0, 80), lastName: parts.slice(1).join(" ").slice(0, 80), email: who.email, source: "email" })
+          .returning({ id: schema.contacts.id });
+        contactId = c!.id;
+      }
+      const job = await createJob(
+        { title: (who.subject || "Email enquiry").slice(0, 200), contactId, source: "email", description: who.body.slice(0, 4000) },
+        context.actor,
+      );
+      if (!job) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "The job was not made." });
+      const out = await fileHolding(input.conversationId, job.id, context.actor.name);
+      return { ...out, jobNumber: job.number };
     }),
 
   /** The numbers on the inbox filter chips, both dimensions at once. */

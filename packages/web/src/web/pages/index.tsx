@@ -2,6 +2,7 @@ import { Link } from "wouter";
 import { AlertTriangle, ArrowRight, Clock, MapPin, Radio, Users2 } from "lucide-react";
 import { Page } from "../components/layout";
 import { OfficeTasksCard } from "../components/office-tasks";
+import { UnfiledTray } from "../components/mail-filing";
 import { AlertsCard } from "../components/alerts-card";
 import { CrewUpdatesCard } from "../components/crew-updates";
 import { Card, CardHeader, Empty, Loading, Stat } from "../components/ui/card";
@@ -128,6 +129,7 @@ export default function DashboardPage() {
         <div className="space-y-4">
           <AlertsCard />
 
+          <UnfiledTray limit={5} hideWhenEmpty />
           <OfficeTasksCard />
 
           <TopSourcesCard />

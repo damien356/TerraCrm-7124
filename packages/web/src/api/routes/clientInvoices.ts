@@ -11,6 +11,7 @@ import { isProductForm, lockState, staffSections } from "../lib/selection-colour
 import { staffOffers } from "../lib/underlay-upgrade";
 import { EMAIL_RE } from "../lib/quote-email";
 import { sendInvoiceEmail } from "../lib/invoice-email";
+import { uploadInput } from "../lib/job-mail";
 import { cardPaymentsOn, payUrl } from "../lib/stripe";
 import { billingOnJob, RAISE_KINDS, raiseJobInvoice } from "../lib/final-invoice";
 
@@ -156,9 +157,25 @@ export const clientInvoices = {
 
   /** Email the invoice to the client with its Pay by card link and the bank details. */
   email: staffOnly
-    .input(z.object({ id: z.number(), to: z.string().trim().max(200).nullish() }))
+    .input(
+      z.object({
+        id: z.number(),
+        to: z.string().trim().max(200).nullish(),
+        cc: z.array(z.string().trim().max(200)).max(10).optional(),
+        mediaIds: z.array(z.number().int()).max(30).optional(),
+        uploads: z.array(uploadInput).max(20).optional(),
+      }),
+    )
     .handler(async ({ input, context }) => {
-      return sendInvoiceEmail({ invoiceId: input.id, to: input.to ?? null, byName: context.actor.name, actorRole: context.actor.role });
+      return sendInvoiceEmail({
+        invoiceId: input.id,
+        to: input.to ?? null,
+        cc: input.cc,
+        mediaIds: input.mediaIds,
+        uploads: input.uploads,
+        byName: context.actor.name,
+        actorRole: context.actor.role,
+      });
     }),
 
   void: adminOnly

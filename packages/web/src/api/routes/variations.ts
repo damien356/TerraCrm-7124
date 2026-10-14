@@ -5,6 +5,7 @@ import * as schema from "../database/schema";
 import { staffOnly, type Actor } from "../middleware/auth";
 import { rebuildForecast } from "../lib/cashflow";
 import { acceptVariation, rejectVariation, WORK_ORDER_WARNING } from "../lib/variation-accept";
+import { uploadInput } from "../lib/job-mail";
 import { addressedFor, billNoteOf, sendVariation, variationDraft, variationPdfFor, variationPhotos } from "../lib/variation-send";
 import {
   acceptedQuoteFor,
@@ -207,6 +208,9 @@ export const variations = {
         to: z.string().trim().min(3).max(200),
         subject: z.string().max(300).optional(),
         body: z.string().trim().min(1).max(20000),
+        cc: z.array(z.string().trim().max(200)).max(10).optional(),
+        mediaIds: z.array(z.number().int()).max(30).optional(),
+        uploads: z.array(uploadInput).max(20).optional(),
       }),
     )
     .handler(async ({ input, context }) => {
@@ -216,7 +220,7 @@ export const variations = {
         byProfileId: await profileIdOf(context.actor.userId),
         actorRole: context.actor.role,
       });
-      return { to: out.to, url: out.url, variation: await fresh(input.id, context.actor) };
+      return { to: out.to, url: out.url, linked: out.linked, variation: await fresh(input.id, context.actor) };
     }),
 
   pdf: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {

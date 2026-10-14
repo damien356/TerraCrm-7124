@@ -8,6 +8,7 @@ import { leadToQuotedOnSend } from "../lib/job-stage";
 import { quoteRefOf } from "../lib/quote-number";
 import { linkSummary } from "../lib/quote-links";
 import { depositInvoiceFor } from "../lib/client-invoices";
+import { uploadInput } from "../lib/job-mail";
 import { quoteEmailDraft, sendQuoteEmail } from "../lib/quote-email";
 import { assertReadyToGoOut, editableQuoteOrThrow, quoteOrThrow, recordPriceHistory } from "./quotes";
 
@@ -62,7 +63,7 @@ export const quoteSend = {
     const ref = await quoteRefOf(quote);
     const resend = quote.status === "accepted";
     const draft = resend ? await resendDraft(quote, ref) : await quoteEmailDraft(quote, ref);
-    return { ...draft, ref, resend, link: await linkSummary(quote.id) };
+    return { ...draft, ref, resend, jobId: quote.jobId, link: await linkSummary(quote.id) };
   }),
 
   /** Email it. Only marked sent once the email has actually gone. */
@@ -73,6 +74,9 @@ export const quoteSend = {
         to: z.string().min(3).max(200),
         subject: z.string().max(300),
         body: z.string().min(1).max(20000),
+        cc: z.array(z.string().trim().max(200)).max(10).optional(),
+        mediaIds: z.array(z.number().int()).max(30).optional(),
+        uploads: z.array(uploadInput).max(20).optional(),
       }),
     )
     .handler(async ({ input, context }) => {
@@ -84,6 +88,9 @@ export const quoteSend = {
           to: input.to,
           subject: input.subject,
           body: input.body,
+          cc: input.cc,
+          mediaIds: input.mediaIds,
+          uploads: input.uploads,
           byName: context.actor.name,
           byProfileId: await profileIdOf(context.actor.userId),
         });
@@ -97,7 +104,7 @@ export const quoteSend = {
           actorName: context.actor.name,
           actorRole: context.actor.role,
         });
-        return { quote, to: out.to, via: out.via, url: out.url };
+        return { quote, to: out.to, via: out.via, url: out.url, linked: out.linked };
       }
       await assertBillable(quote.jobId);
       await assertReadyToGoOut(quote, context.actor);
@@ -107,6 +114,9 @@ export const quoteSend = {
         to: input.to,
         subject: input.subject,
         body: input.body,
+        cc: input.cc,
+        mediaIds: input.mediaIds,
+        uploads: input.uploads,
         byName: context.actor.name,
         byProfileId: await profileIdOf(context.actor.userId),
       });
@@ -127,7 +137,7 @@ export const quoteSend = {
         actorRole: context.actor.role,
       });
       await leadToQuotedOnSend({ jobId: quote.jobId, quoteNumber: out.ref, actor: context.actor });
-      return { quote: row, to: out.to, via: out.via, url: out.url };
+      return { quote: row, to: out.to, via: out.via, url: out.url, linked: out.linked };
     }),
 
   /** The link card on the builder: url, how often it was opened, and the signature if signed. */

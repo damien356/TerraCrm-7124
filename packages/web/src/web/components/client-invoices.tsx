@@ -9,6 +9,7 @@ import { errorText } from "./public-shell";
 import { moneyExact } from "../lib/money";
 import { useBootstrap } from "../queries/settings";
 import { EmailInput } from "./email-input";
+import { CcList, EmailAttachments, NO_ATTACHMENTS, type MailAttachments } from "./email-attachments";
 import {
   useClientInvoices,
   useEmailInvoice,
@@ -29,12 +30,16 @@ import {
  * paid, only Admin can void, and nothing with money on it can be voided.
  */
 
-function EmailInvoiceModal({ invoice, onClose }: { invoice: Invoice | null; onClose: () => void }) {
+function EmailInvoiceModal({ invoice, jobId, onClose }: { invoice: Invoice | null; jobId: number; onClose: () => void }) {
   const send = useEmailInvoice();
   const [to, setTo] = React.useState("");
+  const [cc, setCc] = React.useState<string[]>([]);
+  const [files, setFiles] = React.useState<MailAttachments>(NO_ATTACHMENTS);
   const [error, setError] = React.useState<string | null>(null);
   React.useEffect(() => {
     setTo("");
+    setCc([]);
+    setFiles(NO_ATTACHMENTS);
     setError(null);
     send.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -44,13 +49,22 @@ function EmailInvoiceModal({ invoice, onClose }: { invoice: Invoice | null; onCl
     <Modal open={!!invoice} onClose={onClose} title={`Email ${invoice.ref} to the client`}>
       <div className="flex flex-col gap-3">
         <p className="text-sm text-muted-foreground">
-          Sends {moneyExact(invoice.outstanding)} owing with the Pay by card link and our bank details, from team@. Logged on the job's thread.
+          Sends {moneyExact(invoice.outstanding)} owing with the invoice PDF, the Pay by card link and our bank details, from team@. Logged on the job's thread.
         </p>
         <Field label="Send to (leave empty for the client's email on file)">
           <EmailInput value={to} onValueChange={setTo} placeholder="client@example.com" />
         </Field>
+        <Field label="CC">
+          <CcList value={cc} onChange={setCc} />
+        </Field>
+        <EmailAttachments jobId={jobId} value={files} onChange={setFiles} note="The invoice PDF is attached already. Add anything else here." />
         {error ? <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p> : null}
-        {send.data ? <p className="text-sm text-[var(--success)]">Sent to {send.data.to}.</p> : null}
+        {send.data ? (
+          <p className="text-sm text-[var(--success)]">
+            Sent to {send.data.to}.
+            {send.data.linked?.length ? ` ${send.data.linked.length} file${send.data.linked.length === 1 ? "" : "s"} went as download links, too big to attach.` : ""}
+          </p>
+        ) : null}
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose}>
             {send.data ? "Close" : "Cancel"}
@@ -61,7 +75,13 @@ function EmailInvoiceModal({ invoice, onClose }: { invoice: Invoice | null; onCl
               onClick={async () => {
                 setError(null);
                 try {
-                  await send.mutateAsync({ id: invoice.id, to: to.trim() || null });
+                  await send.mutateAsync({
+                    id: invoice.id,
+                    to: to.trim() || null,
+                    cc: cc.map((c) => c.trim()).filter(Boolean),
+                    mediaIds: files.mediaIds,
+                    uploads: files.uploads,
+                  });
                 } catch (e) {
                   setError(errorText(e));
                 }
@@ -549,7 +569,7 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
       )}
       {bill ? <RaiseInvoiceModal jobId={jobId} billing={bill} open={raising} onClose={() => setRaising(false)} onDone={setNotice} /> : null}
       <MarkPaidModal invoice={paying} onClose={() => setPaying(null)} />
-      <EmailInvoiceModal invoice={emailing} onClose={() => setEmailing(null)} />
+      <EmailInvoiceModal invoice={emailing} jobId={jobId} onClose={() => setEmailing(null)} />
       {isAdmin ? <VoidModal invoice={voiding} onClose={() => setVoiding(null)} /> : null}
     </Card>
   );

@@ -9,6 +9,7 @@ import { isTerraOwn, recordInvoice, recordStatement } from "./invoice-match";
 import { sendAsTeam } from "./agent-mail";
 import { isLiveServer } from "./runtime";
 import { NOTIFY_FROM_ADDRESS, isTerraOpsMail } from "./notify-kinds";
+import { checkReplies, REPLY_MAILBOXES, type ReplyRun } from "./mail-replies";
 
 /* ---------------------------------------------------------------------------
  * The email agent. Every 15 minutes it reads new mail with a PDF in billing@,
@@ -223,11 +224,20 @@ export async function runMailAgent(limit = PER_RUN) {
       .from(schema.mailAccounts)
       .where(isNotNull(schema.mailAccounts.refreshTokenSealed));
     const runs: MailboxRun[] = [];
+    const replies: ReplyRun[] = [];
     for (const a of accts) {
       try {
         runs.push(await checkMailbox(a.address, limit));
       } catch (e) {
         runs.push({ address: a.address, looked: 0, read: 0, invoices: 0, statements: 0, errors: 1, note: String((e as Error).message ?? e) });
+      }
+      /* Then the job email reply pass, team@ and damien@ only (spec 15 Oct). */
+      if ((REPLY_MAILBOXES as readonly string[]).includes(a.address)) {
+        try {
+          replies.push(await checkReplies(a.address, limit));
+        } catch (e) {
+          replies.push({ address: a.address, looked: 0, filed: 0, unfiled: 0, ignored: 0, errors: 1, note: String((e as Error).message ?? e) });
+        }
       }
     }
     let sent = 0;
@@ -245,7 +255,7 @@ export async function runMailAgent(limit = PER_RUN) {
         }
       }
     }
-    return { runs, sent };
+    return { runs, replies, sent };
   } finally {
     running = false;
   }

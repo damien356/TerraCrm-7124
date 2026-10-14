@@ -120,3 +120,36 @@ export function useUnpinMessage() {
 export function useMarkRead() {
   return useMutation(useConversationMutation("markRead"));
 }
+
+/* ------------------------- job email thread (spec 15 Oct) ------------------------- */
+
+/** The mailboxes you can send from. damien@ only for Damien. */
+export function useSenders() {
+  return useQuery(orpc.conversations.senders.queryOptions({ staleTime: 60_000 }));
+}
+
+/** Email Terra could not place, with each sender's jobs. */
+export function useUnfiled(enabled = true) {
+  return useQuery(orpc.conversations.unfiled.queryOptions({ enabled, staleTime: 10_000, refetchInterval: 60_000 }));
+}
+
+/** Moving email changes threads and the job file, so both refresh. */
+function useFiledRefresh() {
+  const queryClient = useQueryClient();
+  return () => {
+    queryClient.invalidateQueries({ queryKey: orpc.conversations.key() });
+    queryClient.invalidateQueries({ queryKey: orpc.media.key() });
+  };
+}
+
+export function useMoveMessage() {
+  return useMutation(orpc.conversations.moveMessage.mutationOptions({ onSuccess: useFiledRefresh() }));
+}
+
+export function useFileUnfiled() {
+  return useMutation(orpc.conversations.fileUnfiled.mutationOptions({ onSuccess: useFiledRefresh() }));
+}
+
+export function useNewEnquiry() {
+  return useMutation(orpc.conversations.newEnquiry.mutationOptions({ onSuccess: useFiledRefresh() }));
+}

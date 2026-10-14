@@ -2,6 +2,7 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import { useSearch } from "wouter";
 import { AlertTriangle, Ban, Check, Copy, ExternalLink, FileText, ImagePlus, Mail, MessageSquare, Plus, Search, Send, Trash2 } from "lucide-react";
+import { CcList, EmailAttachments, NO_ATTACHMENTS, type MailAttachments } from "./email-attachments";
 import { Card, CardHeader, Empty, Loading, Spinner } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -896,6 +897,8 @@ function SendModal({ v, onClose }: { v: Variation; onClose: () => void }) {
   const [subject, setSubject] = React.useState<string | null>(null);
   const [body, setBody] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [cc, setCc] = React.useState<string[]>([]);
+  const [files, setFiles] = React.useState<MailAttachments>(NO_ATTACHMENTS);
   const d = draft.data;
 
   const toValue = to ?? (channel === "email" ? (d?.email ?? "") : (d?.mobile ?? ""));
@@ -910,7 +913,17 @@ function SendModal({ v, onClose }: { v: Variation; onClose: () => void }) {
   async function submit() {
     setError(null);
     try {
-      await send.mutateAsync({ id: v.id, channel, to: toValue, subject: channel === "email" ? (subject ?? d?.subject ?? "") : undefined, body: bodyValue });
+      const email = channel === "email";
+      await send.mutateAsync({
+        id: v.id,
+        channel,
+        to: toValue,
+        subject: email ? (subject ?? d?.subject ?? "") : undefined,
+        body: bodyValue,
+        cc: email ? cc.map((c) => c.trim()).filter(Boolean) : undefined,
+        mediaIds: email ? files.mediaIds : undefined,
+        uploads: email ? files.uploads : undefined,
+      });
     } catch (e) {
       setError(errorText(e));
     }
@@ -945,6 +958,7 @@ function SendModal({ v, onClose }: { v: Variation; onClose: () => void }) {
       {send.data ? (
         <p className="text-sm text-[var(--success)]">
           Sent to {send.data.to}. The client can open it at {send.data.url}
+          {send.data.linked?.length ? ` ${send.data.linked.length} file${send.data.linked.length === 1 ? "" : "s"} went as download links, too big to attach.` : ""}
         </p>
       ) : d ? (
         <div className="grid gap-3">
@@ -979,13 +993,25 @@ function SendModal({ v, onClose }: { v: Variation; onClose: () => void }) {
             <Input value={toValue} onChange={(e) => setTo(e.target.value)} placeholder={channel === "email" ? "client@example.com" : "04xx xxx xxx"} />
           </Field>
           {channel === "email" ? (
-            <Field label="Subject">
-              <Input value={subject ?? d.subject} onChange={(e) => setSubject(e.target.value)} />
-            </Field>
+            <>
+              <Field label="CC">
+                <CcList
+                  value={cc}
+                  onChange={setCc}
+                  suggestions={options.filter((r) => r.email && r.email !== toValue).map((r) => ({ email: r.email ?? "", name: r.name ?? "" }))}
+                />
+              </Field>
+              <Field label="Subject">
+                <Input value={subject ?? d.subject} onChange={(e) => setSubject(e.target.value)} />
+              </Field>
+            </>
           ) : null}
           <Field label={channel === "email" ? "Message" : "Text"} hint={channel === "sms" ? "The link stays in. The opt out line is added on the end." : undefined}>
             <Textarea rows={channel === "email" ? 10 : 4} value={bodyValue} onChange={(e) => setBody(e.target.value)} />
           </Field>
+          {channel === "email" ? (
+            <EmailAttachments jobId={v.jobId} value={files} onChange={setFiles} note="The variation PDF is attached already. Add anything else here." />
+          ) : null}
         </div>
       ) : null}
     </Modal>

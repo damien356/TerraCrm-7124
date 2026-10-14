@@ -9,6 +9,7 @@ import { moneyExact } from "../lib/money";
 import { useQuoteEmailDraft, useQuoteLink, useSendQuoteEmail } from "../queries/quoteSend";
 import { needsScope, SCOPE_FILL } from "../../api/lib/quote-email-template";
 import { EmailInput } from "./email-input";
+import { CcList, EmailAttachments, NO_ATTACHMENTS, type MailAttachments } from "./email-attachments";
 
 /**
  * Email quote (spec 2.1): from team@ as "Damien from Terra", PDF attached,
@@ -63,6 +64,8 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
   const [subject, setSubject] = React.useState<string | null>(null);
   const [body, setBody] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [cc, setCc] = React.useState<string[]>([]);
+  const [files, setFiles] = React.useState<MailAttachments>(NO_ATTACHMENTS);
 
   const d = draft.data;
   const toValue = to ?? d?.to ?? "";
@@ -88,9 +91,18 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
     if (!d) return;
     setError(null);
     try {
-      const out = await send.mutateAsync({ quoteId, to: toValue.trim(), subject: subjectValue, body: bodyValue });
+      const out = await send.mutateAsync({
+        quoteId,
+        to: toValue.trim(),
+        subject: subjectValue,
+        body: bodyValue,
+        cc: cc.map((c) => c.trim()).filter(Boolean),
+        mediaIds: files.mediaIds,
+        uploads: files.uploads,
+      });
       const what = d.resend ? `Wording edited, re-sent. Quote ${d.ref} emailed to ${out.to}` : `Quote ${d.ref} emailed to ${out.to}`;
-      onSent?.(`${what}${out.via === "relay" ? " (sent through the backup mailer, team@ is not connected)" : ""}.`);
+      const links = out.linked?.length ? ` ${out.linked.length} file${out.linked.length === 1 ? "" : "s"} went as download links, too big to attach.` : "";
+      onSent?.(`${what}${out.via === "relay" ? " (sent through the backup mailer, team@ is not connected)" : ""}.${links}`);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -147,6 +159,9 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
               <EmailInput value={toValue} onValueChange={setTo} placeholder="name@example.com" />
             </Field>
           ) : null}
+          <Field label="CC">
+            <CcList value={cc} onChange={setCc} suggestions={d.recipients.filter((r) => r.email !== toValue)} />
+          </Field>
           <Field label="Subject">
             <Input value={subjectValue} onChange={(e) => setSubject(e.target.value)} />
           </Field>
@@ -164,6 +179,7 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
               Type what the quote is for in place of {SCOPE_FILL}, for example "carpet to 3 bedrooms and lounge". Send stays off until it is filled in.
             </p>
           ) : null}
+          <EmailAttachments jobId={d.jobId} value={files} onChange={setFiles} note="The quote PDF is attached already. Add anything else here." />
           <p className="text-xs text-muted-foreground">
             The quote link is added at the bottom if you take it out: {d.url}
           </p>

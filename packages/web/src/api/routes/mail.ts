@@ -4,12 +4,12 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
-import { connectUrl, disconnect, MAILBOXES, mailboxFor, oauthConfigured, redirectUri, SEND_FROM, SEND_SCOPE } from "../lib/gmail";
+import { connectUrl, disconnect, MAILBOXES, mailboxFor, oauthConfigured, redirectUri, SEND_SCOPE } from "../lib/gmail";
 import { AUTO_SEND_KEY, runMailAgent } from "../lib/mail-agent";
 
 /**
- * The email agent's mailboxes. Three addresses, fixed in code. Read only for
- * billing@ and damien@; team@ can also send. No route ever returns a token.
+ * The email agent's mailboxes. Three addresses, fixed in code. billing@ is read
+ * only. team@ and damien@ can also send. No route ever returns a token.
  */
 export const mail = {
   status: adminOnly.handler(async () => {
@@ -29,7 +29,7 @@ export const mail = {
           purpose: m.purpose,
           wantsSend: m.canSend,
           connected,
-          canSend: connected && m.address === SEND_FROM && Boolean(r?.canSend) && (r?.scopes ?? "").split(" ").includes(SEND_SCOPE),
+          canSend: connected && m.canSend && Boolean(r?.canSend) && (r?.scopes ?? "").split(" ").includes(SEND_SCOPE),
           connectedAt: connected ? (r?.connectedAt ?? null) : null,
           lastCheckedAt: r?.lastCheckedAt ?? null,
           // Kept after Google drops the sign-in, so Settings can say why. Disconnect clears it.

@@ -1,8 +1,8 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { sendAsTeam } from "./agent-mail";
-import { addParticipant, ensureForJob, logMessage, subjectWithRef } from "./conversations";
+import { pickedFiles, sendJobEmail, type MailUpload } from "./job-mail";
+import { ensureForJob, logMessage, subjectWithRef } from "./conversations";
 import { auDate } from "./invoice-match";
 import { SENDER_NAME } from "./material-selection";
 import { todayISO } from "./pricing";
@@ -194,6 +194,11 @@ export async function variationDraft(id: number) {
   };
 }
 
+/** How a variation reads on the job's thread: "Variation V188000-1". */
+async function variationLabel(v: Variation) {
+  return `Variation ${v.ref}`;
+}
+
 async function attachPdf(messageId: number, key: string, pdf: Buffer, filename: string) {
   await putObject(key, pdf, "application/pdf", filename);
   await db.insert(schema.messageAttachments).values({ messageId, filename, mime: "application/pdf", sizeBytes: pdf.length, storageKey: key, url: "" });
@@ -207,6 +212,9 @@ export async function sendVariation(args: {
   id: number;
   channel: "email" | "sms";
   to: string;
+  cc?: string[];
+  mediaIds?: number[];
+  uploads?: MailUpload[];
   subject?: string;
   body: string;
   byName: string;
@@ -221,32 +229,32 @@ export async function sendVariation(args: {
   const conv = await ensureForJob(v.jobId);
   let messageId: number;
   let sentTo: string;
+  let linked: string[] = [];
 
   if (args.channel === "email") {
     const to = args.to.trim();
     if (!EMAIL_RE.test(to)) throw bad(`"${to}" is not an email address.`);
     const body = args.body.includes(url) ? args.body : `${args.body.trimEnd()}\n\nView and accept the variation online: ${url}`;
-    const subject = subjectWithRef(args.subject?.trim() || `Variation ${v.ref}`, conv.ref);
+    for (const c of args.cc ?? []) if (!EMAIL_RE.test(c.trim())) throw bad(`"${c}" is not an email address.`);
     const { pdf, filename } = await variationPdfFor(v.id);
-    const out = await sendAsTeam({ to, subject, text: body, fromName: SENDER_NAME, attachments: [{ filename, content: pdf, contentType: "application/pdf" }] });
+    const picked = await pickedFiles({ jobId: v.jobId, mediaIds: args.mediaIds, uploads: args.uploads, byName: args.byName, byProfileId: args.byProfileId });
     const [contact] = await db.select().from(schema.contacts).where(eq(schema.contacts.email, to)).limit(1);
-    const msg = await logMessage({
-      conversationId: conv.id,
+    const sent = await sendJobEmail({
+      conv,
       jobId: v.jobId,
+      to,
+      cc: args.cc,
+      subject: args.subject?.trim() || `Variation ${v.ref}`,
+      text: body,
+      fromName: SENDER_NAME,
+      files: [{ filename, content: pdf, contentType: "application/pdf", storeAt: `variations/${v.jobId}/${v.id}/sent-${stamp()}.pdf` }, ...picked],
+      label: await variationLabel(v),
       contactId: contact?.id ?? null,
-      channel: "email",
-      audience: "customer",
-      direction: "out",
-      subject,
-      body,
       authorName: args.byName,
       authorProfileId: args.byProfileId ?? null,
-      toAddress: to,
-      providerId: out.id,
-      status: "sent",
     });
-    await attachPdf(msg.id, `variations/${v.jobId}/${v.id}/sent-${stamp()}.pdf`, pdf, filename);
-    if (contact) await addParticipant(conv.id, { role: "customer", contactId: contact.id, name: fullName(contact), email: contact.email, mobile: contact.mobile });
+    const msg = sent.message;
+    linked = sent.linked;
     messageId = msg.id;
     sentTo = to;
   } else {
@@ -287,7 +295,7 @@ export async function sendVariation(args: {
     actorName: args.byName,
     actorRole: args.actorRole,
   });
-  return { variation: row!, to: sentTo, messageId, url };
+  return { variation: row!, to: sentTo, messageId, url, linked };
 }
 
 /** After an online accept: the signed PDF on the thread and a copy to the signer. Never undoes the accept. */
@@ -317,35 +325,50 @@ export async function sendVariationSignedCopy(args: {
   ];
   const body = lines.join("\n");
   const subject = subjectWithRef(`Variation ${v.ref} accepted, your signed copy`, conv.ref);
+  const label = await variationLabel(v);
 
-  let providerId: string | null = null;
+  let emailed = false;
   let failed: string | null = null;
   const to = args.signerEmail?.trim() || null;
   if (to && EMAIL_RE.test(to)) {
     try {
-      const out = await sendAsTeam({ to, subject, text: body, fromName: SENDER_NAME, attachments: [{ filename, content: pdf, contentType: "application/pdf" }] });
-      providerId = out.id;
+      /* Sent and logged on the thread with the signed PDF, in one go. */
+      await sendJobEmail({
+        conv,
+        jobId: v.jobId,
+        to,
+        subject: `Variation ${v.ref} accepted, your signed copy`,
+        text: body,
+        fromName: SENDER_NAME,
+        files: [{ filename, content: pdf, contentType: "application/pdf", storeAt: key }],
+        label,
+        authorName: "Terra Ops",
+      });
+      emailed = true;
     } catch (e) {
       failed = String((e as Error)?.message ?? e).slice(0, 300);
       console.error("[variation] signed copy email failed:", failed);
     }
   }
-  const msg = await logMessage({
-    conversationId: conv.id,
-    jobId: v.jobId,
-    channel: to ? "email" : "note",
-    audience: to ? "customer" : "internal",
-    direction: "out",
-    subject: to ? subject : null,
-    body: to ? body : `${args.signerName} accepted variation ${v.ref} online. Signed copy attached.`,
-    authorName: "Terra Ops",
-    toAddress: to,
-    providerId,
-    status: failed ? "failed" : "sent",
-    statusDetail: failed,
-    failedAt: failed ? new Date() : null,
-  });
-  await attachPdf(msg.id, key, pdf, filename);
+  /* Logged either way, so the signed PDF is on the thread even with no email. */
+  if (!emailed) {
+    const msg = await logMessage({
+      conversationId: conv.id,
+      jobId: v.jobId,
+      channel: to ? "email" : "note",
+      audience: to ? "customer" : "internal",
+      direction: "out",
+      subject: to ? subject : null,
+      body: to ? body : `${args.signerName} accepted variation ${v.ref} online. Signed copy attached.`,
+      authorName: "Terra Ops",
+      toAddress: to,
+      label,
+      status: failed ? "failed" : "sent",
+      statusDetail: failed,
+      failedAt: failed ? new Date() : null,
+    });
+    await attachPdf(msg.id, key, pdf, filename);
+  }
   // Filed in the job file too, in the office only bucket, so it is never only in an email.
   await db.insert(schema.jobMedia).values({
     jobId: v.jobId,
@@ -360,5 +383,5 @@ export async function sendVariationSignedCopy(args: {
     uploaderName: "Terra Ops",
   });
   await db.update(schema.variationSignatures).set({ pdfKey: key, updatedAt: new Date() }).where(eq(schema.variationSignatures.id, args.signatureId));
-  return { key, emailed: Boolean(providerId), failed };
+  return { key, emailed, failed };
 }

@@ -1,6 +1,8 @@
 import { MARKETING_FROM, sendEmail } from "./email";
 import { MailboxNotConnected, SEND_FROM, sendFromTeam, type OutgoingMail } from "./gmail";
 
+export type TeamSendResult = { via: "gmail" | "relay"; id: string; threadId: string; messageIdHeader: string };
+
 /**
  * Every email the agent sends goes out as team@. Nothing else.
  *
@@ -9,25 +11,31 @@ import { MailboxNotConnected, SEND_FROM, sendFromTeam, type OutgoingMail } from 
  * through the existing mail service, still from team@ with replies to team@.
  * There is no way to pass a different sender into this function.
  */
-export async function sendAsTeam(mail: OutgoingMail): Promise<{ via: "gmail" | "relay"; id: string }> {
+export async function sendAsTeam(mail: OutgoingMail): Promise<TeamSendResult> {
   try {
     const r = await sendFromTeam(mail);
-    return { via: "gmail", id: r.id };
+    return { via: "gmail", ...r };
   } catch (e) {
     if (!(e instanceof MailboxNotConnected)) throw e;
   }
   if (!MARKETING_FROM.includes(SEND_FROM)) throw new Error("Relay sender is not team@, refusing to send");
-  const out = await sendEmail({
-    to: mail.to,
-    subject: mail.subject,
-    text: mail.text,
-    html: `<div style="font-family:Arial,sans-serif;font-size:14px;white-space:pre-wrap">${escapeHtml(mail.text)}</div>`,
-    from: mail.fromName ? `${mail.fromName.replace(/[<>"\r\n]/g, "")} <${SEND_FROM}>` : MARKETING_FROM,
-    replyTo: SEND_FROM,
-    attachments: mail.attachments?.map((a) => ({ filename: a.filename, content: a.content.toString("base64") })),
-  });
+  const one = (to: string) =>
+    sendEmail({
+      to,
+      subject: mail.subject,
+      text: mail.text,
+      html: `<div style="font-family:Arial,sans-serif;font-size:14px;white-space:pre-wrap">${escapeHtml(mail.text)}</div>`,
+      from: mail.fromName ? `${mail.fromName.replace(/[<>"\r\n]/g, "")} <${SEND_FROM}>` : MARKETING_FROM,
+      replyTo: SEND_FROM,
+      inReplyTo: mail.inReplyTo,
+      references: mail.references,
+      attachments: mail.attachments?.map((a) => ({ filename: a.filename, content: a.content.toString("base64") })),
+    });
+  const out = await one(mail.to);
   if (!out.ok) throw new Error(out.reason);
-  return { via: "relay", id: out.providerId };
+  // The relay takes one address at a time, so each copied-in person gets their own.
+  for (const cc of mail.cc ?? []) await one(cc);
+  return { via: "relay", id: out.providerId, threadId: "", messageIdHeader: "" };
 }
 
 const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
