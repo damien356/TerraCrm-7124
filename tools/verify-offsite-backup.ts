@@ -37,6 +37,12 @@ try {
       const r = await pg.unsafe(`select count(*)::int n from terra_backup.${q(t)}`);
       check(r[0].n === n, `${t}: Postgres row count ${n}`);
     }
+    const noKey = await pg`select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'terra_backup' and c.relkind = 'r' and c.relname <> '_backup_info'
+        and not exists (select 1 from pg_index i where i.indrelid = c.oid and i.indisprimary)`;
+    // Copies made by the incremental sync (info.sync is set) key every table. Older full rebuilds did not.
+    if (info.sync) check(noKey.length === 0, 'every Postgres backup table has a primary key');
+    else console.log(`Note: ${noKey.length} Postgres tables have no primary key. The next incremental run adds them.`);
     const access = await pg`select has_schema_privilege('anon','terra_backup','USAGE') a, has_schema_privilege('authenticated','terra_backup','USAGE') b`;
     check(!access[0].a && !access[0].b, 'anon and authenticated roles cannot access backup schema');
   } finally { await pg.close(); }
@@ -45,9 +51,12 @@ try {
   check((await bucket.json()).public === false, 'backup bucket is private');
   const s3 = new S3Client({ region: 'auto', endpoint: process.env.S3_ENDPOINT, credentials: { accessKeyId: process.env.S3_ACCESS_KEY_ID!, secretAccessKey: process.env.S3_SECRET_ACCESS_KEY! } });
   let token: string | undefined;
+  const tooBig: string[] = [];
   do {
     const page = await s3.send(new ListObjectsV2Command({ Bucket: process.env.S3_BUCKET, ContinuationToken: token }));
     for (const o of page.Contents ?? []) {
+      // Over the plan's file size limit, so never copied. Reported, not a crash.
+      if (o.Key && info.media?.tooBig.includes(o.Key)) { tooBig.push(o.Key); continue; }
       const got = await s3.send(new GetObjectCommand({ Bucket: process.env.S3_BUCKET, Key: o.Key }));
       const src = await got.Body!.transformToByteArray();
       const copy = await download(`app-files/${o.Key}`);
@@ -66,5 +75,6 @@ try {
     }
     check(!Object.keys(manifest.files).some(p => p.split('/').some(x => x.startsWith('.env') || x === '.secrets' || x === '.ssh')), 'no credential files in sandbox manifest');
   } else console.log('Sandbox copy still in progress, not verified yet.');
-  console.log(`VERIFIED ${checks} checks`);
+  for (const k of tooBig) console.log(`NOT COPIED, over the Supabase file size limit: ${k}`);
+  console.log(`VERIFIED ${checks} checks${tooBig.length ? `, ${tooBig.length} file too big to copy` : ""}`);
 } finally { rmSync(dir, {recursive:true, force:true}); }

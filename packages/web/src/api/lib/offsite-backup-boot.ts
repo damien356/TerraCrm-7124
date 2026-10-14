@@ -27,7 +27,8 @@ async function tick() {
   running = true;
   try {
     const last = await sbGetJson<BackupInfo>("database/latest.json").catch(() => null);
-    const age = last ? Date.now() - Date.parse(last.takenAt) : Infinity;
+    // checkedAt is the last run. takenAt stays put when live had not changed.
+    const age = last ? Date.now() - Date.parse(last.checkedAt ?? last.takenAt) : Infinity;
     if (age < EVERY_MS - CHECK_MS) return;
     const info = await runOffsiteBackup({ source: "published-server" });
     console.log(`[offsite-backup] done, ${info.tables} tables, ${info.rows} rows, postgres ${info.postgres}`);
