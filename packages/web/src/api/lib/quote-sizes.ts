@@ -37,10 +37,14 @@ export { isSizeFlag, underlayName, wholeUnits };
 /** True for the two underlays that follow a floor line. */
 export const followsAFloor = (p: Pick<Product, "category"> | null | undefined) => !!p && floorsForUnderlay(p.category).length > 0;
 
-/** What a floor line comes to, for the underlay under it. */
+/**
+ * What a floor line comes to, for the underlay under it. The line's own qty
+ * wins: a carpet measured at 5 m2 (1.3 lm) but typed up to 7 lm puts 7 lm of
+ * underlay down, not 1.3. The measure only counts while the qty still matches it.
+ */
 function floorFacts(floor: Line, fp: Product) {
   const res = qtyForLine(fp, floor);
-  if (res) {
+  if (res && same(floor.qty, res.qty)) {
     return {
       lm: res.lm,
       widthM: res.widthM,
@@ -49,7 +53,7 @@ function floorFacts(floor: Line, fp: Product) {
       wastagePct: floor.wastagePct,
     };
   }
-  const widthM = fp.widthM ?? floor.rollWidthM ?? null;
+  const widthM = res?.widthM ?? fp.widthM ?? floor.rollWidthM ?? null;
   const box = boxM2Of(fp);
   const lm = fp.unit === "lm" ? floor.qty : fp.unit === "m2" && widthM ? floor.qty / widthM : null;
   const totalM2 =
