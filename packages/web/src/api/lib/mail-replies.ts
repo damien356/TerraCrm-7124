@@ -59,7 +59,7 @@ export function junkKind(msg: GmailMessage): "auto" | "bulk" | null {
   const from = addressOf(header(msg, "From"));
   const subject = h("Subject");
   const local = from.split("@")[0] ?? "";
-  if (/^(no[-_.]?reply|do[-_.]?not[-_.]?reply|mailer[-_.]?daemon|postmaster|bounces?|newsletters?|marketing|news)([-_.+].*)?$/.test(local)) return "bulk";
+  if (/^(no[-_.]?reply|do[-_.]?not[-_.]?reply|mailer[-_.]?daemon|postmaster|bounces?|newsletters?|marketing|news|notifications?|notify|alerts?|automated)([-_.+].*)?$/.test(local)) return "bulk";
   if (h("List-Unsubscribe") || h("List-Id")) return "bulk";
   const prec = h("Precedence");
   if (prec === "bulk" || prec === "list" || prec === "junk") return "bulk";
@@ -67,11 +67,27 @@ export function junkKind(msg: GmailMessage): "auto" | "bulk" | null {
   if ((auto && auto !== "no") || h("X-Autoreply") || h("X-Autorespond") || h("X-Auto-Response-Suppress").includes("all") || prec === "auto_reply") return "auto";
   if (/^(automatic reply|auto[- ]?reply|autoreply|out of (the )?office|ooo\b|away from (the )?office|on (annual )?leave|i am (currently )?(away|out))/i.test(subject)) return "auto";
   if (/^(undeliverable|delivery status notification|mail delivery (failed|subsystem))/i.test(subject)) return "bulk";
+  /* A form or a shop saying it got something: nobody wrote it. */
+  if (/^(.{0,80}[-:] )?(thank you for (your )?(submission|enquiry|inquiry|order|contacting|registering)|thanks for (your )?(submission|order|contacting)|we('ve| have) received your)/i.test(subject)) return "auto";
   return null;
 }
 
 /** Supplier paperwork, read by invoice reading and never filed as a client email. */
 const PAPERWORK = /(invoice|statement|work[\s_-]*order|remittance|credit[\s_-]*note|purchase[\s_-]*order)/i;
+/** A bill or invoice by its subject, when the PDF itself has a meaningless name. */
+const PAPERWORK_SUBJECT = /\b(bill|invoice|statement|remittance|receipt|account summary)\b/i;
+
+/** Senders someone marked "Not a job, ignore this sender" in the Unfiled tray. */
+export const IGNORE_SENDERS_KEY = "mail_ignore_senders";
+export async function ignoredSenders(): Promise<string[]> {
+  const [row] = await db.select({ value: schema.settings.value }).from(schema.settings).where(eq(schema.settings.key, IGNORE_SENDERS_KEY)).limit(1);
+  try {
+    const list = JSON.parse(row?.value ?? "[]");
+    return Array.isArray(list) ? list.map((x) => String(x).trim().toLowerCase()).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
 
 /** Every attached file, however deep, with what is needed to fetch it. */
 export function fileParts(msg: GmailMessage) {
@@ -114,11 +130,17 @@ const stripHtml = (html: string) =>
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+    .replace(/&#39;/g, "'")
+    .replace(/&#(\d{1,6});/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]{1,6});/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/[ \t\u00a0]+\n/g, "\n")
+    .replace(/\n[ \t\u00a0]+/g, "\n");
 
 /** The words of the email, with the quoted history cut off so the thread reads cleanly. */
 export function bodyOf(msg: GmailMessage) {
-  const plain = findPart(msg.payload, "text/plain");
+  const plainPart = findPart(msg.payload, "text/plain");
+  /* Some senders put an empty plain part next to the real HTML one. */
+  const plain = plainPart && decode(plainPart.body?.data).trim() ? plainPart : null;
   const html = plain ? null : findPart(msg.payload, "text/html");
   let text = plain ? decode(plain.body?.data) : html ? stripHtml(decode(html.body?.data)) : msg.payload?.body?.data ? decode(msg.payload.body.data) : msg.snippet ?? "";
   text = text.replace(/\r\n/g, "\n");
@@ -194,23 +216,35 @@ export async function openJobsFor(email: string) {
   return { contacts, jobIds: [...new Set(rows.map((r) => r.parentJobId ?? r.id))] };
 }
 
-/** A holding thread already open for this sender, so two emails from one person sit together. */
-async function unfiledFor(email: string, contactId: number | null) {
-  const [byContact] = contactId
-    ? await db
-        .select({ id: schema.conversations.id })
-        .from(schema.conversations)
-        .where(and(eq(schema.conversations.state, "unassigned"), eq(schema.conversations.contactId, contactId)))
-        .limit(1)
-    : [];
-  if (byContact) return byContact.id;
-  const [bySender] = await db
-    .select({ id: schema.conversations.id })
+/** "Re: Fwd: Tiles" and "tiles" are the same conversation. */
+export const baseSubject = (s: string | null | undefined) =>
+  (s ?? "")
+    .replace(/^\s*((re|fw|fwd|aw|sv)\s*(\[\d+\])?\s*:\s*)+/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+/**
+ * A holding thread already open for this same conversation: same sender and
+ * the same Gmail thread or the same subject. A builder writing about two
+ * sites gets two Unfiled items, so each can go on its own job.
+ */
+async function unfiledFor(email: string, contactId: number | null, threadId: string | null, subject: string) {
+  const rows = await db
+    .select({ id: schema.conversations.id, gmailThreadId: schema.messages.gmailThreadId, subject: schema.messages.subject })
     .from(schema.conversations)
     .innerJoin(schema.messages, eq(schema.messages.conversationId, schema.conversations.id))
-    .where(and(eq(schema.conversations.state, "unassigned"), sql`lower(${schema.messages.fromAddress}) = ${email}`))
-    .limit(1);
-  return bySender?.id ?? null;
+    .where(
+      and(
+        eq(schema.conversations.state, "unassigned"),
+        or(sql`lower(${schema.messages.fromAddress}) = ${email}`, contactId ? eq(schema.conversations.contactId, contactId) : sql`0`),
+      ),
+    )
+    .orderBy(desc(schema.conversations.lastMessageAt))
+    .limit(100);
+  const want = baseSubject(subject);
+  const hit = rows.find((r) => (threadId && r.gmailThreadId === threadId) || (want && baseSubject(r.subject) === want));
+  return hit?.id ?? null;
 }
 
 async function supplierEmail(email: string) {
@@ -271,14 +305,18 @@ export async function fileReply(accountId: number, address: string, gmailId: str
   let match = await matchByMail(msg, address);
   /* Paperwork that is not a reply to a Terra email belongs to invoice reading. */
   if (!match && files.some((f) => PAPERWORK.test(f.filename ?? ""))) return done("ignored", "", "invoice, statement or work order, left for invoice reading");
+  if (!match && PAPERWORK_SUBJECT.test(subject) && files.some((f) => /pdf/i.test(f.mimeType ?? "") || /\.pdf$/i.test(f.filename ?? "")))
+    return done("ignored", "", "a bill or invoice, left for invoice reading");
   if (!match && junk === "auto") return done("ignored", "", "automatic reply, not to a job email");
+  /* Marked "Not a job" in the tray: only a reply to a Terra email gets through. */
+  if (!match && (await ignoredSenders()).includes(from)) return done("ignored", "", "sender marked Not a job");
 
   const { contacts, jobIds } = await openJobsFor(from);
   if (!match && jobIds.length === 1) match = { conversationId: (await ensureForJob(jobIds[0]!)).id, how: "sender" };
   if (!match) {
     if (address !== SEND_FROM) return done("ignored", "", "damien@ mail that is not about a job");
     const contactId = contacts.length === 1 ? contacts[0]!.id : null;
-    const existing = await unfiledFor(from, contactId);
+    const existing = await unfiledFor(from, contactId, msg.threadId ?? null, subject);
     const conversationId = existing ?? (await openUnassigned({ subject: subject || "Email", contactId })).id;
     match = { conversationId, how: "unfiled" };
   }
@@ -359,8 +397,10 @@ export async function fileReply(accountId: number, address: string, gmailId: str
     });
   }
 
+  /* A reply into an email that is itself still Unfiled stays Unfiled. */
+  const holding = conv.state === "unassigned";
   if (!auto) {
-    const filed = match.how !== "unfiled";
+    const filed = !holding;
     if (filed) {
       await db.insert(schema.officeTasks).values({
         jobId,
@@ -379,7 +419,7 @@ export async function fileReply(accountId: number, address: string, gmailId: str
     });
   }
 
-  return done(match.how === "unfiled" ? "unfiled" : "filed", match.how, auto ? "automatic reply" : "", message.id);
+  return done(holding ? "unfiled" : "filed", match.how, auto ? "automatic reply" : "", message.id);
 }
 
 /** One round over one mailbox. Its own place in the mailbox, apart from invoice reading. */

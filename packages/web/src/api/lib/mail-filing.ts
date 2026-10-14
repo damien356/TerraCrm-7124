@@ -1,8 +1,9 @@
-import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { ensureForJob } from "./conversations";
 import { bucketForMime, tagForJob } from "./job-mail";
+import { IGNORE_SENDERS_KEY, ignoredSenders } from "./mail-replies";
 
 /* ---------------------------------------------------------------------------
  * Putting an email on the right job by hand (job email thread, spec 15 Oct):
@@ -157,7 +158,84 @@ export async function jobsForContact(contactId: number) {
     .orderBy(desc(schema.jobs.createdAt))
     .limit(30);
   const open = (r: (typeof rows)[number]) => r.statusId == null || ![8, 9].includes(r.statusId);
-  return [...rows.filter(open), ...rows.filter((r) => !open(r))].map((r) => ({ ...r, open: open(r) }));
+  return [...rows.filter(open), ...rows.filter((r) => !open(r))].map((r) => ({ ...r, open: open(r), byAddress: false }));
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** "248/42 Goldmine Rd" to its number and street name, for spotting it in an email. */
+export function addressKey(address: string) {
+  const tokens = address.toLowerCase().replace(/,/g, " ").split(/\s+/).filter(Boolean);
+  const i = tokens.findIndex((t) => /\d/.test(t));
+  if (i < 0) return null;
+  const street = tokens.slice(i + 1).find((t) => /^[a-z][a-z'-]{2,}$/.test(t) && !/^(unit|lot|shop|level|suite)$/.test(t));
+  const num = tokens[i]!.replace(/^(unit|lot|u)/, "");
+  return street && /\d/.test(num) ? { num, street } : null;
+}
+
+/** Open jobs whose site address is written in the email, number and street both. */
+export async function jobsByAddress(text: string, skip: number[] = []) {
+  const hay = ` ${text.toLowerCase().replace(/,/g, " ")} `;
+  const rows = await db
+    .select({
+      id: schema.jobs.id,
+      number: schema.jobs.number,
+      displayNumber: schema.jobs.displayNumber,
+      title: schema.jobs.title,
+      statusId: schema.jobs.statusId,
+      parentJobId: schema.jobs.parentJobId,
+      status: schema.jobStatuses.name,
+      createdAt: schema.jobs.createdAt,
+      address: schema.sites.address,
+    })
+    .from(schema.jobs)
+    .innerJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
+    .leftJoin(schema.jobStatuses, eq(schema.jobStatuses.id, schema.jobs.statusId))
+    .where(or(isNull(schema.jobs.statusId), notInArray(schema.jobs.statusId, [8, 9])))
+    .orderBy(desc(schema.jobs.createdAt))
+    .limit(400);
+  const out = [];
+  for (const r of rows) {
+    if (skip.includes(r.id) || r.parentJobId) continue;
+    const k = addressKey(r.address);
+    if (!k) continue;
+    const numRe = new RegExp(`(^|[^\\d/])${escapeRe(k.num)}([^\\d/]|$)`);
+    const streetRe = new RegExp(`\\b${escapeRe(k.street)}\\b`);
+    if (numRe.test(hay) && streetRe.test(hay)) {
+      const { address: _a, ...job } = r;
+      out.push({ ...job, open: true, byAddress: true });
+    }
+    if (out.length >= 3) break;
+  }
+  return out;
+}
+
+/** "Not a job": the holding thread is closed, kept for the record. Optionally its sender is ignored from now on. */
+export async function dismissHolding(conversationId: number, ignoreSender: boolean, byName: string) {
+  const who = await holdingSender(conversationId);
+  if (!who) throw new Error("That email has already been filed.");
+  if (who.conv.state !== "unassigned") throw new Error("That email is already on a job.");
+  await db.update(schema.conversations).set({ state: "closed", updatedAt: new Date() }).where(eq(schema.conversations.id, conversationId));
+  const ids = (await db.select({ id: schema.messages.id }).from(schema.messages).where(eq(schema.messages.conversationId, conversationId))).map((m) => m.id);
+  if (ids.length) {
+    await db
+      .update(schema.officeTasks)
+      .set({ status: "done", completedAt: new Date(), completedByName: byName, updatedAt: new Date() })
+      .where(and(inArray(schema.officeTasks.sourceMessageId, ids), eq(schema.officeTasks.status, "open")));
+  }
+  let ignored: string | null = null;
+  if (ignoreSender && who.email && who.email.includes("@")) {
+    const list = await ignoredSenders();
+    if (!list.includes(who.email)) {
+      const value = JSON.stringify([...list, who.email].slice(-500));
+      await db
+        .insert(schema.settings)
+        .values({ key: IGNORE_SENDERS_KEY, value })
+        .onConflictDoUpdate({ target: schema.settings.key, set: { value, updatedAt: new Date() } });
+    }
+    ignored = who.email;
+  }
+  return { conversationId, ignored };
 }
 
 /** Unfiled email, for the tray: each holding thread with its sender and their jobs. */
@@ -187,7 +265,12 @@ export async function unfiledList() {
       preview: msgs[0]?.body.replace(/\s+/g, " ").trim().slice(0, 200) ?? c.lastMessagePreview,
       messages: msgs.map((m) => ({ ...m, body: m.body.slice(0, 3000) })),
       count: Number((await db.select({ n: sql<number>`count(*)` }).from(schema.messages).where(eq(schema.messages.conversationId, c.id)))[0]?.n ?? 0),
-      jobs: who?.contact ? await jobsForContact(who.contact.id) : [],
+      jobs: await (async () => {
+        const mine = who?.contact ? await jobsForContact(who.contact.id) : [];
+        const text = [who?.subject, ...msgs.map((m) => `${m.subject ?? ""} ${m.body.slice(0, 2000)}`)].join(" ");
+        const near = await jobsByAddress(text, mine.map((j) => j.id));
+        return [...near, ...mine];
+      })(),
     });
   }
   return out;

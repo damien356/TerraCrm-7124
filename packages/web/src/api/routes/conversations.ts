@@ -7,7 +7,7 @@ import * as schema from "../database/schema";
 import { staffOnly, type Actor } from "../middleware/auth";
 import { parseTags } from "../lib/person-tags";
 import { mailUploadKey, bucketForMime } from "../lib/job-mail";
-import { fileHolding, holdingSender, moveMessageToJob, unfiledList } from "../lib/mail-filing";
+import { dismissHolding, fileHolding, holdingSender, moveMessageToJob, unfiledList } from "../lib/mail-filing";
 import { mediaKey, signGet, signPut } from "../lib/s3";
 import { createJob } from "./jobs";
 import { jobFamily, pickedFiles, sendersFor, sendJobEmail, uploadInput } from "../lib/job-mail";
@@ -783,6 +783,17 @@ export const conversations = {
     .handler(async ({ input, context }) => {
       try {
         return await fileHolding(input.conversationId, input.jobId, context.actor.name);
+      } catch (e) {
+        throw new ORPCError("BAD_REQUEST", { message: (e as Error).message });
+      }
+    }),
+
+  /** "Not a job": off the Unfiled tray, kept for the record, and the sender ignored from now on if asked. */
+  dismissUnfiled: staffOnly
+    .input(z.object({ conversationId: z.number().int(), ignoreSender: z.boolean().default(false) }))
+    .handler(async ({ input, context }) => {
+      try {
+        return await dismissHolding(input.conversationId, input.ignoreSender, context.actor.name);
       } catch (e) {
         throw new ORPCError("BAD_REQUEST", { message: (e as Error).message });
       }

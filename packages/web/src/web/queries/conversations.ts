@@ -153,3 +153,7 @@ export function useFileUnfiled() {
 export function useNewEnquiry() {
   return useMutation(orpc.conversations.newEnquiry.mutationOptions({ onSuccess: useFiledRefresh() }));
 }
+
+export function useDismissUnfiled() {
+  return useMutation(orpc.conversations.dismissUnfiled.mutationOptions({ onSuccess: useFiledRefresh() }));
+}

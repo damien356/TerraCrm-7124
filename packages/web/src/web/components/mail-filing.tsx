@@ -1,13 +1,13 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRightLeft, Inbox, Plus, Search } from "lucide-react";
+import { ArrowRightLeft, Inbox, MapPin, Plus, Search, X } from "lucide-react";
 import { Card, CardHeader, Empty, Spinner } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/field";
 import { Modal } from "./ui/modal";
 import { orpc } from "../lib/api";
-import { useFileUnfiled, useMoveMessage, useNewEnquiry, useUnfiled } from "../queries/conversations";
+import { useDismissUnfiled, useFileUnfiled, useMoveMessage, useNewEnquiry, useUnfiled } from "../queries/conversations";
 import { useBootstrap } from "../queries/settings";
 
 /* ---------------------------------------------------------------------------
@@ -106,13 +106,15 @@ export function UnfiledTray({ limit = 50, hideWhenEmpty = false }: { limit?: num
   const list = useUnfiled(staff);
   const file = useFileUnfiled();
   const enquiry = useNewEnquiry();
+  const dismiss = useDismissUnfiled();
+  const [dismissing, setDismissing] = React.useState<number | null>(null);
   const [finding, setFinding] = React.useState<number | null>(null);
   const [reading, setReading] = React.useState<number | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [done, setDone] = React.useState<string | null>(null);
   const rows = list.data ?? [];
   if (!staff || (hideWhenEmpty && rows.length === 0)) return null;
-  const busy = file.isPending || enquiry.isPending;
+  const busy = file.isPending || enquiry.isPending || dismiss.isPending;
   const onErr = (e: unknown) => setError(e instanceof Error ? e.message : "That did not work.");
 
   const fileTo = (conversationId: number, job: { id: number; number: number; displayNumber: string | null }) => {
@@ -156,7 +158,15 @@ export function UnfiledTray({ limit = 50, hideWhenEmpty = false }: { limit?: num
               <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{r.preview}</p>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {r.jobs.slice(0, 6).map((j) => (
-                  <Button key={j.id} size="sm" variant={j.open ? "default" : "outline"} disabled={busy} onClick={() => fileTo(r.conversationId, j)}>
+                  <Button
+                    key={j.id}
+                    size="sm"
+                    variant={j.open ? "default" : "outline"}
+                    disabled={busy}
+                    title={j.byAddress ? "The job's site address is in this email" : undefined}
+                    onClick={() => fileTo(r.conversationId, j)}
+                  >
+                    {j.byAddress ? <MapPin className="size-3.5" /> : null}
                     {jobLabel(j)} {j.title ? <span className="max-w-[160px] truncate font-normal opacity-80">{j.title}</span> : null}
                   </Button>
                 ))}
@@ -176,6 +186,9 @@ export function UnfiledTray({ limit = 50, hideWhenEmpty = false }: { limit?: num
                   }}
                 >
                   {enquiry.isPending ? <Spinner /> : <Plus className="size-3.5" />} New enquiry
+                </Button>
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => setDismissing(dismissing === r.conversationId ? null : r.conversationId)}>
+                  <X className="size-3.5" /> Not a job
                 </Button>
                 <button
                   type="button"
@@ -197,6 +210,39 @@ export function UnfiledTray({ limit = 50, hideWhenEmpty = false }: { limit?: num
                     </li>
                   ))}
                 </ul>
+              ) : null}
+              {dismissing === r.conversationId ? (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-secondary/30 p-2.5">
+                  <span className="text-xs">Take it off the tray? It stays on record.</span>
+                  {(
+                    [
+                      [false, "Just this one"],
+                      ...(r.email ? ([[true, `Ignore ${r.email} from now on`]] as const) : []),
+                    ] as const
+                  ).map(([ignoreSender, label]) => (
+                    <Button
+                      key={label}
+                      size="sm"
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() => {
+                        setError(null);
+                        dismiss.mutate(
+                          { conversationId: r.conversationId, ignoreSender },
+                          {
+                            onSuccess: (out) => {
+                              setDismissing(null);
+                              setDone(out.ignored ? `Taken off. Email from ${out.ignored} will be ignored from now on.` : "Taken off the tray.");
+                            },
+                            onError: onErr,
+                          },
+                        );
+                      }}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
               ) : null}
               {finding === r.conversationId ? (
                 <div className="mt-2">
