@@ -1,405 +1,297 @@
-import { useMemo } from "react";
-import {
-  ActivityIndicator,
-  Linking,
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  Text,
-  View,
-} from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, BackHandler, Linking, Platform, Pressable, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { WebView, type WebViewNavigation } from "react-native-webview";
 import { Colors, Fonts } from "@/constants/theme";
-import { fmtLongDate, fmtMoney, fmtTime, statusLabel, todayISO } from "@/lib/format";
-import { useLiveCrew, useOfficeSummary } from "@/queries/office";
+import { siteUrl } from "@/lib/api";
+import { sessionTokenForWebPages } from "@/lib/auth";
 import { useWhoami } from "@/queries/session";
 
 const c = Colors.light;
 
-function Stat({ label, value, hint, dark }: { label: string; value: string; hint?: string; dark?: boolean }) {
-  return (
-    <View
-      style={{
-        flex: 1,
-        backgroundColor: dark ? c.sidebar : c.card,
-        borderWidth: dark ? 0 : 1,
-        borderColor: c.border,
-        borderRadius: 14,
-        padding: 13,
-      }}
-    >
-      <Text
-        style={{
-          fontFamily: Fonts.medium,
-          fontSize: 10,
-          letterSpacing: 1,
-          color: dark ? "rgba(255,255,255,0.5)" : c.mutedForeground,
-        }}
-      >
-        {label}
-      </Text>
-      <Text
-        style={{
-          fontFamily: Fonts.bold,
-          fontSize: 21,
-          color: dark ? "#FFFFFF" : c.foreground,
-          marginTop: 4,
-        }}
-      >
-        {value}
-      </Text>
-      {hint ? (
-        <Text
-          style={{
-            fontFamily: Fonts.sans,
-            fontSize: 11.5,
-            color: dark ? "rgba(255,255,255,0.6)" : c.mutedForeground,
-          }}
-        >
-          {hint}
-        </Text>
-      ) : null}
-    </View>
-  );
+/** Where the website keeps its sign-in token. Same key the website's own sign-in uses. */
+const WEB_TOKEN_KEY = "runable.managed-auth.token";
+
+function originOf(url: string) {
+  const m = /^(https?:\/\/[^/?#]+)/i.exec(url);
+  return m ? m[1].toLowerCase() : "";
 }
 
-function Section({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) {
-  return (
-    <View style={{ marginTop: 22 }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 }}>
-        <Text style={{ fontFamily: Fonts.bold, fontSize: 15, color: c.foreground }}>{title}</Text>
-        {count != null && count > 0 ? (
-          <View
-            style={{
-              minWidth: 20,
-              paddingHorizontal: 6,
-              height: 20,
-              borderRadius: 10,
-              backgroundColor: c.muted,
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: c.mutedForeground }}>{count}</Text>
-          </View>
-        ) : null}
-      </View>
-      {children}
-    </View>
-  );
+/** The site address with the phone flag on, for the first page the app opens. */
+function pageUrl(path: string) {
+  const clean = path.startsWith("/") ? path : `/${path}`;
+  const joiner = clean.includes("?") ? "&" : "?";
+  return `${siteUrl}${clean}${joiner}app=1`;
 }
 
-function Row({
-  title,
-  subtitle,
-  right,
-  tone,
-  onPress,
+/**
+ * Runs before the website's own code on every page it loads. Marks the page
+ * as the phone app and hands it this phone's sign-in, only ever on Terra's
+ * own address.
+ */
+function bootScript(token: string | null) {
+  return `(function(){try{
+if (window.location.origin.toLowerCase() !== ${JSON.stringify(originOf(siteUrl))}) return;
+window.__TERRA_PHONE_APP__ = true;
+var t = ${JSON.stringify(token ?? "")};
+if (t) { window.localStorage.setItem(${JSON.stringify(WEB_TOKEN_KEY)}, t); }
+else { window.localStorage.removeItem(${JSON.stringify(WEB_TOKEN_KEY)}); }
+}catch(e){}})();true;`;
+}
+
+function HeaderButton({
   icon,
+  label,
+  onPress,
+  solid,
 }: {
-  title: string;
-  subtitle?: string;
-  right?: string;
-  tone?: "warn" | "bad";
-  onPress?: () => void;
-  icon?: keyof typeof Ionicons.glyphMap;
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress: () => void;
+  solid?: boolean;
 }) {
-  const edge = tone === "bad" ? c.destructive : tone === "warn" ? c.warning : c.border;
   return (
     <Pressable
       onPress={onPress}
-      style={{
-        backgroundColor: c.card,
-        borderWidth: 1,
-        borderColor: c.border,
-        borderLeftWidth: tone ? 3 : 1,
-        borderLeftColor: edge,
-        borderRadius: 12,
-        padding: 12,
-        marginBottom: 8,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 10,
-      }}
-    >
-      {icon ? <Ionicons name={icon} size={18} color={tone ? edge : c.mutedForeground} /> : null}
-      <View style={{ flex: 1 }}>
-        <Text style={{ fontFamily: Fonts.medium, fontSize: 14, color: c.foreground }} numberOfLines={1}>
-          {title}
-        </Text>
-        {subtitle ? (
-          <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: c.mutedForeground }} numberOfLines={1}>
-            {subtitle}
-          </Text>
-        ) : null}
-      </View>
-      {right ? (
-        <Text style={{ fontFamily: Fonts.medium, fontSize: 12.5, color: c.mutedForeground }}>{right}</Text>
-      ) : null}
-    </Pressable>
-  );
-}
-
-function Empty({ text }: { text: string }) {
-  return (
-    <View
-      style={{
-        backgroundColor: c.muted,
-        borderRadius: 12,
-        padding: 14,
-      }}
-    >
-      <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: c.mutedForeground }}>{text}</Text>
-    </View>
-  );
-}
-
-/** The one thing the office does from a site visit: talk, and get a priced draft. */
-function VoiceQuoteButton({ onPress }: { onPress: () => void }) {
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityLabel="Record a voice quote"
+      accessibilityLabel={label}
+      hitSlop={6}
       style={({ pressed }) => ({
-        marginTop: 16,
-        backgroundColor: c.primary,
-        borderRadius: 18,
-        paddingVertical: 18,
-        paddingHorizontal: 18,
         flexDirection: "row",
         alignItems: "center",
-        gap: 14,
-        opacity: pressed ? 0.88 : 1,
+        gap: 6,
+        paddingHorizontal: solid ? 12 : 8,
+        paddingVertical: 7,
+        borderRadius: 999,
+        backgroundColor: solid ? c.primary : "transparent",
+        opacity: pressed ? 0.75 : 1,
       })}
     >
-      <View
-        style={{
-          width: 52,
-          height: 52,
-          borderRadius: 26,
-          backgroundColor: "rgba(255,255,255,0.18)",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Ionicons name="mic" size={27} color="#FFFFFF" />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={{ fontFamily: Fonts.bold, fontSize: 18, color: "#FFFFFF" }}>Voice quote</Text>
-        <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: "rgba(255,255,255,0.8)", marginTop: 1 }}>
-          Talk through the job, get a priced draft
-        </Text>
-      </View>
-      <Ionicons name="chevron-forward" size={22} color="rgba(255,255,255,0.85)" />
+      <Ionicons name={icon} size={solid ? 17 : 21} color={solid ? "#FFFFFF" : "rgba(255,255,255,0.85)"} />
+      {solid ? <Text style={{ fontFamily: Fonts.bold, fontSize: 13.5, color: "#FFFFFF" }}>{label}</Text> : null}
     </Pressable>
   );
 }
 
+function Centre({ children }: { children: React.ReactNode }) {
+  return <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>{children}</View>;
+}
+
+/**
+ * The office side of the app (notes 18.44). Admin and Office logins get the
+ * website's own pages here, phone sized, with the cut-down phone menu. The
+ * website decides what that menu holds and keeps price edits and schedule
+ * moves off, so every website publish updates this screen too.
+ */
 export default function OfficeScreen() {
   const router = useRouter();
   const who = useWhoami();
-  const isAdmin = who.data?.canSeeOffice === true;
-  const summary = useOfficeSummary(isAdmin);
-  const crew = useLiveCrew(isAdmin);
+  const isOffice = who.data?.canSeeOffice === true;
+  const params = useLocalSearchParams<{ path?: string; at?: string }>();
+  const web = useRef<WebView>(null);
+  const [canGoBack, setCanGoBack] = useState(false);
+  const [firstLoad, setFirstLoad] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
-  const data = summary.data;
-  const onSite = useMemo(
-    () => (data?.todayTasks ?? []).filter((t) => t.status === "in_progress").length,
-    [data?.todayTasks],
+  // The first page is fixed once. A later "open this quote" goes in as a
+  // navigation, so the page keeps its place in the back history.
+  const [startPath] = useState(() => (typeof params.path === "string" && params.path ? params.path : "/"));
+  const token = useMemo(() => sessionTokenForWebPages(), []);
+  const boot = useMemo(() => bootScript(token), [token]);
+  const site = originOf(siteUrl);
+
+  const lastAsk = useRef(params.at);
+  useEffect(() => {
+    if (!params.path || params.at === lastAsk.current) return;
+    lastAsk.current = params.at;
+    web.current?.injectJavaScript(`window.location.assign(${JSON.stringify(pageUrl(params.path))});true;`);
+  }, [params.path, params.at]);
+
+  // Android back steps back through the pages before it leaves the tab.
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== "android") return undefined;
+      const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+        if (!canGoBack) return false;
+        web.current?.goBack();
+        return true;
+      });
+      return () => sub.remove();
+    }, [canGoBack]),
+  );
+
+  const onNav = useCallback((nav: WebViewNavigation) => setCanGoBack(nav.canGoBack), []);
+
+  /** Terra pages stay in here. Anything else (maps, phone, email, files) opens in its own app. */
+  const keepInside = useCallback(
+    (req: { url: string; isTopFrame?: boolean }) => {
+      const url = req.url;
+      if (req.isTopFrame === false) return true;
+      if (url.startsWith("about:") || url.startsWith("blob:") || url.startsWith("data:")) return true;
+      if (originOf(url) === site) return true;
+      void Linking.openURL(url).catch(() => undefined);
+      return false;
+    },
+    [site],
+  );
+
+  const reload = useCallback(() => {
+    // After a failure, or before the first page ever landed, start clean.
+    if (failed || firstLoad) {
+      setFailed(false);
+      setAttempt((n) => n + 1);
+      return;
+    }
+    web.current?.reload();
+  }, [failed, firstLoad]);
+
+  const header = (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 4,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        backgroundColor: c.sidebar,
+      }}
+    >
+      {canGoBack ? (
+        <HeaderButton icon="chevron-back" label="Back" onPress={() => web.current?.goBack()} />
+      ) : (
+        <View style={{ width: 8 }} />
+      )}
+      <Text style={{ flex: 1, fontFamily: Fonts.bold, fontSize: 15, color: "#FFFFFF" }}>The office</Text>
+      <HeaderButton icon="refresh" label="Reload" onPress={reload} />
+      <HeaderButton icon="mic" label="Voice quote" solid onPress={() => router.push("/voice-quote")} />
+    </View>
   );
 
   if (who.isLoading) {
     return (
       <SafeAreaView edges={["top", "left", "right"]} style={{ flex: 1, backgroundColor: c.background }}>
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+        <Centre>
           <ActivityIndicator color={c.primary} />
-        </View>
+        </Centre>
       </SafeAreaView>
     );
   }
 
-  if (!isAdmin) {
+  if (!isOffice) {
     return (
       <SafeAreaView edges={["top", "left", "right"]} style={{ flex: 1, backgroundColor: c.background }}>
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
+        <Centre>
           <Ionicons name="lock-closed-outline" size={26} color={c.mutedForeground} />
-          <Text
-            style={{
-              fontFamily: Fonts.sans,
-              fontSize: 14,
-              color: c.mutedForeground,
-              textAlign: "center",
-              marginTop: 10,
-            }}
-          >
+          <Text style={{ fontFamily: Fonts.sans, fontSize: 14, color: c.mutedForeground, textAlign: "center", marginTop: 10 }}>
             This screen is for the office. Your login is set up as crew.
           </Text>
+        </Centre>
+      </SafeAreaView>
+    );
+  }
+
+  // A browser preview cannot hold one site inside another. Open it in a tab instead.
+  if (Platform.OS === "web") {
+    return (
+      <SafeAreaView edges={["top", "left", "right"]} style={{ flex: 1, backgroundColor: c.sidebar }}>
+        {header}
+        <View style={{ flex: 1, backgroundColor: c.background }}>
+          <Centre>
+            <Ionicons name="phone-portrait-outline" size={28} color={c.mutedForeground} />
+            <Text style={{ fontFamily: Fonts.bold, fontSize: 17, color: c.foreground, marginTop: 10 }}>
+              Office pages open on the phone
+            </Text>
+            <Text
+              style={{ fontFamily: Fonts.sans, fontSize: 13.5, lineHeight: 19, color: c.mutedForeground, textAlign: "center", marginTop: 6 }}
+            >
+              On a phone they show right here. In this preview, open them in a new tab to see the phone menu.
+            </Text>
+            <Pressable
+              onPress={() => void Linking.openURL(pageUrl(startPath))}
+              style={({ pressed }) => ({
+                marginTop: 16,
+                backgroundColor: c.primary,
+                borderRadius: 12,
+                paddingVertical: 12,
+                paddingHorizontal: 18,
+                opacity: pressed ? 0.85 : 1,
+              })}
+            >
+              <Text style={{ fontFamily: Fonts.bold, fontSize: 14.5, color: "#FFFFFF" }}>Open the office pages</Text>
+            </Pressable>
+          </Centre>
         </View>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView edges={["top", "left", "right"]} style={{ flex: 1, backgroundColor: c.background }}>
-      <ScrollView
-        contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
-        refreshControl={
-          <RefreshControl
-            refreshing={summary.isFetching && !summary.isLoading}
-            onRefresh={() => {
-              void summary.refetch();
-              void crew.refetch();
-            }}
-            tintColor={c.primary}
-          />
-        }
-      >
-        <Text style={{ fontFamily: Fonts.medium, fontSize: 12.5, letterSpacing: 1, color: c.mutedForeground }}>
-          {fmtLongDate(todayISO()).toUpperCase()}
-        </Text>
-        <Text style={{ fontFamily: Fonts.bold, fontSize: 26, color: c.foreground, marginTop: 4 }}>
-          The office
-        </Text>
-        <Text style={{ fontFamily: Fonts.sans, fontSize: 13.5, color: c.mutedForeground, marginTop: 2 }}>
-          {who.data?.name ? `${who.data.name}, ` : ""}admin access
-        </Text>
-
-        <VoiceQuoteButton onPress={() => router.push("/voice-quote")} />
-
-        {summary.isLoading ? (
-          <View style={{ paddingVertical: 40, alignItems: "center" }}>
-            <ActivityIndicator color={c.primary} />
-          </View>
-        ) : summary.isError ? (
-          <View style={{ marginTop: 18 }}>
-            <Empty text="Could not load the office screen. Pull down to try again." />
-          </View>
+    <SafeAreaView edges={["top", "left", "right"]} style={{ flex: 1, backgroundColor: c.sidebar }}>
+      {header}
+      <View style={{ flex: 1, backgroundColor: c.background }}>
+        {failed ? (
+          <Centre>
+            <Ionicons name="cloud-offline-outline" size={28} color={c.mutedForeground} />
+            <Text style={{ fontFamily: Fonts.bold, fontSize: 17, color: c.foreground, marginTop: 10 }}>
+              Could not reach the office
+            </Text>
+            <Text style={{ fontFamily: Fonts.sans, fontSize: 13.5, color: c.mutedForeground, textAlign: "center", marginTop: 6 }}>
+              Check the phone has signal, then try again.
+            </Text>
+            <Pressable
+              onPress={reload}
+              style={({ pressed }) => ({
+                marginTop: 16,
+                backgroundColor: c.primary,
+                borderRadius: 12,
+                paddingVertical: 12,
+                paddingHorizontal: 22,
+                opacity: pressed ? 0.85 : 1,
+              })}
+            >
+              <Text style={{ fontFamily: Fonts.bold, fontSize: 14.5, color: "#FFFFFF" }}>Try again</Text>
+            </Pressable>
+          </Centre>
         ) : (
-          <>
-            <View style={{ flexDirection: "row", gap: 10, marginTop: 16 }}>
-              <Stat
-                dark
-                label="ON TODAY"
-                value={String(data?.todayTasks.length ?? 0)}
-                hint={`${onSite} on site now`}
-              />
-              <Stat
-                label="NOT COVERED"
-                value={String(data?.unfilled.length ?? 0)}
-                hint="next 7 days"
-              />
-            </View>
-            <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
-              <Stat label="OPEN JOBS" value={String(data?.counts.openJobs ?? 0)} hint={`${data?.counts.leads ?? 0} leads`} />
-              <Stat label="LAST 30 DAYS" value={fmtMoney(data?.pipelineValue ?? 0)} hint="job value in" />
-            </View>
-
-            <Section title="On site now" count={crew.data?.length ?? 0}>
-              {(crew.data ?? []).length === 0 ? (
-                <Empty text="Nobody is sharing a position right now. Pins only drop while a task is running." />
-              ) : (
-                (crew.data ?? []).map((p) => (
-                  <Row
-                    key={p.installerId}
-                    icon="location"
-                    title={p.installerName}
-                    subtitle={p.taskTitle ?? "On the clock"}
-                    right="Map"
-                    onPress={() => {
-                      const q = `${p.lat},${p.lng}`;
-                      const url =
-                        Platform.OS === "ios"
-                          ? `http://maps.apple.com/?ll=${q}`
-                          : `https://www.google.com/maps/search/?api=1&query=${q}`;
-                      void Linking.openURL(url);
-                    }}
-                  />
-                ))
-              )}
-            </Section>
-
-            <Section title="Today's run" count={data?.todayTasks.length ?? 0}>
-              {(data?.todayTasks ?? []).length === 0 ? (
-                <Empty text="Nothing booked for today." />
-              ) : (
-                (data?.todayTasks ?? []).map((t) => (
-                  <Row
-                    key={t.id}
-                    icon={t.status === "complete" ? "checkmark-circle" : "hammer-outline"}
-                    title={t.title}
-                    subtitle={`${t.ref ? `${t.ref}, ` : ""}${t.installerName ?? "Nobody assigned"}${t.siteSuburb ? `, ${t.siteSuburb}` : ""}`}
-                    right={t.startTime ? fmtTime(t.startTime) : statusLabel(t.status)}
-                    tone={!t.installerName ? "bad" : undefined}
-                  />
-                ))
-              )}
-            </Section>
-
-            <Section title="Needs covering" count={data?.unfilled.length ?? 0}>
-              {(data?.unfilled ?? []).length === 0 ? (
-                <Empty text="Everything in the next week has a name on it." />
-              ) : (
-                (data?.unfilled ?? []).map((t) => (
-                  <Row
-                    key={t.id}
-                    icon="alert-circle-outline"
-                    title={t.title}
-                    subtitle={`${t.ref ? `${t.ref}, ` : ""}${t.skillName ?? "No skill set"}${t.siteSuburb ? `, ${t.siteSuburb}` : ""}`}
-                    right={t.scheduledDate ?? "No date"}
-                    tone="warn"
-                  />
-                ))
-              )}
-            </Section>
-
-            <Section title="Offers out" count={data?.pendingOffers.length ?? 0}>
-              {(data?.pendingOffers ?? []).length === 0 ? (
-                <Empty text="No offers waiting on a reply." />
-              ) : (
-                (data?.pendingOffers ?? []).map((o) => (
-                  <Row
-                    key={o.id}
-                    icon="paper-plane-outline"
-                    title={o.taskTitle}
-                    subtitle={`${o.ref ? `${o.ref}, ` : ""}${o.installerName}, ${o.mode === "broadcast" ? "broadcast" : "direct"}`}
-                    right={o.payAmount ? fmtMoney(o.payAmount) : undefined}
-                  />
-                ))
-              )}
-            </Section>
-
-            <Section title="Running late" count={data?.atRisk.length ?? 0}>
-              {(data?.atRisk ?? []).length === 0 ? (
-                <Empty text="Nothing has been left open past its day." />
-              ) : (
-                (data?.atRisk ?? []).map((t) => (
-                  <Row
-                    key={t.id}
-                    icon="time-outline"
-                    title={t.title}
-                    subtitle={`${t.ref ? `${t.ref}, ` : ""}${t.installerName ?? "Nobody assigned"}, ${statusLabel(t.status)}`}
-                    right={t.scheduledDate ?? undefined}
-                    tone="bad"
-                  />
-                ))
-              )}
-            </Section>
-
-            <Section title="Latest activity">
-              {(data?.recent ?? []).length === 0 ? (
-                <Empty text="Nothing logged yet today." />
-              ) : (
-                (data?.recent ?? []).slice(0, 10).map((a) => (
-                  <Row key={a.id} icon="ellipse-outline" title={a.detail} subtitle={a.actorName || undefined} />
-                ))
-              )}
-            </Section>
-          </>
+          <WebView
+            key={attempt}
+            ref={web}
+            source={{ uri: pageUrl(startPath) }}
+            applicationNameForUserAgent="TerraOpsApp/1"
+            injectedJavaScriptBeforeContentLoaded={boot}
+            onShouldStartLoadWithRequest={keepInside}
+            onNavigationStateChange={onNav}
+            onLoadEnd={() => setFirstLoad(false)}
+            onError={() => setFailed(true)}
+            onHttpError={(e) => {
+              if (e.nativeEvent.statusCode >= 500) setFailed(true);
+            }}
+            onOpenWindow={(e) => {
+              const url = e.nativeEvent.targetUrl;
+              if (originOf(url) === site) web.current?.injectJavaScript(`window.location.assign(${JSON.stringify(url)});true;`);
+              else void Linking.openURL(url).catch(() => undefined);
+            }}
+            setSupportMultipleWindows={false}
+            pullToRefreshEnabled
+            allowsBackForwardNavigationGestures
+            sharedCookiesEnabled
+            domStorageEnabled
+            javaScriptEnabled
+            startInLoadingState
+            renderLoading={() => (
+              <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center", backgroundColor: c.background }}>
+                <ActivityIndicator color={c.primary} />
+                <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: c.mutedForeground, marginTop: 10 }}>
+                  Opening the office
+                </Text>
+              </View>
+            )}
+            style={{ flex: 1, backgroundColor: c.background }}
+          />
         )}
-      </ScrollView>
+      </View>
     </SafeAreaView>
   );
 }

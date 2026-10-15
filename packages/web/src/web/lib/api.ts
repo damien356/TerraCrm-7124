@@ -3,12 +3,16 @@ import { RPCLink } from "@orpc/client/fetch";
 import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import type { AppRouterClient } from "../../api";
 import { authClient } from "./auth";
+import { isPhoneApp, PHONE_APP_HEADER, PHONE_APP_VALUE } from "./phone-app";
 
 const link = new RPCLink({
   url: `${window.location.origin}/api/rpc`,
   headers: () => {
     const token = authClient.managedAuth.getToken();
-    return token ? { Authorization: `Bearer ${token}` } : {};
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    // Inside the phone app the server holds the same lines as the screen (notes 18.44).
+    if (isPhoneApp) headers[PHONE_APP_HEADER] = PHONE_APP_VALUE;
+    return headers;
   },
 });
 

@@ -10,6 +10,7 @@ import { forgetSignedIn } from "@/lib/crash-guard";
 import { crewLabel, daysUntil, fmtDateTime, fmtDayLabel, fmtMoney } from "@/lib/format";
 import { useHistory, useMe, useSetLocationConsent } from "@/queries/field";
 import { HandsFreeCard } from "@/components/hands-free-card";
+import { useWhoami } from "@/queries/session";
 import { currentUpdate, updatesSupported } from "@/lib/updates";
 import appJson from "@/app.json";
 
@@ -78,7 +79,101 @@ function ExpiryRow({ label, value }: { label: string; value: Date | string | nul
   );
 }
 
+/** Sign out, the same way for every login. */
+function signOutHere() {
+  forgetSignedIn();
+  void releaseCrewPhone().finally(() => void authClient.signOut());
+}
+
+/**
+ * Me for an Admin or Office login with no installer card (notes 18.44).
+ * There are no jobs, pay or licences to show, so it is who you are, the
+ * hands-free note and Sign out.
+ */
+function OfficeMe({ name, email, role }: { name: string; email: string; role: string }) {
+  const initials =
+    (name || email || "?")
+      .split(" ")
+      .map((p) => p[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "?";
+  return (
+    <SafeAreaView edges={["top", "left", "right"]} style={{ flex: 1, backgroundColor: c.background }}>
+      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 13 }}>
+          <View
+            style={{
+              width: 54,
+              height: 54,
+              borderRadius: 27,
+              backgroundColor: c.sidebar,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Text style={{ fontFamily: Fonts.bold, fontSize: 20, color: "#FFFFFF" }}>{initials}</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontFamily: Fonts.bold, fontSize: 21, color: c.foreground }}>{name || "Office"}</Text>
+            <Text style={{ fontFamily: Fonts.sans, fontSize: 13.5, color: c.mutedForeground }}>{email}</Text>
+            <Text style={{ fontFamily: Fonts.medium, fontSize: 12, color: c.mutedForeground, marginTop: 2 }}>
+              {role === "admin" ? "Admin login" : "Office login"}
+            </Text>
+          </View>
+        </View>
+
+        <HandsFreeCard office />
+
+        <Pressable
+          onPress={signOutHere}
+          style={({ pressed }) => ({
+            marginTop: 28,
+            borderWidth: 1,
+            borderColor: c.border,
+            borderRadius: 12,
+            paddingVertical: 14,
+            alignItems: "center",
+            opacity: pressed ? 0.7 : 1,
+          })}
+        >
+          <Text style={{ fontFamily: Fonts.medium, fontSize: 15, color: c.destructive }}>Sign out</Text>
+        </Pressable>
+
+        <Text
+          style={{
+            fontFamily: Fonts.sans,
+            fontSize: 11,
+            color: c.mutedForeground,
+            textAlign: "center",
+            marginTop: 16,
+            marginBottom: 8,
+          }}
+        >
+          {buildLine()}
+        </Text>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
 export default function MeScreen() {
+  const who = useWhoami();
+  if (who.isLoading) {
+    return (
+      <SafeAreaView edges={["top", "left", "right"]} style={{ flex: 1, backgroundColor: c.background }}>
+        <ActivityIndicator color={c.primary} style={{ marginTop: 32 }} />
+      </SafeAreaView>
+    );
+  }
+  const data = who.data;
+  if (data && data.canSeeOffice && !data.canSeeField) {
+    return <OfficeMe name={data.name ?? ""} email={data.email ?? ""} role={data.role} />;
+  }
+  return <CrewMe />;
+}
+
+function CrewMe() {
   const router = useRouter();
   const [skillsOpen, setSkillsOpen] = useState(false);
   const me = useMe();

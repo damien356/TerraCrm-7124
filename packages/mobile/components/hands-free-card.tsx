@@ -84,7 +84,46 @@ function fenceLine(state: FenceState | null, count: number) {
  * directions, and arriving and leaving site by location. All three are the
  * installer's own switches. iPhone only for now.
  */
-export function HandsFreeCard() {
+export function HandsFreeCard({ office }: { office?: boolean } = {}) {
+  if (office) return <OfficeHandsFree />;
+  return <CrewHandsFree />;
+}
+
+/**
+ * An Admin or Office login has no jobs of its own to read out, and the server
+ * only gives a hands-free key to a crew login. Say so rather than show
+ * switches that fail (notes 18.44).
+ */
+function OfficeHandsFree() {
+  return (
+    <View
+      style={{
+        backgroundColor: c.card,
+        borderWidth: 1,
+        borderColor: c.border,
+        borderRadius: 14,
+        padding: 14,
+        marginTop: 12,
+      }}
+    >
+      <Text style={{ fontFamily: Fonts.medium, fontSize: 10.5, letterSpacing: 1, color: c.mutedForeground }}>
+        HANDS-FREE
+      </Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 10 }}>
+        <Ionicons name="mic-circle-outline" size={22} color={c.mutedForeground} />
+        <Text style={{ flex: 1, fontFamily: Fonts.bold, fontSize: 15, color: c.foreground }}>
+          Siri, CarPlay and arriving by location
+        </Text>
+      </View>
+      <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, lineHeight: 18, color: c.mutedForeground, marginTop: 8 }}>
+        These read a crew member's own jobs, so they only run on a crew login. For a quote on site, use Voice quote at
+        the top of the Office tab.
+      </Text>
+    </View>
+  );
+}
+
+function CrewHandsFree() {
   const router = useRouter();
   const settings = useVoiceSettings();
   const setNav = useSetNavApp();

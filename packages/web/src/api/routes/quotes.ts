@@ -43,6 +43,7 @@ import { floorLineFor, followsAFloor, followUnderlay, lineSizes, refollow, sizeF
 import { isUnderlayCategory, underlayName } from "../lib/order-sizes";
 import { foldForClient, quoteFreightView, refreshQuoteFreight, supplierChargesMarkupPct } from "../lib/quote-freight";
 import { isChargeLine } from "../lib/charge-fold";
+import { fromPhoneApp, PHONE_PRICE_MESSAGE } from "../lib/phone-app";
 
 /**
  * Quotes are for Admin and Office. Field crew must never reach any procedure
@@ -807,6 +808,10 @@ export const quotes = {
     )
     .handler(async ({ input, context }) => {
       const quote = await editableQuoteOrThrow(input.quoteId);
+      // Notes 18.44. A line typed by hand sets its own price, so it is a website job.
+      if (fromPhoneApp(context.headers) && (input.unitPrice !== 0 || (input.unitCost ?? null) !== null)) {
+        throw new ORPCError("FORBIDDEN", { message: PHONE_PRICE_MESSAGE });
+      }
       if (context.actor.role !== "admin") input.unitCost = null;
       // A delivery charge typed in by hand is a delivery line, not a product (188001 list item 6).
       if (input.productId == null && (input.kind === "supply" || input.kind === "other") && isDeliveryText(input.description)) {
@@ -1095,6 +1100,16 @@ export const quotes = {
       const { id, addInstall, ...rest } = input;
       const [before] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, id));
       if (!before) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
+      // Notes 18.44. On the phone the price book sets the price. Qty, words and
+      // product swaps still go through, a new sell, cost or markup does not.
+      if (
+        fromPhoneApp(context.headers) &&
+        ((rest.unitPrice !== undefined && rest.unitPrice !== before.unitPrice) ||
+          (rest.unitCost !== undefined && rest.unitCost !== before.unitCost) ||
+          (rest.markupPercent !== undefined && rest.markupPercent !== before.markupPercent))
+      ) {
+        throw new ORPCError("FORBIDDEN", { message: PHONE_PRICE_MESSAGE });
+      }
       const current = await quoteOrThrow(before.quoteId);
       // 188001 list item 7: an accepted quote keeps its prices, qty and lines.
       // Only the words on a line can change. Anything else is a variation.

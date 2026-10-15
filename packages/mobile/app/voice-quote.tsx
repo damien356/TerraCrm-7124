@@ -344,7 +344,17 @@ export default function VoiceQuoteScreen() {
             <BigButton
               label="Open the quote"
               icon="open-outline"
-              onPress={() => void Linking.openURL(`${siteUrl}/quotes/${result.quote.id}`)}
+              onPress={() => {
+                // On a phone the quote opens in the app's office pages (notes 18.44).
+                if (Platform.OS === "web") {
+                  void Linking.openURL(`${siteUrl}/quotes/${result.quote.id}`);
+                  return;
+                }
+                router.navigate({
+                  pathname: "/office",
+                  params: { path: `/quotes/${result.quote.id}`, at: String(Date.now()) },
+                });
+              }}
             />
             <BigButton label="Record another" icon="mic-outline" tone="plain" onPress={reset} />
           </View>

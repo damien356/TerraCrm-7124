@@ -95,3 +95,19 @@ export const authClient = createAuthClient({
     }),
   ],
 });
+
+/**
+ * The session for the office pages the app shows from the website (notes
+ * 18.44). They sign in the same way the website does, with a bearer token
+ * kept in the page's storage, so the app hands them the one it already has.
+ * A Runable sign-in has a token of its own. An email sign-in has a session
+ * cookie, and its signed value works as the same bearer token.
+ */
+export function sessionTokenForWebPages(): string | null {
+  const managed = authClient.managedAuth.getToken();
+  if (managed) return managed;
+  if (Platform.OS === "web") return getWebSessionToken();
+  const cookie = authClient.getCookie?.() ?? "";
+  const match = /(?:^|;\s*)(?:__Secure-)?[A-Za-z0-9_.-]*session_token=([^;]+)/.exec(cookie);
+  return match?.[1] ?? null;
+}

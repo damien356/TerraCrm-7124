@@ -42,6 +42,7 @@ import { useLastQuoted, type LastQuoted } from "../queries/productFind";
 import { LastQuotedNote } from "../components/product-finder";
 import { QUOTE_STATUS_COLOUR } from "./quotes";
 import { CancelJobButton } from "../components/job-cancel";
+import { isPhoneApp } from "../lib/phone-app";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
 
@@ -262,7 +263,7 @@ function ChangeProduct({ item, onClose }: { item: Item; onClose: () => void }) {
           ) : near.length ? (
             list(near)
           ) : (
-            <p className="text-sm text-muted-foreground">Nothing close in the price book. Search below, or close this and type the price in.</p>
+            <p className="text-sm text-muted-foreground">{isPhoneApp ? "Nothing close in the price book. Search below." : "Nothing close in the price book. Search below, or close this and type the price in."}</p>
           )}
         </div>
         <div>
@@ -477,7 +478,8 @@ function LineRow({
         <Input
           className="tabular ml-auto block h-8 w-[92px] text-right"
           value={draft.unitPrice}
-          disabled={locked}
+          disabled={locked || isPhoneApp}
+          title={isPhoneApp ? "Prices are changed on the website" : undefined}
           onChange={(e) => setDraft((d) => ({ ...d, unitPrice: e.target.value }))}
           onBlur={() =>
             Number(draft.unitPrice) !== item.unitPrice &&
@@ -491,7 +493,7 @@ function LineRow({
           className="tabular ml-auto block h-8 w-[92px] text-right"
           placeholder="cost"
           value={draft.unitCost}
-          disabled={locked || !cost.edit}
+          disabled={locked || !cost.edit || isPhoneApp}
           onChange={(e) => setDraft((d) => ({ ...d, unitCost: e.target.value }))}
           onBlur={() => {
             const next = draft.unitCost === "" ? null : Number(draft.unitCost);
@@ -509,7 +511,7 @@ function LineRow({
             placeholder={item.unitCost ? "" : "no cost"}
             title={cost.edit ? "Markup on cost. Changing it sets the sell price." : "Only an Admin can change markup"}
             value={draft.markup}
-            disabled={locked || !cost.edit || !item.unitCost}
+            disabled={locked || !cost.edit || !item.unitCost || isPhoneApp}
             onChange={(e) => setDraft((d) => ({ ...d, markup: e.target.value }))}
             onBlur={() => {
               if (draft.markup === "" || !Number.isFinite(Number(draft.markup))) {
@@ -994,7 +996,9 @@ export default function QuoteBuilderPage() {
                 ? "Accepted. Line descriptions can still be fixed. Price changes go through a variation on the job."
                 : locked
                   ? "Locked. Make a new version to change the price."
-                  : "Prices come off the price book."
+                  : isPhoneApp
+                    ? "Prices come off the price book. Changing a price is done on the website."
+                    : "Prices come off the price book."
             }
           />
           {q.items.length === 0 ? (
@@ -1047,7 +1051,14 @@ export default function QuoteBuilderPage() {
             <>
               <ProductPicker quoteId={q.id} context={{ companyId: q.companyId, contactId: q.contactId, excludeQuoteNumber: q.number }} />
               <LabourPicker quoteId={q.id} category={q.job?.category ?? null} />
-              <AddLine quoteId={q.id} />
+              {/* A line typed by hand needs a price typed in, so it stays on the website (notes 18.44). */}
+              {isPhoneApp ? (
+                <p className="border-t border-border bg-secondary/40 px-3 py-3 text-xs text-muted-foreground">
+                  Lines not on the price book, and price changes, are done on the website.
+                </p>
+              ) : (
+                <AddLine quoteId={q.id} />
+              )}
             </>
           )}
         </Card>

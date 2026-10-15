@@ -36,6 +36,7 @@ import {
 } from "../queries/tasks";
 import { useInstallers, useEligible } from "../queries/installers";
 import { useBroadcast, useOffersForTask, useSendDirect, useWithdrawOffers } from "../queries/offers";
+import { isPhoneApp } from "../lib/phone-app";
 
 const money = (n?: number | null) =>
   n == null ? "-" : n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
@@ -95,11 +96,13 @@ function TaskBlock({
   return (
     <button
       type="button"
-      draggable
+      draggable={!isPhoneApp}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onClick={onOpen}
-      className="w-full cursor-grab rounded-md border-l-[3px] px-2 py-1.5 text-left transition-shadow hover:shadow-sm active:cursor-grabbing"
+      className={`w-full rounded-md border-l-[3px] px-2 py-1.5 text-left transition-shadow hover:shadow-sm ${
+        isPhoneApp ? "cursor-pointer" : "cursor-grab active:cursor-grabbing"
+      }`}
       // Out of the way mid-drag, so the row behind it takes the drop.
       style={{ backgroundColor: tint.fill, borderLeftColor: tint.edge, pointerEvents: dragging ? "none" : undefined }}
     >
@@ -290,7 +293,8 @@ function RunBar({
 
   // The handles sit on the end of the run, so they only make sense when the end
   // of the run is on screen. A finished job does not need another day.
-  const canExtend = !run.openRight && t.status !== "complete";
+  // The phone app shows the board view only (notes 18.44), so no handles there.
+  const canExtend = !isPhoneApp && !run.openRight && t.status !== "complete";
 
   return (
     <div
@@ -308,7 +312,7 @@ function RunBar({
     >
       <button
         type="button"
-        draggable
+        draggable={!isPhoneApp}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
         onClick={onOpen}
@@ -328,7 +332,9 @@ function RunBar({
           ...(clash ? { outline: "1.5px solid #C0362C", outlineOffset: "-1.5px" } : {}),
           opacity: t.status === "complete" ? 0.7 : 1,
         }}
-        className={`flex w-full cursor-grab flex-col justify-center overflow-hidden px-2 text-left transition-shadow group-hover:z-10 group-hover:shadow-md active:cursor-grabbing ${
+        className={`flex w-full flex-col justify-center overflow-hidden px-2 text-left transition-shadow group-hover:z-10 group-hover:shadow-md ${
+          isPhoneApp ? "cursor-pointer" : "cursor-grab active:cursor-grabbing"
+        } ${
           run.openLeft ? "rounded-l-none" : "rounded-l-md"
         } ${run.openRight ? "rounded-r-none" : "rounded-r-md"}`}
       >
@@ -679,6 +685,83 @@ function DispatchPanel({
 
 /* -------------------------------- board -------------------------------- */
 
+/**
+ * The phone app's look at one booking (notes 18.44). Read only: who, where,
+ * which days. Changing it is a website job, so there is nothing to press but
+ * the job link.
+ */
+function BookingView({
+  task: t,
+  installers,
+  onClose,
+}: {
+  task: any;
+  installers: Array<{ id: number; name: string }>;
+  onClose: () => void;
+}) {
+  const lead = t ? installers.find((i) => i.id === t.assignedInstallerId)?.name : undefined;
+  const dates: string[] = t?.dates ?? (t?.scheduledDate ? [t.scheduledDate] : []);
+  const when =
+    dates.length === 0
+      ? "Not booked yet"
+      : dates.length === 1
+        ? sayDate(dates[0]!)
+        : `${sayDate(dates[0]!)} to ${sayDate(dates[dates.length - 1]!)}, ${dates.length} days`;
+  const rows: Array<[string, React.ReactNode]> = t
+    ? [
+        ["Job", t.jobTitle || t.jobNumber],
+        ["Customer", t.customerName || "No customer"],
+        ["Site", [t.siteAddress, t.siteSuburb].filter(Boolean).join(", ") || "No site"],
+        ["When", when],
+        ["Arrive", sayTime(t.startTime) ?? "No time set"],
+        ["Installer", [lead ?? "Nobody yet", t.secondInstallerName].filter(Boolean).join(" and ")],
+        ["Status", TASK_STATUS_LABEL[t.status] ?? t.status],
+      ]
+    : [];
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center">
+      <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0 bg-black/50" />
+      <div className="relative max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-card px-5 pb-8 pt-4 shadow-xl">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-base font-semibold">{t?.title ?? "Booking"}</p>
+            {t ? <p className="text-xs text-muted-foreground">{t.ref}</p> : null}
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close" className="rounded-md p-1 text-muted-foreground hover:bg-secondary">
+            <X className="size-5" />
+          </button>
+        </div>
+        {t ? (
+          <>
+            <dl className="mt-3 divide-y divide-border text-sm">
+              {rows.map(([label, value]) => (
+                <div key={label} className="flex gap-3 py-2">
+                  <dt className="w-24 shrink-0 text-muted-foreground">{label}</dt>
+                  <dd className="min-w-0 flex-1">{value}</dd>
+                </div>
+              ))}
+              {t.pendingOffers > 0 ? (
+                <div className="flex gap-3 py-2">
+                  <dt className="w-24 shrink-0 text-muted-foreground">Offers</dt>
+                  <dd className="min-w-0 flex-1">{t.pendingOffers} waiting on a reply</dd>
+                </div>
+              ) : null}
+            </dl>
+            <Link to={`/jobs/${t.jobId}`}>
+              <Button className="mt-4 w-full">Open the job</Button>
+            </Link>
+            <p className="mt-3 text-center text-xs text-muted-foreground">
+              View only on the phone. Change the booking on the website.
+            </p>
+          </>
+        ) : (
+          <p className="mt-3 text-sm text-muted-foreground">That booking is no longer on the board.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function SchedulePage() {
   const week = useWeek();
   const board = useBoard(week.from, week.to);
@@ -743,7 +826,7 @@ export default function SchedulePage() {
 
   function drop(installerId: number | null, date: string | null) {
     setHover(null);
-    if (dragId == null) return;
+    if (dragId == null || isPhoneApp) return;
     const id = dragId;
     setDropError(null);
     setDropNote(null);
@@ -803,7 +886,11 @@ export default function SchedulePage() {
         <Page
           wide
           title="Schedule"
-          subtitle="One row per installer, one bar per booking. Click a bar to change the booking, drag it to move it."
+          subtitle={
+            isPhoneApp
+              ? "One row per installer, one bar per booking. View only on the phone. Bookings are changed on the website."
+              : "One row per installer, one bar per booking. Click a bar to change the booking, drag it to move it."
+          }
           actions={
             <div className="flex items-center gap-1">
               <Button variant="outline" size="icon-sm" onClick={() => week.shift(-1)}>
@@ -818,14 +905,16 @@ export default function SchedulePage() {
             </div>
           }
         >
-          <CommandBox
-            onBooked={(s) => {
-              setCmdNote(s);
-              setDropNote(null);
-              setDropError(null);
-            }}
-            onOpenTask={open}
-          />
+          {isPhoneApp ? null : (
+            <CommandBox
+              onBooked={(s) => {
+                setCmdNote(s);
+                setDropNote(null);
+                setDropError(null);
+              }}
+              onOpenTask={open}
+            />
+          )}
 
           {cmdNote ? (
             <div className="mb-3 flex items-start justify-between gap-3 rounded-md bg-[var(--success)]/10 px-3 py-2 text-sm">
@@ -984,7 +1073,12 @@ export default function SchedulePage() {
                 return (
                   <div key={inst.id} className="flex border-b border-border">
                     <div className="sticky left-0 z-20 w-40 shrink-0 border-r border-border bg-card px-3 py-2">
-                      <Link to={`/team?open=${inst.id}`} className="flex items-start gap-2">
+                      <Link
+                        to={`/team?open=${inst.id}`}
+                        className="flex items-start gap-2"
+                        // People is a website page, so on the phone the name is just a label.
+                        onClick={isPhoneApp ? (e) => e.preventDefault() : undefined}
+                      >
                         <span className="mt-1 size-2.5 shrink-0 rounded-full" style={{ backgroundColor: inst.colour }} />
                         <span className="min-w-0">
                           <span className="block truncate text-[13px] font-semibold">{inst.name}</span>
@@ -1092,14 +1186,26 @@ export default function SchedulePage() {
             </div>
           </div>
 
-          <p className="mt-3 text-xs text-muted-foreground">
-            Drop a dispatch on a day to schedule and assign it in one move. A booked run moves as a whole, so dragging
-            a 4 day bar to Wednesday shifts all four days. Drop it on the unassigned row to pull someone off.
-          </p>
+          {isPhoneApp ? (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Tap a bar to see the booking. Moving, booking and taking someone off a job are done on the website.
+            </p>
+          ) : (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Drop a dispatch on a day to schedule and assign it in one move. A booked run moves as a whole, so dragging
+              a 4 day bar to Wednesday shifts all four days. Drop it on the unassigned row to pull someone off.
+            </p>
+          )}
         </Page>
       </div>
 
-      {selected == null ? null : panel === "book" ? (
+      {selected == null ? null : isPhoneApp ? (
+        <BookingView
+          task={[...tasks, ...unassigned].find((t) => t.id === selected) ?? null}
+          installers={installers.data ?? []}
+          onClose={() => setSelected(null)}
+        />
+      ) : panel === "book" ? (
         <BookInstallerPanel
           taskId={selected}
           onClose={() => setSelected(null)}

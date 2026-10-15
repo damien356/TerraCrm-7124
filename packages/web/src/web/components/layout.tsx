@@ -41,6 +41,7 @@ import {
   X,
 } from "lucide-react";
 import { authClient } from "../lib/auth";
+import { isPhoneApp } from "../lib/phone-app";
 import { useBootstrap } from "../queries/settings";
 import { Loading } from "./ui/card";
 import { GlobalMemoButton, MemoProvider } from "./voice-memo";
@@ -170,7 +171,55 @@ function officeCanOpen(path: string) {
   return !ADMIN_ONLY_PATHS.some((p) => matches(path, p));
 }
 
+/**
+ * The office pages that open inside the phone app. Everything else stays on
+ * the website. A phone login still only gets what its role can open there,
+ * so Office never gains a page here it could not open on a computer.
+ * Detail pages under these (a job, a quote, a client) come along with them.
+ */
+const PHONE_PATHS = [
+  "/",
+  "/conversations",
+  "/quotes",
+  "/voice-quotes",
+  "/jobs",
+  "/schedule",
+  "/crew",
+  "/clients",
+  "/companies",
+  "/supervisors",
+  "/finance/invoices",
+  "/finance/callbacks",
+  "/terra-ai",
+];
+
+/** Set up screens that sit under a phone path but still belong on the website. */
+const PHONE_BLOCKED_PATHS = ["/companies/types"];
+
+function phoneCanOpen(path: string) {
+  if (PHONE_BLOCKED_PATHS.some((p) => matches(path, p))) return false;
+  return PHONE_PATHS.some((p) => matches(path, p));
+}
+
+function phoneNav(entries: NavEntry[]): NavEntry[] {
+  const out: NavEntry[] = [];
+  for (const entry of entries) {
+    if (isSection(entry)) {
+      const children = entry.children.filter((c) => PHONE_PATHS.includes(c.to));
+      if (children.length) out.push({ ...entry, children });
+    } else if (PHONE_PATHS.includes(entry.to)) {
+      out.push(entry);
+    }
+  }
+  return out;
+}
+
 function navFor(role: string | undefined): NavEntry[] {
+  const full = officeNavFor(role);
+  return isPhoneApp ? phoneNav(full) : full;
+}
+
+function officeNavFor(role: string | undefined): NavEntry[] {
   if (role === "admin") return NAV;
   const out: NavEntry[] = [];
   for (const entry of NAV) {
@@ -336,14 +385,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
           {bootstrap.data?.actor.name || session.data.user.name || "Office"}
         </p>
         <p className="truncate px-3 text-[11px] text-white/40">{session.data.user.email}</p>
-        <button
-          type="button"
-          onClick={() => authClient.signOut().then(() => (window.location.href = "/login"))}
-          className="mt-2 flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-white/50 transition-colors hover:bg-white/5 hover:text-white/90"
-        >
-          <LogOut className="size-3.5" />
-          Sign out
-        </button>
+        {/* The phone app signs out from its own Me tab. */}
+        {isPhoneApp ? null : (
+          <button
+            type="button"
+            onClick={() => authClient.signOut().then(() => (window.location.href = "/login"))}
+            className="mt-2 flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-white/50 transition-colors hover:bg-white/5 hover:text-white/90"
+          >
+            <LogOut className="size-3.5" />
+            Sign out
+          </button>
+        )}
       </div>
     </>
   );
@@ -392,7 +444,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <p className="text-[14px] font-bold tracking-[-0.01em] text-white">Terra Ops</p>
         </div>
         <main className="min-w-0 flex-1 pb-20">
-          {role === "office" && !officeCanOpen(location) ? (
+          {isPhoneApp && !phoneCanOpen(location) ? (
+            <div className="mx-auto mt-24 max-w-md px-6 text-center">
+              <h1 className="text-lg font-semibold">Website only</h1>
+              <p className="mt-2 text-sm text-muted-foreground">
+                This page is on the website. Open ops.terraflooring.com.au on a computer to use it.
+              </p>
+              <Link to="/" className="mt-5 inline-block text-sm font-medium text-primary hover:underline">
+                Back to the dashboard
+              </Link>
+            </div>
+          ) : role === "office" && !officeCanOpen(location) ? (
             <div className="mx-auto mt-24 max-w-md px-6 text-center">
               <h1 className="text-lg font-semibold">Admin only</h1>
               <p className="mt-2 text-sm text-muted-foreground">
