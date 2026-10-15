@@ -552,7 +552,7 @@ async function buildSqlite(data: Awaited<ReturnType<typeof readLive>>) {
 
 type Manifest = Record<string, { size: number; etag?: string; at: string }>;
 const MEDIA_MANIFEST = "app-files/_manifest.json";
-/** Supabase free plan rejects single files over 50 MB. Raise this if the plan allows more. */
+/** Supabase's default global upload limit is 50 MB. Set SUPABASE_MAX_FILE_MB to match if it is raised in Storage settings. */
 const MAX_FILE_BYTES = Number(process.env.SUPABASE_MAX_FILE_MB ?? 50) * 1024 * 1024;
 
 async function backupMedia(log: Log) {
