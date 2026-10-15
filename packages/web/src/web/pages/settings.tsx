@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Download, HardDriveDownload, Plus, Search } from "lucide-react";
+import { Download, HardDriveDownload, Plus, Search, Trash2, X } from "lucide-react";
 import { Page } from "../components/layout";
 import { SwatchModal } from "../components/product-swatch";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
@@ -13,6 +13,7 @@ import { EmailAgentCard } from "../components/email-agent";
 import { NotifySettingsCard } from "../components/notify-settings";
 import { LeadsSettingsTab } from "../components/leads-settings";
 import { PriceListTools } from "../components/price-import";
+import { DeleteConfirmModal, ProductDeleteTools } from "../components/product-delete";
 import { QuoteEmailCard } from "../components/quote-email-settings";
 import { UnderlayUpgradesCard } from "../components/underlay-upgrades-card";
 import { QUOTE_EMAIL_BODY_KEY, QUOTE_EMAIL_SUBJECT_KEY } from "../../api/lib/quote-email-template";
@@ -696,13 +697,37 @@ function ProductsTab() {
   const [q, setQ] = React.useState("");
   const [newOpen, setNewOpen] = React.useState(false);
   const [showInactive, setShowInactive] = React.useState(false);
+  // 15 Oct: delete. Ticks pick rows; the bin and Delete selected open the same confirm. Admin only.
+  const [picked, setPicked] = React.useState<Set<number>>(() => new Set());
+  const [deleting, setDeleting] = React.useState<number[] | null>(null);
+  const [deleteNotice, setDeleteNotice] = React.useState<string | null>(null);
 
-  const rows = (products.data ?? []).filter((p) => {
-    if (!showInactive && !p.active) return false;
-    if (!q.trim()) return true;
-    const hay = [p.supplier, p.brand, p.range, p.colour, p.sku].join(" ").toLowerCase();
-    return hay.includes(q.trim().toLowerCase());
-  });
+  const rows = React.useMemo(
+    () =>
+      (products.data ?? []).filter((p) => {
+        if (!showInactive && !p.active) return false;
+        if (!q.trim()) return true;
+        const hay = [p.supplier, p.brand, p.range, p.colour, p.sku].join(" ").toLowerCase();
+        return hay.includes(q.trim().toLowerCase());
+      }),
+    [products.data, showInactive, q],
+  );
+  // A new search or filter starts a new selection, so nothing off screen is ever deleted.
+  React.useEffect(() => setPicked(new Set()), [q, showInactive]);
+  const chosen = React.useMemo(() => rows.filter((p) => picked.has(p.id)).map((p) => p.id), [rows, picked]);
+  const allPicked = rows.length > 0 && chosen.length === rows.length;
+  const togglePick = React.useCallback((id: number, on: boolean) => {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const askDelete = React.useCallback((id: number) => {
+    setDeleteNotice(null);
+    setDeleting([id]);
+  }, []);
 
   return (
     <>
@@ -726,6 +751,27 @@ function ProductsTab() {
         </Button>
       </div>
       {isAdmin ? <PriceListTools search={q} includeDiscontinued={showInactive} /> : null}
+      {isAdmin ? <ProductDeleteTools notice={deleteNotice} onNotice={setDeleteNotice} /> : null}
+      {isAdmin && chosen.length ? (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-2" data-testid="bulk-bar">
+          <span className="text-sm font-medium">{chosen.length.toLocaleString("en-AU")} selected</span>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={() => {
+              setDeleteNotice(null);
+              setDeleting(chosen);
+            }}
+          >
+            <Trash2 className="size-4" />
+            Delete selected
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setPicked(new Set())}>
+            <X className="size-4" />
+            Clear
+          </Button>
+        </div>
+      ) : null}
 
       <Card>
         <CardHeader
@@ -742,6 +788,16 @@ function ProductsTab() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left">
+                  {isAdmin ? (
+                    <th className="th w-8 pl-4 pr-0">
+                      <Checkbox
+                        aria-label="Select all shown"
+                        title="Select every product shown"
+                        checked={allPicked}
+                        onChange={(e) => setPicked(e.target.checked ? new Set(rows.map((p) => p.id)) : new Set())}
+                      />
+                    </th>
+                  ) : null}
                   <th className="th px-4">Supplier</th>
                   <th className="th px-4">Brand / range</th>
                   <th className="th px-4">Colour</th>
@@ -752,11 +808,19 @@ function ProductsTab() {
                   <th className="th px-4 text-right">Sell</th>
                   <th className="th px-4 text-right">Margin</th>
                   <th className="th px-4" aria-label="Row actions" />
+                  {isAdmin ? <th className="th pl-0 pr-4" aria-label="Delete" /> : null}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {rows.map((p) => (
-                  <ProductLine key={p.id} product={p} />
+                  <ProductLine
+                    key={p.id}
+                    product={p}
+                    admin={isAdmin}
+                    picked={picked.has(p.id)}
+                    onPick={togglePick}
+                    onDelete={askDelete}
+                  />
                 ))}
               </tbody>
             </table>
@@ -765,6 +829,16 @@ function ProductsTab() {
       </Card>
 
       <NewProductModal open={newOpen} onClose={() => setNewOpen(false)} />
+      {isAdmin ? (
+        <DeleteConfirmModal
+          ids={deleting}
+          onClose={() => setDeleting(null)}
+          onDone={(msg) => {
+            setDeleteNotice(msg);
+            setPicked(new Set());
+          }}
+        />
+      ) : null}
     </>
   );
 }
@@ -898,7 +972,19 @@ function ProductSizesModal({ product, onClose }: { product: ProductRow; onClose:
   );
 }
 
-function ProductLine({ product }: { product: ProductRow }) {
+const ProductLine = React.memo(function ProductLine({
+  product,
+  admin,
+  picked,
+  onPick,
+  onDelete,
+}: {
+  product: ProductRow;
+  admin: boolean;
+  picked: boolean;
+  onPick: (id: number, on: boolean) => void;
+  onDelete: (id: number) => void;
+}) {
   const update = useUpdateProduct();
   const [sizing, setSizing] = React.useState(false);
   const [swatch, setSwatch] = React.useState(false);
@@ -913,6 +999,11 @@ function ProductLine({ product }: { product: ProductRow }) {
 
   return (
     <tr className={product.active ? "" : "opacity-50"}>
+      {admin ? (
+        <td className="py-2 pl-4 pr-0">
+          <Checkbox aria-label="Select" checked={picked} onChange={(e) => onPick(product.id, e.target.checked)} />
+        </td>
+      ) : null}
       <td className="px-4 py-2">{product.supplier || "-"}</td>
       <td className="px-4 py-2">
         <span className="font-medium">{product.brand}</span>
@@ -1052,9 +1143,23 @@ function ProductLine({ product }: { product: ProductRow }) {
           <SwatchModal id={product.id} title={[product.range, product.colour].filter(Boolean).join(" ")} onClose={() => setSwatch(false)} />
         ) : null}
       </td>
+      {admin ? (
+        <td className="py-2 pl-0 pr-4 text-right">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Delete"
+            title="Delete for good. A product used on a quote, job, invoice or order is hidden instead."
+            className="text-muted-foreground hover:text-destructive"
+            onClick={() => onDelete(product.id)}
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        </td>
+      ) : null}
     </tr>
   );
-}
+});
 
 function NewProductModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const create = useCreateProduct();

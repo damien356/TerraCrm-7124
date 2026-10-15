@@ -1454,6 +1454,51 @@ export const priceImportRows = sqliteTable(
   (t) => [index("price_import_rows_import_idx").on(t.importId)],
 );
 
+/**
+ * 15 Oct. One row per delete from Settings, Price list (the bin on a row, or
+ * Delete selected). Undo last delete reads `product_delete_rows` for the
+ * newest one still applied, like Undo last import.
+ */
+export const productDeletes = sqliteTable("product_deletes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  actorName: text("actor_name").notNull().default(""),
+  actorUserId: text("actor_user_id"),
+  /** How many were deleted for good. */
+  deleted: integer("deleted").notNull().default(0),
+  /** How many were used, so Active was unticked instead. */
+  hidden: integer("hidden").notNull().default(0),
+  /** applied · undone */
+  status: text("status").notNull().default("applied"),
+  undoneAt: integer("undone_at", { mode: "timestamp" }),
+  undoneBy: text("undone_by").notNull().default(""),
+  undoNote: text("undo_note").notNull().default(""),
+  ...timestamps,
+});
+
+/** What one delete did to one product, with the whole row kept so undo can put it back. */
+export const productDeleteRows = sqliteTable(
+  "product_delete_rows",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    deleteId: integer("delete_id")
+      .notNull()
+      .references(() => productDeletes.id, { onDelete: "cascade" }),
+    /** No FK on purpose: the product row is gone. */
+    productId: integer("product_id").notNull(),
+    /** deleted · hidden · kept (in an underlay upgrade pair) */
+    action: text("action").notNull(),
+    /** Brand range colour, for the log. */
+    name: text("name").notNull().default(""),
+    /** Why it was not deleted, e.g. "used on 2 quotes and 1 purchase order". */
+    reason: text("reason").notNull().default(""),
+    /** Hidden rows: Active before the delete, so undo only ticks back what it unticked. */
+    wasActive: integer("was_active", { mode: "boolean" }).notNull().default(false),
+    /** Deleted rows: JSON of the product row, its specials and its voice matches. */
+    snapshot: text("snapshot").notNull().default("{}"),
+  },
+  (t) => [index("product_delete_rows_delete_idx").on(t.deleteId)],
+);
+
 export const jobMaterials = sqliteTable(
   "job_materials",
   {

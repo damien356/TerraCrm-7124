@@ -26,6 +26,7 @@ import {
 } from "./price-sheet";
 import { gridToXlsx, xlsxToGrid } from "./price-xlsx";
 import { boxM2Of } from "./flooring-qty";
+import { productUsage } from "./product-delete";
 
 export type SheetFile = { fileName: string; csv?: string; xlsxBase64?: string };
 type ActorLite = { userId: string; name: string };
@@ -249,23 +250,9 @@ const sameVal = (a: unknown, b: unknown) => {
   return a === b;
 };
 
-/** Tables that point at a product and keep their row when it goes. A product they use is never deleted. */
+/** Every table that points at a product and keeps its row when it goes (lib/product-delete.ts). A product they use is never deleted. */
 async function productsInUse(ids: number[]): Promise<Set<number>> {
-  const used = new Set<number>();
-  if (!ids.length) return used;
-  const tables = [
-    schema.quoteItems,
-    schema.jobMaterials,
-    schema.purchaseOrderLines,
-    schema.quotePriceHistory,
-    schema.priceFlags,
-    schema.installerAccountEntries,
-  ] as const;
-  for (const t of tables) {
-    const rows = await db.select({ id: t.productId }).from(t).where(inArray(t.productId, ids));
-    for (const r of rows) if (r.id != null) used.add(r.id);
-  }
-  return used;
+  return new Set((await productUsage(ids)).keys());
 }
 
 /**

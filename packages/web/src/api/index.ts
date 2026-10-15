@@ -32,6 +32,7 @@ import { team } from "./routes/team";
 import { suppliers } from "./routes/suppliers";
 import { products } from "./routes/products";
 import { priceImport } from "./routes/priceImport";
+import { productDelete } from "./routes/productDelete";
 import { review } from "./routes/review";
 import { labour } from "./routes/labour";
 import { costing } from "./routes/costing";
@@ -143,6 +144,8 @@ export const router = {
   products,
   /** Settings, Price list: template, export, import with preview, undo. Admin only. */
   priceImport,
+  /** Settings, Price list: delete unused products, hide used ones, undo last delete. Admin only. */
+  productDelete,
   /** Sorting the ServiceM8 import: what is a homeowner, what is a business. */
   review,
   /** Labour rate book: Terra defaults, installer overrides, effective-dated history. */
