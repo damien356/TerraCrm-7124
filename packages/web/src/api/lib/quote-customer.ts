@@ -2,7 +2,7 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import type { Extraction } from "../agent/extract";
-import { findCandidates, type Candidate } from "./memo-context";
+import { findCandidates, nameClash, type Candidate } from "./memo-context";
 
 /**
  * Who a voice quote is for. Same matcher as voice memos, so a mis-heard name
@@ -75,6 +75,8 @@ export async function customerCandidates(s: SpokenCustomer): Promise<Candidate[]
 export function strongMatch(s: SpokenCustomer, list: Candidate[]): Candidate | null {
   const [top, next] = list;
   if (!top) return null;
+  // A name (or number) that fits more than one client is asked, never guessed.
+  if (nameClash(top, list)) return null;
   if (top.score >= 10) return top;
   if (s.isNew) return null;
   const fullExact = Boolean(s.lastName) && top.name.toLowerCase() === (s.name ?? "").toLowerCase();

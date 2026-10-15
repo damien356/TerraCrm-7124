@@ -290,13 +290,41 @@ function soundKey(s: string) {
 function nameScore(spoken: string, c: Pick<Contact, "firstName" | "lastName">) {
   const parts = tokens(`${c.firstName} ${c.lastName}`);
   let score = 0;
-  for (const t of tokens(spoken)) {
-    if (parts.includes(t)) score += 3;
-    else if (t.length >= 4 && parts.some((p) => editDistance(p, t) <= 1)) score += 2;
-    else if (t.length >= 4 && fuzzy(t, parts) > 0) score += fuzzy(t, parts);
-    else if (t.length >= 3 && parts.some((p) => p.startsWith(t))) score += 1;
-  }
+  for (const t of tokens(spoken)) score += wordScore(t, parts);
   return score;
+}
+
+/** One spoken word against a client's name parts. 0 when it fits none of them. */
+function wordScore(t: string, parts: string[]) {
+  if (parts.includes(t)) return 3;
+  if (t.length >= 4 && parts.some((p) => editDistance(p, t) <= 1)) return 2;
+  if (t.length >= 4 && fuzzy(t, parts) > 0) return fuzzy(t, parts);
+  if (t.length >= 3 && parts.some((p) => p.startsWith(t))) return 1;
+  return 0;
+}
+
+/**
+ * Every word of the spoken name fits this client ("Mohammed Arshad" fits
+ * Muhammad Arshad, not Iftiaz Mohammed). Two clients that both fit one name
+ * is a name that matches more than one client.
+ */
+function nameFits(spoken: string, c: Pick<Contact, "firstName" | "lastName">) {
+  const said = tokens(spoken);
+  const parts = tokens(`${c.firstName} ${c.lastName}`);
+  return said.length > 0 && said.every((t) => wordScore(t, parts) > 0);
+}
+
+/**
+ * Damien, 16 Oct: if the name matches more than one client, ask, don't
+ * guess. True when another candidate fits the same spoken name as the pick.
+ * A phone, email or job number said settles it, unless that also points at
+ * someone else.
+ */
+export function nameClash(pick: Candidate, list: Candidate[]) {
+  const others = list.filter((c) => c.id !== pick.id);
+  if (pick.byId) return others.some((c) => c.byId);
+  const said = pick.nameFits ?? [];
+  return others.some((c) => (c.nameFits ?? []).some((n) => said.includes(n)));
 }
 
 /** 1.2 to 2 for a sounds-alike name part, 0 when nothing is close. */
@@ -340,16 +368,22 @@ export interface Candidate {
   name: string;
   detail: string;
   score: number;
+  /** The spoken names this client fits word for word (nameFits). */
+  nameFits?: string[];
+  /** Came up on a phone, email or job number that was said. */
+  byId?: boolean;
 }
 
 export async function findCandidates(m: Mentions): Promise<{ text: string | null; list: Candidate[] }> {
-  const scores = new Map<number, { contact: Contact; score: number; why: string[] }>();
-  const bump = (c: Contact, by: number, why: string) => {
-    const cur = scores.get(c.id) ?? { contact: c, score: 0, why: [] };
+  const scores = new Map<number, { contact: Contact; score: number; why: string[]; byId: boolean }>();
+  const bump = (c: Contact, by: number, why: string, byId = false) => {
+    const cur = scores.get(c.id) ?? { contact: c, score: 0, why: [], byId: false };
     cur.score += by;
+    if (byId) cur.byId = true;
     if (!cur.why.includes(why)) cur.why.push(why);
     scores.set(c.id, cur);
   };
+  const fits = new Map<number, string[]>();
 
   if (m.personNames.length) {
     // Score every client in code, not with a LIKE: speech to text gets
@@ -364,6 +398,7 @@ export async function findCandidates(m: Mentions): Promise<{ text: string | null
       for (const c of names) {
         const s = nameScore(name, c);
         if (s >= floor && s > (hits.get(c.id)?.score ?? 0)) hits.set(c.id, { score: s, why: `name "${name}"` });
+        if (s >= floor && nameFits(name, c)) fits.set(c.id, [...(fits.get(c.id) ?? []), name]);
       }
     }
     const best = [...hits.entries()].sort((a, b) => b[1].score - a[1].score).slice(0, 60);
@@ -394,7 +429,7 @@ export async function findCandidates(m: Mentions): Promise<{ text: string | null
         ),
       )
       .limit(5);
-    for (const c of rows) bump(c, 10, `phone ${raw}`);
+    for (const c of rows) bump(c, 10, `phone ${raw}`, true);
   }
 
   for (const email of m.emails) {
@@ -403,14 +438,14 @@ export async function findCandidates(m: Mentions): Promise<{ text: string | null
       .from(schema.contacts)
       .where(eq(sql`lower(${schema.contacts.email})`, email.toLowerCase().trim()))
       .limit(3);
-    for (const c of rows) bump(c, 10, `email ${email}`);
+    for (const c of rows) bump(c, 10, `email ${email}`, true);
   }
 
   if (m.jobNumbers.length) {
     const jobs = await db.select().from(schema.jobs).where(inArray(schema.jobs.number, m.jobNumbers));
     for (const j of jobs) {
       const c = await jobCustomer(j.id);
-      if (c) bump(c, 8, `job #${j.number}`);
+      if (c) bump(c, 8, `job #${j.number}`, true);
     }
   }
 
@@ -476,6 +511,8 @@ export async function findCandidates(m: Mentions): Promise<{ text: string | null
         .filter(Boolean)
         .join(" · "),
       score: t.score,
+      nameFits: fits.get(t.contact.id) ?? [],
+      byId: t.byId,
     });
   }
   return { text: blocks.join("\n\n"), list };

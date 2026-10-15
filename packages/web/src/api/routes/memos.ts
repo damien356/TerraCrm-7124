@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -14,6 +14,7 @@ import {
   jobChoicesFor,
   jobCustomer,
   jobsForContact,
+  nameClash,
   shortJobLabel,
   localToDate,
   nowStrings,
@@ -29,6 +30,7 @@ import { createContact } from "./contacts";
 import { sendConversationMessage } from "./conversations";
 import { jobNumberSql } from "../lib/job-ref";
 import { quoteRef } from "../lib/refs";
+import { addJobPerson, customerTag } from "../lib/job-people";
 
 /* ---------------------------------------------------------------------------
  * VOICE MEMOS
@@ -311,13 +313,18 @@ async function runOne(captureId: number, m: StoredMemo, a: StoredAction, actor: 
       );
       a.ref = { table: "quotes", id: built.quote.id };
       a.state = "done";
+      // No job in play, so the quote made its own (Damien, 16 Oct). It is
+      // this memo's new job from here on, so the rest of the memo lands on it.
+      if (built.madeJob && !m.newJobId) m.newJobId = built.madeJob.id;
+      a.jobLabel = await jobLabel(built.jobId);
       a.resultLabel =
-        `Quote ${built.quote.ref} drafted, ${built.lineCount} line${built.lineCount === 1 ? "" : "s"}` +
+        (built.madeJob ? `Job #${built.madeJob.number} and quote ` : "Quote ") +
+        `${built.quote.ref} drafted, ${built.lineCount} line${built.lineCount === 1 ? "" : "s"}` +
         (built.flaggedCount ? `, ${built.flaggedCount} to check` : "");
       a.resultHref = `/quotes/${built.quote.id}`;
       await db
         .update(schema.voiceQuoteCaptures)
-        .set({ quoteId: built.quote.id })
+        .set({ quoteId: built.quote.id, ...(built.jobId ? { jobId: built.jobId } : {}) })
         .where(eq(schema.voiceQuoteCaptures.id, captureId));
       return;
     }
@@ -360,7 +367,9 @@ async function runOne(captureId: number, m: StoredMemo, a: StoredAction, actor: 
 
 /** Runs everything still pending or waiting on the client, in a safe order. */
 async function runActions(captureId: number, m: StoredMemo, actor: Actor, transcript: string) {
-  const order = (a: StoredAction) => (a.kind === "create_job" ? 0 : 1);
+  // A quote with no job in play makes its own, so it goes straight after
+  // create_job and the rest of the memo can land on that job.
+  const order = (a: StoredAction) => (a.kind === "create_job" ? 0 : a.kind === "quote" ? 1 : 2);
   const todo = m.actions
     .filter((a) => a.state === "pending" || a.state === "waiting_client")
     .sort((x, y) => order(x) - order(y));
@@ -439,11 +448,45 @@ async function moveMade(m: StoredMemo, a: StoredAction) {
   } else if (a.ref.table === "office_tasks") {
     await db.update(schema.officeTasks).set({ jobId, updatedAt: new Date() }).where(eq(schema.officeTasks.id, a.ref.id));
   } else if (a.ref.table === "quotes") {
+    // A quote is never taken off its job. With no other job to go to it stays where it is.
     await db
       .update(schema.quotes)
-      .set({ jobId, ...(contactId ? { contactId } : {}), updatedAt: new Date() })
+      .set({ ...(jobId ? { jobId } : {}), ...(contactId ? { contactId } : {}), updatedAt: new Date() })
       .where(eq(schema.quotes.id, a.ref.id));
   }
+}
+
+/**
+ * The client was changed after this memo made its job (a "make a job" or a
+ * quote that made one). The job is still this memo's own, so it follows the
+ * new client: customer, bill to and the Owner row. Left alone once it has an
+ * invoice or someone put a different customer on it by hand.
+ */
+async function repointNewJob(m: StoredMemo, before: number | null) {
+  const to = clientReady(m) ? m.client.contactId : null;
+  if (!m.newJobId || !to || to === before) return;
+  const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, m.newJobId));
+  if (!job || (job.contactId && job.contactId !== before)) return;
+  const [invoice] = await db.select({ id: schema.invoices.id }).from(schema.invoices).where(eq(schema.invoices.jobId, job.id)).limit(1);
+  if (invoice) return;
+  const billTo = job.billToType === "contact" && (!job.billToContactId || job.billToContactId === before);
+  await db
+    .update(schema.jobs)
+    .set({ contactId: to, ...(billTo ? { billToContactId: to } : {}), updatedAt: new Date() })
+    .where(eq(schema.jobs.id, job.id));
+  if (before) {
+    await db.delete(schema.jobContacts).where(and(eq(schema.jobContacts.jobId, job.id), eq(schema.jobContacts.contactId, before)));
+  }
+  const tag = await customerTag(to, job.companyId);
+  await addJobPerson(job.id, to, {
+    tags: [tag],
+    isPrimary: true,
+    onSiteContact: tag === "owner",
+    receivesSms: true,
+    receivesEmail: true,
+    canApproveQuote: true,
+    showToCrew: tag === "owner",
+  });
 }
 
 /**
@@ -584,6 +627,8 @@ async function routeMemo(
       contactId = candidates[0]?.id ?? null;
     }
     const picked = candidates.find((c) => c.id === contactId);
+    // Damien, 16 Oct: a name that matches more than one client is asked, never guessed.
+    if (kind === "existing" && picked && nameClash(picked, candidates)) kind = "unsure";
     client = { ...plan.client, kind, contactId, name: picked?.name ?? null, candidates };
   }
 
@@ -883,7 +928,10 @@ export const memos = {
       // A different person means a different set of jobs. Anything already
       // made for the wrong one follows the change.
       await fitJobs(memo);
-      if (before !== memo.client.contactId) for (const a of memo.actions) await moveMade(memo, a);
+      if (before !== memo.client.contactId) {
+        await repointNewJob(memo, before);
+        for (const a of memo.actions) await moveMade(memo, a);
+      }
       await runActions(input.id, memo, context.actor, row.transcript);
       await saveMemo(input.id, memo, { contactId: memo.client.contactId });
       return { ok: true, contactId: memo.client.contactId };

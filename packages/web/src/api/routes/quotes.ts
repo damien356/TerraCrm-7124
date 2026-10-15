@@ -26,6 +26,8 @@ import { createContact } from "./contacts";
 import { bundlesFor, copyBundles } from "./quoteBundles";
 import { leadToQuotedOnSend } from "../lib/job-stage";
 import { addJobPerson, addQuotePerson, copyQuotePeople, personInput } from "../lib/job-people";
+import { UNSET_SOURCE } from "../lib/lead-codes";
+import { syncJobValue, syncJobValueFromQuote } from "../lib/job-value";
 import { floorQty, floorTypeOf, isInstallFlag, isOwnFlag, NO_WIDTH_FLAG } from "../lib/flooring-qty";
 import {
   addLinkedLabour,
@@ -159,6 +161,8 @@ export async function recalc(quoteId: number) {
     .update(schema.quotes)
     .set({ subtotal, gst, total, updatedAt: new Date() })
     .where(eq(schema.quotes.id, quoteId));
+  // A job made by this quote shows its total until a quote is accepted (Damien, 16 Oct).
+  await syncJobValueFromQuote(quoteId);
 
   return { subtotal, gst, total };
 }
@@ -371,10 +375,12 @@ export async function createQuoteRecord(input: z.infer<typeof createQuoteInput>,
   const totals = await recalc(row.id);
 
   // New quote: the job is made now, at Lead, with the quote's number and people.
+  // A quote never stands without its job (Damien, 16 Oct), so any caller
+  // that left out both the job and makeJob gets one too, source Unknown.
   let jobId = input.jobId ?? null;
-  if (input.makeJob && !jobId) {
+  if (!jobId) {
     const [fresh] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, row.id));
-    const { job } = await createJobForQuote(fresh ?? row, { source: input.source });
+    const { job } = await createJobForQuote(fresh ?? row, { source: input.source || UNSET_SOURCE });
     jobId = job.id;
     await db.insert(schema.activityLog).values({
       jobId,
@@ -775,6 +781,8 @@ export const quotes = {
       // A job made with the quote takes the customer, company and site it is missing.
       const touchesJob = rest.contactId !== undefined || rest.companyId !== undefined || rest.supervisorContactId !== undefined || rest.siteId !== undefined;
       if (row?.jobId && touchesJob) await fillJobFromQuote(row.id);
+      // The deposit or the status changed: the job made by this quote follows.
+      if (row?.jobId && (rest.depositPercent !== undefined || rest.status !== undefined)) await syncJobValueFromQuote(row.id);
       return row;
     }),
 
@@ -786,6 +794,8 @@ export const quotes = {
       });
     }
     await db.delete(schema.quotes).where(eq(schema.quotes.id, input.id));
+    // The job made by these quotes goes back to the newest one left.
+    if (quote.jobId) await syncJobValue(quote.jobId);
     return { ok: true };
   }),
 
@@ -1678,6 +1688,7 @@ export const quotes = {
         .set({ status: "declined", updatedAt: new Date() })
         .where(eq(schema.quotes.id, input.id))
         .returning();
+      if (quote.jobId) await syncJobValue(quote.jobId);
 
       await db.insert(schema.activityLog).values({
         jobId: quote.jobId,

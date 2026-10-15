@@ -17,6 +17,8 @@ import { depositDefaultFor } from "../lib/deposits";
 import { markupOf } from "../lib/pricing";
 import { customerCandidates, spokenCustomer, strongMatch } from "../lib/quote-customer";
 import { lineTypeOfKind } from "../lib/line-kinds";
+import { createJobForQuote } from "../lib/quote-convert";
+import { UNSET_SOURCE } from "../lib/lead-codes";
 
 /**
  * Damien records a rough job note on site, this turns it into a draft quote.
@@ -211,6 +213,7 @@ async function runPipeline(captureId: number, input: ProcessInput, actor: Actor)
       .set({
         extractedJson: JSON.stringify(built.extraction),
         quoteId: built.quote.id,
+        jobId: built.jobId,
         contactId: built.contactId,
         status: "priced",
         updatedAt: new Date(),
@@ -280,12 +283,14 @@ export async function buildQuoteFromTranscript(
       contactId = hit.id;
       matchedCustomerName = hit.name;
     } else if (spoken.name && !spoken.isNew && spoken.name.length >= 4) {
-      const [companyMatch] = await db
+      const companyMatches = await db
         .select()
         .from(schema.companies)
         .where(eq(sql`lower(${schema.companies.name})`, spoken.name.toLowerCase()))
-        .limit(1);
-      if (companyMatch) {
+        .limit(2);
+      const [companyMatch] = companyMatches;
+      // Two companies with that name: ask, never guess.
+      if (companyMatch && companyMatches.length === 1) {
         companyId = companyMatch.id;
         matchedCustomerName = companyMatch.name;
       }
@@ -325,6 +330,24 @@ export async function buildQuoteFromTranscript(
     })
     .returning();
   if (!quoteRow) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Quote not created" });
+
+  // A quote never stands without its job (Damien, 16 Oct). With no job in
+  // play the job is made now, at Lead, with the quote's number and customer.
+  // If that fails the quote goes too, so nothing is left without a job.
+  let jobId = link.jobId;
+  let madeJob: { id: number; number: number } | null = null;
+  if (!jobId) {
+    try {
+      const { job, number: jobNumber } = await createJobForQuote(quoteRow, { source: UNSET_SOURCE });
+      jobId = job.id;
+      madeJob = { id: job.id, number: jobNumber };
+    } catch (e) {
+      await db.delete(schema.quotes).where(eq(schema.quotes.id, quoteRow.id));
+      throw new ORPCError("INTERNAL_SERVER_ERROR", {
+        message: `The job for this quote could not be made, so no quote was saved. ${e instanceof Error ? e.message : ""}`.trim(),
+      });
+    }
+  }
 
   if (pricedLines.length) {
     const inserted = await db.insert(schema.quoteItems).values(
@@ -370,11 +393,28 @@ export async function buildQuoteFromTranscript(
   await linkUnderlay(quoteRow.id);
 
   const totals = await recalc(quoteRow.id);
-  const ref = await quoteRefOf(quoteRow);
+  const [fresh] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, quoteRow.id));
+  const saved = fresh ?? { ...quoteRow, jobId };
+  const ref = await quoteRefOf(saved);
+
+  if (madeJob) {
+    // The job was made before the lines went on. recalc above put the
+    // quote's total on it (lib/job-value.ts), and keeps it there as it changes.
+    await db.insert(schema.activityLog).values({
+      contactId,
+      jobId: madeJob.id,
+      entityType: "job",
+      entityId: madeJob.id,
+      action: "created",
+      detail: `Job #${madeJob.number} made with voice quote ${ref}`,
+      actorName: actor.name,
+      actorRole: actor.role,
+    });
+  }
 
   await db.insert(schema.activityLog).values({
     contactId,
-    jobId: link.jobId,
+    jobId,
     entityType: "quote",
     entityId: quoteRow.id,
     action: "created_from_voice",
@@ -386,7 +426,9 @@ export async function buildQuoteFromTranscript(
   });
 
   return {
-    quote: { ...quoteRow, ...totals, ref },
+    quote: { ...saved, ...totals, ref },
+    jobId,
+    madeJob,
     extraction,
     contactId,
     flaggedCount: pricedLines.filter((l) => l.flagged).length,

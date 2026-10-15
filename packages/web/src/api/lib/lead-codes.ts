@@ -10,6 +10,14 @@
 export const UNKNOWN_SOURCE = "Unknown (before tracking)";
 
 /**
+ * Where a job made by a voice quote (or any quote that had to make its own
+ * job) came from until someone sets it. Not on the Settings list on purpose:
+ * it shows as its own line in the leads report, so the real source gets set
+ * on the job (Damien, 16 Oct).
+ */
+export const UNSET_SOURCE = "Unknown";
+
+/**
  * Jobs made before the list moved into Settings carry a short key. The New
  * job screen, quotes and voice memos still send these, so they are read
  * through this map everywhere a source is shown or counted.
