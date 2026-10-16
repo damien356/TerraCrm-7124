@@ -1,3 +1,4 @@
+import { isUnitType, parseAptChecks, propertyTypeAnswered, propertyTypeShort } from "../lib/property-types";
 import { jobNumberSql, taskRefSql } from "../lib/job-ref";
 import { syncJobForTask } from "../lib/job-stage";
 import { z } from "zod";
@@ -52,6 +53,9 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
       ref: taskRefSql,
       jobTitle: schema.jobs.title,
       furnitureOnSite: schema.jobs.furnitureOnSite,
+      /* Client prep (notes 18.56): the furniture answer and the apartment checklist. */
+      furnitureMoving: schema.jobs.furnitureMoving,
+      aptChecks: schema.jobs.aptChecks,
       jobAccessNotes: schema.jobs.accessNotes,
       siteAddress: schema.sites.address,
       siteSuburb: schema.sites.suburb,
@@ -103,6 +107,10 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
       swmsRequired: swms.get(r.jobId)?.required ?? false,
       swmsSignedToday: swms.get(r.jobId)?.signedToday ?? false,
       contacts: people.get(r.jobId) ?? [],
+      // Readable on every app build, blank until the office answers it (notes 18.56).
+      propertyType: propertyTypeAnswered(r.propertyType) ? propertyTypeShort(r.propertyType) : null,
+      unit: isUnitType(r.propertyType),
+      aptChecks: parseAptChecks(r.aptChecks),
     };
   });
 }

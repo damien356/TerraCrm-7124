@@ -1,3 +1,4 @@
+import { dayDate } from "./prep-templates";
 import { and, asc, eq, gte, inArray, isNull, lt, lte, ne, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -220,7 +221,9 @@ export async function buildDailySummary(now = new Date()) {
   const overdueTasks = tasks.filter((t) => t.dueDate && t.dueDate < today);
   const otherTasks = tasks.filter((t) => !(t.dueDate && t.dueDate < today));
   const referralFees = await referralLine();
-  return { today, overdueTasks, otherTasks, todayJobs, lateCrew, lateInvoices, recentAlerts, referralFees };
+  // Notes 18.56: client prep. Imported here, not at the top, because lib/prep imports this file.
+  const prep = await (await import("./prep")).prepForSummary(now);
+  return { today, overdueTasks, otherTasks, todayJobs, lateCrew, lateInvoices, recentAlerts, referralFees, prep };
 }
 
 /**
@@ -284,6 +287,23 @@ export function dailySummaryText(s: Awaited<ReturnType<typeof buildDailySummary>
 
   if (s.recentAlerts.length) {
     out.push("NOT CLEARED FROM THE LAST DAY\n" + s.recentAlerts.map((a) => a.title).join("\n"));
+  }
+
+  /* Notes 18.56: no one-tap Stop here, because mail scanners open links. Stop is on the job. */
+  const p = s.prep;
+  if (p?.sendingToday.length) {
+    const kindWord = { install_email: "Install email", day_sms: "Day before text", omw_sms: "On my way text" } as const;
+    out.push(
+      "CLIENT PREP SENDING TODAY\n" +
+        p.sendingToday.map((x) => `${x.ref}: ${kindWord[x.kind]} for ${dayDate(x.forDate)} to ${x.who}. ${OPS_URL}/jobs/${x.jobId}`).join("\n") +
+        "\nTo stop one, open the job and press Stop in Client prep.",
+    );
+  }
+  if (p?.needsAnswer.length) {
+    out.push(
+      "NEEDS PROPERTY TYPE / FURNITURE ANSWER\n" +
+        p.needsAnswer.map((x) => `${x.ref}: install ${dayDate(x.firstDay)}, needs the ${x.missing.join(" and ")}. Prep messages held. ${OPS_URL}/jobs/${x.jobId}`).join("\n"),
+    );
   }
 
   const r = s.referralFees;

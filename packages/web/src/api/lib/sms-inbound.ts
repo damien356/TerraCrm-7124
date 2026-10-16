@@ -5,6 +5,7 @@ import * as schema from "../database/schema";
 import { contactByMobile, ensureForContact, logMessage, openUnassigned } from "./conversations";
 import { normaliseMobile } from "./sms";
 import { notifyOffice } from "./notify";
+import { noteKeyReply } from "./prep";
 
 /* ---------------------------------------------------------------------------
  * TEXTS COMING BACK IN.
@@ -134,6 +135,8 @@ export async function handleInboundSms(raw: Record<string, unknown>) {
     fromAddress: mobile,
     providerId: msg.messageId,
   });
+  // Notes 18.56: "key's under the mat" in answer to a prep text goes on the job's access notes.
+  if (!stop && jobId) await noteKeyReply({ jobId, contactId: contact?.id ?? null, body: msg.body, channel: "sms", name: name || mobile });
 
   if (stop) {
     const [already] = await db

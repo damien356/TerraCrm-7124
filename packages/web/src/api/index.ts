@@ -78,6 +78,9 @@ import { bootMailAgent } from "./lib/mail-agent";
 import { finishConnect } from "./lib/gmail";
 import { bootReminders } from "./lib/reminders";
 import { bootDailySummary } from "./lib/notify";
+import { bootPrep } from "./lib/prep";
+import { prep } from "./routes/prep";
+import { fieldPrep } from "./routes/fieldPrep";
 import { handleInboundSms, inboundSecretOk } from "./lib/sms-inbound";
 import { takeLead, type LeadFile } from "./lib/lead-intake";
 import { bootTimberRepair } from "./lib/timber-repair";
@@ -120,8 +123,11 @@ export const router = {
   /** Referral fees (notes 18.47). Admin only, except picking the referrer on a job. */
   referrals,
   billTo,
+  /** Client prep messages: install email, day before text, On my way (notes 18.56). */
+  prep,
   alerts,
   field,
+  fieldPrep,
   /** Hands-free crew: Siri asks, confirm-back before anything is sent. */
   voice,
   /** Arrived and left site, by geofence or by hand, and the every-day photo rule. */
@@ -379,6 +385,8 @@ bootOffsiteBackup();
 bootOfferTimer();
 // The 7am summary email to the office (item 15). Same gate.
 bootDailySummary();
+// Client prep messages from 10am, checked every 5 minutes (notes 18.56). Same gate.
+bootPrep();
 // The after job care series, every 10 minutes. Same gate, and off until switched on in Marketing, Care.
 bootCareEngine();
 // Timber repairs: pushes the office when Marc has not priced one in 2 hours. Same gate.

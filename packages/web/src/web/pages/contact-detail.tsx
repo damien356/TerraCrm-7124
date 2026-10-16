@@ -19,6 +19,7 @@ import { useCompanies } from "../queries/companies";
 import { useClient } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
 import { EmailInput } from "../components/email-input";
+import { propertyTypeShort } from "../../api/lib/property-types";
 import { AddressAutocomplete } from "../components/address-autocomplete";
 
 const COMPANY_ROLES = ["owner", "manager", "supervisor", "accounts", "property_manager", "purchasing", "other"];
@@ -234,7 +235,7 @@ export default function ContactDetailPage() {
                   <li key={s.id} className="px-4 py-2.5">
                     <p className="text-sm">{s.address}</p>
                     <p className="text-xs text-muted-foreground">
-                      {s.suburb} {s.postcode ?? ""} · {roleLabel(s.propertyType)}
+                      {s.suburb} {s.postcode ?? ""} · {propertyTypeShort(s.propertyType)}
                     </p>
                   </li>
                 ))}

@@ -413,7 +413,8 @@ export async function takeLead(formKey: string, raw: Record<string, unknown>, fi
     newSite = place
       ? { address: place.address, suburb: place.suburb, state: place.state, postcode: place.postcode || null, lat: place.lat, lng: place.lng, placeId: place.placeId }
       : { address: lead.address.slice(0, 300), suburb: lead.suburb, state: lead.state || "QLD", postcode: lead.postcode || null };
-    newSite.propertyType = page?.clientType === "homeowner" || !page ? "residential" : "commercial";
+    // Notes 18.56: a homeowner's property type is asked, not guessed. Blank reads red on the job.
+    newSite.propertyType = page?.clientType === "homeowner" || !page ? "" : "commercial";
     if (place?.suburb) suburb = place.suburb;
     if (!place) flags.push("Address not checked with Google");
   } else if (STREET_RE.test(lead.message)) {
