@@ -52,7 +52,7 @@ async function explainThrow(e: unknown): Promise<string> {
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState<null | "email" | "google">(null);
+  const [busy, setBusy] = useState<null | "email">(null);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note] = useState(() => peekLoginNote());
@@ -70,21 +70,6 @@ export default function LoginScreen() {
       // A dropped connection or a CORS block throws instead of resolving with
       // res.error. Without this catch, busy is never cleared and the button
       // spins forever with no explanation.
-      setError(await explainThrow(e));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function signInWithGoogle() {
-    setError(null);
-    setBusy("google");
-    try {
-      const res = await authClient.managedAuth.signIn({ provider: "google" });
-      if (res.error && res.error.code !== "AUTH_SESSION_DISMISSED") {
-        setError(res.error.message ?? "Couldn't sign you in.");
-      }
-    } catch (e) {
       setError(await explainThrow(e));
     } finally {
       setBusy(null);
@@ -248,47 +233,6 @@ export default function LoginScreen() {
               <ActivityIndicator color="#1C1B1A" />
             ) : (
               <Text style={{ fontFamily: Fonts.bold, fontSize: 16, color: "#1C1B1A" }}>Sign in</Text>
-            )}
-          </Pressable>
-
-          <View style={{ flexDirection: "row", alignItems: "center", marginVertical: 20 }}>
-            <View style={{ flex: 1, height: 1, backgroundColor: "rgba(255,255,255,0.12)" }} />
-            <Text
-              style={{
-                fontFamily: Fonts.sans,
-                fontSize: 12,
-                color: "rgba(255,255,255,0.4)",
-                marginHorizontal: 12,
-              }}
-            >
-              or
-            </Text>
-            <View style={{ flex: 1, height: 1, backgroundColor: "rgba(255,255,255,0.12)" }} />
-          </View>
-
-          <Pressable
-            onPress={signInWithGoogle}
-            disabled={busy !== null}
-            style={{
-              height: 52,
-              borderRadius: 10,
-              backgroundColor: "#FFFFFF",
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 10,
-              opacity: busy !== null ? 0.55 : 1,
-            }}
-          >
-            {busy === "google" ? (
-              <ActivityIndicator color={c.foreground} />
-            ) : (
-              <>
-                <Ionicons name="logo-google" size={18} color="#1C1B1A" />
-                <Text style={{ fontFamily: Fonts.medium, fontSize: 15, color: "#1C1B1A" }}>
-                  Continue with Google
-                </Text>
-              </>
             )}
           </Pressable>
 

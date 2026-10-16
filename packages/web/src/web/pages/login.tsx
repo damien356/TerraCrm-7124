@@ -7,7 +7,7 @@ import { Spinner } from "../components/ui/card";
 export default function LoginPage() {
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
-  const [busy, setBusy] = React.useState<"none" | "email" | "google">("none");
+  const [busy, setBusy] = React.useState<"none" | "email">("none");
   const [error, setError] = React.useState<string | null>(null);
 
   const session = authClient.useSession();
@@ -26,20 +26,6 @@ export default function LoginPage() {
       window.location.href = "/";
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign in failed");
-      setBusy("none");
-    }
-  }
-
-  async function google() {
-    setError(null);
-    setBusy("google");
-    try {
-      await authClient.managedAuth.signIn({ provider: "google" });
-      window.location.href = "/";
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      // Closing the Google popup isn't a failure worth shouting about.
-      if (!message.includes("POPUP_CLOSED")) setError(message);
       setBusy("none");
     }
   }
@@ -69,24 +55,7 @@ export default function LoginPage() {
           <h2 className="text-xl font-semibold">Sign in</h2>
           <p className="mt-1 text-sm text-muted-foreground">Office access to Terra Ops.</p>
 
-          <Button
-            type="button"
-            variant="outline"
-            className="mt-6 w-full"
-            disabled={busy !== "none"}
-            onClick={google}
-          >
-            {busy === "google" ? <Spinner /> : null}
-            Continue with Google
-          </Button>
-
-          <div className="my-5 flex items-center gap-3">
-            <div className="h-px flex-1 bg-border" />
-            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">or</span>
-            <div className="h-px flex-1 bg-border" />
-          </div>
-
-          <form onSubmit={submit} className="space-y-3">
+          <form onSubmit={submit} className="mt-6 space-y-3">
             <Field label="Email">
               <Input
                 type="email"
