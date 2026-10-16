@@ -966,6 +966,30 @@ Fix list 11 Oct, item 9. Go-ahead in answer 16. The form offers "Upgrade to <bet
 - Checks: lint 0, api 0, app 138 (baseline), mobile 0, build 0.
 - Live, 16 Oct, with Damien's OK: backup backups/pre-referral-fees.db (118 tables, 19194 rows, bad 0, integrity ok), dry run on a copy, then fix1016c/apply-ref.ts with APPLY=1: 5 statements run, tables job_referrals, referral_snapshots and referrers added, office_tasks.admin_only added. Read back: tasks 14 (admin only 0), quotes 12, jobs 4236, referrers 0, job referrals 0, snapshots 0. No referrer is set up on live yet; Damien adds them from the company or contact card.
 
+### 18.48 Merge a job into another (17 Oct)
+Why: one builder sent three POs for one site and Ops made two jobs (188012 and 188013). Damien's rules, final:
+- Admin only. On the job page, "Merge into another job" picks the job to keep. A preview lists exactly what moves and what is kept. Nothing is saved until Merge is pressed. All of it goes in one batch: all of it or none of it.
+- Everything on the merged job moves onto the main job: quotes, the conversation and its emails, photos and files, notes and timeline, people, office tasks, dispatches, variations, POs, supplier bills, costs, client prep messages and every other row that points at the job.
+- People on both jobs are kept once with the ticks of both. The main job keeps its own main contact.
+- Dispatches and variations take the main job's next letters and numbers. A variation already sent keeps its old reference, so the client's copy still matches.
+- One thread per job: the merged job's messages join the main job's conversation. Emails keep their own Message-ID and Gmail thread, so a reply to one still finds the job.
+- The main job keeps its title. Blanks on it (site, company, access notes, plan) are filled from the merged job. The descriptions are joined. The values are added.
+- The merged job is kept, marked "Merged into 188012", its value set to 0, and hidden from the job lists. Opening it opens the main job. A search for its number still finds it. An email tagged [#188013], a supplier bill or a thread that names it lands on the main job.
+- Blocked: the same job; a job already merged; a repair or callback; money moved on the merged job (a paid invoice or a paid deposit); a live invoice on it (void it first); a referral on it; a timber repair request on both. Each says why in plain words.
+- One timeline line on the main job lists what moved, and one on the merged job says where it went.
+
+Schema (sql/2026-11-01-job-merge.sql): jobs gets merged_into_job_id, merged_at, merged_by_name, and the index jobs_merged_idx. Nothing existing changes.
+
+Server:
+- lib/job-merge.ts (new): mergePreview and mergeJobs. The tables that point at a job are read from the live table layout, so a new table is never missed.
+- lib/job-redirect.ts (new): mergedTarget follows the pointer (a chain is followed to the end).
+- routes/jobMerge.ts (new): preview and run, Admin only.
+- Job lists, search, mail filing, mail replies, invoice matching, conversations, contacts, companies and leads skip merged jobs or follow the pointer.
+
+Web: components/job-merge.tsx (the button and the preview, opened over the page so the dark header does not recolour it), queries/jobMerge.ts, job-detail.tsx (the button, and a merged job opens the main job), jobs.tsx.
+
+Checked on a scratch copy: fix1016e/t-jm PASS 87 (Office cannot preview or merge; each block; people merged with both ticks; dispatch and variation numbers; the conversation joined; email tags and replies land on the main job; the same prep message kept once; values added; the merged job hidden and opening the main job; no long dashes). On screen: the preview, the blocks, Merge, desktop and phone width.
+
 ### 18.50 Phone app: office pages fit the phone (16 Oct)
 - Damien's ask: inside the phone app, no pinch zoom and every page fits the phone width with no sideways scroll; Jobs, Quotes, Clients, Invoices and Conversations as stacked cards (number, customer, site, status, tap to open); Dashboard one column with Alerts and Unfiled near the top; one header (the app's "The office" bar with the menu in it); Schedule one day at a time with swipe; finger sized buttons and rows (44px). Only inside the app. The website on a computer is unchanged. Numbered 18.50 because 18.48 (Job merge) and 18.49 (Builder POs) were already taken by work in progress.
 - web/lib/phone-app.ts: hasAppMenu (isPhoneApp and window.__TERRA_APP_MENU__, set only by app build 12 on). applyPhoneChrome runs at load in phone mode: adds the phone-app class (and phone-app-menu) to html, sets the viewport to width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, and blocks gesturestart and gesturechange.

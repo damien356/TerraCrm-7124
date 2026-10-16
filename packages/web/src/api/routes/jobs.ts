@@ -3,7 +3,7 @@ import { nextJobNumber } from "../lib/job-number";
 import { z } from "zod";
 import { assertSupervisor } from "../lib/supervisors";
 import { checkNewRecords, createNewRecords, newCompanyInput, newContactInput, newSiteInput } from "../lib/job-new-records";
-import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import { syncJobValue } from "../lib/job-value";
@@ -278,10 +278,17 @@ export const jobs = {
       if (input.contactId) where.push(eq(schema.jobs.contactId, input.contactId));
       if (input.companyId) where.push(eq(schema.jobs.companyId, input.companyId));
       if (input.stage) where.push(eq(schema.jobStatuses.stage, input.stage));
+      // The first run of digits, so "Q188000-2", "188000-A" and "PO188000-1" all find job 188000.
+      const asNumber = Number(input.search?.match(/\d+/)?.[0] ?? "");
+      // A merged job (notes 18.48) is hidden, except when its own number is searched: then it
+      // comes back with `mergedInto`, so the list opens the job it went into.
+      where.push(
+        Number.isFinite(asNumber) && asNumber > 0
+          ? or(isNull(schema.jobs.mergedIntoJobId), eq(schema.jobs.number, asNumber))!
+          : isNull(schema.jobs.mergedIntoJobId),
+      );
       if (input.search) {
         const q = `%${input.search.toLowerCase()}%`;
-        // The first run of digits, so "Q188000-2", "188000-A" and "PO188000-1" all find job 188000.
-        const asNumber = Number(input.search.match(/\d+/)?.[0] ?? "");
         const cbRef = parseCallbackRef(input.search);
         where.push(
           or(
@@ -322,8 +329,18 @@ export const jobs = {
         .orderBy(desc(schema.jobs.number))
         .limit(input.limit);
 
+      const intoIds = [...new Set(rows.map((r) => r.job.mergedIntoJobId).filter((x): x is number => x != null))];
+      const intoRows = intoIds.length
+        ? await db
+            .select({ id: schema.jobs.id, number: schema.jobs.number, displayNumber: schema.jobs.displayNumber })
+            .from(schema.jobs)
+            .where(inArray(schema.jobs.id, intoIds))
+        : [];
+
       return rows.map((r) => ({
         ...r.job,
+        /** Set on a merged job: the job everything went into. The list opens that one. */
+        mergedInto: intoRows.find((x) => x.id === r.job.mergedIntoJobId) ?? null,
         status: r.status,
         site: r.site,
         contact: r.contact,
@@ -388,6 +405,13 @@ export const jobs = {
         .limit(50),
     ]);
 
+    const [mergedInto] = row.job.mergedIntoJobId
+      ? await db
+          .select({ id: schema.jobs.id, number: schema.jobs.number, displayNumber: schema.jobs.displayNumber })
+          .from(schema.jobs)
+          .where(eq(schema.jobs.id, row.job.mergedIntoJobId))
+      : [];
+
     const [repair] = await db
       .select({ id: schema.repairRequests.id, status: schema.repairRequests.status })
       .from(schema.repairRequests)
@@ -399,6 +423,8 @@ export const jobs = {
       ...row.job,
       /** The timber repair on this job, for the link to /repairs/:id. */
       repair: repair ?? null,
+      /** Set on a merged job (notes 18.48). The job page opens this job instead. */
+      mergedInto: mergedInto ?? null,
       status: row.status,
       site: row.site,
       contact: row.contact,

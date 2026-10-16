@@ -16,7 +16,7 @@ import { useBootstrap } from "../queries/settings";
  * "Which job is this for?", one tap filing and "New enquiry".
  * ------------------------------------------------------------------------- */
 
-type JobHit = { id: number; number: number; displayNumber: string | null; title: string; status?: string | null };
+export type JobHit = { id: number; number: number; displayNumber: string | null; title: string; status?: string | null };
 
 const jobLabel = (j: { number: number; displayNumber: string | null }) => `#${j.displayNumber || j.number}`;
 
@@ -31,7 +31,11 @@ export function JobFinder({ onPick, busy, exclude }: { onPick: (job: JobHit) => 
   const found = useQuery(
     orpc.jobs.list.queryOptions({ input: { search: settled, limit: 8 }, enabled: settled.length >= 2, staleTime: 15_000 }),
   );
-  const hits = (found.data ?? []).filter((j) => j.id !== exclude);
+  // A merged job opens the job it went into, shown once (notes 18.48).
+  const seen = new Set<number>();
+  const hits = (found.data ?? [])
+    .map((j) => (j.mergedInto ? { ...j, id: j.mergedInto.id, number: j.mergedInto.number, displayNumber: j.mergedInto.displayNumber, title: `${j.title || "Untitled"} (merged into this job)`, status: null } : j))
+    .filter((j) => j.id !== exclude && !seen.has(j.id) && !!seen.add(j.id));
   return (
     <div className="grid gap-2">
       <div className="relative">

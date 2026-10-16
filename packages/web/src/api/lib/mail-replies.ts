@@ -90,17 +90,33 @@ export async function ignoredSenders(): Promise<string[]> {
   }
 }
 
+/** A drawn image (logo, banner) rather than a photo. Photos come as JPEG or HEIC. */
+const DRAWN_IMAGE = /^image\/(png|gif|bmp|svg\+xml)$/i;
+/** Bigger than this, a PNG pasted into the body is a screenshot someone meant to send. */
+const LOGO_MAX_BYTES = 300_000;
+
 /** Every attached file, however deep, with what is needed to fetch it. */
 export function fileParts(msg: GmailMessage) {
   const out: GmailPart[] = [];
+  /* The body as sent, to see which pictures are drawn inside it ("cid:..."). */
+  const html = (() => {
+    const part = findPart(msg.payload, "text/html");
+    return part?.body?.data ? Buffer.from(part.body.data, "base64url").toString("utf8").toLowerCase() : "";
+  })();
   const walk = (p?: GmailPart) => {
     if (!p) return;
     if (p.filename && (p.body?.attachmentId || p.body?.data)) {
       const disp = (p.headers?.find((x) => x.name.toLowerCase() === "content-disposition")?.value ?? "").toLowerCase();
-      const cid = p.headers?.some((x) => x.name.toLowerCase() === "content-id");
-      /* A logo in someone's signature is not a file they sent. */
-      const signatureBit = (disp.startsWith("inline") || cid) && (p.mimeType ?? "").startsWith("image/") && (p.body?.size ?? 0) < 40_000;
-      if (!signatureBit) out.push(p);
+      const cidValue = (p.headers?.find((x) => x.name.toLowerCase() === "content-id")?.value ?? "").trim().replace(/^<|>$/g, "").toLowerCase();
+      const image = (p.mimeType ?? "").startsWith("image/");
+      const size = p.body?.size ?? 0;
+      /* A logo in someone's signature is not a file they sent. A small inline picture is one. */
+      const smallInline = (disp.startsWith("inline") || !!cidValue) && image && size < 40_000;
+      /* So is a drawn image the body itself shows by its Content-ID, at any size up to a
+       * screenshot. The Ambrose logo is a 92 KB PNG (notes 18.48). A photo pasted into the
+       * body is a JPEG, so it is still kept. */
+      const bodyLogo = !!cidValue && DRAWN_IMAGE.test(p.mimeType ?? "") && size < LOGO_MAX_BYTES && html.includes(`cid:${cidValue}`);
+      if (!smallInline && !bodyLogo) out.push(p);
     }
     p.parts?.forEach(walk);
   };
@@ -212,6 +228,8 @@ export async function openJobsFor(email: string) {
       and(
         or(inArray(schema.jobs.contactId, ids), linked.length ? inArray(schema.jobs.id, linked.map((l) => l.jobId)) : sql`0`),
         or(isNull(schema.jobs.statusId), notInArray(schema.jobs.statusId, CLOSED_STATUSES)),
+        // A merged job is not open: its work is on the job it went into (notes 18.48).
+        isNull(schema.jobs.mergedIntoJobId),
       ),
     );
   return { contacts, jobIds: [...new Set(rows.map((r) => r.parentJobId ?? r.id))] };

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { isSupervisor, notifySupervisorChange } from "../lib/supervisors";
-import { and, asc, desc, eq, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -174,10 +174,14 @@ export const contacts = {
         .leftJoin(schema.jobStatuses, eq(schema.jobStatuses.id, schema.jobs.statusId))
         .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
         .where(
-          or(
-            eq(schema.jobs.contactId, input.id),
-            eq(schema.jobs.billToContactId, input.id),
-            sql`exists (select 1 from ${schema.jobContacts} jc where jc.job_id = ${schema.jobs.id} and jc.contact_id = ${input.id})`,
+          and(
+            or(
+              eq(schema.jobs.contactId, input.id),
+              eq(schema.jobs.billToContactId, input.id),
+              sql`exists (select 1 from ${schema.jobContacts} jc where jc.job_id = ${schema.jobs.id} and jc.contact_id = ${input.id})`,
+            ),
+            // A merged job (notes 18.48) is shown once, as the job it went into.
+            isNull(schema.jobs.mergedIntoJobId),
           ),
         )
         .orderBy(desc(schema.jobs.number)),
