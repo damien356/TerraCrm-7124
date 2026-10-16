@@ -12,6 +12,7 @@ import { LabourRatesTab, RATE_UNITS, UNIT_LABEL } from "../components/labour";
 import { EmailAgentCard } from "../components/email-agent";
 import { NotifySettingsCard } from "../components/notify-settings";
 import { PrepSettingsCard } from "../components/prep-settings";
+import { AppLinksCard } from "../components/app-links-card";
 import { LeadsSettingsTab } from "../components/leads-settings";
 import { PriceListTools } from "../components/price-import";
 import { DeleteConfirmModal, ProductDeleteTools } from "../components/product-delete";
@@ -115,7 +116,7 @@ const UNITS = ["m2", "lm", "each", "roll", "box", "hour"];
 /** Item 9. How a product is sold, which decides the wastage and labour sums on a quote. */
 const SOLD_AS_LABEL: Record<string, string> = { box: "Box", broadloom: "Broadloom", "": "Neither" };
 
-type Tab = "skills" | "statuses" | "products" | "labour" | "business" | "leads" | "notifications" | "prep" | "email" | "backups";
+type Tab = "skills" | "statuses" | "products" | "labour" | "business" | "leads" | "notifications" | "prep" | "staffapp" | "email" | "backups";
 
 const TABS: Array<{ id: Tab; label: string; blurb: string }> = [
   { id: "skills", label: "Skills", blurb: "What a task can be. Installers get ticked against these." },
@@ -145,6 +146,11 @@ const TABS: Array<{ id: Tab; label: string; blurb: string }> = [
     id: "prep",
     label: "Client prep",
     blurb: "The install email, the day before text and On my way: on or off, the arrival window, when they send, and every word.",
+  },
+  {
+    id: "staffapp",
+    label: "Staff app",
+    blurb: "The iPhone and Android download links that staff invites point to.",
   },
   {
     id: "email",
@@ -204,6 +210,7 @@ export default function SettingsPage() {
       {tab === "leads" ? <LeadsSettingsTab /> : null}
       {tab === "notifications" ? <NotifySettingsCard /> : null}
       {tab === "prep" ? <PrepSettingsCard /> : null}
+      {tab === "staffapp" ? <AppLinksCard /> : null}
       {tab === "email" ? <EmailAgentCard /> : null}
       {tab === "backups" ? <BackupsTab /> : null}
     </Page>

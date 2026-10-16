@@ -1068,3 +1068,28 @@ Web: job page facts (property type and furniture, red when missing) and the Clie
 Mobile (build 13, no OTA): components/client-prep.tsx on the task page (On my way and the unit checklist); offers read the new property types.
 
 Checked on a scratch copy: prep/t-prep PASS 77 (install email to tenant and owner, text to the tenant only, builder contact excluded, window and no exact time, unit lines, no double send, nothing before 10am, timeline and thread, Stop and Put back on, crew On my way and the checklist, key replies by text and email, booking blocks with measures allowed, held job on the To fill list, builder jobs off and the switch, date change, cancelled, coordinate day, the 7am sections, settings admin only).
+
+### 18.55 Staff invites: download link and one-time password set-up (17 Oct)
+Damien's rules, final:
+- An Admin sends an invite by text (ClickSend) or by email (Resend). Send invite shows for everyone, including logins that already have a password. Setting up from the link replaces it.
+- The text, word for word: "Hi [first name], welcome to Terra Flooring. Download the Terra app here: [download link]. Then set up your login here: [one-time link]. Your username is [email]. Any questions, call the office on 1300 183 772." The email says the same.
+- The download link is always ops.terraflooring.com.au/app. That page sends an iPhone to the iPhone link and an Android phone to the Android link. On a computer it shows both. Both links are set in Settings, Staff app, and can change any time. An empty one tells that phone to call the office.
+- The set-up link is /setup/<token>. It works once and runs out after 48 hours. A newer invite stops every older one working. The person chooses their own password (at least 8 characters, typed twice). Used, run out, replaced, not valid and switched off links each say so plainly.
+- Add person makes no password any more and texts none. It makes the login, the profile and (for Field crew) the installer card, then sends the invite: "Add and send invite by SMS" or "by email". If the invite does not go, the person is kept (there is nothing anyone can sign in with) and the reason shows, so the office fixes the mobile or email and presses Send invite. A mobile is only needed for SMS.
+- A switched-off person cannot be sent an invite, and a link they already hold does not work while they are off.
+- A failed send is logged, and its link is dead from the start, so any older link they hold keeps working.
+
+Schema (sql/2026-10-31-staff-invites.sql): the invites table (profile, user, sha256 of the token, channel, sent to, status sending/sent/failed, detail, sent by, expires, used, voided). Only the hash is stored. The app links are two settings rows (app_link_ios, app_link_android).
+
+Server:
+- lib/invites.ts (new): the wording, the app links, sendInvite (insert, send, then mark sent and void the older ones, or mark failed), the log, checkLink and setupLogin (claims the link in one guarded write, then sets or replaces the credential password with Better Auth's hash, verifies the email, voids the rest).
+- routes/invites.ts (new): send, log, linksGet, linksSave (Admin); appLinks, check, setup (public, the link is the key).
+- routes/team.ts: addPerson takes sendBy (sms, email or none) and sends the invite instead of a password. list adds hasPassword and the invite log.
+
+Web: People rows have Login and invite (has a password or not, the latest invite, Send or Resend by text or email, the invite log); the Add person modal has the two send buttons; pages/public-app.tsx (/app) and pages/public-setup.tsx (/setup/:token) sit outside Layout; Settings, Staff app tab (components/app-links-card.tsx).
+
+Mobile: no change. The sign-in screen already says to ring the office for a new invite.
+
+Store links: a TestFlight public link only opens once the build has passed Beta App Review. A Google Play internal testing link only works for Google accounts on the tester list.
+
+Checked on a scratch copy: invites/t-inv PASS 121 (Admin only for send, log and links; https links only; the text word for word with no password; only the hash stored; 48 hours; a resend by email voids the text link; failed text and failed email keep the older link; weak password refused; single use; sign in with the chosen password; an existing login's password replaced, old one refused; expired and invalid links; switched off refused both ways; add by email with no mobile; a failed invite keeps the person; no long dashes).

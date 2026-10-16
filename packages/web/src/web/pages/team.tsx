@@ -1,5 +1,5 @@
 import * as React from "react";
-import { HardHat, KeyRound, ShieldCheck, Smartphone, Briefcase, UserPlus, TriangleAlert } from "lucide-react";
+import { HardHat, KeyRound, ShieldCheck, Smartphone, Briefcase, UserPlus, TriangleAlert, Send } from "lucide-react";
 import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -19,6 +19,7 @@ import {
 import { InstallerPanel } from "./installers";
 import { useRevokeVoiceKey, useVoiceKeys } from "../queries/visits";
 import { EmailInput } from "../components/email-input";
+import { useSendInvite } from "../queries/invites";
 
 function when(iso: string | null) {
   if (!iso) return "-";
@@ -113,8 +114,11 @@ export default function TeamPage() {
             dispatched tasks. Enforced on the server.
           </li>
           <li>
-            Add person makes the login and texts the password to their mobile. There is no public sign-up. Only an Admin can make a login here.
-            "Switch off" only blocks login. It never deletes anything.
+            Add person makes the login and sends an invite by text or email. The invite has the app download link and a
+            one-time link where they choose their own password, so nobody in the office ever sees it. The link works
+            once and runs out after 48 hours. Sending a new invite stops the older one working. There is no public
+            sign-up. Only an Admin can make a login or send an invite. "Switch off" only blocks login. It never deletes
+            anything.
           </li>
         </ul>
       </Card>
@@ -131,12 +135,13 @@ export default function TeamPage() {
         <Empty>No one yet. The first person to create an account becomes the Admin.</Empty>
       ) : (
         <Card className="overflow-x-auto">
-          <table className="w-full min-w-[960px] text-sm">
+          <table className="w-full min-w-[1180px] text-sm">
             <thead>
               <tr className="border-b border-border">
                 <th className="th px-4">Person</th>
                 <th className="th px-4">Access level</th>
                 <th className="th px-4">Details</th>
+                <th className="th px-4">Login and invite</th>
                 <th className="th px-4">Last signed in</th>
                 <th className="th px-4" aria-label="Row actions" />
               </tr>
@@ -231,6 +236,9 @@ export default function TeamPage() {
                       </div>
                     ) : null}
                   </td>
+                  <td className="px-4 py-3">
+                    <InviteCell row={row} onError={setError} />
+                  </td>
                   <td className="px-4 py-3 text-muted-foreground">{when(row.lastSeenAt)}</td>
                   <td className="px-4 py-3 text-right">
                     <Button
@@ -255,6 +263,109 @@ export default function TeamPage() {
       <PhoneProblems />
       {openId !== null ? <InstallerPanel id={openId} onClose={() => setOpenId(null)} /> : null}
     </Page>
+  );
+}
+
+type Person = NonNullable<ReturnType<typeof useLogins>["data"]>[number];
+type InviteRow = Person["invites"][number];
+
+const INVITE_STATE: Record<InviteRow["state"], { label: string; colour: string | null }> = {
+  waiting: { label: "Waiting", colour: "#B45309" },
+  set_up: { label: "Set up", colour: "#15803D" },
+  expired: { label: "Expired", colour: null },
+  replaced: { label: "Replaced", colour: null },
+  failed: { label: "Not sent", colour: "#C2410C" },
+};
+
+const viaWord = (c: InviteRow["channel"]) => (c === "sms" ? "Texted" : "Emailed");
+
+/** One line of the invite log: how it went, when, and what became of it. */
+function inviteLine(i: InviteRow) {
+  const sent = `${viaWord(i.channel)} to ${i.sentTo} ${stamp(i.sentAt)}`;
+  if (i.state === "failed") return `${i.channel === "sms" ? "Text" : "Email"} to ${i.sentTo} did not go ${stamp(i.sentAt)}${i.detail ? `: ${i.detail}` : ""}`;
+  if (i.state === "set_up") return `${sent}. Set up ${stamp(i.usedAt)}`;
+  if (i.state === "waiting") return `${sent}. Runs out ${stamp(i.expiresAt)}`;
+  if (i.state === "expired") return `${sent}. Ran out ${stamp(i.expiresAt)}`;
+  return `${sent}. Replaced by a newer invite`;
+}
+
+/**
+ * Send or resend the invite, and the log of every invite this person has had
+ * (notes 18.55). Shown for everyone, including logins that already have a
+ * password: setting up from the link replaces it.
+ */
+function InviteCell({ row, onError }: { row: Person; onError: (m: string | null) => void }) {
+  const send = useSendInvite();
+  const [showLog, setShowLog] = React.useState(false);
+  const [sentNote, setSentNote] = React.useState<string | null>(null);
+  const latest = row.invites[0] ?? null;
+  const again = row.invites.some((i) => i.state !== "failed");
+
+  async function go(channel: "sms" | "email") {
+    onError(null);
+    setSentNote(null);
+    const who = row.name || row.email;
+    const to = channel === "sms" ? row.phone : row.email;
+    if (!to) {
+      onError(channel === "sms" ? `${who} has no mobile. Add one with Edit name, mobile, email.` : `${who} has no email.`);
+      return;
+    }
+    const lines = [`${channel === "sms" ? "Text" : "Email"} an invite to ${who} at ${to}?`];
+    if (row.hasPassword) lines.push("They already have a password. Setting up from the new link replaces it.");
+    if (latest?.state === "waiting") lines.push("The invite they already have stops working.");
+    if (!window.confirm(lines.join("\n\n"))) return;
+    try {
+      const r = await send.mutateAsync({ profileId: row.id, channel });
+      setSentNote(`${channel === "sms" ? "Texted" : "Emailed"} to ${r.to}.`);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <div className="space-y-1.5 text-xs">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className={row.hasPassword ? "text-foreground" : "text-muted-foreground"}>
+          {row.hasPassword ? "Has a password" : "No password yet"}
+        </span>
+        {latest ? <Badge colour={INVITE_STATE[latest.state].colour}>{INVITE_STATE[latest.state].label}</Badge> : null}
+      </div>
+      {latest ? <p className="max-w-[260px] text-muted-foreground">{inviteLine(latest)}</p> : null}
+      {row.active ? (
+        <div className="flex flex-wrap gap-1">
+          <Button variant="ghost" disabled={send.isPending} onClick={() => go("sms")}>
+            {send.isPending && send.variables?.channel === "sms" ? <Spinner className="border-foreground/20 border-t-foreground" /> : <Send className="size-3.5" />}
+            {again ? "Resend by text" : "Send invite by text"}
+          </Button>
+          <Button variant="ghost" disabled={send.isPending} onClick={() => go("email")}>
+            {send.isPending && send.variables?.channel === "email" ? <Spinner className="border-foreground/20 border-t-foreground" /> : <Send className="size-3.5" />}
+            {again ? "Resend by email" : "Send invite by email"}
+          </Button>
+        </div>
+      ) : (
+        <p className="text-muted-foreground">Switched off. Switch on to send an invite.</p>
+      )}
+      {sentNote ? <p className="text-emerald-700">{sentNote}</p> : null}
+      {row.invites.length ? (
+        <button type="button" className="text-primary hover:underline" onClick={() => setShowLog((v) => !v)}>
+          {showLog ? "Hide invite log" : `Invite log (${row.invites.length})`}
+        </button>
+      ) : null}
+      {showLog ? (
+        <ul className="max-w-[300px] space-y-1 border-l border-border pl-2">
+          {row.invites.map((i) => (
+            <li key={i.id}>
+              <span className="font-medium text-foreground">{INVITE_STATE[i.state].label}</span>
+              <span className="text-muted-foreground">
+                {" "}
+                · {inviteLine(i)}
+                {i.sentByName ? ` · by ${i.sentByName}` : ""}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 
@@ -395,8 +506,8 @@ function PhoneProblems() {
 }
 
 /**
- * Add a person with a login. The password is made on the server and texted to
- * their mobile, so nobody in the office sees it.
+ * Add a person with a login and send their invite (notes 18.55). No password
+ * is made here. They choose their own from the one-time link.
  */
 function AddPersonModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const add = useAddPerson();
@@ -429,30 +540,38 @@ function AddPersonModal({ open, onClose }: { open: boolean; onClose: () => void 
     }));
   }
 
-  async function submit() {
+  async function submit(sendBy: "sms" | "email") {
     setError(null);
     try {
-      await add.mutateAsync({
+      const r = await add.mutateAsync({
         name: form.name.trim(),
         email: form.email.trim(),
         mobile: form.mobile.trim(),
         role: form.role,
         installerId: form.role === "field" && form.installerId ? Number(form.installerId) : null,
+        sendBy,
       });
-      setDone(`${form.name.trim()} is added. Their password was texted to ${form.mobile.trim()}.`);
+      const who = form.name.trim();
+      if (r.invite?.ok) {
+        setDone(`${who} is added. Their invite was ${sendBy === "sms" ? "texted" : "emailed"} to ${r.invite.to}. It runs out in 48 hours.`);
+      } else {
+        setDone(
+          `${who} is added, but the invite did not go (${r.invite?.reason ?? "not sent"}). Fix the ${sendBy === "sms" ? "mobile" : "email"} if needed, then use Send invite on their row.`,
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   }
 
-  const ready = form.name.trim() && form.email.trim() && form.mobile.trim();
+  const ready = Boolean(form.name.trim() && form.email.trim());
 
   return (
     <Modal
       open={open}
       onClose={close}
       title="Add person"
-      subtitle="Terra makes their login and texts the password to their mobile."
+      subtitle="Terra makes their login and sends an invite. They choose their own password from the link."
       footer={
         done ? (
           <Button onClick={close}>Done</Button>
@@ -461,9 +580,13 @@ function AddPersonModal({ open, onClose }: { open: boolean; onClose: () => void 
             <Button variant="ghost" onClick={close}>
               Cancel
             </Button>
-            <Button onClick={submit} disabled={!ready || add.isPending}>
-              {add.isPending ? <Spinner className="border-white/40 border-t-white" /> : null}
-              Add and text password
+            <Button variant="ghost" onClick={() => submit("email")} disabled={!ready || add.isPending}>
+              {add.isPending && add.variables?.sendBy === "email" ? <Spinner className="border-foreground/20 border-t-foreground" /> : null}
+              Add and send invite by email
+            </Button>
+            <Button onClick={() => submit("sms")} disabled={!ready || !form.mobile.trim() || add.isPending}>
+              {add.isPending && add.variables?.sendBy === "sms" ? <Spinner className="border-white/40 border-t-white" /> : null}
+              Add and send invite by SMS
             </Button>
           </>
         )
@@ -501,7 +624,7 @@ function AddPersonModal({ open, onClose }: { open: boolean; onClose: () => void 
           <Field label="Email" hint="This is what they sign in with.">
             <EmailInput value={form.email} onValueChange={(v) => set("email", v)} />
           </Field>
-          <Field label="Mobile" hint="The password is texted here.">
+          <Field label="Mobile" hint="The invite is texted here if you send it by SMS.">
             <Input value={form.mobile} onChange={(e) => set("mobile", e.target.value)} placeholder="0412 345 678" />
           </Field>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}

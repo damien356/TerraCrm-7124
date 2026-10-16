@@ -1,10 +1,11 @@
 import { z } from "zod";
-import { randomInt, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
-import { hashPassword } from "better-auth/crypto";
 import { db } from "../database";
-import { normaliseMobile, sendSms, smsConfigured } from "../lib/sms";
+import { emailConfigured } from "../lib/email";
+import { hasPasswordFor, inviteLog, sendInvite } from "../lib/invites";
+import { normaliseMobile, smsConfigured } from "../lib/sms";
 import * as schema from "../database/schema";
 import { adminOnly, ensureInstallerCard, normaliseRole } from "../middleware/auth";
 
@@ -37,13 +38,6 @@ async function emailTaken(email: string, exceptUserId?: string) {
     )
     .limit(1);
   return rows.length > 0;
-}
-
-/** Easy to read off a text and type on a phone: no 0/o, 1/l/i. */
-function newPassword() {
-  const abc = "abcdefghjkmnpqrstuvwxyz23456789";
-  const pick = (n: number) => Array.from({ length: n }, () => abc[randomInt(abc.length)]).join("");
-  return `${pick(5)}-${pick(5)}`;
 }
 
 /** Installer cards no login points at. Field crew can be added onto one. */
@@ -96,6 +90,8 @@ export const team = {
       .leftJoin(schema.installers, eq(schema.installers.id, schema.profiles.installerId))
       .orderBy(desc(schema.profiles.createdAt));
 
+    const log = await inviteLog(rows.map((r) => r.profile.id));
+    const withPassword = await hasPasswordFor(rows.map((r) => r.profile.userId));
     return rows.map((r) => ({
       id: r.profile.id,
       userId: r.profile.userId,
@@ -111,6 +107,8 @@ export const team = {
       installerActive: r.installerActive ?? null,
       signedUpAt: r.signedUpAt ? new Date(Number(r.signedUpAt)).toISOString() : null,
       lastSeenAt: r.lastSeenAt ? new Date(Number(r.lastSeenAt)).toISOString() : null,
+      hasPassword: withPassword.has(r.profile.userId),
+      invites: log.get(r.profile.id) ?? [],
     }));
   }),
 
@@ -236,28 +234,39 @@ export const team = {
   unlinkedCards: adminOnly.handler(() => unlinkedCards()),
 
   /**
-   * Add a person with a login. Terra makes the password and texts it to their
-   * mobile, so the office never sees it. Field crew also get an installer card:
-   * either a new one, or an existing card that has no login yet.
+   * Add a person with a login (notes 18.55). No password is made here: the
+   * login has none until the person picks one from their invite link, so the
+   * office never sees it. Field crew also get an installer card: either a new
+   * one, or an existing card that has no login yet.
    *
-   * If the text does not go, nothing is kept, so there is never a login out
-   * there with a password nobody has.
+   * The invite goes straight after. If it does not go, the person is kept
+   * (there is nothing anyone can sign in with) and the reason comes back, so
+   * the office can fix the mobile or email and press Send invite again.
    */
   addPerson: adminOnly
     .input(
       z.object({
         name: z.string().trim().min(1, "Add their name."),
         email: emailShape,
-        mobile: z.string().trim().min(1, "Add their mobile. The password is texted to it."),
+        mobile: z.string().trim().optional().default(""),
         role: z.enum(["admin", "office", "field"]),
         installerId: z.number().int().nullable().optional(),
+        sendBy: z.enum(["sms", "email", "none"]).default("sms"),
       }),
     )
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
       const email = cleanEmail(input.email);
-      const mobile = normaliseMobile(input.mobile);
-      if (!mobile) throw new ORPCError("BAD_REQUEST", { message: "That mobile does not look like an Australian mobile. The password is texted to it." });
-      if (!smsConfigured()) throw new ORPCError("BAD_REQUEST", { message: "Texting is not set up, so the password cannot be sent." });
+      const phone = input.mobile.trim();
+      if (input.sendBy === "sms") {
+        if (!phone) throw new ORPCError("BAD_REQUEST", { message: "Add their mobile. The invite is texted to it." });
+        if (!normaliseMobile(phone)) throw new ORPCError("BAD_REQUEST", { message: "That mobile does not look like an Australian mobile. The invite is texted to it." });
+        if (!smsConfigured()) throw new ORPCError("BAD_REQUEST", { message: "Texting is not set up, so the invite cannot be texted. Send it by email instead." });
+      } else if (phone && !normaliseMobile(phone)) {
+        throw new ORPCError("BAD_REQUEST", { message: "That mobile does not look like an Australian mobile." });
+      }
+      if (input.sendBy === "email" && !emailConfigured()) {
+        throw new ORPCError("BAD_REQUEST", { message: "Email is not set up, so the invite cannot be emailed. Send it by text instead." });
+      }
       if (await emailTaken(email)) throw new ORPCError("BAD_REQUEST", { message: `${email} already has a login.` });
 
       let card: Awaited<ReturnType<typeof unlinkedCards>>[number] | undefined;
@@ -267,36 +276,25 @@ export const team = {
         if (!card) throw new ORPCError("BAD_REQUEST", { message: "That installer card already has a login, or is archived." });
       }
 
-      const password = newPassword();
       const userId = randomUUID().replace(/-/g, "");
       const now = new Date();
-      const phone = input.mobile.trim();
 
       await db.insert(schema.user).values({ id: userId, name: input.name, email, emailVerified: false, createdAt: now, updatedAt: now });
       const undo: (() => Promise<unknown>)[] = [() => db.delete(schema.user).where(eq(schema.user.id, userId))];
+      let profileId: number;
       try {
-        await db.insert(schema.account).values({
-          id: randomUUID().replace(/-/g, ""),
-          accountId: userId,
-          providerId: "credential",
-          userId,
-          password: await hashPassword(password),
-          createdAt: now,
-          updatedAt: now,
-        });
-        undo.unshift(() => db.delete(schema.account).where(eq(schema.account.userId, userId)));
-
         const [profile] = await db
           .insert(schema.profiles)
-          .values({ userId, name: input.name, email, phone, role: input.role, canSeeCosts: false })
+          .values({ userId, name: input.name, email, phone: phone || null, role: input.role, canSeeCosts: false })
           .returning({ id: schema.profiles.id });
+        profileId = profile!.id;
         undo.unshift(() => db.delete(schema.profiles).where(eq(schema.profiles.userId, userId)));
 
         if (card) {
           const before = card;
           await db
             .update(schema.installers)
-            .set({ userId, mobile: phone, email, active: true, updatedAt: now })
+            .set({ userId, mobile: phone || before.mobile, email, active: true, updatedAt: now })
             .where(eq(schema.installers.id, card.id));
           await db.update(schema.profiles).set({ installerId: card.id }).where(eq(schema.profiles.userId, userId));
           undo.unshift(() =>
@@ -309,20 +307,21 @@ export const team = {
           const id = await ensureInstallerCard(userId);
           undo.unshift(() => db.delete(schema.installers).where(eq(schema.installers.id, id)));
         }
-
-        const first = input.name.split(/\s+/)[0];
-        const where = input.role === "field" ? "Sign in on the Terra app." : "Sign in at ops.terraflooring.com.au";
-        const sent = await sendSms({
-          to: mobile,
-          body: `Terra: Hi ${first}, here is your Terra login. Email: ${email} Password: ${password} ${where}`,
-          sender: "auto",
-        });
-        if (!sent.ok) throw new ORPCError("BAD_REQUEST", { message: `The text did not go (${sent.reason}), so the login was not made. Nothing was saved.` });
-
-        return { ok: true as const, profileId: profile!.id };
       } catch (e) {
         for (const step of undo) await step().catch(() => {});
         throw e;
+      }
+
+      if (input.sendBy === "none") return { ok: true as const, profileId, invite: null };
+      try {
+        const sent = await sendInvite(profileId, input.sendBy, context.actor.name || context.actor.email || "Admin");
+        return {
+          ok: true as const,
+          profileId,
+          invite: sent.ok ? { ok: true as const, to: sent.to } : { ok: false as const, reason: sent.reason },
+        };
+      } catch (e) {
+        return { ok: true as const, profileId, invite: { ok: false as const, reason: (e as Error).message || "Not sent" } };
       }
     }),
 

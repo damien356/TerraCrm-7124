@@ -4093,3 +4093,31 @@ export const prepSends = sqliteTable(
   },
   (t) => [unique("prep_sends_uq").on(t.jobId, t.kind, t.forDate, t.recipient), index("prep_sends_job_idx").on(t.jobId)],
 );
+
+/**
+ * Notes 18.55: staff invites. One row per invite sent. The link itself is never
+ * stored, only its sha256, so a copy of the database can't be used to set
+ * anyone's password. A link works once, for 48 hours, and a newer invite
+ * replaces every older one for the same person.
+ */
+export const invites = sqliteTable(
+  "invites",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    profileId: integer("profile_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    /** sms · email */
+    channel: text("channel").notNull(),
+    sentTo: text("sent_to").notNull().default(""),
+    /** sending · sent · failed */
+    status: text("status").notNull().default("sending"),
+    detail: text("detail"),
+    sentByName: text("sent_by_name").notNull().default(""),
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    usedAt: integer("used_at", { mode: "timestamp" }),
+    voidedAt: integer("voided_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (t) => [index("invites_profile_idx").on(t.profileId)],
+);
