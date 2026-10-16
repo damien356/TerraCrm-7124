@@ -46,6 +46,7 @@ import { isUnderlayCategory, underlayName } from "../lib/order-sizes";
 import { foldForClient, quoteFreightView, refreshQuoteFreight, supplierChargesMarkupPct } from "../lib/quote-freight";
 import { isChargeLine } from "../lib/charge-fold";
 import { fromPhoneApp, PHONE_PRICE_MESSAGE } from "../lib/phone-app";
+import { copyLinksFor } from "../lib/quote-copy-links";
 
 /**
  * Quotes are for Admin and Office. Field crew must never reach any procedure
@@ -171,7 +172,7 @@ export async function recalc(quoteId: number) {
  * "Andes Peak in Merida", the way it reads on the customer's quote. Underlay
  * reads "Carpetmate Standard underlay" (fix list 11 Oct, item 3).
  */
-function productLineName(p: { brand: string | null; range: string | null; colour: string | null; category?: string | null }) {
+export function productLineName(p: { brand: string | null; range: string | null; colour: string | null; category?: string | null }) {
   if (isUnderlayCategory(p.category)) return underlayName(p);
   const named = [p.brand, p.range].filter(Boolean).join(" ");
   return p.colour ? (named ? `${named} in ${p.colour}` : p.colour) : named;
@@ -223,6 +224,16 @@ async function assertDiscountAllowed(quote: typeof schema.quotes.$inferSelect, i
  */
 export async function assertReadyToGoOut(quote: typeof schema.quotes.$inferSelect, actor: Actor) {
   const items = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quote.id));
+  // Copy from previous job (16 Oct): every copied m2, lm and labour line is confirmed or edited first.
+  const toCheck = items.filter((i) => i.checkRequired).length;
+  if (toCheck) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: `${toCheck} copied line${toCheck === 1 ? "" : "s"} still say${toCheck === 1 ? "s" : ""} Check required. Confirm or edit each one first.`,
+    });
+  }
+  if (!quote.contactId && !quote.companyId) {
+    throw new ORPCError("BAD_REQUEST", { message: "Pick who this quote is for first." });
+  }
   const pct = discountPercentOf(items);
   const limit = await discountLimit();
   if (pct > limit && pct > quote.discountApprovedPercent) {
@@ -292,7 +303,16 @@ export const createQuoteInput = z.object({
 });
 
 /** Make a draft quote. New quote on the Quotes page and Create quote on the job page both come here. */
-export async function createQuoteRecord(input: z.infer<typeof createQuoteInput>, actor: Actor) {
+export async function createQuoteRecord(
+  input: z.infer<typeof createQuoteInput>,
+  actor: Actor,
+  /**
+   * Copy from previous job (16 Oct). waitForClient: a copy for another client
+   * waits with nobody on it, and its job is made when the client is picked
+   * (setCustomer). noAccessNotes: the job starts with no access notes.
+   */
+  opts: { waitForClient?: boolean; noAccessNotes?: boolean } = {},
+) {
   if (input.makeJob && !input.jobId && !input.source) {
     throw new ORPCError("BAD_REQUEST", { message: "Pick where the job came from. Unknown is fine." });
   }
@@ -378,9 +398,9 @@ export async function createQuoteRecord(input: z.infer<typeof createQuoteInput>,
   // A quote never stands without its job (Damien, 16 Oct), so any caller
   // that left out both the job and makeJob gets one too, source Unknown.
   let jobId = input.jobId ?? null;
-  if (!jobId) {
+  if (!jobId && !opts.waitForClient) {
     const [fresh] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, row.id));
-    const { job } = await createJobForQuote(fresh ?? row, { source: input.source || UNSET_SOURCE });
+    const { job } = await createJobForQuote(fresh ?? row, { source: input.source || UNSET_SOURCE, noAccessNotes: opts.noAccessNotes });
     jobId = job.id;
     await db.insert(schema.activityLog).values({
       jobId,
@@ -448,6 +468,7 @@ export async function reviseQuoteRecord(
       terms: quote.terms,
       bundleMode: quote.bundleMode,
       layout: quote.layout,
+      copiedFromQuoteId: quote.copiedFromQuoteId,
     })
     .returning();
 
@@ -481,6 +502,8 @@ export async function reviseQuoteRecord(
           chargeSupplierId: i.chargeSupplierId,
           chargeKey: i.chargeKey,
           chargeTyped: i.chargeTyped,
+          // A copied line still to check stays to check on the next version.
+          checkRequired: i.checkRequired,
           ...(isChargeLine(i) ? { flagged: i.flagged, flagReason: i.flagReason } : {}),
         })),
       )
@@ -629,6 +652,8 @@ export const quotes = {
       bundlesFor(row.quote),
     ]);
     const freightIncluded = context.actor.canSeeCosts ? await quoteFreightView(row.quote.id) : null;
+    // Copy from previous job (16 Oct): where this one came from, and the copies made from it.
+    const copyLinks = await copyLinksFor(row.quote);
 
     const cost = items.reduce((sum, i) => sum + (i.unitCost ?? 0) * (i.qty ?? 0), 0);
     const showCosts = context.actor.canSeeCosts;
@@ -660,6 +685,8 @@ export const quotes = {
       ...depositSplit(row.quote.total, row.quote.depositPercent),
       activity,
       versions: versions.map((v) => ({ ...v, ref: quoteRef(row.quote.number, v.version, jobRefText) })),
+      copiedFrom: copyLinks.from,
+      copies: copyLinks.copies,
       /** What the client sees: titles, wording and totals only. */
       bundles: bundleView.bundles,
       /** Item 1: the layout the client gets now, and the rows when itemised. */
@@ -1104,6 +1131,8 @@ export const quotes = {
         addInstall: z.boolean().optional(),
         /** Fix list item 3: on an underlay line, the floor line it follows. Null = stop following. */
         followsItemId: z.number().nullable().optional(),
+        /** Copy from previous job (16 Oct). False = Confirm on a Check required line. Only clears. */
+        checkRequired: z.literal(false).optional(),
       }),
     )
     .handler(async ({ input, context }) => {
@@ -1261,6 +1290,13 @@ export const quotes = {
         context.actor,
       );
 
+      // Copy from previous job (16 Oct): editing a copied line counts as checking it.
+      if (before.checkRequired && fields.checkRequired === undefined) {
+        const edited = (["qty", "measuredM2", "wastagePct", "rollWidthM", "unitPrice", "productId", "description"] as const).some(
+          (k) => input[k] !== undefined && input[k] !== before[k],
+        );
+        if (edited || setMarkup !== undefined) fields.checkRequired = false;
+      }
       const [row] = await db
         .update(schema.quoteItems)
         .set({ ...fields, ...freightReset, markupPercent, ...(priceBy !== undefined ? { priceBy } : {}), ...(listUnitPrice !== undefined ? { listUnitPrice } : {}), ...(typedOver ? { chargeTyped: true } : {}), total: round2(qty * unitPrice), updatedAt: new Date() })
@@ -1380,18 +1416,35 @@ export const quotes = {
         .set({ contactId: contact.id, updatedAt: new Date() })
         .where(eq(schema.voiceQuoteCaptures.quoteId, input.id));
       if (quote.jobId) await fillJobFromQuote(quote.id);
+      // Copy from previous job (16 Oct): a copy for another client waited with no job. It gets one now, at Lead.
+      let jobId = quote.jobId;
+      if (!jobId) {
+        const [fresh] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, quote.id));
+        const { job } = await createJobForQuote(fresh ?? quote, { source: UNSET_SOURCE, noAccessNotes: quote.copiedFromQuoteId != null });
+        jobId = job.id;
+        await db.insert(schema.activityLog).values({
+          jobId,
+          contactId: contact.id,
+          entityType: "job",
+          entityId: jobId,
+          action: "created",
+          detail: `Job made with quote ${await quoteRefById(quote.id)}`,
+          actorName: context.actor.name,
+          actorRole: context.actor.role,
+        });
+      }
       const name = `${contact.firstName} ${contact.lastName}`.trim();
       await db.insert(schema.activityLog).values({
         contactId: contact.id,
-        jobId: quote.jobId,
+        jobId,
         entityType: "quote",
         entityId: quote.id,
         action: "customer_set",
-        detail: `${name} put on quote ${await quoteRefOf(quote)}${input.create ? " as a new client" : ""}`,
+        detail: `${name} put on quote ${await quoteRefById(quote.id)}${input.create ? " as a new client" : ""}`,
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
-      return { contactId: contact.id, name };
+      return { contactId: contact.id, name, jobId };
     }),
 
   suggestProducts: staffOnly.input(z.object({ itemId: z.number() })).handler(async ({ input }) => {
@@ -1466,6 +1519,8 @@ export const quotes = {
           unitCost: product.costPrice ?? null,
           markupPercent: markupOf(product.costPrice, unitPrice),
           freightUnitCost: null,
+          // Copy from previous job (16 Oct): picking the product again counts as checking the line.
+          checkRequired: false,
           qty,
           total: round2(qty * unitPrice),
           ...(areaRes ? {} : { measuredM2: null, wastagePct: null, rollWidthM: null }),

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { ClientQuotesCard } from "../components/quote-copy";
 import { Link, useParams } from "wouter";
 import { ArrowLeft, Building2, Mail, MapPin, Phone, Trash2 } from "lucide-react";
 import { Page } from "../components/layout";
@@ -15,7 +16,6 @@ import { useContact, useLinkCompany, useUnlinkCompany, useUpdateContact } from "
 import { useCompanies } from "../queries/companies";
 import { useClient } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
-import { quoteRef } from "../../api/lib/refs";
 import { EmailInput } from "../components/email-input";
 import { AddressAutocomplete } from "../components/address-autocomplete";
 
@@ -271,26 +271,7 @@ export default function ContactDetailPage() {
             )}
           </Card>
 
-          <Card>
-            <CardHeader title="Quotes" />
-            {contact.data.quotes.length === 0 ? (
-              <Empty>No quotes yet.</Empty>
-            ) : (
-              <ul className="divide-y divide-border">
-                {contact.data.quotes.map((q) => (
-                  <li key={q.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
-                    <Link to={`/quotes/${q.id}`} className="font-medium text-primary hover:underline">
-                      {quoteRef(q.number, q.version)}
-                    </Link>
-                    <span className="flex items-center gap-2">
-                      <Badge>{q.status}</Badge>
-                      <span className="tabular">{money(q.total)}</span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
+          <ClientQuotesCard contactId={c.id} />
 
           <Card>
             <CardHeader title="History" />

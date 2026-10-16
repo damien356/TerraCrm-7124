@@ -1,7 +1,8 @@
 import * as React from "react";
 import { useBootstrap } from "../queries/settings";
 import { Link, useLocation, useParams } from "wouter";
-import { AlertTriangle, ArrowLeft, ArrowRight, Check, Plus, Repeat, Search, Send, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, Check, Copy, Plus, Repeat, Search, Send, Trash2, X } from "lucide-react";
+import { QuoteCopyModal } from "../components/quote-copy";
 import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -112,6 +113,8 @@ type Item = {
   chargeTyped?: boolean;
   /** 188001 list item 5. Priced by a markup under the standard one. Cost viewers only. */
   belowStandard?: { markup: number; standard: number } | null;
+  /** Notes 18.46. A copied measure or labour line, yellow until someone confirms it. */
+  checkRequired?: boolean;
 };
 
 type LineSize = {
@@ -360,7 +363,15 @@ function LineRow({
   }, [item.id, item.description, item.qty, item.unitPrice, item.unitCost, item.markupPercent, places.qty, places.unitPrice, places.unitCost, places.markup]);
 
   return (
-    <tr className={item.flagged ? "border-b border-border bg-[#D08A1E]/10 last:border-0" : "border-b border-border last:border-0"}>
+    <tr
+      className={
+        item.checkRequired
+          ? "border-b border-border bg-[#F2D45C]/25 last:border-0"
+          : item.flagged
+            ? "border-b border-border bg-[#D08A1E]/10 last:border-0"
+            : "border-b border-border last:border-0"
+      }
+    >
       <td className="px-2 py-1.5">
         {charge ? (
           <div className="w-[104px]">
@@ -400,6 +411,21 @@ function LineRow({
         )}
       </td>
       <td className="min-w-[240px] px-2 py-1.5">
+        {item.checkRequired ? (
+          <span className="mb-1 flex flex-wrap items-center gap-2 text-xs font-medium text-[#8A6A00]">
+            <AlertTriangle className="size-3.5" /> Check required: copied from an old quote. Check the measure and price.
+            {locked ? null : (
+              <button
+                type="button"
+                disabled={update.isPending}
+                onClick={() => update.mutate({ id: item.id, checkRequired: false })}
+                className="rounded-md bg-[#8A6A00] px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-[#6E5500]"
+              >
+                Confirm
+              </button>
+            )}
+          </span>
+        ) : null}
         {item.flagged ? (
           <span className="mb-1 flex items-center gap-1 text-xs text-[#D08A1E]" title={item.flagReason ?? "Needs review"}>
             <AlertTriangle className="size-3.5" /> {item.flagReason ?? "Needs review"}
@@ -735,6 +761,7 @@ export default function QuoteBuilderPage() {
   const [lineNotice, setLineNotice] = React.useState<string | null>(null);
   /** 188001 list item 12: Send and Accept ask for the site first, then carry on. */
   const [siteAsk, setSiteAsk] = React.useState<{ saveLabel: string; next: () => void } | null>(null);
+  const [duplicating, setDuplicating] = React.useState(false);
 
   if (quote.isLoading) return <Loading label="Opening quote…" />;
   if (!quote.data) {
@@ -756,6 +783,7 @@ export default function QuoteBuilderPage() {
   const locked = q.status === "accepted" || q.status === "declined" || q.status === "expired" || q.status === "replaced" || q.status === "cancelled";
   // 188001 list item 7: on an accepted quote the words can still be fixed and re-sent.
   const wordingOpen = q.status === "accepted";
+  const checksLeft = q.items.filter((i: Item) => i.checkRequired).length;
   const customer = q.contact ? `${q.contact.firstName} ${q.contact.lastName}` : q.company ? "" : "No customer yet";
   // A delivery line and no site on the quote or its job.
   const needsSite = !!siteNeed.data?.needed && !locked;
@@ -796,6 +824,32 @@ export default function QuoteBuilderPage() {
             {q.site ? ` · ${q.site.address}` : ""}
           </span>
           {needsSite ? <span className="text-amber-700">· No site yet. Send and Accept will ask for it.</span> : null}
+          {q.copiedFrom ? (
+            <span className="text-muted-foreground">
+              ·{" "}
+              <Link to={`/quotes/${q.copiedFrom.id}`} className="text-primary hover:underline">
+                {q.copiedFrom.sameClient ? "Follow-on from" : "Copied from"} {q.copiedFrom.ref}
+              </Link>
+            </span>
+          ) : null}
+          {q.copies.length ? (
+            <span className="text-muted-foreground">
+              · Copied to{" "}
+              {q.copies.map((c, i) => (
+                <React.Fragment key={c.id}>
+                  {i ? ", " : ""}
+                  <Link to={`/quotes/${c.id}`} className="text-primary hover:underline">
+                    {c.ref}
+                  </Link>
+                </React.Fragment>
+              ))}
+            </span>
+          ) : null}
+          {checksLeft ? (
+            <span className="font-medium text-[#8A6A00]">
+              · {checksLeft} line{checksLeft === 1 ? "" : "s"} still say{checksLeft === 1 ? "s" : ""} Check required. Confirm each one before it goes out.
+            </span>
+          ) : null}
         </span>
       }
       actions={
@@ -804,6 +858,12 @@ export default function QuoteBuilderPage() {
             <Link to={`/jobs/${q.job.id}`}>
               <Button variant="outline">Job #{q.job.number}</Button>
             </Link>
+          ) : null}
+          {q.items.length ? (
+            <Button variant="outline" onClick={() => setDuplicating(true)} title="Copy these lines to a new quote, priced today">
+              <Copy className="size-4" />
+              Duplicate this quote
+            </Button>
           ) : null}
           {q.status === "needs_review" ? (
             <Button
@@ -1377,6 +1437,7 @@ export default function QuoteBuilderPage() {
           </label>
         </div>
       </Modal>
+      <QuoteCopyModal open={duplicating} onClose={() => setDuplicating(false)} fromQuoteId={q.id} />
     </Page>
   );
 }

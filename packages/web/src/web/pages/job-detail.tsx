@@ -1,4 +1,5 @@
 import * as React from "react";
+import { DuplicateQuoteButton, JobCopyLinks } from "../components/quote-copy";
 import { CareCard } from "../components/care-card";
 import { Link, useParams, useSearch } from "wouter";
 import { AlertTriangle, ArrowLeft, LifeBuoy, MessagesSquare, Plus, Sofa, Trash2, Users } from "lucide-react";
@@ -720,11 +721,13 @@ export default function JobDetailPage() {
                     <span className="flex items-center gap-2">
                       <Badge>{q.status}</Badge>
                       <span className="tabular">{money(q.total)}</span>
+                      <DuplicateQuoteButton quoteId={q.id} />
                     </span>
                   </li>
                 ))}
               </ul>
             )}
+            <JobCopyLinks jobId={j.id} />
           </Card>
 
           <SwmsJobCard jobId={j.id} />

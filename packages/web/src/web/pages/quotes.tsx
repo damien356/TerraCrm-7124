@@ -1,7 +1,8 @@
 import * as React from "react";
 import { SupervisorPicker } from "../components/supervisor-picker";
 import { Link, useLocation } from "wouter";
-import { Plus, Search } from "lucide-react";
+import { Copy, Plus, Search } from "lucide-react";
+import { QuoteCopyModal } from "../components/quote-copy";
 import { Page } from "../components/layout";
 import { Card, Empty, Loading, Spinner, Stat } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -57,6 +58,7 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
   });
   const [people, setPeople] = React.useState<PersonDraft[]>([]);
   const [error, setError] = React.useState<string | null>(null);
+  const [copying, setCopying] = React.useState(false);
   const sites = useSites(form.contactId ? { contactId: Number(form.contactId) } : {});
   const depositDefault = useDepositDefault({
     companyId: form.companyId ? Number(form.companyId) : null,
@@ -107,6 +109,10 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
       width="max-w-xl"
       footer={
         <>
+          <Button variant="outline" className="mr-auto" onClick={() => setCopying(true)}>
+            <Copy className="size-4" />
+            Copy from previous job
+          </Button>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
@@ -183,6 +189,12 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
         </div>
       </div>
       {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
+      <QuoteCopyModal
+        open={copying}
+        onClose={() => setCopying(false)}
+        contactId={form.contactId ? Number(form.contactId) : null}
+        companyId={form.companyId ? Number(form.companyId) : null}
+      />
     </Modal>
   );
 }

@@ -251,6 +251,8 @@ export const settings = {
         defaultWastagePct: z.number().min(0).max(100).nullable().optional(),
         /** Terra keeps it in the warehouse, so it is cut from stock, not ordered in whole rolls. */
         heldInWarehouse: z.boolean().optional(),
+        /** Copy from previous job (16 Oct): site prep, such as levelling or primer. Unticked on a copied quote. */
+        sitePrep: z.boolean().optional(),
       }),
     )
     .handler(async ({ input }) => {

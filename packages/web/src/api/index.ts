@@ -18,6 +18,7 @@ import { dispatches } from "./routes/dispatches";
 import { offers } from "./routes/offers";
 import { quotes } from "./routes/quotes";
 import { quoteBundles } from "./routes/quoteBundles";
+import { quoteCopy } from "./routes/quoteCopy";
 import { quoteAgent } from "./routes/quoteAgent";
 import { field } from "./routes/field";
 import { installerInvoices } from "./routes/installerInvoices";
@@ -104,6 +105,8 @@ export const router = {
   offers,
   quotes,
   quoteBundles,
+  /** Copy from previous job and Duplicate this quote (notes 18.46). */
+  quoteCopy,
   /** The assistant in the quote builder: checks, answers, proposes. Only Apply changes the quote. */
   quoteAgent,
   /** Damien dictates a job note on site, this turns the recording into a draft quote. */

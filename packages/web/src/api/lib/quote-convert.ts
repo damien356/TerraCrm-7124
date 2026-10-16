@@ -91,7 +91,7 @@ export async function buildWorkFromQuote(quoteId: number, jobId: number, opts: {
  */
 export async function createJobForQuote(
   quote: QuoteRow,
-  opts: { title?: string; furnitureOnSite?: boolean; source?: string },
+  opts: { title?: string; furnitureOnSite?: boolean; source?: string; noAccessNotes?: boolean },
 ) {
   if (quote.jobId) throw new Error("This quote is already attached to a job");
   const furnitureOnSite = opts.furnitureOnSite ?? false;
@@ -139,7 +139,8 @@ export async function createJobForQuote(
       billToCompanyId: quote.companyId ?? null,
       furnitureOnSite,
       ...(opts.source ? { source: opts.source } : {}),
-      accessNotes: site?.accessNotes ?? null,
+      // A copied quote (16 Oct) starts its job with no access notes: those are checked fresh on site.
+      accessNotes: opts.noAccessNotes ? null : (site?.accessNotes ?? null),
       value: quote.total,
       // The deposit the customer accepted. Drives the forecast and the deposit invoice.
       depositAmount: depositSplit(quote.total ?? 0, quote.depositPercent ?? 0).deposit,

@@ -399,6 +399,8 @@ export const labourRateItems = sqliteTable(
     notes: text("notes"),
     sortOrder: integer("sort_order").notNull().default(0),
     active: integer("active", { mode: "boolean" }).notNull().default(true),
+    /** Copy from previous job (16 Oct). Site specific work (prep, uplift, stairs, furniture). Unticked on a copy. */
+    sitePrep: integer("site_prep", { mode: "boolean" }).notNull().default(false),
     ...timestamps,
   },
   (t) => [index("rate_items_group_idx").on(t.groupName), index("rate_items_skill_idx").on(t.skillId)],
@@ -1297,6 +1299,11 @@ export const products = sqliteTable(
     /** Item 8 (fix list 13 Oct). The colour swatch picture, uploaded in the Price list. Storage key. */
     swatchKey: text("swatch_key"),
     /**
+     * Copy from previous job (16 Oct). Site specific work, such as levelling,
+     * moisture barrier or primer. A copied quote leaves these lines unticked.
+     */
+    sitePrep: integer("site_prep", { mode: "boolean" }).notNull().default(false),
+    /**
      * Trims and stair nosings are sold PER FLOOR RANGE, and a range with no
      * trim genuinely has none — Riverhill confirmed the gaps are real, not
      * missing data. This names the floor range an accessory fits so quoting
@@ -1551,6 +1558,12 @@ export const quotes = sqliteTable(
      * is supply only, else sections), itemised (one row per line) or sections.
      */
     layout: text("layout").notNull().default("auto"),
+    /**
+     * Copy from previous job (16 Oct). The quote this one was copied from.
+     * Same client reads "Follow-on from", another client "Copied from".
+     * No FK on purpose: the original going leaves the copy as it is.
+     */
+    copiedFromQuoteId: integer("copied_from_quote_id"),
     ...timestamps,
   },
   (t) => [index("quotes_contact_idx").on(t.contactId), unique("quotes_number_version_unique").on(t.number, t.version)],
@@ -1591,6 +1604,12 @@ export const quoteItems = sqliteTable(
      */
     flagged: integer("flagged", { mode: "boolean" }).notNull().default(false),
     flagReason: text("flag_reason"),
+    /**
+     * Copy from previous job (16 Oct). A copied m2, lm or labour line shows
+     * yellow, "Check required", until someone confirms or edits it. The quote
+     * cannot be sent while one is left.
+     */
+    checkRequired: integer("check_required", { mode: "boolean" }).notNull().default(false),
     /**
      * The raw, normalised phrase Damien spoke for this line, when it came
      * from a voice capture. Kept so a human's correction (picking the right

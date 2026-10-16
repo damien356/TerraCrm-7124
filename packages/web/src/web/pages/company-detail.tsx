@@ -10,6 +10,7 @@ import { Button } from "../components/ui/button";
 import { Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { PaymentTermsCard } from "../components/payment-terms";
+import { ClientQuotesCard } from "../components/quote-copy";
 import { useCompany, useUpdateCompany } from "../queries/companies";
 import { useCompanyIntelDetail } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
@@ -285,6 +286,8 @@ export default function CompanyDetailPage() {
               </ul>
             )}
           </Card>
+
+          <ClientQuotesCard companyId={c.id} />
         </div>
 
         <Card>

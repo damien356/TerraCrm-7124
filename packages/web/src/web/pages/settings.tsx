@@ -870,6 +870,8 @@ type ProductRow = {
   defaultWastagePct: number | null;
   heldInWarehouse: boolean;
   swatchKey: string | null;
+  /** Notes 18.46. Starts unticked when a quote is copied. */
+  sitePrep: boolean;
 };
 
 const numOrNull = (v: string) => (v.trim() === "" || !Number.isFinite(Number(v)) ? null : Number(v));
@@ -1121,6 +1123,18 @@ const ProductLine = React.memo(function ProductLine({
               onChange={(e) => update.mutate({ id: product.id, heldInWarehouse: e.target.checked })}
             />
             Stocked
+          </label>
+          <label
+            htmlFor={`product_siteprep_${product.id}`}
+            className="flex items-center justify-end gap-2 text-xs text-muted-foreground"
+            title="Self-leveller, moisture barrier, primer and the like. Starts unticked when a quote is copied."
+          >
+            <Checkbox
+              id={`product_siteprep_${product.id}`}
+              checked={product.sitePrep}
+              onChange={(e) => update.mutate({ id: product.id, sitePrep: e.target.checked })}
+            />
+            Site prep
           </label>
           <button
             type="button"

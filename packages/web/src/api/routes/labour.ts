@@ -298,6 +298,8 @@ export const labour = {
         notes: z.string().nullable().optional(),
         sortOrder: z.number().optional(),
         active: z.boolean().optional(),
+        /** Copy from previous job (16 Oct): prep, uplift, stairs or furniture. Unticked on a copied quote. */
+        sitePrep: z.boolean().optional(),
       }),
     )
     .handler(async ({ input }) => {

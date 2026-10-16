@@ -433,6 +433,18 @@ export function LabourRatesTab() {
                               ))}
                           </Select>
                           {row.active ? null : <span className="text-xs text-muted-foreground">switched off</span>}
+                          <label
+                            htmlFor={`rate_siteprep_${row.id}`}
+                            className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                            title="Self-leveller, moisture barrier, primer, furniture, stairs, uplift and disposal. Starts unticked when a quote is copied."
+                          >
+                            <Checkbox
+                              id={`rate_siteprep_${row.id}`}
+                              checked={Boolean(row.sitePrep)}
+                              onChange={(e) => update.mutate({ id: row.id, sitePrep: e.target.checked })}
+                            />
+                            Site prep
+                          </label>
                         </div>
                       </div>
                     ) : (
@@ -442,6 +454,7 @@ export function LabourRatesTab() {
                             {row.name}
                           </span>
                           {row.kind !== "work" ? <Badge>{row.kind}</Badge> : null}
+                          {row.sitePrep ? <Badge>site prep</Badge> : null}
                         </div>
                         {row.notes ? <div className="mt-0.5 text-xs text-foreground/80">{row.notes}</div> : null}
                         <div className="mt-0.5 text-xs text-muted-foreground">
