@@ -47,6 +47,7 @@ import { voiceQuotes } from "./routes/voiceQuotes";
 import { memos } from "./routes/memos";
 import { officeTasks } from "./routes/officeTasks";
 import { referrals } from "./routes/referrals";
+import { billTo } from "./routes/billTo";
 import { alerts } from "./routes/alerts";
 import { voice } from "./routes/voice";
 import { visits } from "./routes/visits";
@@ -118,6 +119,7 @@ export const router = {
   officeTasks,
   /** Referral fees (notes 18.47). Admin only, except picking the referrer on a job. */
   referrals,
+  billTo,
   alerts,
   field,
   /** Hands-free crew: Siri asks, confirm-back before anything is sent. */

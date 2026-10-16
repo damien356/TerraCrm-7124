@@ -3,6 +3,7 @@ import { checkReferral } from "./referral-fees";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { jobBillTo, quoteBillTo } from "./bill-to";
 import { invoiceRef } from "./refs";
 
 const money = (n: number) => `$${n.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -77,6 +78,9 @@ export async function raiseInvoice(args: RaiseInvoice) {
   if (!job) throw bad(`job ${args.jobId} not found`);
   const base = await invoiceBaseNumber(job.id);
   const { subtotal, gst } = gstSplit(total);
+  // Notes 18.54: an invoice from a quote bills that quote's Bill to, else the job's.
+  const [quote] = args.quoteId ? await db.select().from(schema.quotes).where(eq(schema.quotes.id, args.quoteId)) : [];
+  const payer = (quote ? quoteBillTo(quote) : null) ?? jobBillTo(job);
 
   let row: typeof schema.invoices.$inferSelect | undefined;
   for (let attempt = 0; attempt < 6 && !row; attempt++) {
@@ -96,9 +100,9 @@ export async function raiseInvoice(args: RaiseInvoice) {
           quoteId: args.quoteId ?? null,
           kind: args.kind,
           label: args.label,
-          billToType: job.billToType,
-          billToContactId: job.billToType === "company" ? null : (job.billToContactId ?? job.contactId ?? null),
-          billToCompanyId: job.billToType === "company" ? (job.billToCompanyId ?? job.companyId ?? null) : null,
+          billToType: payer?.type ?? job.billToType,
+          billToContactId: payer?.type === "contact" ? payer.id : null,
+          billToCompanyId: payer?.type === "company" ? payer.id : null,
           status: "sent",
           subtotal,
           gst,

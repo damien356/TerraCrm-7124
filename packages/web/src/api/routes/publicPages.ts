@@ -3,11 +3,12 @@ import { ORPCError } from "@orpc/server";
 import { and, asc, desc, eq, gt, inArray } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { billedCompanyId } from "../lib/bill-to";
 import { withUser, type Actor } from "../middleware/auth";
 import { bundlesFor, clientPdfFor } from "./quoteBundles";
 import { rebuildForecast } from "../lib/cashflow";
 import { depositInvoiceFor } from "../lib/client-invoices";
-import { depositSplit } from "../lib/deposits";
+import { depositSplit, quotePercent } from "../lib/deposits";
 import { auDate } from "../lib/invoice-match";
 import { selectionForJob, submitSelection } from "../lib/material-selection";
 import { isProductForm, lockState, publicSections, submitProductSelection } from "../lib/selection-colours";
@@ -69,7 +70,9 @@ async function addressedTo(quote: Quote) {
   const [supervisor] = quote.supervisorContactId
     ? await db.select().from(schema.contacts).where(eq(schema.contacts.id, quote.supervisorContactId))
     : [];
-  const [company] = quote.companyId ? await db.select().from(schema.companies).where(eq(schema.companies.id, quote.companyId)) : [];
+  // Notes 18.54: the company shown follows the quote's Bill to.
+  const companyId = billedCompanyId(quote);
+  const [company] = companyId ? await db.select().from(schema.companies).where(eq(schema.companies.id, companyId)) : [];
   const [site] = quote.siteId ? await db.select().from(schema.sites).where(eq(schema.sites.id, quote.siteId)) : [];
   const person = supervisor ?? contact;
   return {
@@ -155,7 +158,7 @@ const quotePage = {
     const ref = await quoteRefOf(quote);
     const to = await addressedTo(quote);
     const { bundles, layout, items } = await bundlesFor(quote);
-    const { deposit, balance } = depositSplit(quote.total, quote.depositPercent);
+    const { deposit, balance } = depositSplit(quote.total, quotePercent(quote));
     return {
       state,
       /** Admin or Office looking at a quote that has not gone out yet. */
@@ -172,7 +175,7 @@ const quotePage = {
       subtotal: quote.subtotal,
       gst: quote.gst,
       total: quote.total,
-      depositPercent: quote.depositPercent,
+      depositPercent: quotePercent(quote),
       deposit,
       balance,
       terms: { version: SUPPLY_TERMS_VERSION, title: SUPPLY_TERMS_TITLE, items: SUPPLY_TERMS },

@@ -5,7 +5,7 @@ import * as schema from "../database/schema";
 import { clientPdfFor } from "../routes/quoteBundles";
 import { pickedFiles, sendJobEmail, type MailUpload } from "./job-mail";
 import { ensureForQuote, logMessage, subjectWithRef } from "./conversations";
-import { depositSplit } from "./deposits";
+import { depositSplit, quotePercent } from "./deposits";
 import { isSupplyOnly } from "./quote-layout";
 import { linkForQuote, quoteUrl } from "./quote-links";
 import { SENDER_NAME } from "./material-selection";
@@ -101,14 +101,14 @@ export async function quoteEmailDraft(quote: Quote, _ref: string) {
   const first = recipients[0]?.name.split(" ")[0] || "there";
   const link = await linkForQuote(quote.id);
   const url = quoteUrl(link.token);
-  const { deposit } = depositSplit(quote.total, quote.depositPercent);
+  const { deposit } = depositSplit(quote.total, quotePercent(quote));
   const values: QuoteEmailValues = {
     first_name: first,
     quote_number: String(quote.number),
     scope: SCOPE_FILL,
     link: url,
     total: money(quote.total),
-    deposit: quote.depositPercent > 0 && deposit > 0 ? money(deposit) : "",
+    deposit: quotePercent(quote) > 0 && deposit > 0 ? money(deposit) : "",
     valid_until: longDate(quote.validUntil),
   };
   const t = await templates();

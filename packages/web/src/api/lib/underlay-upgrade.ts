@@ -106,6 +106,9 @@ async function quoteUnderlays(quoteId: number) {
 
 /** A company is on the quote, or the job bills a company. Those jobs get no upgrade offer. */
 export async function companyBilled(jobId: number, quoteId: number | null) {
+  // Notes 18.54: the quote's own Bill to decides, once it has one.
+  const [own] = quoteId ? await db.select({ t: schema.quotes.billToType }).from(schema.quotes).where(eq(schema.quotes.id, quoteId)) : [];
+  if (own?.t) return own.t === "company";
   const [job] = await db.select({ t: schema.jobs.billToType }).from(schema.jobs).where(eq(schema.jobs.id, jobId));
   if (job?.t === "company") return true;
   if (!quoteId) return false;

@@ -6,7 +6,8 @@ import { Button } from "./ui/button";
 import { Spinner } from "./ui/card";
 import { Field, Input } from "./ui/field";
 import { Modal } from "./ui/modal";
-import { depositHint } from "./deposit-default";
+import { BillToField, readyBillTo, type BillToCard } from "./bill-to";
+import { useSetCardDeposit } from "../queries/billTo";
 import { useCreateQuoteForJob, useQuoteJobStart } from "../queries/quotes";
 
 /**
@@ -36,30 +37,43 @@ function CreateQuoteModal({ jobId, onClose }: { jobId: number; onClose: () => vo
   const [from, setFrom] = React.useState<"blank" | "copy" | null>(null);
   const [deposit, setDeposit] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+  // Who pays (notes 18.54). Starts as the copied version's Bill to, or the job's.
+  const [picked, setPicked] = React.useState<BillToCard | null | undefined>(undefined);
+  const [cardPercent, setCardPercent] = React.useState("");
+  const setCard = useSetCardDeposit();
 
   const mode = from ?? (s?.latest ? "copy" : "blank");
-  const prefill = mode === "copy" && s?.latest ? s.latest.depositPercent : (s?.cardDeposit.percent ?? 0);
+  const startBill = mode === "copy" && s?.latest?.billTo ? s.latest.billTo : s?.billTo ?? null;
+  const startCard: BillToCard | null = startBill
+    ? { type: startBill.type, id: startBill.id, name: s?.billTo && s.billTo.type === startBill.type && s.billTo.id === startBill.id ? s.billTo.name : "", percent: s?.billTo && s.billTo.type === startBill.type && s.billTo.id === startBill.id ? s.billTo.percent : null }
+    : null;
+  const billTo = picked === undefined ? startCard : picked;
+  const known = [
+    ...(s?.billTo ? [{ type: s.billTo.type, id: s.billTo.id, role: "The job's Bill to" }] : []),
+    ...(s?.latest?.billTo ? [{ type: s.latest.billTo.type, id: s.latest.billTo.id, role: `Bill to on ${s.latest.ref}` }] : []),
+  ];
   const typed = deposit.trim() !== "";
-  const cardLine = s ? `${s.cardDeposit.percent}% (${depositHint(s.cardDeposit.source) ?? "card default"})` : "";
   const hint = typed
-    ? "Typed for this quote only"
-    : mode === "copy" && s?.latest
-      ? s.latest.depositPercent === s.cardDeposit.percent
-        ? `Copied from ${s.latest.ref}. Same as the card: ${cardLine}`
-        : `Copied from ${s.latest.ref}. The card says ${cardLine}`
-      : depositHint(s?.cardDeposit.source);
+    ? "Typed for this quote only. The card stays."
+    : mode === "copy" && s?.latest?.depositSource === "quote"
+      ? `${s.latest.ref} had ${s.latest.depositPercent}% typed for it only. Leave blank to use the card %.`
+      : "Leave blank to use the Bill to's card %.";
 
   function pick(next: "blank" | "copy") {
     setFrom(next);
     setDeposit("");
+    setPicked(undefined);
   }
 
   async function submit() {
     setError(null);
     const n = typed ? Number(deposit) : undefined;
     if (n !== undefined && (!Number.isFinite(n) || n < 0 || n > 100)) return setError("Deposit has to be between 0 and 100%.");
+    const ready = readyBillTo(billTo, cardPercent, "quote");
+    if ("error" in ready || !billTo) return setError("error" in ready ? ready.error : "Pick who pays this quote (Bill to).");
     try {
-      const q = await create.mutateAsync({ jobId, from: mode, depositPercent: n });
+      if (ready.save != null) await setCard.mutateAsync({ billTo: { type: billTo.type, id: billTo.id }, percent: ready.save });
+      const q = await create.mutateAsync({ jobId, from: mode, billTo: { type: billTo.type, id: billTo.id }, depositPercent: n });
       onClose();
       if (q?.id) navigate(`/quotes/${q.id}`);
     } catch (e) {
@@ -85,7 +99,7 @@ function CreateQuoteModal({ jobId, onClose }: { jobId: number; onClose: () => vo
             Cancel
           </Button>
           {s && !s.blocked ? (
-            <Button onClick={submit} disabled={create.isPending}>
+            <Button onClick={submit} disabled={create.isPending || setCard.isPending}>
               {create.isPending ? <Spinner className="border-white/40 border-t-white" /> : null}
               Create {s.nextRef}
             </Button>
@@ -147,22 +161,33 @@ function CreateQuoteModal({ jobId, onClose }: { jobId: number; onClose: () => vo
             </fieldset>
           ) : null}
 
-          <Field label="Deposit %" hint={hint}>
+          <Field label="Bill to (required)" hint="Who pays this quote. It can differ from the job.">
+            <BillToField
+              id="createquote_billto"
+              jobId={jobId}
+              value={billTo}
+              onChange={setPicked}
+              percent={cardPercent}
+              onPercent={setCardPercent}
+              known={known}
+            />
+          </Field>
+
+          <Field label="Deposit % for this quote" hint={hint}>
             <Input
               id="createquote_deposit"
               type="number"
               min={0}
               max={100}
-              value={typed ? deposit : String(prefill)}
+              placeholder={billTo?.percent != null ? String(billTo.percent) : "%"}
+              value={deposit}
               onChange={(e) => setDeposit(e.target.value)}
             />
           </Field>
 
-          <p className="text-xs text-muted-foreground">
-            {s.billsCompany ? "The job bills the company, so the quote does too." : "The job bills the person, so the quote does too."}
-            {s.billsCompany && !s.hasSupervisor ? " No supervisor on the job yet. You can add one on the quote." : ""}
-          </p>
-
+          {s.billsCompany && !s.hasSupervisor ? (
+            <p className="text-xs text-muted-foreground">No supervisor on the job yet. You can add one on the quote.</p>
+          ) : null}
         </div>
       ) : null}
     </Modal>

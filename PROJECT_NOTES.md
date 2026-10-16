@@ -1006,3 +1006,39 @@ Damien's ask: new quotes keep the job value up to date when they are saved or se
 - Already in place and unchanged: every line add, edit, remove, product change and labour change goes through recalc, which syncs; create, revise, copy, voice quotes, remove, decline and accept do too. A cancelled job keeps its last value.
 - Bill to and deposit from the payer's card moves to 18.54, staff invites to 18.55.
 - Checked on a scratch copy (fix1016g/t-jv, PASS 29): a job made first with a typed $500 then quoted takes the quote; add, edit and remove a line; a job set back to $0 by hand comes right on a notes save, a deposit change and on Send; a new version counts and deleting it goes back to v1; a New quote with its own job has the value from the start; accept gives the accepted total. The same test on the old code fails the save and send cases (3 fails).
+
+### 18.54 Bill to on every job and quote, deposit % from the payer's card (16 Oct)
+Damien's rules, final:
+- Every job and every quote has a Bill to: a company or a person. Empty shows red and cannot save. Each quote has its own Bill to, which can differ from the job's.
+- The deposit % lives on the payer's card. A company card always needs one. A person is asked the first time they are a Bill to, and it saves on their card. A person who works for a company: company jobs use the company %, their private jobs use their own.
+- A quote takes its card %. It can be changed on one quote without touching the card. No guessing: the 0% builder and 50% standard defaults are gone.
+- When a card % changes, draft quotes billed to it follow. Sent quotes stay as they went out.
+- A "Deposit % to fill" page lists the cards with no % that pay on an open job.
+- Nothing is sent to a client on its own: no deposit request, invoice, email or SMS. Supplier invoice requests (invoice_requests_auto) stay on.
+
+Schema (sql/2026-10-29-bill-to.sql): quotes.deposit_source (card, quote or none; default none), bill_to_type, bill_to_contact_id, bill_to_company_id. Jobs already had their Bill to columns.
+
+Server:
+- lib/bill-to.ts (new): the Bill to of a job or quote, the default for a new quote (the job's Bill to, else the company, else the person), the card and its %, depositFieldsFor (card % with source card, a typed % with source quote, no % with source none), setCardDeposit and cardDepositChanged (drafts follow, sent stay, logged), assertBillToReady (a quote cannot go out with no payer or no %), cardsMissingDeposit and quoteBillToPatch.
+- lib/bill-to-options.ts (new): the people and companies on a job or quote to pick from, a search of every card, and cards in bulk.
+- lib/deposits.ts: the builder and standard defaults are removed. quotePercent gives 0 while a quote waits for its %.
+- routes/billTo.ts (new, staff): card, cards, options, search, setCardDeposit, missing.
+- routes/quotes.ts: create, revise and update take billTo and depositPercent; a new version keeps its Bill to and takes the card %; get returns billToCard; the depositDefault route is gone. Copy, voice quotes and bundles go through the same code.
+- routes/jobs.ts: create needs a Bill to (and takes the % for a card that has none); update checks a changed Bill to and logs it once.
+- routes/companies.ts and contacts.ts: a card % change runs cardDepositChanged.
+- Accept, the deposit invoice, the final invoice, cashflow and the job value all bill the quote's own payer (quote-accept, client-invoices, final-invoice, cashflow, job-value, quote-convert, quote-email, publicPages, finance).
+- Timber repairs: the auto send under a price is removed (lib/timber-repair.ts, routes/timber.ts, Settings). Every repair quote is sent by a person.
+
+Web:
+- components/bill-to.tsx (new): BillToField (picker plus the "type it once" prompt when the card has no %) and readyBillTo.
+- components/job-bill-to.tsx (new) on the job page, components/quote-bill-to.tsx (new) above Totals in the quote builder. Totals reads "Bill to <name>" and the deposit row says where the % came from.
+- New job, New quote and Create quote: Bill to required (red when empty, no auto pick), and the % asked when the payer's card has none. Create quote also takes a % for that quote only.
+- pages/deposits-to-fill.tsx (new), linked under Customers: companies and people, their open jobs, and a % box that saves on Enter or with "Save on card". Website only.
+- Settings: "Auto send quotes under" is gone. Company types: the 0/50 note is gone.
+- ui/combobox.tsx: with a pick and the list closed, the placeholder is empty, so the phone no longer shows the name twice.
+
+Audit of anything sent to clients on its own (no code change): only invoice_requests_auto (suppliers) is on. The care engine is off (75 care_sends, all skipped). journeys is empty. client_auto_sms_on gates marketing SMS only. clientInvoices.raise emails only when staff tick email, and the deposit invoice raised on accept is not emailed. The signed copy emails to the signer on quote accept (lib/quote-email.ts) and variation accept (lib/variation-send.ts) are triggered by the client's own action; asked Damien if they stay.
+
+Checked on scratch copies: fix1016h/t-bt PASS 70 (15 cases: job needs a Bill to, % asked once, card %, company %, no guessing, drafts follow, typed % stays, sent stay, new version, other payer, accept bills the quote's payer, job Bill to change logged, the fill list, options and search, nothing sent to a client). fix1016g/t-jv PASS 29, fix1016c/t-rf PASS 140, fix1016b/t-cp PASS 173 (on the pd.ref base), t-vq PASS 79 FAIL 2 (the same two fails as on main). Browser on port 4299: New job red until picked then asks the %, job page Bill to, quote 15 % saved on Enter onto the card, New quote and Create quote, Deposit % to fill, Settings, phone at 390px with no overflow and no page errors.
+
+Live, 16 Oct: backup backups/pre-bill-to.db (121 tables, 19344 rows, bad 0, integrity ok); the four columns added; backfill of 15 quotes read back with 0 mismatches (card 1, quote 11, none 3). The three drafts with no card % are set to none: 4389 (ZZTEST), 188005 (Kevin Ryan) and 188004 (Mermaid Beach Dermatology). Quote 26 (188012) follows Jason Covell's 0% card.

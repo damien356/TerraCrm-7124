@@ -236,7 +236,7 @@ export default function CompanyDetailPage() {
             <div className="border-t border-border px-4 py-3">
               <SwmsToggle kind="company" id={c.id} value={Boolean(c.requiresSwms)} />
               <div className="mt-3 border-t border-border pt-3">
-                <DepositDefault kind="company" id={c.id} value={c.depositPercent ?? null} companyType={c.type} />
+                <DepositDefault kind="company" id={c.id} value={c.depositPercent ?? null} />
               </div>
             </div>
           </Card>

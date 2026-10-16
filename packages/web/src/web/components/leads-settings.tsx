@@ -568,7 +568,6 @@ function TimberCard() {
   const save = useSaveTimberSettings();
   const [markup, setMarkup] = React.useState("");
   const [minCharge, setMinCharge] = React.useState("");
-  const [autoSend, setAutoSend] = React.useState("");
   const [templates, setTemplates] = React.useState<Record<string, string>>({});
   const [tryPrice, setTryPrice] = React.useState("350");
   const [msg, setMsg] = React.useState<Msg>(null);
@@ -579,7 +578,6 @@ function TimberCard() {
     if (!s) return;
     setMarkup(String(s.markup));
     setMinCharge(s.minCharge ? String(s.minCharge) : "");
-    setAutoSend(s.autoSendUnder ? String(s.autoSendUnder) : "");
     setTemplates(Object.fromEntries(s.templates.map((t) => [t.key, t.text])));
   }, [s]);
 
@@ -601,7 +599,6 @@ function TimberCard() {
             await save.mutateAsync({
               markup: Number(markup),
               minCharge: Number(minCharge || 0),
-              autoSendUnder: Number(autoSend || 0),
               templates: s.templates.map((t) => ({ key: t.key as "scratches", text: templates[t.key] ?? t.text })),
             });
             setMsg({ ok: true, text: "Saved." });
@@ -610,15 +607,12 @@ function TimberCard() {
           }
         }}
       >
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Timber repair markup" hint="Default 1.9">
             <Input id="timber_markup" inputMode="decimal" value={markup} onChange={(e) => setMarkup(e.target.value)} />
           </Field>
           <Field label="Minimum charge, ex GST" hint="Blank for no minimum">
             <Input id="timber_min" inputMode="decimal" value={minCharge} onChange={(e) => setMinCharge(e.target.value)} />
-          </Field>
-          <Field label="Auto send quotes under, incl GST" hint="Blank keeps it off. Every quote waits for you.">
-            <Input id="timber_autosend" inputMode="decimal" value={autoSend} onChange={(e) => setAutoSend(e.target.value)} />
           </Field>
         </div>
 

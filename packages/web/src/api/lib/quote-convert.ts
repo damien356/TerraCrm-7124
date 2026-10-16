@@ -1,7 +1,8 @@
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { depositSplit } from "./deposits";
+import { depositSplit, quotePercent } from "./deposits";
+import { billToFields, quoteBillTo } from "./bill-to";
 import { syncDeliveryCosts } from "./delivery-cost";
 import { syncExpectedCosts } from "./expected-costs";
 import { insertDispatchForLines } from "./dispatch-build";
@@ -124,6 +125,7 @@ export async function createJobForQuote(
 
   const [site] = quote.siteId ? await db.select().from(schema.sites).where(eq(schema.sites.id, quote.siteId)) : [undefined];
 
+  const qBill = quoteBillTo(quote);
   const [job] = await db
     .insert(schema.jobs)
     .values({
@@ -133,18 +135,23 @@ export async function createJobForQuote(
       siteId: quote.siteId,
       contactId: quote.contactId,
       companyId: quote.companyId,
-      // Billing is decided per job, not per person: a company on the quote
-      // means the company pays, otherwise the person does.
-      billToType: quote.companyId ? "company" : "contact",
-      billToContactId: quote.companyId ? null : quote.contactId,
-      billToCompanyId: quote.companyId ?? null,
+      // Billing is decided per job, not per person. The quote's own Bill to
+      // wins (notes 18.54). Without one, a company on the quote means the
+      // company pays, otherwise the person does.
+      ...(qBill
+        ? { billToType: qBill.type, billToContactId: qBill.type === "contact" ? qBill.id : null, billToCompanyId: qBill.type === "company" ? qBill.id : null }
+        : {
+            billToType: quote.companyId ? "company" : "contact",
+            billToContactId: quote.companyId ? null : quote.contactId,
+            billToCompanyId: quote.companyId ?? null,
+          }),
       furnitureOnSite,
       ...(opts.source ? { source: opts.source } : {}),
       // A copied quote (16 Oct) starts its job with no access notes: those are checked fresh on site.
       accessNotes: opts.noAccessNotes ? null : (site?.accessNotes ?? null),
       value: quote.total,
       // The deposit the customer accepted. Drives the forecast and the deposit invoice.
-      depositAmount: depositSplit(quote.total ?? 0, quote.depositPercent ?? 0).deposit,
+      depositAmount: depositSplit(quote.total ?? 0, quotePercent(quote)).deposit,
     })
     .returning();
 
@@ -185,6 +192,7 @@ export async function fillJobFromQuote(quoteId: number) {
   const [invoice] = await db.select({ id: schema.invoices.id }).from(schema.invoices).where(eq(schema.invoices.jobId, job.id)).limit(1);
   const patch: Partial<typeof schema.jobs.$inferInsert> = {};
   if (!job.contactId && q.contactId) patch.contactId = q.contactId;
+  const own = quoteBillTo(q);
   if (!invoice && !job.companyId && q.companyId) {
     patch.companyId = q.companyId;
     patch.billToType = "company";
@@ -192,6 +200,11 @@ export async function fillJobFromQuote(quoteId: number) {
     patch.billToContactId = null;
   } else if (!invoice && !job.companyId && job.billToType === "contact" && !job.billToContactId && q.contactId) {
     patch.billToContactId = q.contactId;
+  }
+  // Notes 18.54: a job with nobody billed yet takes the quote's own Bill to.
+  if (!invoice && own && !job.billToCompanyId && !job.billToContactId && !patch.billToCompanyId && !patch.billToContactId) {
+    if (own.type === "company" && !job.companyId && !patch.companyId) patch.companyId = own.id;
+    Object.assign(patch, billToFields(own));
   }
   if (!job.siteId && q.siteId) {
     const [site] = await db.select().from(schema.sites).where(eq(schema.sites.id, q.siteId));

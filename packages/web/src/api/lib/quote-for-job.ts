@@ -2,7 +2,7 @@ import { ORPCError } from "@orpc/server";
 import { desc, eq, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { depositDefaultFor } from "./deposits";
+import { cardOf, defaultQuoteBillTo, quoteBillTo } from "./bill-to";
 import { hasTagSql } from "./job-people";
 import { jobNumberSql } from "./job-ref";
 import { quoteRef } from "./refs";
@@ -66,22 +66,44 @@ export async function quoteDefaultsForJob(jobId: number) {
 export async function quoteStartForJob(jobId: number) {
   const d = await quoteDefaultsForJob(jobId);
   const quotes = await db
-    .select({ id: schema.quotes.id, number: schema.quotes.number, version: schema.quotes.version, status: schema.quotes.status, depositPercent: schema.quotes.depositPercent, total: schema.quotes.total })
+    .select({
+      id: schema.quotes.id,
+      number: schema.quotes.number,
+      version: schema.quotes.version,
+      status: schema.quotes.status,
+      depositPercent: schema.quotes.depositPercent,
+      depositSource: schema.quotes.depositSource,
+      total: schema.quotes.total,
+      billToType: schema.quotes.billToType,
+      billToContactId: schema.quotes.billToContactId,
+      billToCompanyId: schema.quotes.billToCompanyId,
+    })
     .from(schema.quotes)
     .where(eq(schema.quotes.jobId, jobId))
     .orderBy(desc(schema.quotes.version));
   const refOf = (q: { number: number; version: number }) => quoteRef(q.number, q.version, d.job.ref);
   const latest = quotes[0] ?? null;
   const draft = quotes.find((q) => OPEN_STATUSES.includes(q.status)) ?? null;
-  const cardDeposit = await depositDefaultFor({ companyId: d.companyId, contactId: d.contactId });
+  // Notes 18.54: the new quote bills the job's Bill to unless the office picks someone else.
+  const billTo = await cardOf(await defaultQuoteBillTo({ jobId, companyId: d.companyId, contactId: d.contactId }));
   const notChargeable = d.job.parentJobId != null && d.job.chargeable === false;
   // Item 12: after acceptance, only variations.
   const accepted = quotes.find((q) => q.status === "accepted") ?? null;
   return {
     nextRef: quoteRef(d.job.number, (latest?.version ?? 0) + 1, d.job.ref),
-    latest: latest ? { id: latest.id, ref: refOf(latest), status: latest.status, depositPercent: latest.depositPercent, total: latest.total } : null,
+    latest: latest
+      ? {
+          id: latest.id,
+          ref: refOf(latest),
+          status: latest.status,
+          depositPercent: latest.depositPercent,
+          depositSource: latest.depositSource,
+          total: latest.total,
+          billTo: quoteBillTo(latest),
+        }
+      : null,
     draft: draft ? { id: draft.id, ref: refOf(draft), status: draft.status } : null,
-    cardDeposit,
+    billTo,
     billsCompany: d.companyId != null,
     hasSupervisor: d.supervisorContactId != null,
     blocked: notChargeable

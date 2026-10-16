@@ -42,6 +42,7 @@ import TerraAiPage from "./pages/terra-ai";
 import ReferrersPage from "./pages/referrers";
 import DuplicatesPage from "./pages/duplicates";
 import CompanyTypesPage from "./pages/company-types";
+import DepositsToFillPage from "./pages/deposits-to-fill";
 import PublicQuotePage from "./pages/public-quote";
 import PublicSelectionPage from "./pages/public-selection";
 import PublicPayPage from "./pages/public-pay";
@@ -90,6 +91,7 @@ function App() {
               <Route path="/clients/:id" component={ContactDetailPage} />
               <Route path="/companies" component={CompaniesPage} />
               <Route path="/companies/types" component={CompanyTypesPage} />
+              <Route path="/deposits-to-fill" component={DepositsToFillPage} />
               <Route path="/companies/:id" component={CompanyDetailPage} />
               <Route path="/supervisors" component={SupervisorsPage} />
               <Route path="/supervisors/:id" component={SupervisorDetailPage} />

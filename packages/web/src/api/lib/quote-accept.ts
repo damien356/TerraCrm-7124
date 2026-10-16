@@ -4,7 +4,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { assertBillable } from "./callbacks";
 import { depositInvoiceFor, raiseInvoice, type InvoiceRow } from "./client-invoices";
-import { depositSplit } from "./deposits";
+import { depositSplit, quotePercent } from "./deposits";
 import { carryQuotePeopleToJob } from "./job-people";
 import { moveJobForward } from "./job-stage";
 import { notifyOffice } from "./notify";
@@ -99,7 +99,7 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     .update(schema.jobs)
     .set({
       value: round2(locked.total + variationsOn),
-      ...(prev ? {} : { depositAmount: depositSplit(locked.total, locked.depositPercent).deposit }),
+      ...(prev ? {} : { depositAmount: depositSplit(locked.total, quotePercent(locked)).deposit }),
       updatedAt: now,
     })
     .where(eq(schema.jobs.id, jobId));
@@ -135,8 +135,8 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
         actorRole: args.actor.role,
       });
     }
-  } else if (locked.depositPercent > 0 && !(await depositInvoiceFor(locked.id))) {
-    const { deposit } = depositSplit(locked.total, locked.depositPercent);
+  } else if (quotePercent(locked) > 0 && !(await depositInvoiceFor(locked.id))) {
+    const { deposit } = depositSplit(locked.total, quotePercent(locked));
     if (deposit > 0) {
       invoice = await raiseInvoice({
         jobId,

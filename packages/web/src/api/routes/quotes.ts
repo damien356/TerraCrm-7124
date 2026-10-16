@@ -15,7 +15,18 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
 import { markupOf, markupPctUsed, sellAtMarkup } from "../lib/pricing";
-import { depositDefaultFor, depositSplit } from "../lib/deposits";
+import { depositSplit, quotePercent } from "../lib/deposits";
+import {
+  assertBillToReady,
+  assertCard,
+  billToFields,
+  billToInput,
+  cardOf,
+  defaultQuoteBillTo,
+  depositFieldsFor,
+  quoteBillTo,
+  quoteBillToPatch,
+} from "../lib/bill-to";
 import { liveSellFor } from "../lib/live-sell";
 import { assertNoAcceptedQuote } from "../lib/variations";
 import { suggestProducts } from "../agent/price";
@@ -240,6 +251,8 @@ export async function assertReadyToGoOut(quote: typeof schema.quotes.$inferSelec
   if (!quote.contactId && !quote.companyId) {
     throw new ORPCError("BAD_REQUEST", { message: "Pick who this quote is for first." });
   }
+  // Notes 18.54: who pays, and their deposit %, before anything goes out.
+  await assertBillToReady(quote);
   const pct = discountPercentOf(items);
   const limit = await discountLimit();
   if (pct > limit && pct > quote.discountApprovedPercent) {
@@ -286,7 +299,9 @@ export const createQuoteInput = z.object({
   /** Where the job came from. Required with makeJob, same as New job. */
   source: z.string().trim().optional(),
   siteId: z.number().nullable().optional(),
-  /** Left out, it comes off the company or contact card (lib/deposits.ts). */
+  /** Who pays (notes 18.54). Left out: the job's Bill to, else the company, else the person. */
+  billTo: billToInput.nullable().optional(),
+  /** Left out, it comes off the Bill to's card. Typed, it is for this quote only. */
   depositPercent: z.number().min(0).max(100).optional(),
   validDays: z.number().int().min(1).max(365).default(30),
   notes: z.string().nullable().optional(),
@@ -336,8 +351,9 @@ export async function createQuoteRecord(
 
   const validUntil = new Date();
   validUntil.setDate(validUntil.getDate() + input.validDays);
-  const depositPercent =
-    input.depositPercent ?? (await depositDefaultFor({ companyId: input.companyId, contactId: input.contactId })).percent;
+  // Notes 18.54: the Bill to's card gives the %. A card with no % waits (source none).
+  const billTo = input.billTo ?? (await defaultQuoteBillTo({ jobId: input.jobId, companyId: input.companyId, contactId: input.contactId }));
+  const card = billTo ? await assertCard(billTo) : null;
 
   const [row] = await db
     .insert(schema.quotes)
@@ -350,7 +366,8 @@ export async function createQuoteRecord(
       supervisorContactId: input.companyId ? (input.supervisorContactId ?? null) : null,
       siteId: input.siteId ?? null,
       status: "draft",
-      depositPercent,
+      ...billToFields(billTo),
+      ...depositFieldsFor(card, input.depositPercent),
       validUntil,
       notes: input.notes ?? null,
       terms: input.terms ?? settingRow?.value ?? null,
@@ -456,6 +473,8 @@ export async function reviseQuoteRecord(
     .select({ max: sql<number>`coalesce(max(${schema.quotes.version}), 1)` })
     .from(schema.quotes)
     .where(eq(schema.quotes.number, quote.number));
+  const revBillTo = quoteBillTo(quote) ?? (await defaultQuoteBillTo({ jobId: quote.jobId, companyId: quote.companyId, contactId: quote.contactId }));
+  const revCard = revBillTo ? await cardOf(revBillTo) : null;
 
   const [row] = await db
     .insert(schema.quotes)
@@ -468,7 +487,9 @@ export async function reviseQuoteRecord(
       supervisorContactId: quote.supervisorContactId,
       siteId: quote.siteId,
       status: "draft",
-      depositPercent: opts.depositPercent ?? quote.depositPercent,
+      // Notes 18.54: a new version keeps its Bill to and takes the card's % (or the one typed now).
+      ...billToFields(revBillTo),
+      ...depositFieldsFor(revCard, opts.depositPercent),
       validUntil: quote.validUntil,
       notes: quote.notes,
       terms: quote.terms,
@@ -691,7 +712,9 @@ export const quotes = {
       items: showCosts
         ? mine.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice), belowStandard: markupBelowStandard(i), area: areas[i.id] ?? null, size: sizes[i.id] ?? null }))
         : shown.map((i) => ({ ...i, unitCost: null, markupPercent: null, freightUnitCost: null, belowStandard: null, area: areas[i.id] ?? null, size: sizes[i.id] ?? null })),
-      ...depositSplit(row.quote.total, row.quote.depositPercent),
+      ...depositSplit(row.quote.total, quotePercent(row.quote)),
+      /** Notes 18.54: who pays this quote and the % on their card. */
+      billToCard: await cardOf(quoteBillTo(row.quote)),
       activity,
       versions: versions.map((v) => ({ ...v, ref: quoteRef(row.quote.number, v.version, jobRefText) })),
       copiedFrom: copyLinks.from,
@@ -715,11 +738,6 @@ export const quotes = {
     };
   }),
 
-  /** The deposit % a new quote for this company or contact starts at, and why. */
-  depositDefault: staffOnly
-    .input(z.object({ companyId: z.number().nullable().optional(), contactId: z.number().nullable().optional() }))
-    .handler(({ input }) => depositDefaultFor(input)),
-
   create: staffOnly
     .input(createQuoteInput)
     .handler(({ input, context }) => createQuoteRecord(input, context.actor)),
@@ -733,7 +751,9 @@ export const quotes = {
       z.object({
         jobId: z.number(),
         from: z.enum(["blank", "copy"]),
-        /** Left out: the card default for a blank one, the copied version's for a copy. */
+        /** Who pays (notes 18.54). Left out: the job's Bill to, or the copied version's. */
+        billTo: billToInput.optional(),
+        /** Left out: the Bill to's card %. Typed, it is for this quote only. */
         depositPercent: z.number().min(0).max(100).optional(),
       }),
     )
@@ -741,7 +761,13 @@ export const quotes = {
       if (input.from === "copy") {
         const latest = await latestQuoteOnJob(input.jobId);
         if (!latest) throw new ORPCError("BAD_REQUEST", { message: "There is no quote on this job to copy yet. Start a blank one." });
-        return reviseQuoteRecord(latest, context.actor, { depositPercent: input.depositPercent });
+        const rev = await reviseQuoteRecord(latest, context.actor, { depositPercent: input.depositPercent });
+        // A different payer picked for the copy: its card gives the % unless one was typed.
+        const old = quoteBillTo(latest);
+        if (input.billTo && (input.billTo.type !== old?.type || input.billTo.id !== old?.id)) {
+          return { ...rev, ...(await quoteBillToPatch(rev.id, input.billTo, input.depositPercent, true)) };
+        }
+        return rev;
       }
       await assertNoAcceptedQuote({ jobId: input.jobId });
       const d = await quoteDefaultsForJob(input.jobId);
@@ -752,6 +778,7 @@ export const quotes = {
           companyId: d.companyId,
           supervisorContactId: d.supervisorContactId,
           siteId: d.siteId,
+          billTo: input.billTo,
           depositPercent: input.depositPercent,
         }),
         context.actor,
@@ -768,7 +795,12 @@ export const quotes = {
         supervisorContactId: z.number().nullable().optional(),
         siteId: z.number().nullable().optional(),
         status: z.enum(["draft", "needs_review", "sent", "accepted", "declined", "expired"]).optional(),
+        /** Typed for this quote only, unless it matches the card (notes 18.54). */
         depositPercent: z.number().min(0).max(100).optional(),
+        /** Who pays this quote (notes 18.54). A draft takes the new card's %. */
+        billTo: billToInput.optional(),
+        /** Follow the Bill to's card % again after one was typed. */
+        depositFromCard: z.boolean().optional(),
         validUntil: z.date().nullable().optional(),
         notes: z.string().nullable().optional(),
         terms: z.string().nullable().optional(),
@@ -776,7 +808,7 @@ export const quotes = {
     )
     .handler(async ({ input }) => {
       if (input.jobId) await assertBillable(input.jobId);
-      const { id, ...rest } = input;
+      const { id, billTo, depositFromCard, depositPercent, ...rest } = input;
       const current = await quoteOrThrow(id);
       if (rest.status === "sent" || rest.status === "accepted") {
         throw new ORPCError("BAD_REQUEST", { message: "Use Send or Accepted on the quote, so the checks run." });
@@ -796,7 +828,8 @@ export const quotes = {
           });
         }
       }
-      const onlyStatus = Object.entries(rest).every(([k, v]) => k === "status" || v === undefined);
+      const onlyStatus =
+        Object.entries(rest).every(([k, v]) => k === "status" || v === undefined) && billTo === undefined && depositPercent === undefined && !depositFromCard;
       if (LOCKED_STATUSES.includes(current.status) && !onlyStatus) {
         throw new ORPCError("BAD_REQUEST", { message: "This quote is locked. Make a new version to change it." });
       }
@@ -812,11 +845,17 @@ export const quotes = {
         if (!companyId) rest.supervisorContactId = null;
         else if (supervisorId) await assertSupervisor(companyId, supervisorId);
       }
-      const [row] = await db
+      let [row] = await db
         .update(schema.quotes)
         .set({ ...rest, updatedAt: new Date() })
         .where(eq(schema.quotes.id, id))
         .returning();
+      // Notes 18.54: the Bill to and its %. A quote with nobody billed yet bills who it is now for.
+      const own = quoteBillTo(current);
+      const fill = !own && (rest.companyId || rest.contactId) ? { type: rest.companyId ? "company" : "contact", id: (rest.companyId ?? rest.contactId)! } as const : null;
+      if (billTo || fill || depositPercent !== undefined || depositFromCard) {
+        row = await quoteBillToPatch(id, billTo ?? fill ?? own, depositPercent, depositFromCard);
+      }
       // A job made with the quote takes the customer, company and site it is missing.
       const touchesJob = rest.contactId !== undefined || rest.companyId !== undefined || rest.supervisorContactId !== undefined || rest.siteId !== undefined;
       if (row?.jobId && touchesJob) await fillJobFromQuote(row.id);
@@ -1423,6 +1462,8 @@ export const quotes = {
           updatedAt: new Date(),
         })
         .where(eq(schema.quotes.id, input.id));
+      // Notes 18.54: a quote with nobody billed yet bills the client picked now.
+      if (!quoteBillTo(quote)) await quoteBillToPatch(quote.id, { type: "contact", id: contact.id });
       await db
         .update(schema.voiceQuoteCaptures)
         .set({ contactId: contact.id, updatedAt: new Date() })

@@ -179,7 +179,8 @@ export function cardDeposit(
 ): number {
   const company = companyId ? deposits.companies.get(companyId) : undefined;
   const contactPct = contactId ? deposits.contacts.get(contactId) : undefined;
-  return depositDefaultOf(company ?? null, contactPct == null ? null : { depositPercent: contactPct }).percent;
+  // A card with no % yet forecasts no deposit (notes 18.54: never guessed).
+  return depositDefaultOf(company ?? null, contactPct == null ? null : { depositPercent: contactPct }).percent ?? 0;
 }
 
 /**

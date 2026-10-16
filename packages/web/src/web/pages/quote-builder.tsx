@@ -1,4 +1,5 @@
 import * as React from "react";
+import { QuoteBillTo, QuoteDepositRows } from "../components/quote-bill-to";
 import { useBootstrap } from "../queries/settings";
 import { Link, useLocation, useParams } from "wouter";
 import { AlertTriangle, ArrowLeft, ArrowRight, Check, Copy, Plus, Repeat, Search, Send, Trash2, X } from "lucide-react";
@@ -576,65 +577,6 @@ function LineRow({
   );
 }
 
-/* -------------------------------- deposit -------------------------------- */
-
-/** Deposit % for this quote. Saves when you leave the box, not on every key. */
-function DepositRows({
-  quoteId,
-  percent,
-  deposit,
-  balance,
-  locked,
-  onError,
-}: {
-  quoteId: number;
-  percent: number;
-  deposit: number;
-  balance: number;
-  locked: boolean;
-  onError: (msg: string | null) => void;
-}) {
-  const update = useUpdateQuote();
-  const [draft, setDraft] = React.useState(String(percent));
-  React.useEffect(() => setDraft(String(percent)), [percent]);
-
-  function save() {
-    const n = Number(draft);
-    if (draft.trim() === "" || !Number.isFinite(n) || n < 0 || n > 100) {
-      setDraft(String(percent));
-      onError("Deposit has to be between 0 and 100%.");
-      return;
-    }
-    if (n === percent) return;
-    onError(null);
-    update.mutate({ id: quoteId, depositPercent: n }, { onError: (e) => onError(e.message) });
-  }
-
-  return (
-    <>
-      <div className="flex items-center justify-between gap-2 border-t border-border pt-2">
-        <span className="text-muted-foreground">Deposit</span>
-        <span className="flex items-center gap-2">
-          <Input
-            className="tabular h-8 w-[70px] text-right"
-            inputMode="decimal"
-            value={draft}
-            disabled={locked}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={save}
-            onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-          />
-          <span className="tabular text-muted-foreground">% = {money(deposit)}</span>
-        </span>
-      </div>
-      <div className="flex justify-between">
-        <span className="text-muted-foreground">Balance</span>
-        <span className="tabular">{money(balance)}</span>
-      </div>
-    </>
-  );
-}
-
 /* ------------------------------ add-line row ----------------------------- */
 
 function AddLine({ quoteId }: { quoteId: number }) {
@@ -1131,7 +1073,13 @@ export default function QuoteBuilderPage() {
 
         <div className="flex flex-col gap-4">
           <Card>
-            <CardHeader title="Totals" />
+            <div className="px-4 py-3">
+              <QuoteBillTo quoteId={q.id} jobId={q.jobId ?? null} card={q.billToCard} locked={locked} onError={setError} />
+            </div>
+          </Card>
+
+          <Card>
+            <CardHeader title="Totals" subtitle={q.billToCard ? `Bill to ${q.billToCard.name}` : "Nobody picked to pay yet"} />
             <div className="flex flex-col gap-2 px-4 py-3 text-sm">
               <ReferralFeeRows fee={q.referralFee} subtotal={q.subtotal} />
               <div className="flex justify-between">
@@ -1146,9 +1094,11 @@ export default function QuoteBuilderPage() {
                 <span>Total</span>
                 <span className="tabular">{money(q.total)}</span>
               </div>
-              <DepositRows
+              <QuoteDepositRows
                 quoteId={q.id}
                 percent={q.depositPercent}
+                source={q.depositSource}
+                card={q.billToCard}
                 deposit={q.deposit}
                 balance={q.balance}
                 locked={locked}

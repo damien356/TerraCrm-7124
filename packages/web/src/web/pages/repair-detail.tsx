@@ -266,7 +266,7 @@ function SetPriceModal({ open, id, current, onClose, onDone }: { open: boolean; 
     if (!valid) return setError("Type Marc's price ex GST.");
     try {
       const out = await save.mutateAsync({ id, marcPrice: n, note });
-      onDone(out.autoSent ? `Priced and sent to the client at ${money(out.clientPrice)} incl GST.` : `Quote ready at ${money(out.clientPrice)} incl GST. Check it, then Approve.`);
+      onDone(`Quote ready at ${money(out.clientPrice)} incl GST. Check it, then Approve.`);
       onClose();
     } catch (e) {
       setError(errorText(e));

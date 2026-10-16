@@ -2,6 +2,7 @@ import { ORPCError } from "@orpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { jobBillTo, quoteBillTo } from "./bill-to";
 import { raiseInvoice } from "./client-invoices";
 import { loadDepositMaps, loadTermsMaps, resolveTerms, settleDate, termsLabel, today } from "./cashflow";
 import { quoteRefOf } from "./quote-number";
@@ -44,15 +45,16 @@ export async function acceptedQuoteOf(jobId: number) {
 }
 
 /** Where the invoice email goes by default: the billed contact, else the company's accounts email. */
-async function recipientFor(job: typeof schema.jobs.$inferSelect) {
-  if (job.billToType === "company") {
-    const id = job.billToCompanyId ?? job.companyId;
-    if (!id) return null;
+async function recipientFor(job: typeof schema.jobs.$inferSelect, quote: typeof schema.quotes.$inferSelect | null) {
+  // Notes 18.54: the accepted quote's Bill to is who pays, else the job's.
+  const payer = (quote ? quoteBillTo(quote) : null) ?? jobBillTo(job);
+  if (payer?.type === "company") {
+    const id = payer.id;
     const [co] = await db.select({ email: schema.companies.email, name: schema.companies.name }).from(schema.companies).where(eq(schema.companies.id, id));
     const email = co?.email?.trim() || "";
     return EMAIL_RE.test(email) ? { email, who: `${co?.name ?? "the company"} accounts` } : null;
   }
-  const id = job.billToContactId ?? job.contactId;
+  const id = payer?.id;
   if (!id) return null;
   const [c] = await db
     .select({ email: schema.contacts.email, first: schema.contacts.firstName, last: schema.contacts.lastName })
@@ -90,7 +92,7 @@ export async function billingOnJob(jobId: number) {
   const quoteRef = quote ? await quoteRefOf(quote) : null;
   const statusName = (status[0]?.name ?? "").trim().toLowerCase();
   const { dueDay, termsText } = await dueFor(job, today());
-  const recipient = await recipientFor(job);
+  const recipient = await recipientFor(job, quote);
 
   let reason: string | null = null;
   if (job.parentJobId && job.callbackChargeable === false) reason = "This callback is not chargeable. Nothing is billed.";

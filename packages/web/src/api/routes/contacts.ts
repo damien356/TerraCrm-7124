@@ -6,6 +6,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { staffOnly, type Actor } from "../middleware/auth";
 import { rebuildForecast } from "../lib/cashflow";
+import { cardDepositChanged } from "../lib/bill-to";
 
 export const createContactInput = z.object({
   firstName: z.string().min(1),
@@ -211,7 +212,7 @@ export const contacts = {
         source: z.string().optional(),
         notes: z.string().nullable().optional(),
         marketingOptIn: z.boolean().optional(),
-        /** Deposit % new quotes start at when no company is on the quote. Null = 50. */
+        /** Deposit % on the person's card. Quotes billed to them take it. Null = not asked yet, never guessed (notes 18.54). */
         depositPercent: z.number().min(0).max(100).nullable().optional(),
         active: z.boolean().optional(),
       }),
@@ -219,6 +220,9 @@ export const contacts = {
     .handler(async ({ input }) => {
       const { id, ...rest } = input;
       const [before] = await db.select().from(schema.contacts).where(eq(schema.contacts.id, id));
+      // A set % is never blanked (notes 18.54). Type 0 for no deposit.
+      if (before?.depositPercent != null && rest.depositPercent === null)
+        throw new ORPCError("BAD_REQUEST", { message: "A deposit % once set can't be blanked. Type 0 for no deposit." });
       const [row] = await db
         .update(schema.contacts)
         .set({ ...rest, updatedAt: new Date() })
@@ -226,6 +230,8 @@ export const contacts = {
         .returning();
       if (!row) throw new ORPCError("NOT_FOUND", { message: "Contact not found" });
       if (before && before.depositPercent !== row.depositPercent) {
+        // Draft quotes billed to this person follow their card (notes 18.54).
+        await cardDepositChanged({ type: "contact", id });
         await rebuildForecast().catch((e) => console.error("[cashflow] rebuild after deposit change failed:", e));
       }
       const emailChanged =

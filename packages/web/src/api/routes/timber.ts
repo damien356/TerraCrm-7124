@@ -98,7 +98,6 @@ export const timber = {
     return {
       markup: s.markup,
       minCharge: s.minCharge,
-      autoSendUnder: s.autoSendUnder,
       templates: REPAIR_TYPES.map(([key, label]) => ({ key, label, text: s.templates[key], defaultText: TIMBER_TEMPLATE_DEFAULTS[key] })),
       photoSentence: PHOTO_PRICE_SENTENCE,
       pricer: pricer ? { id: pricer.id, name: pricer.name, mobile: pricer.mobile } : null,
@@ -113,14 +112,14 @@ export const timber = {
       z.object({
         markup: z.number().min(1, "The markup is at least 1").max(10),
         minCharge: z.number().min(0).max(100_000),
-        autoSendUnder: z.number().min(0).max(100_000),
         templates: z.array(z.object({ key: repairTypeEnum, text: z.string().trim().min(1, "A template cannot be empty").max(4000) })).max(3),
       }),
     )
     .handler(async ({ input }) => {
       await putSetting(TIMBER_MARKUP_KEY, String(input.markup));
       await putSetting(TIMBER_MIN_KEY, String(input.minCharge));
-      await putSetting(TIMBER_AUTOSEND_KEY, String(input.autoSendUnder));
+      // Notes 18.54: timber repair quotes never auto send. The old ceiling is kept at 0 (off).
+      await putSetting(TIMBER_AUTOSEND_KEY, "0");
       for (const t of input.templates) await putSetting(TIMBER_TEMPLATE_KEY(t.key), t.text);
       return { ok: true };
     }),

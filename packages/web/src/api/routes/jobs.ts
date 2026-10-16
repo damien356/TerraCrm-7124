@@ -7,6 +7,7 @@ import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import { syncJobValue } from "../lib/job-value";
+import { assertCard, cardOf, jobBillTo, setCardDeposit } from "../lib/bill-to";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
 import { addJobPerson, customerTag, personInput, removeJobTag, updateJobPerson } from "../lib/job-people";
@@ -73,7 +74,20 @@ export const createJobInput = z.object({
    * supervisor when the job is made.
    */
   fileSupervisor: z.boolean().optional(),
+  /**
+   * Notes 18.54: the Bill to's card had no deposit % and the New job screen
+   * asked for it. It saves on the card, never only on the job.
+   */
+  billToDepositPercent: z.number().min(0).max(100).nullable().optional(),
 });
+
+const NO_BILL_TO = "Pick who pays this job (Bill to).";
+
+/** The New job screen always names who pays: a company or a person (notes 18.54). */
+function hasBillTo(i: z.infer<typeof createJobInput>) {
+  if (i.billToType === "company") return !!(i.billToCompanyId || i.companyId || i.newCompany);
+  return !!(i.billToContactId || i.billToContactKey || i.contactId || i.contactKey);
+}
 
 /** Shared with voice memos, so a job said out loud lands exactly like one typed in. */
 export async function createJob(input: z.input<typeof createJobInput>, actor: Pick<Actor, "name" | "role">) {
@@ -88,6 +102,7 @@ export async function createJob(input: z.input<typeof createJobInput>, actor: Pi
     supervisorKey,
     billToContactKey,
     fileSupervisor,
+    billToDepositPercent,
     ...jobInput
   } = parsed;
 
@@ -191,6 +206,13 @@ export async function createJob(input: z.input<typeof createJobInput>, actor: Pi
       if (p.tags.includes("supervisor")) continue; // the supervisor comes only through supervisorContactId
       await addJobPerson(row.id, p.contactId, p);
     }
+  }
+
+  // Notes 18.54: the % asked on the New job screen saves on the payer's card, only when it had none.
+  const payer = row ? jobBillTo(row) : null;
+  if (payer && billToDepositPercent != null) {
+    const card = await cardOf(payer);
+    if (card && card.percent == null) await setCardDeposit(payer, billToDepositPercent, actor);
   }
 
   // Whoever gets the invoice is on the job too. Someone not already on it is tagged Accounts.
@@ -404,7 +426,11 @@ export const jobs = {
 
   create: staffOnly
     // Typed in on the New job screen, where the lead source has to be picked ("Unknown" is fine).
-    .input(createJobInput.extend({ source: z.string({ error: NO_SOURCE }).trim().min(1, NO_SOURCE) }))
+    .input(
+      createJobInput
+        .extend({ source: z.string({ error: NO_SOURCE }).trim().min(1, NO_SOURCE) })
+        .refine(hasBillTo, { message: NO_BILL_TO, path: ["billToType"] }),
+    )
     .handler(({ input, context }) => createJob(input, context.actor)),
 
   update: staffOnly
@@ -432,6 +458,16 @@ export const jobs = {
       const { id, ...rest } = input;
       const [before] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, id));
       if (!before) throw new ORPCError("NOT_FOUND", { message: "Job not found" });
+      // Notes 18.54: a changed Bill to must point at a card that is there.
+      const touchesBillTo = rest.billToType !== undefined || rest.billToContactId !== undefined || rest.billToCompanyId !== undefined;
+      const nextPayer = touchesBillTo ? jobBillTo({ ...before, ...rest }) : null;
+      if (touchesBillTo) {
+        if (!nextPayer) throw new ORPCError("BAD_REQUEST", { message: NO_BILL_TO });
+        await assertCard(nextPayer);
+        if (rest.billToType === "company") rest.billToContactId = null;
+        if (rest.billToType === "contact") rest.billToCompanyId = null;
+      }
+      const prevPayer = jobBillTo(before);
 
       const [row] = await db
         .update(schema.jobs)
@@ -462,6 +498,19 @@ export const jobs = {
           entityId: id,
           action: "furniture_flagged",
           detail: "Furniture on site, install tasks forced to 2-man crews",
+          actorName: context.actor.name,
+          actorRole: context.actor.role,
+        });
+      }
+
+      if (nextPayer && (nextPayer.type !== prevPayer?.type || nextPayer.id !== prevPayer?.id)) {
+        const [from, to] = [await cardOf(prevPayer), await cardOf(nextPayer)];
+        await db.insert(schema.activityLog).values({
+          jobId: id,
+          entityType: "job",
+          entityId: id,
+          action: "bill_to_changed",
+          detail: `Bill to ${from ? `${from.name} → ` : ""}${to?.name ?? "someone"}`,
           actorName: context.actor.name,
           actorRole: context.actor.role,
         });

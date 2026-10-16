@@ -1,43 +1,27 @@
 import * as React from "react";
-import { Button } from "./ui/button";
 import { Input } from "./ui/field";
-import { useUpdateCompany } from "../queries/companies";
-import { useUpdateContact } from "../queries/contacts";
-import { isBuilderType } from "../../api/lib/person-tags";
+import { useSetCardDeposit } from "../queries/billTo";
 
 /**
- * The deposit % new quotes start at, set on a company or contact card.
- * Mirrors api/lib/deposits.ts: blank on a company means 0% for a builder and
- * 50% for anyone else, blank on a contact means 50%. A company on the quote
- * always beats the contact. Existing quotes are never changed by this.
+ * The deposit % on a company or person card (notes 18.54). Quotes billed to
+ * the card take it. Nothing is guessed: a card with no % says so, and the
+ * office is asked the first time it is someone's Bill to. A % once set can be
+ * changed but never blanked. Draft quotes billed to the card follow a change,
+ * sent ones stay as they went out.
  */
-export function DepositDefault({
-  kind,
-  id,
-  value,
-  companyType,
-}: {
-  kind: "company" | "contact";
-  id: number;
-  value: number | null;
-  companyType?: string;
-}) {
-  const company = useUpdateCompany();
-  const contact = useUpdateContact();
-  const pending = company.isPending || contact.isPending;
+export function DepositDefault({ kind, id, value }: { kind: "company" | "contact"; id: number; value: number | null }) {
+  const setCard = useSetCardDeposit();
   const [draft, setDraft] = React.useState(value == null ? "" : String(value));
   const [error, setError] = React.useState<string | null>(null);
+  const [note, setNote] = React.useState<string | null>(null);
   React.useEffect(() => setDraft(value == null ? "" : String(value)), [value]);
 
-  const fallback = kind === "company" ? (isBuilderType(companyType) ? 0 : 50) : 50;
-  const fallbackLabel =
-    kind === "company" ? (isBuilderType(companyType) ? "0%, the builder default" : "50%, the standard") : "50%, the standard";
-
-  async function save(next: number | null) {
+  async function save(next: number) {
     setError(null);
+    setNote(null);
     try {
-      if (kind === "company") await company.mutateAsync({ id, depositPercent: next });
-      else await contact.mutateAsync({ id, depositPercent: next });
+      const out = await setCard.mutateAsync({ billTo: { type: kind, id }, percent: next });
+      if (out.quotesUpdated) setNote(`${out.quotesUpdated} draft quote${out.quotesUpdated === 1 ? "" : "s"} updated.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -46,7 +30,10 @@ export function DepositDefault({
   function commit() {
     const t = draft.trim();
     if (t === "") {
-      if (value !== null) void save(null);
+      if (value != null) {
+        setError("A deposit % once set can't be blanked. Type 0 for no deposit.");
+        setDraft(String(value));
+      }
       return;
     }
     const n = Number(t);
@@ -58,24 +45,29 @@ export function DepositDefault({
     if (n !== value) void save(n);
   }
 
+  const missing = value == null;
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-medium">Deposit on new quotes</p>
-          <p className="text-xs text-muted-foreground">
-            {value == null ? `Not set, so ${fallbackLabel}.` : "Set on this card."}
-            {kind === "contact" ? " A company on the quote wins." : ""}
+          <p className="text-sm font-medium">Deposit %</p>
+          <p className={missing ? "text-xs font-medium text-destructive" : "text-xs text-muted-foreground"}>
+            {missing
+              ? kind === "company"
+                ? "Not set yet. Every company needs one. Quotes billed here wait for it."
+                : "Not asked yet. Quotes billed to this person wait for it."
+              : "Quotes billed to this card take it. Drafts follow a change, sent quotes stay."}
           </p>
         </div>
         <span className="flex shrink-0 items-center gap-1">
           <Input
-            aria-label="Deposit % on new quotes"
-            className="tabular h-8 w-[64px] text-right"
+            aria-label="Deposit % on this card"
+            aria-invalid={missing || undefined}
+            className={`tabular h-8 w-[64px] text-right ${missing ? "border-destructive" : ""}`}
             inputMode="decimal"
-            placeholder={String(fallback)}
+            placeholder="%"
             value={draft}
-            disabled={pending}
+            disabled={setCard.isPending}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={commit}
             onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
@@ -83,28 +75,8 @@ export function DepositDefault({
           <span className="text-xs text-muted-foreground">%</span>
         </span>
       </div>
-      {value != null ? (
-        <Button variant="ghost" className="h-6 self-start px-1.5 text-xs" disabled={pending} onClick={() => save(null)}>
-          Use the default ({fallback}%)
-        </Button>
-      ) : null}
+      {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
       {error ? <p className="text-xs font-medium text-destructive">{error}</p> : null}
     </div>
   );
-}
-
-/** The line under a Deposit % box saying where the % came from. New quote and Create quote on the job page. */
-export function depositHint(source: string | undefined) {
-  switch (source) {
-    case "company":
-      return "From the company card";
-    case "company_type":
-      return "Company default: 0% for builders, 50% for others";
-    case "contact":
-      return "From the contact card";
-    case "standard":
-      return "Standard 50%";
-    default:
-      return undefined;
-  }
 }

@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { depositSplit } from "./deposits";
+import { depositSplit, quotePercent } from "./deposits";
 import { approvedVariationsTotal } from "./variations";
 
 /**
@@ -42,7 +42,7 @@ export async function jobValuePlan(jobId: number) {
   const value = accepted ? r2(Number(quote.total ?? 0) + (await approvedVariationsTotal(jobId))) : r2(Number(quote.total ?? 0));
   // A paid deposit is history, and an accepted job's deposit was set by its first accept.
   const keepDeposit = accepted || job.depositPaid;
-  const depositAmount = keepDeposit ? Number(job.depositAmount ?? 0) : depositSplit(value, quote.depositPercent ?? 0).deposit;
+  const depositAmount = keepDeposit ? Number(job.depositAmount ?? 0) : depositSplit(value, quotePercent(quote)).deposit;
   return {
     job,
     quote,

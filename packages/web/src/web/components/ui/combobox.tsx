@@ -124,7 +124,8 @@ export function Combobox({
           disabled={disabled}
           aria-label={selected ? selected.label : placeholder}
           className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground/70"
-          placeholder={selected ? selected.label : placeholder}
+          // Closed with a pick, the label shows in the span below, so the placeholder stays empty (no double text on the phone).
+          placeholder={selected ? (open ? selected.label : "") : placeholder}
           value={open ? query : ""}
           onFocus={() => setOpen(true)}
           onChange={(e) => {

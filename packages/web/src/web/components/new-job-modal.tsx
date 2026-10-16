@@ -5,6 +5,7 @@ import { Checkbox, Field, Input, Select, Textarea } from "./ui/field";
 import { Modal } from "./ui/modal";
 import { Combobox } from "./ui/combobox";
 import { Spinner } from "./ui/card";
+import { useBillToCards, type BillToValue } from "../queries/billTo";
 import { ContactPicker } from "./contact-picker";
 import { SupervisorDraftPicker, supervisorChoiceName, type SupervisorChoice } from "./supervisor-picker";
 import { QuotePeopleDraft, draftId, jobDraftsToInput, type PersonDraft } from "./job-people";
@@ -119,7 +120,9 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
   const [supervisor, setSupervisor] = React.useState<SupervisorChoice>({ kind: "none" });
   const [site, setSite] = React.useState<SiteChoice>({ mode: "pick", id: "", label: "" });
   const [people, setPeople] = React.useState<PersonDraft[]>([]);
-  const [billTo, setBillTo] = React.useState<BillTo>("main");
+  // Who pays (notes 18.54). Nothing is picked for the office.
+  const [billTo, setBillTo] = React.useState<BillTo>("");
+  const [billPct, setBillPct] = React.useState("");
   const [addBillTo, setAddBillTo] = React.useState<PersonTag[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -132,7 +135,8 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
     setSupervisor({ kind: "none" });
     setSite({ mode: "pick", id: "", label: "" });
     setPeople([]);
-    setBillTo("main");
+    setBillTo("");
+    setBillPct("");
     setAddBillTo(null);
     setError(null);
   }, [open]);
@@ -150,7 +154,7 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
   function changeCompany(next: CompanyChoice) {
     setCompany(next);
     setSupervisor({ kind: "none" });
-    if (billTo === "company" || billTo === "sup") setBillTo("main");
+    if (billTo === "company" || billTo === "sup") setBillTo("");
   }
 
   const billOptions: Array<[BillTo, string]> = [
@@ -159,8 +163,21 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
     ...(supervisor.kind !== "none" ? ([["sup", `${supervisorChoiceName(supervisor) || "The supervisor"} (supervisor)`]] as Array<[BillTo, string]>) : []),
     ...people.map((p) => [draftId(p), p.name] as [BillTo, string]),
   ];
-  // Whoever was billed was taken off the form: fall back to the first one left.
-  const billValue = billOptions.some(([v]) => v === billTo) ? billTo : (billOptions[0]?.[0] ?? "");
+  // Whoever was billed was taken off the form: nobody is billed until one is picked again.
+  const billValue = billOptions.some(([v]) => v === billTo) ? billTo : "";
+  const billName = (billOptions.find(([v]) => v === billValue)?.[1] ?? "").replace(/ \((the contact|the company|supervisor)\)$/, "");
+
+  // The card behind the pick, when it already exists. A new person or company has no % yet.
+  const billCard: BillToValue | null = (() => {
+    if (billValue === "main") return contact.mode === "pick" && contact.id ? { type: "contact", id: Number(contact.id) } : null;
+    if (billValue === "company") return pickedCompanyId ? { type: "company", id: pickedCompanyId } : null;
+    if (billValue === "sup") return supervisor.kind === "pick" ? { type: "contact", id: supervisor.contactId } : null;
+    const person = billValue ? people.find((x) => draftId(x) === billValue) : undefined;
+    return person && !person.contactKey && person.contactId ? { type: "contact", id: person.contactId } : null;
+  })();
+  const cards = useBillToCards(billCard ? [billCard] : []);
+  const cardPercent = billCard ? (cards.data?.[0]?.percent ?? null) : null;
+  const askPercent = !!billValue && (!billCard || (cards.isSuccess && cardPercent == null));
 
   /** Plain-English reason the job cannot be made yet, or null. */
   function problem(): string | null {
@@ -175,6 +192,11 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
       if (p) return p;
     }
     if (site.mode === "new" && !site.draft.address.trim()) return "Type the street address for the new site, or pick an existing site.";
+    if (!billValue) return "Pick who pays this job (Bill to).";
+    if (askPercent) {
+      const n = Number(billPct.trim());
+      if (billPct.trim() === "" || !Number.isFinite(n) || n < 0 || n > 100) return `Type the deposit % for ${billName || "the Bill to"}. It saves on their card.`;
+    }
     if (!form.source) return 'Pick where the job came from. "Other" is fine.';
     return null;
   }
@@ -226,6 +248,8 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
         billToContactId,
         billToContactKey,
         billToCompanyId: billValue === "company" ? pickedCompanyId : null,
+        // Asked once and saved on their card. A card that has a % keeps it.
+        billToDepositPercent: askPercent ? Number(billPct.trim()) : null,
         newContacts,
         people: jobDraftsToInput(people),
         furnitureOnSite: form.furnitureOnSite,
@@ -401,24 +425,49 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
         <Field label="Where it came from (required)">
           <LeadSourceSelect id="newjob_source" value={form.source} onChange={(v) => set("source", v)} invalid={!form.source && !!error} />
         </Field>
-        <Field label="Who gets the invoice" hint="Carol's own house bills Carol. Her builder job bills the company.">
-          <Select
-            id="newjob_billto"
-            value={billValue}
-            onChange={(e) => {
-              if (e.target.value === "__new") setAddBillTo(["accounts"]);
-              else setBillTo(e.target.value);
-            }}
-          >
-            {billOptions.length ? null : <option value="">Pick a contact or company first</option>}
-            {billOptions.map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-            <option value="__new">Someone else (add them)…</option>
-          </Select>
+        <Field label="Bill to (required)" hint="Who pays. Carol's own house bills Carol. Her builder job bills the company.">
+          <div className={billValue ? undefined : "rounded-md ring-2 ring-destructive"} data-required-empty={billValue ? undefined : true}>
+            <Select
+              id="newjob_billto"
+              aria-invalid={!billValue || undefined}
+              value={billValue}
+              onChange={(e) => {
+                setBillPct("");
+                if (e.target.value === "__new") setAddBillTo(["accounts"]);
+                else setBillTo(e.target.value);
+              }}
+            >
+              <option value="">{billOptions.length ? "Pick who pays…" : "Pick a contact or company first"}</option>
+              {billOptions.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+              <option value="__new">Someone else (add them)…</option>
+            </Select>
+          </div>
+          {!billValue ? (
+            <p className="mt-1 text-xs font-medium text-destructive">Required. Pick a company or a person.</p>
+          ) : billCard && cardPercent != null ? (
+            <p className="mt-1 text-xs text-muted-foreground">{cardPercent}% deposit, from their card.</p>
+          ) : null}
         </Field>
+        {askPercent ? (
+          <Field label={`Deposit % for ${billName || "the Bill to"}`} hint="Asked once. It saves on their card.">
+            <Input
+              id="newjob_billto_pct"
+              aria-label={`Deposit % for ${billName || "the Bill to"}`}
+              className={billPct.trim() === "" ? "border-destructive" : undefined}
+              type="number"
+              inputMode="decimal"
+              min={0}
+              max={100}
+              placeholder="%"
+              value={billPct}
+              onChange={(e) => setBillPct(e.target.value)}
+            />
+          </Field>
+        ) : null}
         <Field
           label="Job value (ex GST)"
           hint={Number(form.value) > 0 ? `Saved as ${money(Math.round(Number(form.value) * 110) / 100)} inc GST` : undefined}

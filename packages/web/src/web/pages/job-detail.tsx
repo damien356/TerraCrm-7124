@@ -1,4 +1,5 @@
 import * as React from "react";
+import { JobBillTo } from "../components/job-bill-to";
 import { DuplicateQuoteButton, JobCopyLinks } from "../components/quote-copy";
 import { CareCard } from "../components/care-card";
 import { Link, useParams, useSearch } from "wouter";
@@ -513,9 +514,10 @@ export default function JobDetailPage() {
               <div>
                 <p className="label-xs">Customer</p>
                 <p className="mt-0.5 text-sm font-medium">{customer}</p>
-                <p className="text-xs text-muted-foreground">
-                  bills {j.billToType === "company" ? "the company" : "the contact"}
-                </p>
+                <p className="label-xs mt-2">Bill to</p>
+                <div className="mt-0.5">
+                  <JobBillTo jobId={j.id} />
+                </div>
               </div>
               <div>
                 <p className="label-xs">Site</p>

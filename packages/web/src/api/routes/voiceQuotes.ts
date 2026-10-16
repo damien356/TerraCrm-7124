@@ -13,7 +13,7 @@ import { addLinkedLabour, voiceAreas } from "../lib/quote-labour";
 import { linkUnderlay } from "../lib/quote-sizes";
 import { recalc } from "./quotes";
 import { quoteNumberFor, quoteRefOf } from "../lib/quote-number";
-import { depositDefaultFor } from "../lib/deposits";
+import { billToFields, cardOf, defaultQuoteBillTo, depositFieldsFor } from "../lib/bill-to";
 import { markupOf } from "../lib/pricing";
 import { customerCandidates, spokenCustomer, strongMatch } from "../lib/quote-customer";
 import { lineTypeOfKind } from "../lib/line-kinds";
@@ -315,6 +315,8 @@ export async function buildQuoteFromTranscript(
   if (extraction.generalNotes) notesParts.push(extraction.generalNotes);
   notesParts.push(`Created from a voice recording. Transcript: "${transcript}"`);
 
+  // Notes 18.54: bills the job's Bill to (or the matched customer), and its % comes from that card.
+  const billTo = await defaultQuoteBillTo({ jobId: link.jobId, companyId, contactId });
   const [quoteRow] = await db
     .insert(schema.quotes)
     .values({
@@ -324,7 +326,8 @@ export async function buildQuoteFromTranscript(
       contactId,
       companyId,
       status: anyFlagged ? "needs_review" : "draft",
-      depositPercent: (await depositDefaultFor({ companyId, contactId })).percent,
+      ...billToFields(billTo),
+      ...depositFieldsFor(await cardOf(billTo)),
       validUntil,
       notes: notesParts.join("\n\n"),
     })

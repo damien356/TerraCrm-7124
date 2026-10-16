@@ -7,7 +7,7 @@ import { Button } from "../components/ui/button";
 import { Input, Select } from "../components/ui/field";
 import { orpc } from "../lib/api";
 import { useCompanyTypes } from "../queries/people";
-import { COMPANY_TYPES, COMPANY_TYPE_LABELS, isBuilderType } from "../../api/lib/person-tags";
+import { COMPANY_TYPES, COMPANY_TYPE_LABELS } from "../../api/lib/person-tags";
 
 /**
  * COMPANY TYPES.
@@ -15,7 +15,7 @@ import { COMPANY_TYPES, COMPANY_TYPE_LABELS, isBuilderType } from "../../api/lib
  * Almost every company came in from the import as a builder. This list puts
  * the ones that read like a real estate agency or an insurer first, with a
  * suggested type, so they can be fixed one by one. Saving goes through the
- * normal company update, so deposit terms follow the new type.
+ * normal company update. The deposit % stays on the card (notes 18.54).
  */
 
 /** Cards flagged by hand in the job contacts plan as probably not builders. */
@@ -79,7 +79,7 @@ export default function CompanyTypesPage() {
       <Card>
         <CardHeader
           title={filter === "check" ? "Probably not builders" : "Every active company"}
-          subtitle="A builder starts new quotes at 0% deposit. Any other type starts at 50%, unless the company has its own deposit set."
+          subtitle="The type sorts the company. The deposit % is set on each company card."
         />
         {q.isLoading ? (
           <Loading label="Loading companies…" />
@@ -115,10 +115,6 @@ function TypeRow({ r, flagged }: { r: Row; flagged: boolean }) {
   React.useEffect(() => setType(r.suggested ?? r.type), [r.suggested, r.type]);
 
   const changed = type !== r.type;
-  const depositNote =
-    changed && r.depositPercent == null && isBuilderType(r.type) !== isBuilderType(type)
-      ? `New quotes will start at ${isBuilderType(type) ? "0" : "50"}% deposit.`
-      : null;
 
   async function save() {
     setError(null);
@@ -145,7 +141,6 @@ function TypeRow({ r, flagged }: { r: Row; flagged: boolean }) {
             <span className="ml-1 font-semibold text-[var(--warning)]">Flagged to check</span>
           ) : null}
         </p>
-        {depositNote ? <p className="text-xs text-muted-foreground">{depositNote}</p> : null}
         {error ? <p className="text-xs text-destructive">{error}</p> : null}
       </div>
       <div className="flex items-center gap-2">

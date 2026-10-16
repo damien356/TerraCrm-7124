@@ -57,7 +57,7 @@ export const companies = sqliteTable(
     /** Payment terms in days (0 = due on completion). */
     paymentTerms: integer("payment_terms").notNull().default(14),
     creditLimit: real("credit_limit"),
-    /** Deposit % new quotes for this company start at. Null = 0 for a builder, 50 for anyone else. Always beats the contact's. */
+    /** Notes 18.54. Deposit % for quotes billed to this company. Null = not asked yet (never guessed). */
     depositPercent: real("deposit_percent"),
     notes: text("notes"),
     /**
@@ -105,7 +105,7 @@ export const contacts = sqliteTable(
     /** website · phone · hipages · referral · repeat · walk-in · other */
     source: text("source").notNull().default("other"),
     notes: text("notes"),
-    /** Deposit % new quotes start at when there is no company on the quote. Null = 50. */
+    /** Notes 18.54. Deposit % for quotes billed to this person. Null = not asked yet (never guessed). */
     depositPercent: real("deposit_percent"),
     /** Marketing consent for CRM campaigns (phase 4). */
     marketingOptIn: integer("marketing_opt_in", { mode: "boolean" }).notNull().default(false),
@@ -1564,6 +1564,16 @@ export const quotes = sqliteTable(
      * No FK on purpose: the original going leaves the copy as it is.
      */
     copiedFromQuoteId: integer("copied_from_quote_id"),
+    /**
+     * Notes 18.54. Where the deposit % came from: card (the Bill to's card),
+     * quote (typed on this quote only) or none (the card has no % yet, so the
+     * quote is asked and cannot go out).
+     */
+    depositSource: text("deposit_source").notNull().default("none"),
+    /** Notes 18.54. Who pays this quote: contact or company. Each quote has its own, which can differ from the job's. */
+    billToType: text("bill_to_type"),
+    billToContactId: integer("bill_to_contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    billToCompanyId: integer("bill_to_company_id").references(() => companies.id, { onDelete: "set null" }),
     ...timestamps,
   },
   (t) => [index("quotes_contact_idx").on(t.contactId), unique("quotes_number_version_unique").on(t.number, t.version)],

@@ -18,7 +18,6 @@ import { ensureForJob, logMessage } from "./conversations";
 import { GST_RATE } from "./gst";
 import {
   PHOTO_PRICE_SENTENCE,
-  TIMBER_AUTOSEND_KEY,
   TIMBER_LINK_DAYS,
   TIMBER_MARKUP_DEFAULT,
   TIMBER_MARKUP_KEY,
@@ -79,7 +78,7 @@ const num = (v: string | null, fallback: number) => {
   return v != null && String(v).trim() !== "" && Number.isFinite(n) ? n : fallback;
 };
 
-/** Markup, minimum charge (ex GST), auto send ceiling (incl GST, 0 is off) and the three templates. */
+/** Markup, minimum charge (ex GST) and the three templates. Nothing auto sends to a client (notes 18.54). */
 export async function timberSettings() {
   const rows = await db
     .select()
@@ -88,7 +87,6 @@ export async function timberSettings() {
       inArray(schema.settings.key, [
         TIMBER_MARKUP_KEY,
         TIMBER_MIN_KEY,
-        TIMBER_AUTOSEND_KEY,
         ...Object.keys(TIMBER_TEMPLATE_DEFAULTS).map(TIMBER_TEMPLATE_KEY),
       ]),
     );
@@ -100,7 +98,6 @@ export async function timberSettings() {
   return {
     markup: markup > 0 ? markup : TIMBER_MARKUP_DEFAULT,
     minCharge: Math.max(0, num(get(TIMBER_MIN_KEY), 0)),
-    autoSendUnder: Math.max(0, num(get(TIMBER_AUTOSEND_KEY), 0)),
     templates,
   };
 }
@@ -487,25 +484,15 @@ export async function priceRepair(id: number, marcPrice: number, note: string, a
     actorRole: actor.role,
   });
 
-  let autoSent = false;
-  if (s.autoSendUnder > 0 && total < s.autoSendUnder) {
-    try {
-      await approveRepairQuote(id, SYSTEM);
-      autoSent = true;
-    } catch (e) {
-      console.error("[timber-repair] auto send failed", (e as Error).message);
-    }
-  }
-  if (!autoSent) {
-    await notifyOffice("repair_price_ready", {
-      title: `Timber repair quote ready: ${money0(total)} incl GST`,
-      body: `Job ${jobText(job)}. Marc's price ${moneyPrice(marcPrice)} ex GST${note ? `, "${note.slice(0, 80)}"` : ""}. Approve or Edit.`,
-      jobId: job.id,
-      path: `/repairs/${id}`,
-      data: { kind: "repair", repairId: id, quoteId, jobId: job.id },
-    });
-  }
-  return { quoteId: quoteId!, clientPrice: total, unitEx, autoSent };
+  // Notes 18.54: nothing goes to a client on its own. The office always approves.
+  await notifyOffice("repair_price_ready", {
+    title: `Timber repair quote ready: ${money0(total)} incl GST`,
+    body: `Job ${jobText(job)}. Marc's price ${moneyPrice(marcPrice)} ex GST${note ? `, "${note.slice(0, 80)}"` : ""}. Approve or Edit.`,
+    jobId: job.id,
+    path: `/repairs/${id}`,
+    data: { kind: "repair", repairId: id, quoteId, jobId: job.id },
+  });
+  return { quoteId: quoteId!, clientPrice: total, unitEx, autoSent: false };
 }
 
 /**

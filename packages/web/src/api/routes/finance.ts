@@ -5,6 +5,7 @@ import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { cardDepositChanged, quoteBillTo } from "../lib/bill-to";
 import { adminOnly } from "../middleware/auth";
 import { costCashOut, costHasGst, exGst } from "../lib/gst";
 import { termsOf } from "../lib/supplier-terms";
@@ -372,11 +373,25 @@ export const finance = {
         companyId = companyId ?? job?.companyId ?? null;
         contactId = job?.contactId ?? null;
         const [accepted] = await db
-          .select({ number: schema.quotes.number, version: schema.quotes.version, depositPercent: schema.quotes.depositPercent })
+          .select({
+            number: schema.quotes.number,
+            version: schema.quotes.version,
+            depositPercent: schema.quotes.depositPercent,
+            billToType: schema.quotes.billToType,
+            billToContactId: schema.quotes.billToContactId,
+            billToCompanyId: schema.quotes.billToCompanyId,
+          })
           .from(schema.quotes)
           .where(and(eq(schema.quotes.jobId, input.jobId), eq(schema.quotes.status, "accepted")))
           .orderBy(desc(schema.quotes.version), desc(schema.quotes.id))
           .limit(1);
+        // Notes 18.54: the accepted quote's Bill to is the payer whose card counts.
+        const payer = accepted ? quoteBillTo(accepted) : null;
+        if (payer?.type === "company" && !input.companyId) companyId = payer.id;
+        if (payer?.type === "contact") {
+          contactId = payer.id;
+          if (!input.companyId) companyId = null;
+        }
         if (job && accepted) {
           quoteDeposit = {
             percent: accepted.depositPercent ?? 0,
@@ -451,6 +466,8 @@ export const finance = {
           .update(schema.companies)
           .set({ depositPercent: input.structure === "deposit_balance" ? input.depositPercent : 0, updatedAt: new Date() })
           .where(eq(schema.companies.id, companyId));
+        // Draft quotes billed to the company follow its card (notes 18.54).
+        await cardDepositChanged({ type: "company", id: companyId });
       }
       await rebuildForecast();
       return row;

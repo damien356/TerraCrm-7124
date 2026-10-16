@@ -12,8 +12,9 @@ import { Modal } from "../components/ui/modal";
 import { Combobox } from "../components/ui/combobox";
 import { QuotePeopleDraft, draftsToInput, type PersonDraft } from "../components/job-people";
 import { LeadSourceSelect } from "../components/lead-source-select";
-import { depositHint } from "../components/deposit-default";
-import { useCreateQuote, useDepositDefault, useQuoteStats, useQuotes } from "../queries/quotes";
+import { BillToField, readyBillTo, type BillToCard } from "../components/bill-to";
+import { useSetCardDeposit } from "../queries/billTo";
+import { useCreateQuote, useQuoteStats, useQuotes } from "../queries/quotes";
 import { ContactPicker } from "../components/contact-picker";
 import { useCompanies, useSites } from "../queries/companies";
 import { PhoneCardList } from "../components/phone-card-list";
@@ -51,8 +52,8 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
     companyId: "",
     supervisorContactId: "",
     siteId: "",
-    /** Blank until someone types one. Blank means "use the card default". */
-    depositPercent: "",
+    /** Asked only when the Bill to's card has no % yet. Saved on the card. */
+    billToPercent: "",
     validDays: "30",
     notes: "",
     /** Where the job came from. Required, same as New job. */
@@ -62,11 +63,13 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
   const [error, setError] = React.useState<string | null>(null);
   const [copying, setCopying] = React.useState(false);
   const sites = useSites(form.contactId ? { contactId: Number(form.contactId) } : {});
-  const depositDefault = useDepositDefault({
-    companyId: form.companyId ? Number(form.companyId) : null,
-    contactId: form.contactId ? Number(form.contactId) : null,
-  });
-  const depositTyped = form.depositPercent.trim() !== "";
+  // Who pays (notes 18.54). Nothing is picked for the office.
+  const [billTo, setBillTo] = React.useState<BillToCard | null>(null);
+  const setCard = useSetCardDeposit();
+  const known = [
+    ...(form.contactId ? [{ type: "contact" as const, id: Number(form.contactId), role: "Customer" }] : []),
+    ...(form.companyId ? [{ type: "company" as const, id: Number(form.companyId), role: "Company" }] : []),
+  ];
 
   function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -78,14 +81,20 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
       setError('Pick where the job came from. "Other" is fine.');
       return;
     }
+    const ready = readyBillTo(billTo, form.billToPercent, "quote");
+    if ("error" in ready || !billTo) {
+      setError("error" in ready ? ready.error : "Pick who pays this quote (Bill to).");
+      return;
+    }
     try {
+      if (ready.save != null) await setCard.mutateAsync({ billTo: { type: billTo.type, id: billTo.id }, percent: ready.save });
       const quote = await create.mutateAsync({
         contactId: form.contactId ? Number(form.contactId) : null,
         companyId: form.companyId ? Number(form.companyId) : null,
         supervisorContactId: form.companyId && form.supervisorContactId ? Number(form.supervisorContactId) : null,
         siteId: form.siteId ? Number(form.siteId) : null,
-        // Not typed: the server takes it off the company or contact card.
-        depositPercent: depositTyped ? Math.min(100, Math.max(0, Number(form.depositPercent) || 0)) : undefined,
+        // The deposit % comes off the Bill to's card.
+        billTo: { type: billTo.type, id: billTo.id },
         validDays: Number(form.validDays) || 30,
         notes: form.notes || null,
         // Beyond the customer and supervisor. Merged onto one row per person on the job.
@@ -107,7 +116,7 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
       open={open}
       onClose={onClose}
       title="New quote"
-      subtitle="Pick who it's for, then build the lines. This also makes the job at Lead, with the same number. A company on the quote means the company gets billed."
+      subtitle="Pick who it's for, then build the lines. This also makes the job at Lead, with the same number. Bill to says who pays."
       width="max-w-xl"
       footer={
         <>
@@ -118,7 +127,7 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={create.isPending}>
+          <Button onClick={submit} disabled={create.isPending || setCard.isPending}>
             {create.isPending ? <Spinner className="border-white/40 border-t-white" /> : null}
             Start quote
           </Button>
@@ -164,13 +173,14 @@ export function NewQuoteModal({ open, onClose }: { open: boolean; onClose: () =>
             ))}
           </Select>
         </Field>
-        <Field label="Deposit %" hint={depositTyped ? "Typed for this quote only" : depositHint(depositDefault.data?.source)}>
-          <Input
-            type="number"
-            min={0}
-            max={100}
-            value={depositTyped ? form.depositPercent : String(depositDefault.data?.percent ?? "")}
-            onChange={(e) => set("depositPercent", e.target.value === "" ? "" : e.target.value)}
+        <Field label="Bill to (required)" hint="Who pays. The deposit % comes off their card." className="sm:col-span-2">
+          <BillToField
+            id="newquote_billto"
+            value={billTo}
+            onChange={setBillTo}
+            percent={form.billToPercent}
+            onPercent={(v) => set("billToPercent", v)}
+            known={known}
           />
         </Field>
         <Field label="Valid for (days)">

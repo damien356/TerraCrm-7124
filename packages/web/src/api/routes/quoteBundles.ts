@@ -3,6 +3,7 @@ import { asc, eq } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { billedCompanyId } from "../lib/bill-to";
 import { staffOnly } from "../middleware/auth";
 import {
   BUNDLE_MODES,
@@ -14,7 +15,7 @@ import {
 } from "../lib/bundles";
 import { draftBundleWording } from "../agent/bundle-wording";
 import { renderQuotePdf, type QuotePdfInput } from "../lib/quotePdf";
-import { depositSplit } from "../lib/deposits";
+import { depositSplit, quotePercent } from "../lib/deposits";
 import { todayISO } from "../lib/pricing";
 import { auDate } from "../lib/invoice-match";
 import { quoteRefOf } from "../lib/quote-number";
@@ -179,7 +180,7 @@ const fullName = (c: { firstName: string; lastName: string } | null | undefined)
 /** Everything the client PDF needs. Bundles only: no line, qty, rate or cost leaves this function. */
 /** Pay by card on the PDF: the deposit's pay link once accepted, else the quote's online link. */
 async function cardPayForPdf(quote: typeof schema.quotes.$inferSelect) {
-  if (!cardPaymentsOn() || !(quote.depositPercent > 0)) return null;
+  if (!cardPaymentsOn() || !(quotePercent(quote) > 0)) return null;
   const dep = await depositInvoiceFor(quote.id);
   if (dep && owingOn(dep) > 0) return { url: payUrl(dep.id), note: `Pay deposit ${dep.number} online. No card surcharge.` };
   if (dep) return null;
@@ -188,7 +189,8 @@ async function cardPayForPdf(quote: typeof schema.quotes.$inferSelect) {
   return { url: quoteUrl(link.token), note: "Accept online, then pay your deposit by card. No card surcharge." };
 }
 
-async function jobBillsCompany(jobId: number | null) {
+async function jobBillsCompany(jobId: number | null, quoteType?: string | null) {
+  if (quoteType) return quoteType === "company";
   if (!jobId) return false;
   const [job] = await db.select({ t: schema.jobs.billToType }).from(schema.jobs).where(eq(schema.jobs.id, jobId));
   return job?.t === "company";
@@ -202,9 +204,9 @@ export async function clientPdfFor(quoteId: number, signed?: QuotePdfInput["sign
   const [supervisor] = quote.supervisorContactId
     ? await db.select().from(schema.contacts).where(eq(schema.contacts.id, quote.supervisorContactId))
     : [];
-  const [company] = quote.companyId
-    ? await db.select().from(schema.companies).where(eq(schema.companies.id, quote.companyId))
-    : [];
+  // Notes 18.54: the company on the paperwork follows the quote's Bill to.
+  const companyId = billedCompanyId(quote);
+  const [company] = companyId ? await db.select().from(schema.companies).where(eq(schema.companies.id, companyId)) : [];
   const [site] = quote.siteId ? await db.select().from(schema.sites).where(eq(schema.sites.id, quote.siteId)) : [];
   const { bundles, layout, items } = await bundlesFor(quote);
 
@@ -213,7 +215,7 @@ export async function clientPdfFor(quoteId: number, signed?: QuotePdfInput["sign
     ? [site.address, [site.suburb, site.state, site.postcode].filter(Boolean).join(" ")].filter(Boolean).join(", ")
     : null;
   const isoDay = (d: Date) => todayISO(d);
-  const { deposit, balance } = depositSplit(quote.total, quote.depositPercent);
+  const { deposit, balance } = depositSplit(quote.total, quotePercent(quote));
 
   const ref = await quoteRefOf(quote);
   const pdf = await renderQuotePdf({
@@ -235,11 +237,11 @@ export async function clientPdfFor(quoteId: number, signed?: QuotePdfInput["sign
     subtotal: quote.subtotal,
     gst: quote.gst,
     total: quote.total,
-    depositPercent: quote.depositPercent,
+    depositPercent: quotePercent(quote),
     deposit,
     balance,
     cardPay: await cardPayForPdf(quote),
-    showPosition: Boolean(company) || (await jobBillsCompany(quote.jobId)) || Boolean(signed?.position?.trim()),
+    showPosition: Boolean(company) || (await jobBillsCompany(quote.jobId, quote.billToType)) || Boolean(signed?.position?.trim()),
     signed: signed ?? null,
   });
   // Itemised: the client reads the rows, so section wording is not needed.

@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { and, asc, desc, eq, inArray, like, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, like, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { staffOnly } from "../middleware/auth";
-import { depositDefaultOf } from "../lib/deposits";
+import { cardDepositChanged, syncCompanyTerms } from "../lib/bill-to";
 import { rebuildForecast } from "../lib/cashflow";
 import { siteGeoFields, withGeoSource } from "../lib/job-new-records";
 
@@ -140,7 +140,7 @@ export const companies = {
         billingAddress: z.string().nullable().optional(),
         paymentTerms: z.number().int().min(0).default(14),
         creditLimit: z.number().nullable().optional(),
-        /** Deposit % new quotes start at. Null = 0 for a builder, 50 otherwise. Admin and Office. */
+        /** Deposit % on the card. Quotes billed to the company take it. Null = not asked yet, never guessed (notes 18.54). */
         depositPercent: z.number().min(0).max(100).nullable().optional(),
         notes: z.string().nullable().optional(),
         ...workOrderFields,
@@ -166,7 +166,7 @@ export const companies = {
         billingAddress: z.string().nullable().optional(),
         paymentTerms: z.number().int().min(0).optional(),
         creditLimit: z.number().nullable().optional(),
-        /** Deposit % new quotes start at. Null = 0 for a builder, 50 otherwise. Admin and Office. */
+        /** Deposit % on the card. Quotes billed to the company take it. Null = not asked yet, never guessed (notes 18.54). */
         depositPercent: z.number().min(0).max(100).nullable().optional(),
         notes: z.string().nullable().optional(),
         ...workOrderFields,
@@ -180,6 +180,9 @@ export const companies = {
         .select({ type: schema.companies.type, depositPercent: schema.companies.depositPercent })
         .from(schema.companies)
         .where(eq(schema.companies.id, id));
+      // A set % is never blanked: a company card always needs one (notes 18.54).
+      if (before?.depositPercent != null && rest.depositPercent === null)
+        throw new ORPCError("BAD_REQUEST", { message: "A company always needs a deposit %. Type 0 for no deposit." });
       const [row] = await db
         .update(schema.companies)
         .set({ ...rest, updatedAt: new Date() })
@@ -188,14 +191,12 @@ export const companies = {
       if (!row) throw new ORPCError("NOT_FOUND", { message: "Company not found" });
       // The company form sends every field on save, so compare with before:
       // only a real change to the deposit or the type touches terms.
-      if (before && (before.depositPercent !== row.depositPercent || before.type !== row.type)) {
+      if (before && before.depositPercent !== row.depositPercent) {
         // One deposit setting: keep the company's payment terms row in step
-        // (progress claims carry their own stages) and redo the forecast.
-        const pct = depositDefaultOf(row, null).percent;
-        await db
-          .update(schema.paymentTerms)
-          .set({ depositPercent: pct, structure: pct > 0 ? "deposit_balance" : "on_completion", updatedAt: new Date() })
-          .where(and(eq(schema.paymentTerms.companyId, id), ne(schema.paymentTerms.structure, "progress_claims")));
+        // (progress claims carry their own stages), move the draft quotes
+        // billed to this card (notes 18.54) and redo the forecast.
+        await syncCompanyTerms(id, row.depositPercent);
+        await cardDepositChanged({ type: "company", id });
         await rebuildForecast().catch((e) => console.error("[cashflow] rebuild after deposit change failed:", e));
       }
       return row;

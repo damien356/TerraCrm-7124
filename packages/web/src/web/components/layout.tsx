@@ -25,6 +25,7 @@ import {
   BookOpen,
   Menu,
   Mic,
+  Percent,
   PieChart,
   Receipt,
   Settings as SettingsIcon,
@@ -103,6 +104,7 @@ const NAV: NavEntry[] = [
       { to: "/companies", label: "Companies", icon: Building2 },
       { to: "/supervisors", label: "Supervisors", icon: UserRoundSearch },
       { to: "/referrers", label: "Referrers", icon: Handshake },
+      { to: "/deposits-to-fill", label: "Deposit % to fill", icon: Percent },
     ],
   },
   {
