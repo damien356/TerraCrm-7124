@@ -75,7 +75,8 @@ function clientTypeFromCompany(type: string | null | undefined) {
  * enough to do in memory: a few thousand jobs.
  */
 async function leadJobs(range: { from?: string; to?: string; clientType?: string; source?: string }) {
-  const where = [isNull(schema.jobs.parentJobId)];
+  // A merged job (notes 18.48) is not a lead of its own: it counts once, on the job it went into.
+  const where = [isNull(schema.jobs.parentJobId), isNull(schema.jobs.mergedIntoJobId)];
   if (range.from) where.push(gte(schema.jobs.createdAt, dayStart(range.from)));
   if (range.to) where.push(lte(schema.jobs.createdAt, dayEnd(range.to)));
   const rows = await db

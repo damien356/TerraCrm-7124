@@ -635,10 +635,19 @@ export const jobs = sqliteTable(
     utm: text("utm").notNull().default(""),
     /** JSON list of flags for the office, e.g. "Unknown landing page". */
     leadFlags: text("lead_flags").notNull().default("[]"),
+    /**
+     * JOB MERGE (lib/job-merge.ts, notes 18.48). Set on a job that was merged
+     * into another. Everything on it moved to that job. It is hidden from the
+     * job lists, and anything that finds it by number goes to that job instead.
+     */
+    mergedIntoJobId: integer("merged_into_job_id").references((): AnySQLiteColumn => jobs.id, { onDelete: "set null" }),
+    mergedAt: integer("merged_at", { mode: "timestamp" }),
+    mergedByName: text("merged_by_name"),
     ...timestamps,
   },
   (t) => [
     index("jobs_status_idx").on(t.statusId),
+    index("jobs_merged_idx").on(t.mergedIntoJobId),
     index("jobs_site_idx").on(t.siteId),
     index("jobs_external_idx").on(t.externalRef),
     index("jobs_contact_idx").on(t.contactId),

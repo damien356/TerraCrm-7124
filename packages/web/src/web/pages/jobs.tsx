@@ -108,12 +108,14 @@ export default function JobsPage() {
                   <tr key={j.id} className="border-b border-border last:border-0 hover:bg-secondary/50">
                     <td className="px-4 py-2.5">
                       <span className="flex items-center gap-1">
-                        <Link to={`/jobs/${j.id}`} className="font-medium text-primary hover:underline">
+                        <Link to={`/jobs/${j.mergedInto?.id ?? j.id}`} className="font-medium text-primary hover:underline">
                           #{j.displayNumber ?? j.number}
                         </Link>
-                        <MemoButton jobId={j.id} compact />
+                        {j.mergedInto ? null : <MemoButton jobId={j.id} compact />}
                       </span>
-                      <p className="max-w-[240px] truncate text-xs text-muted-foreground">{j.title || "Untitled"}</p>
+                      <p className="max-w-[240px] truncate text-xs text-muted-foreground">
+                        {j.mergedInto ? `Merged into #${j.mergedInto.displayNumber ?? j.mergedInto.number}` : j.title || "Untitled"}
+                      </p>
                     </td>
                     <td className="px-4 py-2.5">
                       <p className="truncate">

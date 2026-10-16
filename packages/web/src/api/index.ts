@@ -68,6 +68,7 @@ import { emailCheck } from "./routes/emailCheck";
 import { productFind } from "./routes/productFind";
 import { publicPages } from "./routes/publicPages";
 import { jobCancel } from "./routes/jobCancel";
+import { jobMerge } from "./routes/jobMerge";
 import { variations } from "./routes/variations";
 import { underlayUpgrades } from "./routes/underlayUpgrades";
 import { care } from "./routes/care";
@@ -235,6 +236,7 @@ export const router = {
   /** No-login pages for clients: /q/<token> read and sign a quote, /m/<token> choose flooring. Never returns cost. */
   publicPages,
   jobCancel,
+  jobMerge,
 };
 
 export type AppRouter = typeof router;

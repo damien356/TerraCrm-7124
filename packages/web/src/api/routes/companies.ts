@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, asc, desc, eq, inArray, like, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, like, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -92,7 +92,8 @@ export const companies = {
         .from(schema.jobs)
         .leftJoin(schema.jobStatuses, eq(schema.jobStatuses.id, schema.jobs.statusId))
         .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
-        .where(eq(schema.jobs.companyId, input.id))
+        // A merged job (notes 18.48) is shown once, as the job it went into.
+        .where(and(eq(schema.jobs.companyId, input.id), isNull(schema.jobs.mergedIntoJobId)))
         .orderBy(desc(schema.jobs.number)),
     ]);
 

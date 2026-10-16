@@ -2,7 +2,7 @@ import * as React from "react";
 import { JobBillTo } from "../components/job-bill-to";
 import { DuplicateQuoteButton, JobCopyLinks } from "../components/quote-copy";
 import { CareCard } from "../components/care-card";
-import { Link, useParams, useSearch } from "wouter";
+import { Link, Redirect, useParams, useSearch } from "wouter";
 import { AlertTriangle, ArrowLeft, LifeBuoy, MessagesSquare, Plus, Sofa, Trash2, Users } from "lucide-react";
 import { Page } from "../components/layout";
 import { MemoButton } from "../components/voice-memo";
@@ -46,6 +46,7 @@ import { sourceName } from "../../api/lib/lead-codes";
 import { JobPeopleCard } from "../components/job-people";
 import { DispatchWork, MergeDispatchesModal, SplitDispatchModal } from "../components/dispatch-split";
 import { CancelJobButton } from "../components/job-cancel";
+import { MergeJobButton } from "../components/job-merge";
 import { JobReferrerCard } from "../components/referrals";
 import { useJobDispatchLines } from "../queries/dispatches";
 import {
@@ -356,6 +357,8 @@ export default function JobDetailPage() {
   }
 
   const j = job.data;
+  // A merged job opens the job it went into (notes 18.48).
+  if (j.mergedInto) return <Redirect to={`/jobs/${j.mergedInto.id}`} replace />;
   const isCallback = j.parentJobId != null;
   const isAdmin = bootstrap.data?.actor.role === "admin";
   // Supply only (item 14): the order, delivery and billing cards sit together in step order.
@@ -480,6 +483,7 @@ export default function JobDetailPage() {
             Create callback
           </Button>
           <CancelJobButton jobId={j.id} />
+          {isAdmin && !isCallback ? <MergeJobButton jobId={j.id} /> : null}
           <Button onClick={() => setTaskModal(true)}>
             <Plus className="size-4" />
             Add dispatch
@@ -763,7 +767,7 @@ export default function JobDetailPage() {
               <ul className="max-h-[420px] divide-y divide-border overflow-y-auto">
                 {j.activity.map((a) => (
                   <li key={a.id} className="px-4 py-2.5">
-                    <p className="text-sm">{a.detail}</p>
+                    <p className="whitespace-pre-line text-sm">{a.detail}</p>
                     <p className="mt-0.5 text-[11px] text-muted-foreground">
                       {a.actorName || "System"} ·{" "}
                       {new Date(a.createdAt).toLocaleString("en-AU", {

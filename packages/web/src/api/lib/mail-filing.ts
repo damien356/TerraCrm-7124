@@ -154,7 +154,13 @@ export async function jobsForContact(contactId: number) {
     })
     .from(schema.jobs)
     .leftJoin(schema.jobStatuses, eq(schema.jobStatuses.id, schema.jobs.statusId))
-    .where(or(eq(schema.jobs.contactId, contactId), linked.length ? inArray(schema.jobs.id, linked.map((l) => l.jobId)) : sql`0`))
+    .where(
+      and(
+        or(eq(schema.jobs.contactId, contactId), linked.length ? inArray(schema.jobs.id, linked.map((l) => l.jobId)) : sql`0`),
+        // A merged job is never offered: its work is on the job it went into (notes 18.48).
+        isNull(schema.jobs.mergedIntoJobId),
+      ),
+    )
     .orderBy(desc(schema.jobs.createdAt))
     .limit(30);
   const open = (r: (typeof rows)[number]) => r.statusId == null || ![8, 9].includes(r.statusId);
@@ -193,7 +199,7 @@ export async function jobsByAddress(text: string, skip: number[] = []) {
     .from(schema.jobs)
     .innerJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
     .leftJoin(schema.jobStatuses, eq(schema.jobStatuses.id, schema.jobs.statusId))
-    .where(or(isNull(schema.jobs.statusId), notInArray(schema.jobs.statusId, [8, 9])))
+    .where(and(or(isNull(schema.jobs.statusId), notInArray(schema.jobs.statusId, [8, 9])), isNull(schema.jobs.mergedIntoJobId)))
     .orderBy(desc(schema.jobs.createdAt))
     .limit(400);
   const out = [];

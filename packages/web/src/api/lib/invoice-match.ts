@@ -7,6 +7,7 @@ import { termsForSupplier } from "./supplier-terms";
 import { INVOICES_TO } from "./gmail";
 import { checkInvoicePrices } from "./price-check";
 import { notifyOffice } from "./notify";
+import { mergedTargets } from "./job-redirect";
 
 /* ---------------------------------------------------------------------------
  * Matching supplier paperwork to POs.
@@ -168,7 +169,10 @@ export async function linkInvoice(inv: InvoiceRow): Promise<{ poId: number | nul
   // A bare job number with exactly one PO to this supplier on that job.
   const jobNos = jobNumbersIn(inv.poRefRaw, inv.otherRefs);
   if (jobNos.length && open.length) {
-    const jobs = await db.select({ id: schema.jobs.id, number: schema.jobs.number }).from(schema.jobs).where(inArray(schema.jobs.number, jobNos));
+    const found = await db.select({ id: schema.jobs.id, number: schema.jobs.number }).from(schema.jobs).where(inArray(schema.jobs.number, jobNos));
+    // A merged job's number (notes 18.48) finds the POs on the job it went into.
+    const targets = await mergedTargets(found.map((j) => j.id));
+    const jobs = targets.length ? await db.select({ id: schema.jobs.id, number: schema.jobs.number }).from(schema.jobs).where(inArray(schema.jobs.id, targets)) : [];
     const jobIds = new Set(jobs.map((j) => j.id));
     const onJob = open.filter((p) => jobIds.has(p.jobId));
     if (onJob.length === 1) return { poId: onJob[0]!.id, note: `No PO number, matched on job ${jobs.find((j) => j.id === onJob[0]!.jobId)?.number}.` };

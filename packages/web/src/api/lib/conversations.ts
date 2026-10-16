@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { mergedTarget } from "./job-redirect";
 import { conversationIdFromAddress } from "./email";
 import { isTerraOpsMail } from "./notify-kinds";
 
@@ -79,10 +80,12 @@ export async function ensureForJob(jobId: number): Promise<typeof schema.convers
   /* A repair (R number) talks on its parent job's thread, labelled, so there is
    * one place per job (answers 15 Oct). */
   const [self] = await db
-    .select({ parentJobId: schema.jobs.parentJobId })
+    .select({ parentJobId: schema.jobs.parentJobId, mergedIntoJobId: schema.jobs.mergedIntoJobId })
     .from(schema.jobs)
     .where(eq(schema.jobs.id, jobId))
     .limit(1);
+  /* A merged job (notes 18.48) talks on the job it went into, so "[#188013]" lands on 188012. */
+  if (self?.mergedIntoJobId && self.mergedIntoJobId !== jobId) return ensureForJob(await mergedTarget(self.mergedIntoJobId));
   if (self?.parentJobId && self.parentJobId !== jobId) return ensureForJob(self.parentJobId);
 
   const [existing] = await db
