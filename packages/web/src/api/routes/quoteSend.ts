@@ -10,6 +10,7 @@ import { linkSummary } from "../lib/quote-links";
 import { depositInvoiceFor } from "../lib/client-invoices";
 import { uploadInput } from "../lib/job-mail";
 import { quoteEmailDraft, sendQuoteEmail } from "../lib/quote-email";
+import { syncJobValue } from "../lib/job-value";
 import { assertReadyToGoOut, editableQuoteOrThrow, quoteOrThrow, recordPriceHistory } from "./quotes";
 
 /* ---------------------------------------------------------------------------
@@ -136,6 +137,8 @@ export const quoteSend = {
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
+      // Notes 18.53: a sent quote always leaves its job on the right value.
+      if (quote.jobId) await syncJobValue(quote.jobId);
       await leadToQuotedOnSend({ jobId: quote.jobId, quoteNumber: out.ref, actor: context.actor });
       return { quote: row, to: out.to, via: out.via, url: out.url, linked: out.linked };
     }),

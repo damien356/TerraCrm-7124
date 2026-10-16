@@ -820,8 +820,9 @@ export const quotes = {
       // A job made with the quote takes the customer, company and site it is missing.
       const touchesJob = rest.contactId !== undefined || rest.companyId !== undefined || rest.supervisorContactId !== undefined || rest.siteId !== undefined;
       if (row?.jobId && touchesJob) await fillJobFromQuote(row.id);
-      // The deposit or the status changed: the job made by this quote follows.
-      if (row?.jobId && (rest.depositPercent !== undefined || rest.status !== undefined)) await syncJobValueFromQuote(row.id);
+      // Notes 18.53: every save keeps the job's value on its quote, whatever changed.
+      if (row?.jobId) await syncJobValue(row.jobId);
+      if (current.jobId && current.jobId !== row?.jobId) await syncJobValue(current.jobId);
       return row;
     }),
 
@@ -1718,6 +1719,8 @@ export const quotes = {
       actorName: context.actor.name,
       actorRole: context.actor.role,
     });
+    // Notes 18.53: a sent quote always leaves its job on the right value.
+    if (quote.jobId) await syncJobValue(quote.jobId);
     await leadToQuotedOnSend({ jobId: quote.jobId, quoteNumber: await quoteRefOf(quote), actor: context.actor });
 
     return row;

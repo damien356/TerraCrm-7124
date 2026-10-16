@@ -31,6 +31,7 @@ import { createContact } from "./contacts";
 import { sendConversationMessage } from "./conversations";
 import { jobNumberSql } from "../lib/job-ref";
 import { quoteRef } from "../lib/refs";
+import { syncJobValue } from "../lib/job-value";
 import { addJobPerson, customerTag } from "../lib/job-people";
 
 /* ---------------------------------------------------------------------------
@@ -450,10 +451,14 @@ async function moveMade(m: StoredMemo, a: StoredAction) {
     await db.update(schema.officeTasks).set({ jobId, updatedAt: new Date() }).where(eq(schema.officeTasks.id, a.ref.id));
   } else if (a.ref.table === "quotes") {
     // A quote is never taken off its job. With no other job to go to it stays where it is.
+    const [before] = await db.select({ jobId: schema.quotes.jobId }).from(schema.quotes).where(eq(schema.quotes.id, a.ref.id));
     await db
       .update(schema.quotes)
       .set({ ...(jobId ? { jobId } : {}), ...(contactId ? { contactId } : {}), updatedAt: new Date() })
       .where(eq(schema.quotes.id, a.ref.id));
+    // Notes 18.53: both jobs go back to their quotes' value.
+    if (jobId) await syncJobValue(jobId);
+    if (before?.jobId && before.jobId !== jobId) await syncJobValue(before.jobId);
   }
 }
 
@@ -516,6 +521,7 @@ async function takeBack(m: StoredMemo) {
         await db.delete(schema.quoteItems).where(eq(schema.quoteItems.quoteId, q.id));
         await db.update(schema.voiceQuoteCaptures).set({ quoteId: null }).where(eq(schema.voiceQuoteCaptures.quoteId, q.id));
         await db.delete(schema.quotes).where(eq(schema.quotes.id, q.id));
+        if (q.jobId) await syncJobValue(q.jobId);
       } else kept.push(a);
     }
   }

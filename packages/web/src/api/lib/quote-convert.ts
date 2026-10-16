@@ -8,6 +8,7 @@ import { insertDispatchForLines } from "./dispatch-build";
 import { carryQuotePeopleToJob } from "./job-people";
 import { nextJobNumber } from "./job-number";
 import { quoteRef } from "./refs";
+import { syncJobValue } from "./job-value";
 
 /* ---------------------------------------------------------------------------
  * Quotes and their jobs.
@@ -164,6 +165,8 @@ export async function createJobForQuote(
     .update(schema.quotes)
     .set({ jobId: job.id, updatedAt: new Date() })
     .where(and(eq(schema.quotes.number, quote.number), isNull(schema.quotes.jobId)));
+  // Notes 18.53: the newest version sets the value, the same rule as everywhere else.
+  await syncJobValue(job.id);
 
   return { job, number };
 }

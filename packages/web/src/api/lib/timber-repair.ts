@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import type { Actor } from "../middleware/auth";
+import { syncJobValue } from "./job-value";
 import { assertReadyToGoOut, createQuoteRecord, editableQuoteOrThrow, recalc, recordPriceHistory } from "../routes/quotes";
 import { assertBillable } from "./callbacks";
 import { leadToQuotedOnSend } from "./job-stage";
@@ -528,6 +529,7 @@ export async function approveRepairQuote(id: number, actor: Actor) {
   const out = await sendQuoteEmail({ quote, to: draft.to, subject: fill(draft.subject), body: fill(draft.body), byName: actor.name });
   const now = new Date();
   await db.update(schema.quotes).set({ status: "sent", sentAt: quote.sentAt ?? now, updatedAt: now }).where(eq(schema.quotes.id, quote.id));
+  if (quote.jobId) await syncJobValue(quote.jobId);
   await db.insert(schema.activityLog).values({
     jobId: quote.jobId,
     contactId: quote.contactId,
