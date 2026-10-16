@@ -348,6 +348,26 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   const role = bootstrap.data?.actor.role;
 
+  // A login with no Terra Ops profile (there is no public sign-up) gets this, not the board.
+  if (bootstrap.isError && (bootstrap.error as { code?: string } | null)?.code === "FORBIDDEN") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-6">
+        <div className="card-surface max-w-md px-6 py-8 text-center">
+          <HardHat className="mx-auto size-8 text-primary" />
+          <h1 className="mt-3 text-lg font-semibold">No access</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{bootstrap.error.message}</p>
+          <button
+            type="button"
+            onClick={() => authClient.signOut().then(() => (window.location.href = "/login"))}
+            className="mt-5 text-sm font-medium text-primary hover:underline"
+          >
+            Sign out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // Field crew work out of the mobile app. The office web app is for Admin and Office.
   if (bootstrap.isFetched && role !== "admin" && role !== "office") {
     return (

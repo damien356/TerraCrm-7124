@@ -5,8 +5,6 @@ import { Field, Input } from "../components/ui/field";
 import { Spinner } from "../components/ui/card";
 
 export default function LoginPage() {
-  const [mode, setMode] = React.useState<"signin" | "signup">("signin");
-  const [name, setName] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [busy, setBusy] = React.useState<"none" | "email" | "google">("none");
@@ -22,10 +20,8 @@ export default function LoginPage() {
     setError(null);
     setBusy("email");
     try {
-      const res =
-        mode === "signin"
-          ? await authClient.signIn.email({ email, password })
-          : await authClient.signUp.email({ email, password, name: name || email.split("@")[0]! });
+      // Sign in only. Logins are made by an Admin in Admin, People.
+      const res = await authClient.signIn.email({ email, password });
       if (res.error) throw new Error(res.error.message ?? "Sign in failed");
       window.location.href = "/";
     } catch (err) {
@@ -70,10 +66,8 @@ export default function LoginPage() {
 
       <div className="flex flex-1 items-center justify-center px-6 py-12">
         <div className="w-full max-w-sm">
-          <h2 className="text-xl font-semibold">{mode === "signin" ? "Sign in" : "Create your account"}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {mode === "signin" ? "Office access to Terra Ops." : "The first account created becomes the admin."}
-          </p>
+          <h2 className="text-xl font-semibold">Sign in</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Office access to Terra Ops.</p>
 
           <Button
             type="button"
@@ -93,11 +87,6 @@ export default function LoginPage() {
           </div>
 
           <form onSubmit={submit} className="space-y-3">
-            {mode === "signup" ? (
-              <Field label="Your name">
-                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Damien Lacey" />
-              </Field>
-            ) : null}
             <Field label="Email">
               <Input
                 type="email"
@@ -113,10 +102,10 @@ export default function LoginPage() {
                 type="password"
                 required
                 minLength={8}
-                autoComplete={mode === "signin" ? "current-password" : "new-password"}
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="At least 8 characters"
+                placeholder="Your password"
               />
             </Field>
 
@@ -128,20 +117,11 @@ export default function LoginPage() {
               disabled={busy !== "none"}
             >
               {busy === "email" ? <Spinner className="border-[#1C1B1A]/30 border-t-[#1C1B1A]" /> : null}
-              {mode === "signin" ? "Sign in" : "Create account"}
+              Sign in
             </Button>
           </form>
 
-          <button
-            type="button"
-            className="mt-4 text-sm text-muted-foreground transition-colors hover:text-primary"
-            onClick={() => {
-              setMode(mode === "signin" ? "signup" : "signin");
-              setError(null);
-            }}
-          >
-            {mode === "signin" ? "No account yet? Create one" : "Already have an account? Sign in"}
-          </button>
+          <p className="mt-4 text-sm text-muted-foreground">No login yet? Ask the office to add you.</p>
         </div>
       </div>
     </div>

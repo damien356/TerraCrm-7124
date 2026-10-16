@@ -113,7 +113,7 @@ export default function TeamPage() {
             dispatched tasks. Enforced on the server.
           </li>
           <li>
-            Add person makes the login and texts the password to their mobile. New sign-ups start as Field crew.
+            Add person makes the login and texts the password to their mobile. There is no public sign-up. Only an Admin can make a login here.
             "Switch off" only blocks login. It never deletes anything.
           </li>
         </ul>

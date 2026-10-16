@@ -1,7 +1,7 @@
 import { ORPCError } from "@orpc/server";
 import { eq } from "drizzle-orm";
 import { base } from "../__core/app";
-import { auth } from "../auth";
+import { auth, NO_LOGIN } from "../auth";
 import { db, inDemo, runOnDemo, type DemoDb } from "../database";
 import * as schema from "../database/schema";
 import { demoDatabase, ensureReviewerProfile, isPlayReviewer } from "../database/demo";
@@ -104,11 +104,13 @@ async function actorFor(session: Session): Promise<Actor> {
     .from(schema.profiles)
     .where(eq(schema.profiles.userId, session.user.id));
 
-  // First user to ever sign in becomes the admin. Everyone after that signs up
-  // as Field crew (and gets an installer card). An Admin can change their level.
+  // The first user to ever sign in becomes the admin. After that there is no
+  // sign-up: every login is made by an Admin in Admin, People, which writes the
+  // profile too. A login with no profile gets nothing.
   if (!profile) {
     const existing = await db.select({ id: schema.profiles.id }).from(schema.profiles).limit(1);
-    const role: Role = existing.length === 0 ? "admin" : "field";
+    if (existing.length > 0) throw new ORPCError("FORBIDDEN", { message: NO_LOGIN });
+    const role: Role = "admin";
     const [created] = await db
       .insert(schema.profiles)
       .values({
@@ -118,14 +120,13 @@ async function actorFor(session: Session): Promise<Actor> {
         role,
       })
       .returning();
-    const installerId = role === "field" ? await ensureInstallerCard(session.user.id) : null;
     return {
       userId: session.user.id,
       name: created!.name,
       email: created!.email,
       role,
-      installerId,
-      canSeeCosts: role === "admin",
+      installerId: null,
+      canSeeCosts: true,
     };
   }
 
