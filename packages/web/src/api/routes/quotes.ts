@@ -47,6 +47,8 @@ import { foldForClient, quoteFreightView, refreshQuoteFreight, supplierChargesMa
 import { isChargeLine } from "../lib/charge-fold";
 import { fromPhoneApp, PHONE_PRICE_MESSAGE } from "../lib/phone-app";
 import { copyLinksFor } from "../lib/quote-copy-links";
+import { feeOnQuoteRecalc } from "../lib/referral-fees";
+import { feeForStaff, feeLinesForStaff, typedPriceWithoutFee } from "../lib/referral-quote-view";
 
 /**
  * Quotes are for Admin and Office. Field crew must never reach any procedure
@@ -154,7 +156,11 @@ export async function recalc(quoteId: number) {
     .from(schema.quoteItems)
     .where(eq(schema.quoteItems.quoteId, quoteId));
 
-  const subtotal = round2(items.reduce((sum, i) => sum + (i.total ?? 0), 0));
+  const lineSum = round2(items.reduce((sum, i) => sum + (i.total ?? 0), 0));
+  // Notes 18.47: a referral fee goes on top of the lines, never in them.
+  const [q] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, quoteId));
+  const fee = q ? await feeOnQuoteRecalc(q, lineSum) : 0;
+  const subtotal = round2(lineSum + fee);
   const gst = round2(subtotal * GST_RATE);
   const total = round2(subtotal + gst);
 
@@ -657,8 +663,11 @@ export const quotes = {
 
     const cost = items.reduce((sum, i) => sum + (i.unitCost ?? 0) * (i.qty ?? 0), 0);
     const showCosts = context.actor.canSeeCosts;
+    // Notes 18.47: the referral fee. An Admin reads it as its own line. Everyone else has it spread into the lines.
+    const fee = await feeForStaff(row.quote.id, context.actor);
     // Notes 18.33: no cost, no supplier charge lines. Their sell sits in the supplier's lines, as on the client copy.
-    const shown = showCosts ? items : (await foldForClient(items)).lines;
+    const shown = feeLinesForStaff(showCosts ? items : (await foldForClient(items)).lines, fee, context.actor);
+    const mine = context.actor.role === "admin" ? items : shown;
     const areas = await lineAreas(items);
     const sizes = await lineSizes(items);
     const limit = await discountLimit();
@@ -680,7 +689,7 @@ export const quotes = {
       site: row.site,
       job: row.job?.id ? row.job : null,
       items: showCosts
-        ? items.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice), belowStandard: markupBelowStandard(i), area: areas[i.id] ?? null, size: sizes[i.id] ?? null }))
+        ? mine.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice), belowStandard: markupBelowStandard(i), area: areas[i.id] ?? null, size: sizes[i.id] ?? null }))
         : shown.map((i) => ({ ...i, unitCost: null, markupPercent: null, freightUnitCost: null, belowStandard: null, area: areas[i.id] ?? null, size: sizes[i.id] ?? null })),
       ...depositSplit(row.quote.total, row.quote.depositPercent),
       activity,
@@ -698,8 +707,11 @@ export const quotes = {
       freightIncluded,
       /** Settings, Business rules. What the charge lines sell at over cost. Cost viewers only. */
       supplierChargesPct: showCosts ? await supplierChargesMarkupPct() : null,
-      estimatedMargin: showCosts ? round2(row.quote.subtotal - cost) : null,
-      estimatedMarginPercent: !showCosts ? null : row.quote.subtotal > 0 ? round2(((row.quote.subtotal - cost) / row.quote.subtotal) * 100) : 0,
+      // The fee is on top, so Terra's margin is on the price before it (notes 18.47).
+      estimatedMargin: showCosts ? round2(row.quote.subtotal - fee.adminAmount - cost) : null,
+      estimatedMarginPercent: !showCosts ? null : row.quote.subtotal - fee.adminAmount > 0 ? round2(((row.quote.subtotal - fee.adminAmount - cost) / (row.quote.subtotal - fee.adminAmount)) * 100) : 0,
+      /** Admin only: "Referral fee: Fix A Tile, 5%, $500.00", its own line on the internal view. Null for everyone else. */
+      referralFee: fee.view,
     };
   }),
 
@@ -1185,11 +1197,10 @@ export const quotes = {
         delete rest.wastagePct;
         delete rest.rollWidthM;
         delete rest.followsItemId;
-      } else if (!context.actor.canSeeCosts && rest.unitPrice !== undefined && rest.unitPrice !== before.unitPrice && before.qty > 0) {
-        // Staff without costs see this line with the supplier charges spread in. Take that back out of a typed price.
-        const peers = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, before.quoteId));
-        const share = (await foldForClient(peers)).shares.get(before.id) ?? 0;
-        if (share) rest.unitPrice = round2(rest.unitPrice - share / before.qty);
+      } else if (context.actor.role !== "admin" && rest.unitPrice !== undefined && rest.unitPrice !== before.unitPrice && before.qty > 0) {
+        // Staff without costs see this line with the supplier charges spread in, and nobody but an
+        // Admin sees the referral fee (notes 18.47). Take both back out of a typed price.
+        rest.unitPrice = await typedPriceWithoutFee(before, rest.unitPrice, context.actor);
       }
       // Only an Admin can change what Terra pays or the markup on it. Office edits price and quantity only.
       const { markupPercent: markupIn, ...fields } = rest;

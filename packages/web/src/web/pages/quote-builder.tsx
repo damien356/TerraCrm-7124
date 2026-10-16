@@ -44,6 +44,7 @@ import { LastQuotedNote } from "../components/product-finder";
 import { QUOTE_STATUS_COLOUR } from "./quotes";
 import { CancelJobButton } from "../components/job-cancel";
 import { isPhoneApp } from "../lib/phone-app";
+import { ReferralFeeRows } from "../components/referrals";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
 
@@ -1132,6 +1133,7 @@ export default function QuoteBuilderPage() {
           <Card>
             <CardHeader title="Totals" />
             <div className="flex flex-col gap-2 px-4 py-3 text-sm">
+              <ReferralFeeRows fee={q.referralFee} subtotal={q.subtotal} />
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Subtotal</span>
                 <span className="tabular">{money(q.subtotal)}</span>

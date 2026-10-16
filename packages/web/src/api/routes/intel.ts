@@ -135,7 +135,7 @@ export const intel = {
       z
         .object({
           search: z.string().default(""),
-          sort: z.enum(["revenue", "gp", "jobs", "recent", "name"]).default("revenue"),
+          sort: z.enum(["revenue", "gp", "jobs", "recent", "name", "referred"]).default("revenue"),
           limit: z.number().int().min(10).max(2000).default(100),
         })
         .default({ search: "", sort: "revenue", limit: 100 }),
@@ -151,18 +151,26 @@ export const intel = {
               ? sql`last_job_at desc`
               : input.sort === "name"
                 ? sql`lower(c.first_name || ' ' || c.last_name) asc`
-                : sql`revenue desc`;
+                : input.sort === "referred"
+                  ? sql`referred desc, revenue desc`
+                  : sql`revenue desc`;
 
       /**
        * Left joined on purpose. A person with no jobs yet is still a client
        * record people need to find, so they rank last rather than vanish.
        */
-      const rows = await db.all<AggRow & { id: number; first_name: string; last_name: string; mobile: string | null; email: string | null; suburb: string | null; outstanding: number; company_names: string | null; active: number }>(sql`
+      const rows = await db.all<AggRow & { id: number; first_name: string; last_name: string; mobile: string | null; email: string | null; suburb: string | null; outstanding: number; company_names: string | null; active: number; referred: number }>(sql`
         select c.id, c.first_name, c.last_name, c.mobile, c.email, c.suburb, c.active,
           (select coalesce(sum(i.total - i.amount_paid), 0) from invoices i
              where i.bill_to_contact_id = c.id and i.status not in ('paid','void')) as outstanding,
           (select group_concat(co.name, ', ') from company_contacts cc
              join companies co on co.id = cc.company_id where cc.contact_id = c.id) as company_names,
+          -- Notes 18.47: the value of the jobs they referred, beside what they paid. Revenue stays as it was.
+          (select coalesce(sum(rj.value), 0) from referrers rr
+             join job_referrals jr on jr.referrer_id = rr.id
+             join jobs rj on rj.id = jr.job_id
+             left join job_statuses rs on rs.id = rj.status_id
+             where rr.contact_id = c.id and lower(coalesce(rs.name, '')) <> 'cancelled') as referred,
           ${AGG}
         from contacts c
         left join jobs j on j.contact_id = c.id
@@ -193,6 +201,8 @@ export const intel = {
           active: !!r.active,
           companyNames: r.company_names,
           outstanding: Math.round((r.outstanding ?? 0) * 100) / 100,
+          /** Notes 18.47: value of the jobs they referred, ex GST. Not in revenue. */
+          referred: Math.round(Number(r.referred ?? 0) * 100) / 100,
           ...shapeAgg(r),
         })),
       };
@@ -282,7 +292,7 @@ export const intel = {
       z
         .object({
           search: z.string().default(""),
-          sort: z.enum(["revenue", "gp", "jobs", "recent", "outstanding", "name"]).default("revenue"),
+          sort: z.enum(["revenue", "gp", "jobs", "recent", "outstanding", "name", "referred"]).default("revenue"),
           limit: z.number().int().min(10).max(2000).default(100),
         })
         .default({ search: "", sort: "revenue", limit: 100 }),
@@ -300,7 +310,9 @@ export const intel = {
                 ? sql`outstanding desc`
                 : input.sort === "name"
                   ? sql`lower(co.name) asc`
-                  : sql`revenue desc`;
+                  : input.sort === "referred"
+                    ? sql`referred desc, revenue desc`
+                    : sql`revenue desc`;
 
       const rows = await db.all<
         AggRow & {
@@ -312,6 +324,7 @@ export const intel = {
           contact_count: number;
           terms_days: number | null;
           terms_eom: number | null;
+          referred: number;
         }
       >(sql`
         select co.id, co.name, co.type,
@@ -322,6 +335,12 @@ export const intel = {
           (select count(*) from company_contacts cc where cc.company_id = co.id) as contact_count,
           (select pt.terms_days from payment_terms pt where pt.company_id = co.id) as terms_days,
           (select pt.end_of_month from payment_terms pt where pt.company_id = co.id) as terms_eom,
+          -- Notes 18.47: the value of the jobs they referred.
+          (select coalesce(sum(rj.value), 0) from referrers rr
+             join job_referrals jr on jr.referrer_id = rr.id
+             join jobs rj on rj.id = jr.job_id
+             left join job_statuses rs on rs.id = rj.status_id
+             where rr.company_id = co.id and lower(coalesce(rs.name, '')) <> 'cancelled') as referred,
           ${AGG}
         from companies co
         left join jobs j on j.company_id = co.id
@@ -346,6 +365,8 @@ export const intel = {
           /** Falls back to Damien's standard, 30 days EOM, when nothing is set. */
           termsDays: r.terms_days ?? 30,
           termsEom: r.terms_eom === null ? true : !!r.terms_eom,
+          /** Notes 18.47: value of the jobs they referred, ex GST. Not in revenue. */
+          referred: Math.round(Number(r.referred ?? 0) * 100) / 100,
           ...shapeAgg(r),
         })),
       };

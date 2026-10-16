@@ -424,6 +424,15 @@ function LinesTable({ v, canEdit, canSeeCosts, onError }: { v: Variation; canEdi
           ))}
         </tbody>
         <tfoot className="border-t border-border text-sm">
+          {v.referralFee ? (
+            <tr title="Admin only. Spread into the lines on the client copy.">
+              <td colSpan={canSeeCosts ? 5 : 4} className="px-3 py-1.5 text-right text-muted-foreground">
+                {v.referralFee.label}
+              </td>
+              <td className="tabular px-2 py-1.5 text-right">{moneyExact(v.referralFee.amount)}</td>
+              {canEdit ? <td aria-label="No actions" /> : null}
+            </tr>
+          ) : null}
           <tr>
             <td colSpan={canSeeCosts ? 5 : 4} className="px-3 py-1.5 text-right text-muted-foreground">
               Subtotal

@@ -11,6 +11,8 @@ import { Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { PaymentTermsCard } from "../components/payment-terms";
 import { ClientQuotesCard } from "../components/quote-copy";
+import { ReferrerSection } from "../components/referrals";
+import { useBootstrap } from "../queries/settings";
 import { useCompany, useUpdateCompany } from "../queries/companies";
 import { useCompanyIntelDetail } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
@@ -36,6 +38,7 @@ export default function CompanyDetailPage() {
   const company = useCompany(Number.isFinite(id) ? id : null);
   const intel = useCompanyIntelDetail(Number.isFinite(id) ? id : null);
   const update = useUpdateCompany();
+  const isAdmin = useBootstrap().data?.actor.role === "admin";
   const [editing, setEditing] = React.useState(false);
 
   if (company.isLoading) return <Loading label="Opening company…" />;
@@ -288,6 +291,8 @@ export default function CompanyDetailPage() {
           </Card>
 
           <ClientQuotesCard companyId={c.id} />
+
+          {isAdmin ? <ReferrerSection companyId={c.id} abn={c.abn} /> : null}
         </div>
 
         <Card>

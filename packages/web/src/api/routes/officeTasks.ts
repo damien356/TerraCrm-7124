@@ -29,14 +29,17 @@ const row = {
   jobTitle: schema.jobs.title,
 };
 
+/** Notes 18.47: Admin only tasks (the referral fees) never reach anyone but an Admin. */
+const seen = (actor: { role: string }) => (actor.role === "admin" ? undefined : eq(schema.officeTasks.adminOnly, false));
+
 export const officeTasks = {
   /** Everything open: timed reminders first by time, then dated tasks, then the rest. */
-  open: staffOnly.handler(async () => {
+  open: staffOnly.handler(async ({ context }) => {
     const rows = await db
       .select(row)
       .from(schema.officeTasks)
       .leftJoin(schema.jobs, eq(schema.jobs.id, schema.officeTasks.jobId))
-      .where(eq(schema.officeTasks.status, "open"))
+      .where(and(eq(schema.officeTasks.status, "open"), seen(context.actor)))
       .orderBy(
         sql`case when ${schema.officeTasks.remindAt} is null then 1 else 0 end`,
         asc(schema.officeTasks.remindAt),
@@ -56,7 +59,7 @@ export const officeTasks = {
     const [t] = await db
       .update(schema.officeTasks)
       .set({ status: "done", completedAt: new Date(), completedByName: context.actor.name, updatedAt: new Date() })
-      .where(and(eq(schema.officeTasks.id, input.id), eq(schema.officeTasks.status, "open")))
+      .where(and(eq(schema.officeTasks.id, input.id), eq(schema.officeTasks.status, "open"), seen(context.actor)))
       .returning();
     if (!t) throw new ORPCError("NOT_FOUND", { message: "That task is already done or gone." });
     return { ok: true };
@@ -65,12 +68,12 @@ export const officeTasks = {
   /** Push it back. Clears remindedAt so the phone is nudged again at the new time. */
   snooze: staffOnly
     .input(z.object({ id: z.number(), minutes: z.number().int().min(5).max(60 * 24 * 14) }))
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
       const remindAt = new Date(Date.now() + input.minutes * 60_000);
       const [t] = await db
         .update(schema.officeTasks)
         .set({ remindAt, remindedAt: null, updatedAt: new Date() })
-        .where(and(eq(schema.officeTasks.id, input.id), eq(schema.officeTasks.status, "open")))
+        .where(and(eq(schema.officeTasks.id, input.id), eq(schema.officeTasks.status, "open"), seen(context.actor)))
         .returning();
       if (!t) throw new ORPCError("NOT_FOUND", { message: "That task is already done or gone." });
       return { ok: true, remindAt };

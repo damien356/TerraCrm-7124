@@ -257,6 +257,7 @@ const SORTS: { key: ListSort; label: string }[] = [
   { key: "gp", label: "Gross profit" },
   { key: "jobs", label: "Jobs" },
   { key: "recent", label: "Most recent" },
+  { key: "referred", label: "Referred" },
   { key: "name", label: "Name" },
 ];
 
@@ -325,6 +326,7 @@ export default function ClientsPage() {
                   <th className="th px-3 text-right">Jobs</th>
                   <th className="th px-3 text-right">Avg job</th>
                   <th className="th px-3 text-right">Owing</th>
+                  <th className="th px-3 text-right" title="Value of the jobs they referred to Terra. Not in their revenue.">Referred</th>
                   <th className="th px-3 text-right">Last job</th>
                 </tr>
               </thead>
@@ -385,6 +387,9 @@ export default function ClientsPage() {
                       ) : (
                         <span className="text-muted-foreground">-</span>
                       )}
+                    </td>
+                    <td className="tabular whitespace-nowrap px-3 py-2.5 text-right">
+                      {c.referred > 0 ? money(c.referred) : <span className="text-muted-foreground">-</span>}
                     </td>
                     <td className="tabular whitespace-nowrap px-3 py-2.5 text-right text-muted-foreground">
                       {histDate(c.lastJob)}

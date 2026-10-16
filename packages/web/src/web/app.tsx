@@ -32,6 +32,7 @@ import InvoicesPage from "./pages/finance-invoices";
 import SubcontractorInvoicesPage from "./pages/subcontractor-invoices";
 import ExpensesPage from "./pages/finance-expenses";
 import SuppliersOwedPage from "./pages/suppliers-owed";
+import ReferrersOwedPage from "./pages/referrers-owed";
 import ProfitabilityPage from "./pages/finance-profitability";
 import CallbacksReportPage from "./pages/callbacks-report";
 import TemplatesPage from "./pages/templates";
@@ -99,6 +100,7 @@ function App() {
               <Route path="/finance/subcontractor-invoices" component={SubcontractorInvoicesPage} />
               <Route path="/finance/expenses" component={ExpensesPage} />
               <Route path="/finance/suppliers-owed" component={SuppliersOwedPage} />
+              <Route path="/finance/referrers-owed" component={ReferrersOwedPage} />
               <Route path="/finance/profitability" component={ProfitabilityPage} />
               <Route path="/finance/callbacks" component={CallbacksReportPage} />
               <Route path="/reports/leads" component={LeadsReportPage} />

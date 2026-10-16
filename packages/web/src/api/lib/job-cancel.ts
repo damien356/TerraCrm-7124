@@ -1,3 +1,4 @@
+import { referralOnCancel } from "./referral-fees";
 import { ORPCError } from "@orpc/server";
 import { and, eq, inArray, isNull, ne, notInArray, sql } from "drizzle-orm";
 import { db } from "../database";
@@ -130,7 +131,8 @@ async function gather(jobId: number) {
   const officeTasks = await db
     .select()
     .from(schema.officeTasks)
-    .where(and(eq(schema.officeTasks.jobId, jobId), eq(schema.officeTasks.status, "open")))
+    // Notes 18.47: Admin only tasks (the referral fee) are left to the referral, and their titles never reach Office's preview.
+    .where(and(eq(schema.officeTasks.jobId, jobId), eq(schema.officeTasks.status, "open"), eq(schema.officeTasks.adminOnly, false)))
     .orderBy(schema.officeTasks.id);
   const materials = await db.select().from(schema.jobMaterials).where(eq(schema.jobMaterials.jobId, jobId)).orderBy(schema.jobMaterials.id);
   const variations = await db.select().from(schema.variations).where(eq(schema.variations.jobId, jobId)).orderBy(schema.variations.seq);
@@ -519,6 +521,9 @@ export async function cancelJob(args: { jobId: number; mode: CancelMode; confirm
     actorName: actor.name,
     actorRole: actor.role,
   });
+
+  // Notes 18.47: a referral on the job is flagged for Damien (a test clear takes it off unless it was paid).
+  await referralOnCancel(f.job.id, clear);
 
   // 10. What has to be sorted by hand, as one office task.
   let taskId: number | null = null;

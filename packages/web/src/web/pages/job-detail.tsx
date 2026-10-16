@@ -44,6 +44,7 @@ import { sourceName } from "../../api/lib/lead-codes";
 import { JobPeopleCard } from "../components/job-people";
 import { DispatchWork, MergeDispatchesModal, SplitDispatchModal } from "../components/dispatch-split";
 import { CancelJobButton } from "../components/job-cancel";
+import { JobReferrerCard } from "../components/referrals";
 import { useJobDispatchLines } from "../queries/dispatches";
 import {
   CallbackBanner,
@@ -672,6 +673,9 @@ export default function JobDetailPage() {
             )}
           </Card>
           )}
+
+          {/* who referred it (notes 18.47). Office sees the name only. */}
+          <JobReferrerCard jobId={j.id} isAdmin={isAdmin} />
 
           {/* who sent the work */}
           <SupervisorCard

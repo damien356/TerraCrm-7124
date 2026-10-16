@@ -1,4 +1,5 @@
 import { ORPCError } from "@orpc/server";
+import { checkReferral } from "./referral-fees";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -216,6 +217,8 @@ export async function markInvoicePaid(args: {
     actorName: args.byName,
     actorRole: args.actorRole,
   });
+  // Notes 18.47: the job paid in full makes the referral fee owed (an Admin task, never a payment).
+  if (full && inv.jobId) await checkReferral(inv.jobId);
   return row;
 }
 

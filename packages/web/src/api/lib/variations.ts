@@ -10,6 +10,7 @@ import { newToken } from "./quote-links";
 import { jobText, variationRef } from "./refs";
 import { OPS_URL } from "./swms-checks";
 import { isDeliveryText, lineTypeOfKind } from "./line-kinds";
+import { feeOnVariationRecalc } from "./referral-fees";
 
 /* ---------------------------------------------------------------------------
  * Variations (fix list 11 Oct, item 12). Extra work or a dearer product after
@@ -117,7 +118,10 @@ export async function approvedVariationsTotal(jobId: number) {
 
 export async function recalcVariation(id: number) {
   const items = await db.select({ total: schema.variationItems.total }).from(schema.variationItems).where(eq(schema.variationItems.variationId, id));
-  const subtotal = round2(items.reduce((s, i) => s + (i.total ?? 0), 0));
+  const lineSum = round2(items.reduce((s, i) => s + (i.total ?? 0), 0));
+  // Notes 18.47: the job's referral fee goes on top, at the job's %. An accepted variation keeps its fee.
+  const [v] = await db.select({ id: schema.variations.id, jobId: schema.variations.jobId, status: schema.variations.status, sentAt: schema.variations.sentAt }).from(schema.variations).where(eq(schema.variations.id, id));
+  const subtotal = round2(lineSum + (v ? await feeOnVariationRecalc(v, lineSum) : 0));
   const gst = round2(subtotal * GST_RATE);
   const total = round2(subtotal + gst);
   await db.update(schema.variations).set({ subtotal, gst, total, amount: total, updatedAt: new Date() }).where(eq(schema.variations.id, id));

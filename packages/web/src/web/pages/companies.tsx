@@ -173,6 +173,7 @@ const SORTS: { key: CompanySort; label: string }[] = [
   { key: "outstanding", label: "Owing" },
   { key: "jobs", label: "Jobs" },
   { key: "recent", label: "Most recent" },
+  { key: "referred", label: "Referred" },
   { key: "name", label: "Name" },
 ];
 
@@ -260,6 +261,9 @@ export default function CompaniesPage() {
                   <th className="th whitespace-nowrap px-3 text-right">
                     Pays in
                   </th>
+                  <th className="th whitespace-nowrap px-3 text-right" title="Value of the jobs they referred to Terra. Not in their revenue.">
+                    Referred
+                  </th>
                   <th className="th whitespace-nowrap px-3 text-right">
                     Last job
                   </th>
@@ -326,6 +330,9 @@ export default function CompaniesPage() {
                       {c.avgDaysToPay === null
                         ? `${c.termsDays}d terms`
                         : `${c.avgDaysToPay}d actual`}
+                    </td>
+                    <td className="tabular whitespace-nowrap px-3 py-2.5 text-right">
+                      {c.referred > 0 ? money(c.referred) : <span className="text-muted-foreground">-</span>}
                     </td>
                     <td className="tabular whitespace-nowrap px-3 py-2.5 text-right text-muted-foreground">
                       {histDate(c.lastJob)}

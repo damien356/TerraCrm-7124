@@ -1,5 +1,7 @@
 import * as React from "react";
 import { ClientQuotesCard } from "../components/quote-copy";
+import { ReferrerSection } from "../components/referrals";
+import { useBootstrap } from "../queries/settings";
 import { Link, useParams } from "wouter";
 import { ArrowLeft, Building2, Mail, MapPin, Phone, Trash2 } from "lucide-react";
 import { Page } from "../components/layout";
@@ -31,6 +33,7 @@ export default function ContactDetailPage() {
   const update = useUpdateContact();
   const link = useLinkCompany();
   const unlink = useUnlinkCompany();
+  const isAdmin = useBootstrap().data?.actor.role === "admin";
 
   const [edit, setEdit] = React.useState(false);
   const [linkModal, setLinkModal] = React.useState(false);
@@ -272,6 +275,8 @@ export default function ContactDetailPage() {
           </Card>
 
           <ClientQuotesCard contactId={c.id} />
+
+          {isAdmin ? <ReferrerSection contactId={c.id} /> : null}
 
           <Card>
             <CardHeader title="History" />

@@ -23,6 +23,8 @@ import { linkForQuote, quoteUrl } from "../lib/quote-links";
 import { itemRows, LAYOUT_LABELS, layoutUsed, QUOTE_LAYOUTS, type ItemRow } from "../lib/quote-layout";
 import { cardPaymentsOn, owingOn, payUrl } from "../lib/stripe";
 import { foldCharges } from "../lib/charge-fold";
+import { foldFee } from "../lib/referral-fold";
+import { quoteFee } from "../lib/referral-fees";
 
 /**
  * Client bundles on a quote: the mode, which bundle each line sits in, and
@@ -49,8 +51,9 @@ async function quoteRow(id: number, editable: boolean | "wording") {
 
 /**
  * The client's lines: supplier charge lines folded into that supplier's
- * product lines (notes 18.33, lib/charge-fold.ts). Everything client facing
- * reads its lines through here.
+ * product lines (notes 18.33, lib/charge-fold.ts), then any referral fee
+ * spread over all of them (notes 18.47). Everything client facing reads its
+ * lines through here.
  */
 async function clientLines(quoteId: number) {
   const rows = await db
@@ -77,7 +80,8 @@ async function clientLines(quoteId: number) {
     .leftJoin(schema.products, eq(schema.products.id, schema.quoteItems.productId))
     .where(eq(schema.quoteItems.quoteId, quoteId))
     .orderBy(asc(schema.quoteItems.sortOrder), asc(schema.quoteItems.id));
-  return foldCharges(rows).lines;
+  // Notes 18.47: then the referral fee, spread over every line by its price. No fee line, no footer line.
+  return foldFee(foldCharges(rows).lines, await quoteFee(quoteId)).lines;
 }
 
 /** Lines in the shape the bundle maths needs, with each product's category. */

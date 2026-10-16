@@ -28,6 +28,8 @@ import {
 import { quoteRefOf } from "../lib/quote-number";
 import { auDate } from "../lib/invoice-match";
 import { todayISO } from "../lib/pricing";
+import { feeView, variationSnapshot } from "../lib/referral-fees";
+import { foldFee, priceWithoutFee } from "../lib/referral-fold";
 
 /* ---------------------------------------------------------------------------
  * Variations on a job (fix list 11 Oct, item 12). Admin and Office only.
@@ -44,7 +46,11 @@ async function profileIdOf(userId: string) {
 }
 
 async function viewOf(v: Variation, actor: Actor) {
-  const items = await itemsOf(v.id);
+  const raw = await itemsOf(v.id);
+  // Notes 18.47: only an Admin sees the referral fee. Everyone else reads the lines with it spread in.
+  const snap = await variationSnapshot(v.id);
+  const admin = actor.role === "admin";
+  const items = !admin && snap?.amount ? foldFee(raw, snap.amount).lines : raw;
   const [sig] = await db
     .select({ name: schema.variationSignatures.name, position: schema.variationSignatures.position, signedAt: schema.variationSignatures.signedAt })
     .from(schema.variationSignatures)
@@ -94,7 +100,18 @@ async function viewOf(v: Variation, actor: Actor) {
       unitCost: actor.canSeeCosts ? i.unitCost : null,
       total: i.total,
     })),
+    /** Admin only: the fee as its own line. Null for everyone else. */
+    referralFee: admin ? feeView(snap) : null,
   };
+}
+
+async function variationPriceWithoutFee(lineId: number, typed: number) {
+  const [line] = await db.select().from(schema.variationItems).where(eq(schema.variationItems.id, lineId));
+  if (!line || typed === line.unitPrice) return typed;
+  const snap = await variationSnapshot(line.variationId);
+  if (!snap?.amount) return typed;
+  const share = foldFee(await itemsOf(line.variationId), snap.amount).shares.get(line.id) ?? 0;
+  return priceWithoutFee(typed, line.qty, snap, share);
 }
 
 async function fresh(id: number, actor: Actor) {
@@ -185,6 +202,8 @@ export const variations = {
     )
     .handler(async ({ input, context }) => {
       const { unitCost, ...rest } = input;
+      // Notes 18.47: a price typed with the referral fee spread in goes back to Terra's own price.
+      if (context.actor.role !== "admin" && rest.unitPrice !== undefined) rest.unitPrice = await variationPriceWithoutFee(input.id, rest.unitPrice);
       // Only someone who can see costs can set one.
       const out = await updateLine(context.actor.canSeeCosts && unitCost !== undefined ? { ...rest, unitCost } : rest);
       const [item] = await db.select({ v: schema.variationItems.variationId }).from(schema.variationItems).where(eq(schema.variationItems.id, out.item.id));

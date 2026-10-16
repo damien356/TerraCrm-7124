@@ -2338,6 +2338,8 @@ export const officeTasks = sqliteTable(
     remindAt: integer("remind_at", { mode: "timestamp" }),
     /** Set once the push has gone, so a reminder fires exactly once. */
     remindedAt: integer("reminded_at", { mode: "timestamp" }),
+    /** Notes 18.47. Only an Admin sees it: the referral fee tasks. Office never does. */
+    adminOnly: integer("admin_only", { mode: "boolean" }).notNull().default(false),
   },
   (t) => [
     index("office_tasks_job_idx").on(t.jobId),
@@ -3936,4 +3938,106 @@ export const jobSwmsTemplates = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
   },
   (t) => [unique("job_swms_templates_uq").on(t.jobId, t.templateKey)],
+);
+
+/* ---------------------------------------------------------------------------
+ * REFERRAL FEES (notes 18.47). A builder or company that sends Terra a client
+ * and asks for a cut, paid when the job is paid in full. Admin only, all of
+ * it: Office can pick the referrer on a job and nothing else. The tables sit
+ * apart from companies, contacts and jobs on purpose, so a rate or a bank
+ * account can never ride along in a row Office reads.
+ * ------------------------------------------------------------------------- */
+
+/** The "Also a referrer" tick on a company or client card, and what goes with it. */
+export const referrers = sqliteTable(
+  "referrers",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** One of the two is set. */
+    companyId: integer("company_id").references(() => companies.id, { onDelete: "cascade" }),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "cascade" }),
+    /** False is the tick taken off. Fees already owed or paid stay. */
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    /** Default rate, % of the quote ex GST before the fee. A job can change it. */
+    ratePercent: real("rate_percent").notNull().default(0),
+    /** A person's ABN. A company uses the ABN on its own card. */
+    abn: text("abn"),
+    gstRegistered: integer("gst_registered", { mode: "boolean" }).notNull().default(false),
+    bankAccountName: text("bank_account_name"),
+    bankBsb: text("bank_bsb"),
+    bankAccountNumber: text("bank_account_number"),
+    remittanceEmail: text("remittance_email"),
+    ...timestamps,
+  },
+  (t) => [unique("referrers_company_uq").on(t.companyId), unique("referrers_contact_uq").on(t.contactId)],
+);
+
+/**
+ * The referrer on one job, the rate for that job, and the fee once the job
+ * is paid in full.
+ *
+ *   open     the job is not paid in full yet. Nothing owed.
+ *   owed     paid in full. A task and a Referrers owed entry wait for Damien.
+ *   flagged  cancelled, or closed without being paid in full. Damien decides.
+ *   paid     Damien paid it and marked it paid with a date.
+ *   no_fee   Damien decided nothing is owed.
+ */
+export const jobReferrals = sqliteTable(
+  "job_referrals",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    referrerId: integer("referrer_id")
+      .notNull()
+      .references(() => referrers.id, { onDelete: "cascade" }),
+    /** default (the card's rate) · percent · fixed. Admin only. */
+    feeType: text("fee_type").notNull().default("default"),
+    /** % for percent, dollars ex GST for fixed. Null for default. */
+    feeValue: real("fee_value"),
+    setByName: text("set_by_name").notNull().default(""),
+    status: text("status").notNull().default("open"),
+    /** The fee ex GST, set when it is owed or flagged. */
+    amount: real("amount").notNull().default(0),
+    flagReason: text("flag_reason"),
+    taskId: integer("task_id").references(() => officeTasks.id, { onDelete: "set null" }),
+    /** The referrer's invoice, attached by Damien. */
+    invoiceKey: text("invoice_key"),
+    invoiceName: text("invoice_name"),
+    /** What their invoice says, GST included when they are registered. */
+    invoiceAmount: real("invoice_amount"),
+    /** YYYY-MM-DD. */
+    paidOn: text("paid_on"),
+    paidByName: text("paid_by_name"),
+    decidedByName: text("decided_by_name"),
+    ...timestamps,
+  },
+  (t) => [unique("job_referrals_job_uq").on(t.jobId), index("job_referrals_referrer_idx").on(t.referrerId)],
+);
+
+/**
+ * The fee as it stands on one quote or variation: who, the rate, the total
+ * before the fee and the fee. A draft follows the job. A sent quote keeps
+ * the rate it went out with, so a new rate only lands on a re-quote.
+ */
+export const referralSnapshots = sqliteTable(
+  "referral_snapshots",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    quoteId: integer("quote_id").references(() => quotes.id, { onDelete: "cascade" }),
+    variationId: integer("variation_id").references(() => variations.id, { onDelete: "cascade" }),
+    referrerId: integer("referrer_id"),
+    name: text("name").notNull().default(""),
+    /** percent · fixed */
+    feeType: text("fee_type").notNull().default("percent"),
+    feeValue: real("fee_value").notNull().default(0),
+    /** Ex GST, before the fee. */
+    base: real("base").notNull().default(0),
+    amount: real("amount").notNull().default(0),
+    /** Why there is no fee, e.g. the referrer is the bill-to. */
+    blockedReason: text("blocked_reason"),
+    ...timestamps,
+  },
+  (t) => [unique("referral_snapshots_quote_uq").on(t.quoteId), unique("referral_snapshots_variation_uq").on(t.variationId)],
 );

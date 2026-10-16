@@ -69,7 +69,8 @@ export async function tickReminders(now = new Date()) {
         data: { screen: "office", officeTaskId: t.id, jobId: t.jobId },
         sound: "default" as const,
       };
-      const userId = await userIdForProfile(t.assignedProfileId);
+      // An Admin only task (a referral fee, notes 18.47) only ever pushes to Admins.
+      const userId = t.adminOnly ? null : await userIdForProfile(t.assignedProfileId);
       const delivered = userId ? await sendPush([userId], message) : 0;
       if (delivered === 0) await pushToOffice(message);
       sent++;

@@ -5,6 +5,8 @@ import { Card, CardHeader, Empty, Loading, Stat } from "../components/ui/card";
 import { Input } from "../components/ui/field";
 import { histDate, money } from "../lib/money";
 import { useReferrers } from "../queries/people";
+import { useBootstrap } from "../queries/settings";
+import { ReferralFeesTab } from "../components/referral-fees-tab";
 import { COMPANY_TYPE_LABELS, tagLabel } from "../../api/lib/person-tags";
 
 /**
@@ -19,7 +21,7 @@ import { COMPANY_TYPE_LABELS, tagLabel } from "../../api/lib/person-tags";
  * Starts clean: it builds up as people get tagged on new work.
  */
 
-type Tab = "people" | "companies";
+type Tab = "people" | "companies" | "fees";
 type Preset = "12m" | "year" | "all" | "custom";
 
 const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Brisbane" });
@@ -48,6 +50,7 @@ export default function ReferrersPage() {
   const [range, setRange] = React.useState(() => presetRange("12m"));
   const [search, setSearch] = React.useState("");
   const q = useReferrers(range);
+  const isAdmin = useBootstrap().data?.actor.role === "admin";
   const d = q.data;
 
   const pick = (p: Preset) => {
@@ -55,7 +58,7 @@ export default function ReferrersPage() {
     if (p !== "custom") setRange(presetRange(p));
   };
 
-  const all = d ? (tab === "people" ? d.people : d.companies) : [];
+  const all = d && tab !== "fees" ? (tab === "people" ? d.people : d.companies) : [];
   const s = search.trim().toLowerCase();
   const rows = s ? all.filter((r) => `${r.name} ${r.detail}`.toLowerCase().includes(s)) : all;
   const totals = d ? (tab === "people" ? d.totals.people : d.totals.companies) : null;
@@ -68,7 +71,7 @@ export default function ReferrersPage() {
     >
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="inline-flex overflow-hidden rounded-md border border-border">
-          {(["people", "companies"] as const).map((t) => (
+          {(isAdmin ? (["people", "companies", "fees"] as const) : (["people", "companies"] as const)).map((t) => (
             <button
               key={t}
               type="button"
@@ -76,7 +79,7 @@ export default function ReferrersPage() {
               aria-pressed={tab === t}
               className={`px-3 py-2 text-[13px] ${tab === t ? "bg-primary font-semibold text-primary-foreground" : "text-muted-foreground"}`}
             >
-              {t === "people" ? "People" : "Companies"}
+              {t === "people" ? "People" : t === "companies" ? "Companies" : "Referral fees"}
             </button>
           ))}
         </div>
@@ -120,6 +123,10 @@ export default function ReferrersPage() {
         ) : null}
       </div>
 
+      {tab === "fees" ? (
+        <ReferralFeesTab range={range} />
+      ) : (
+      <>
       <div className="mb-3 grid gap-3 sm:grid-cols-3">
         <Stat label={tab === "people" ? "Referrers" : "Companies"} value={d ? rows.length : "…"} hint="Sent at least one quote or job in this period" />
         <Stat label="Quoted (ex GST)" value={totals ? money(s ? rows.reduce((n, r) => n + r.quotedTotal, 0) : totals.quotedTotal) : "…"} hint={d ? `${won} ${won === 1 ? "quote" : "quotes"} won` : undefined} />
@@ -183,6 +190,8 @@ export default function ReferrersPage() {
             </div>
           </Card>
         </>
+      )}
+      </>
       )}
     </Page>
   );

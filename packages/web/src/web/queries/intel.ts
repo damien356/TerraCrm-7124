@@ -8,7 +8,8 @@ import { orpc } from "../lib/api";
 
 export type IntelSort = "revenue" | "gp" | "jobs" | "recent";
 /** The customer lists add name order, since they double as the address book. */
-export type ListSort = IntelSort | "name";
+/** "referred" (notes 18.47): the value of the jobs they referred to Terra. */
+export type ListSort = IntelSort | "name" | "referred";
 
 export function useClientIntel(input: { search?: string; sort?: ListSort; limit?: number } = {}) {
   return useQuery(

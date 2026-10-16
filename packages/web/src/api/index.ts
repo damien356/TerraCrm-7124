@@ -46,6 +46,7 @@ import { segments } from "./routes/segments";
 import { voiceQuotes } from "./routes/voiceQuotes";
 import { memos } from "./routes/memos";
 import { officeTasks } from "./routes/officeTasks";
+import { referrals } from "./routes/referrals";
 import { alerts } from "./routes/alerts";
 import { voice } from "./routes/voice";
 import { visits } from "./routes/visits";
@@ -115,6 +116,8 @@ export const router = {
   memos,
   /** Office to-dos and timed reminders, mostly made by voice memos. */
   officeTasks,
+  /** Referral fees (notes 18.47). Admin only, except picking the referrer on a job. */
+  referrals,
   alerts,
   field,
   /** Hands-free crew: Siri asks, confirm-back before anything is sent. */
