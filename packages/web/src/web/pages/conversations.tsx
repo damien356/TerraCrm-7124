@@ -8,6 +8,7 @@ import { useInbox, useInboxCounts } from "../queries/conversations";
 import { useBootstrap } from "../queries/settings";
 import { useLogins } from "../queries/team";
 import { useCompanies } from "../queries/companies";
+import { isPhoneApp } from "../lib/phone-app";
 
 /**
  * CONVERSATIONS — the master inbox.
@@ -252,10 +253,10 @@ export default function InboxPage() {
     "h-9 rounded-lg border border-border bg-card px-2.5 text-[13px] outline-none focus:border-primary/50";
 
   return (
-    <div className="px-6 py-6">
+    <div className={isPhoneApp ? "px-3 py-4" : "px-6 py-6"}>
       <div className="mx-auto w-full max-w-[760px]">
         <div className="mb-4">
-          <UnfiledTray hideWhenEmpty />
+          <UnfiledTray hideWhenEmpty limit={isPhoneApp ? 3 : undefined} />
         </div>
         <div className="card-surface overflow-hidden">
           {/* Header */}
@@ -283,7 +284,9 @@ export default function InboxPage() {
                 type="button"
                 onClick={() => setMore((v) => !v)}
                 className={cn(
-                  "absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-lg transition-colors",
+                  "absolute top-1/2 flex -translate-y-1/2",
+                  isPhoneApp ? "right-1 size-10" : "right-2 size-7",
+                  " items-center justify-center rounded-lg transition-colors",
                   more || narrowed ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary",
                 )}
                 aria-label="More filters"

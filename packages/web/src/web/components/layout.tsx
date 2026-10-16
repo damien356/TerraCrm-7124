@@ -41,7 +41,7 @@ import {
   X,
 } from "lucide-react";
 import { authClient } from "../lib/auth";
-import { isPhoneApp } from "../lib/phone-app";
+import { hasAppMenu, isPhoneApp } from "../lib/phone-app";
 import { useBootstrap } from "../queries/settings";
 import { Loading } from "./ui/card";
 import { GlobalMemoButton, MemoProvider } from "./voice-memo";
@@ -327,6 +327,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
     setDrawerOpen(false);
   }, [location]);
 
+  // The phone app's own menu button opens this drawer, so the page needs no bar of its own.
+  React.useEffect(() => {
+    if (!hasAppMenu) return;
+    const w = window as unknown as { __terraOpenMenu?: () => void };
+    w.__terraOpenMenu = () => setDrawerOpen((open) => !open);
+    return () => {
+      delete w.__terraOpenMenu;
+    };
+  }, []);
+
   if (isLogin) return <>{children}</>;
 
   if (session.isPending) return <Loading label="Loading Terra Ops…" />;
@@ -433,7 +443,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
       ) : null}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="sticky top-0 z-40 flex items-center gap-3 border-b border-[var(--sidebar-border)] bg-[var(--sidebar)] px-4 py-2.5 lg:hidden">
+        <div
+          className={cn(
+            "sticky top-0 z-40 flex items-center gap-3 border-b border-[var(--sidebar-border)] bg-[var(--sidebar)] px-4 py-2.5 lg:hidden",
+            hasAppMenu && "hidden",
+          )}
+        >
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
@@ -492,16 +507,27 @@ export function Page({
 }) {
   return (
     <div>
-      <div className="page-chrome px-6 py-4">
+      <div className={cn("page-chrome", isPhoneApp ? "px-4 py-3.5" : "px-6 py-4")}>
         <div className={cn("flex flex-wrap items-end justify-between gap-3", wide ? "" : "mx-auto max-w-[1400px]")}>
           <div>
             <h1 className="page-title">{title}</h1>
             {subtitle ? <p className="page-sub">{subtitle}</p> : null}
           </div>
-          {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+          {actions ? (
+            <div
+              className={
+                // On the phone the buttons sit two to a row, full width, easy to hit.
+                isPhoneApp
+                  ? "grid w-full grid-cols-2 gap-2 [&>*]:w-full [&>*]:min-w-0 [&>*]:justify-center [&>*:last-child:nth-child(odd)]:col-span-2"
+                  : "flex flex-wrap items-center gap-2"
+              }
+            >
+              {actions}
+            </div>
+          ) : null}
         </div>
       </div>
-      <div className={cn("px-6 py-5", wide ? "" : "mx-auto max-w-[1400px]")}>{children}</div>
+      <div className={cn(isPhoneApp ? "px-3 py-4" : "px-6 py-5", wide ? "" : "mx-auto max-w-[1400px]")}>{children}</div>
     </div>
   );
 }

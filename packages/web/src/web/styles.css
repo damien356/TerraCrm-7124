@@ -197,3 +197,63 @@
   background: #cfc7bb;
   border-radius: 999px;
 }
+
+/* ------------------------------------------------------------------------
+ * Phone app (Damien, 16 Oct). Only inside the Terra phone app, where the
+ * page carries the `phone-app` class. The website on a computer never does.
+ * ---------------------------------------------------------------------- */
+html.phone-app,
+html.phone-app body {
+  max-width: 100%;
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+  touch-action: pan-x pan-y;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+html.phone-app main {
+  overflow-x: clip;
+}
+/* 16px stops iOS zooming in on a box when it is tapped. */
+html.phone-app input:not([type="checkbox"]):not([type="radio"]),
+html.phone-app select,
+html.phone-app textarea {
+  font-size: 16px;
+  min-height: 44px;
+}
+/* Finger sized: 44px is Apple's smallest comfortable tap. */
+html.phone-app [data-slot="button"] {
+  min-height: 44px;
+  padding-left: 14px;
+  padding-right: 14px;
+}
+html.phone-app [data-slot="button"][class*="size-8"],
+html.phone-app [data-slot="button"][class*="size-9"],
+html.phone-app [data-slot="button"][class*="size-10"] {
+  min-width: 44px;
+  padding-left: 0;
+  padding-right: 0;
+}
+html.phone-app main button:not([data-slot="button"]) {
+  min-height: 36px;
+}
+html.phone-app input[type="checkbox"],
+html.phone-app input[type="radio"] {
+  width: 20px;
+  height: 20px;
+}
+html.phone-app .page-title {
+  font-size: 22px;
+}
+/* A table nobody has made into cards yet scrolls inside its own box. */
+html.phone-app .card-surface:has(> table),
+html.phone-app .card-surface:has(> div > table) {
+  overflow-x: auto;
+}
+/* A long email address or link wraps instead of pushing the page wide. */
+html.phone-app main {
+  overflow-wrap: break-word;
+}
+html.phone-app main .grid > * {
+  min-width: 0;
+}

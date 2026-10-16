@@ -14,6 +14,8 @@ import { histDate } from "../lib/money";
 import { useBootstrap } from "../queries/settings";
 import { useTopSources } from "../queries/leads";
 import { sourceName } from "../../api/lib/lead-codes";
+import { isPhoneApp } from "../lib/phone-app";
+import { cn } from "../lib/utils";
 
 const money = (n: number) =>
   n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
@@ -54,7 +56,7 @@ export default function DashboardPage() {
         </Link>
       }
     >
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div className={cn("grid gap-3", isPhoneApp ? "grid-cols-2" : "sm:grid-cols-2 xl:grid-cols-5")}>
         <Stat label="On today" value={d.todayTasks.length} hint="dispatches scheduled" />
         <Stat
           label="Needs a body"
@@ -74,11 +76,21 @@ export default function DashboardPage() {
           tone={d.atRisk.length ? "danger" : "default"}
           hint="past their day, not finished"
         />
-        <Stat label="Open jobs" value={d.counts.openJobs} hint={`${money(d.pipelineValue)} last 30 days`} />
+        <div className={isPhoneApp ? "col-span-2" : "contents"}>
+          <Stat label="Open jobs" value={d.counts.openJobs} hint={`${money(d.pipelineValue)} last 30 days`} />
+        </div>
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
+      {/* On the phone the things to act on come first, then one card under another. */}
+      {isPhoneApp ? (
+        <div className="mt-4 space-y-4">
+          <AlertsCard />
+          <UnfiledTray limit={5} hideWhenEmpty />
+        </div>
+      ) : null}
+
+      <div className={cn("mt-4 grid grid-cols-1 gap-4", isPhoneApp ? "" : "lg:grid-cols-3")}>
+        <div className={cn("min-w-0 space-y-4", isPhoneApp ? "" : "lg:col-span-2")}>
         <Card>
           <CardHeader title="On the tools today" subtitle={`${d.todayTasks.length} dispatches`} />
           {d.todayTasks.length === 0 ? (
@@ -126,10 +138,14 @@ export default function DashboardPage() {
         <CrewUpdatesCard />
         </div>
 
-        <div className="space-y-4">
-          <AlertsCard />
+        <div className="min-w-0 space-y-4">
+          {isPhoneApp ? null : (
+            <>
+              <AlertsCard />
 
-          <UnfiledTray limit={5} hideWhenEmpty />
+              <UnfiledTray limit={5} hideWhenEmpty />
+            </>
+          )}
           <OfficeTasksCard />
 
           <TopSourcesCard />

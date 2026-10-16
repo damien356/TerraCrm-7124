@@ -16,6 +16,8 @@ import { depositHint } from "../components/deposit-default";
 import { useCreateQuote, useDepositDefault, useQuoteStats, useQuotes } from "../queries/quotes";
 import { ContactPicker } from "../components/contact-picker";
 import { useCompanies, useSites } from "../queries/companies";
+import { PhoneCardList } from "../components/phone-card-list";
+import { isPhoneApp } from "../lib/phone-app";
 
 const money = (n: number) =>
   n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
@@ -218,7 +220,7 @@ export default function QuotesPage() {
         </Button>
       }
     >
-      <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className={isPhoneApp ? "mb-4 grid grid-cols-2 gap-3" : "mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4"}>
         <Stat label="Out with customers" value={money(stats.data?.outstandingValue ?? 0)} tone="warning" hint={`${stats.data?.sentCount ?? 0} sent, waiting`} />
         <Stat label="Accepted value" value={money(stats.data?.acceptedValue ?? 0)} tone="success" />
         <Stat label="Still drafts" value={stats.data?.draftCount ?? 0} hint="Not sent to anyone yet" />
@@ -231,7 +233,7 @@ export default function QuotesPage() {
       </div>
 
       <div className="mb-3 flex flex-wrap gap-2">
-        <div className="relative max-w-md flex-1">
+        <div className={isPhoneApp ? "relative w-full" : "relative max-w-md flex-1"}>
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             className="pl-8"
@@ -240,7 +242,7 @@ export default function QuotesPage() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <Select className="w-[170px]" value={status} onChange={(e) => setStatus(e.target.value)}>
+        <Select className={isPhoneApp ? "w-full" : "w-[170px]"} value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">All statuses</option>
           {STATUSES.map((s) => (
             <option key={s} value={s}>
@@ -255,6 +257,24 @@ export default function QuotesPage() {
           <Loading />
         ) : rows.length === 0 ? (
           <Empty>No quotes match that.</Empty>
+        ) : isPhoneApp ? (
+          <PhoneCardList
+            items={rows.map((q) => ({
+              key: q.id,
+              href: `/quotes/${q.id}`,
+              title: q.job ? `${q.ref} · job #${q.job.number}` : q.ref,
+              badges: <Badge colour={QUOTE_STATUS_COLOUR[q.status]}>{q.status}</Badge>,
+              line1: q.contact
+                ? `${q.contact.firstName} ${q.contact.lastName}${q.company ? `, ${q.company.name}` : ""}`
+                : (q.company?.name ?? "No customer"),
+              line2: q.site?.address ?? "No site",
+              meta: (
+                <span className="tabular">
+                  {money(q.total)} · valid to {fmtDate(q.validUntil)}
+                </span>
+              ),
+            }))}
+          />
         ) : (
           <div className="board-scroll overflow-x-auto">
             <table className="w-full min-w-[880px] text-sm">

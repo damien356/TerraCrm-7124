@@ -35,6 +35,7 @@ function bootScript(token: string | null) {
   return `(function(){try{
 if (window.location.origin.toLowerCase() !== ${JSON.stringify(originOf(siteUrl))}) return;
 window.__TERRA_PHONE_APP__ = true;
+window.__TERRA_APP_MENU__ = true;
 var t = ${JSON.stringify(token ?? "")};
 if (t) { window.localStorage.setItem(${JSON.stringify(WEB_TOKEN_KEY)}, t); }
 else { window.localStorage.removeItem(${JSON.stringify(WEB_TOKEN_KEY)}); }
@@ -56,13 +57,16 @@ function HeaderButton({
     <Pressable
       onPress={onPress}
       accessibilityLabel={label}
-      hitSlop={6}
+      hitSlop={4}
       style={({ pressed }) => ({
         flexDirection: "row",
         alignItems: "center",
+        justifyContent: "center",
         gap: 6,
-        paddingHorizontal: solid ? 12 : 8,
-        paddingVertical: 7,
+        minHeight: 44,
+        minWidth: 44,
+        paddingHorizontal: solid ? 14 : 10,
+        paddingVertical: 8,
         borderRadius: 999,
         backgroundColor: solid ? c.primary : "transparent",
         opacity: pressed ? 0.75 : 1,
@@ -147,23 +151,25 @@ export default function OfficeScreen() {
     web.current?.reload();
   }, [failed, firstLoad]);
 
+  // The website's own menu drawer, opened from this bar so the page needs no second header.
+  const openMenu = useCallback(() => {
+    web.current?.injectJavaScript("window.__terraOpenMenu&&window.__terraOpenMenu();true;");
+  }, []);
+
   const header = (
     <View
       style={{
         flexDirection: "row",
         alignItems: "center",
         gap: 4,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
         backgroundColor: c.sidebar,
       }}
     >
-      {canGoBack ? (
-        <HeaderButton icon="chevron-back" label="Back" onPress={() => web.current?.goBack()} />
-      ) : (
-        <View style={{ width: 8 }} />
-      )}
-      <Text style={{ flex: 1, fontFamily: Fonts.bold, fontSize: 15, color: "#FFFFFF" }}>The office</Text>
+      {Platform.OS !== "web" ? <HeaderButton icon="menu" label="Menu" onPress={openMenu} /> : null}
+      {canGoBack ? <HeaderButton icon="chevron-back" label="Back" onPress={() => web.current?.goBack()} /> : null}
+      <Text style={{ flex: 1, fontFamily: Fonts.bold, fontSize: 15, color: "#FFFFFF", marginLeft: 4 }}>The office</Text>
       <HeaderButton icon="refresh" label="Reload" onPress={reload} />
       <HeaderButton icon="mic" label="Voice quote" solid onPress={() => router.push("/voice-quote")} />
     </View>
@@ -274,6 +280,10 @@ export default function OfficeScreen() {
               else void Linking.openURL(url).catch(() => undefined);
             }}
             setSupportMultipleWindows={false}
+            scalesPageToFit={false}
+            setBuiltInZoomControls={false}
+            setDisplayZoomControls={false}
+            textZoom={100}
             pullToRefreshEnabled
             allowsBackForwardNavigationGestures
             sharedCookiesEnabled

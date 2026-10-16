@@ -762,6 +762,185 @@ function BookingView({
   );
 }
 
+/* ------------------------------ phone day ------------------------------ */
+
+/**
+ * The board on the phone (Damien, 16 Oct): one day at a time, listed by
+ * installer, with a swipe or the arrows for the day before and after. The
+ * week grid is far too wide for a phone. View only, like the rest of the
+ * schedule on the phone.
+ */
+function PhoneDay({
+  date,
+  tasks,
+  unassigned,
+  installers,
+  onOpen,
+  onStep,
+  onToday,
+}: {
+  date: string;
+  tasks: any[];
+  unassigned: any[];
+  installers: Array<{ id: number; name: string; colour: string }>;
+  onOpen: (id: number) => void;
+  onStep: (by: number) => void;
+  onToday: () => void;
+}) {
+  const touch = React.useRef<{ x: number; y: number } | null>(null);
+  const isToday = date === iso(new Date());
+  const heading = new Date(`${date}T00:00:00`).toLocaleDateString("en-AU", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+
+  /** Who is on what this day. A day handed to someone else sits with them. */
+  const onDay = (installerId: number) =>
+    tasks
+      .filter((t) => (t.dates ?? []).includes(date))
+      .filter((t) => {
+        const day = (t.days ?? []).find((d: any) => d.date === date);
+        const lead = day?.installerId ?? t.assignedInstallerId;
+        return lead === installerId || t.secondInstallerId === installerId;
+      })
+      .map((t) => {
+        const all: string[] = [...(t.dates ?? [])].sort();
+        const day = (t.days ?? []).find((d: any) => d.date === date);
+        return {
+          task: t,
+          time: day?.coordinate ? "rings the site" : sayTime(day?.arrivalStart ?? t.startTime),
+          seq: all.length > 1 ? `Day ${all.indexOf(date) + 1} of ${all.length}` : null,
+          live: t.status !== "complete" && t.status !== "cancelled",
+        };
+      })
+      .sort((a, b) => String(a.task.startTime ?? "").localeCompare(String(b.task.startTime ?? "")));
+
+  const rows = installers.map((inst) => ({ inst, jobs: onDay(inst.id) }));
+  const busy = rows.filter((r) => r.jobs.length > 0);
+  const free = rows.filter((r) => r.jobs.length === 0);
+
+  return (
+    <div
+      onTouchStart={(e) => {
+        const t = e.touches[0];
+        touch.current = t ? { x: t.clientX, y: t.clientY } : null;
+      }}
+      onTouchEnd={(e) => {
+        const start = touch.current;
+        const t = e.changedTouches[0];
+        touch.current = null;
+        if (!start || !t) return;
+        const dx = t.clientX - start.x;
+        const dy = t.clientY - start.y;
+        // A clear sideways swipe only, so scrolling down the list never flips the day.
+        if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) onStep(dx < 0 ? 1 : -1);
+      }}
+    >
+      <div className="card-surface mb-3 flex items-center gap-2 px-2 py-2">
+        <Button variant="outline" size="icon" aria-label="Day before" onClick={() => onStep(-1)}>
+          <ChevronLeft className="size-5" />
+        </Button>
+        <div className="min-w-0 flex-1 text-center">
+          <p className={`truncate text-[15px] font-semibold ${isToday ? "text-primary" : ""}`}>{heading}</p>
+          {isToday ? (
+            <p className="text-xs text-muted-foreground">Today</p>
+          ) : (
+            <button type="button" onClick={onToday} className="text-xs font-medium text-primary">
+              Back to today
+            </button>
+          )}
+        </div>
+        <Button variant="outline" size="icon" aria-label="Day after" onClick={() => onStep(1)}>
+          <ChevronRight className="size-5" />
+        </Button>
+      </div>
+
+      {busy.length === 0 ? (
+        <div className="card-surface px-4 py-8 text-center text-sm text-muted-foreground">Nobody is booked this day.</div>
+      ) : (
+        <div className="space-y-3">
+          {busy.map(({ inst, jobs }) => {
+            const clash = jobs.filter((j) => j.live).length > 1;
+            return (
+              <div key={inst.id} className="card-surface overflow-hidden">
+                <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+                  <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: inst.colour }} />
+                  <p className="min-w-0 flex-1 truncate text-sm font-semibold">{inst.name}</p>
+                  {clash ? (
+                    <span className="flex shrink-0 items-center gap-1 text-xs font-semibold text-[#C0362C]">
+                      <AlertTriangle className="size-3.5" />
+                      Double booked
+                    </span>
+                  ) : (
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {jobs.length} {jobs.length === 1 ? "job" : "jobs"}
+                    </span>
+                  )}
+                </div>
+                <ul className="divide-y divide-border">
+                  {jobs.map((j) => {
+                    const tint = tintFor(j.task.skill?.groupName);
+                    return (
+                      <li key={j.task.id}>
+                        <button
+                          type="button"
+                          onClick={() => onOpen(j.task.id)}
+                          className="flex min-h-[60px] w-full items-start gap-3 border-l-[4px] px-4 py-3 text-left active:bg-secondary/70"
+                          style={{ borderLeftColor: tint.edge }}
+                        >
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-semibold">{j.task.title}</span>
+                            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                              {j.task.ref} · {j.task.siteSuburb || j.task.siteAddress || "no site"}
+                            </span>
+                            <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+                              {j.time ? <span className="tabular font-medium text-foreground">{j.time}</span> : null}
+                              {j.seq ? <span>{j.seq}</span> : null}
+                              {j.task.crewSize > 1 ? <span>2 man</span> : null}
+                              {j.task.status === "complete" ? <span className="font-semibold text-[#2C5A28]">done</span> : null}
+                              {j.task.status === "in_progress" ? <span className="font-semibold text-[#8A5A0B]">on site</span> : null}
+                            </span>
+                          </span>
+                          <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground" />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {free.length > 0 ? (
+        <p className="mt-3 px-1 text-xs text-muted-foreground">
+          Free this day: {free.map((r) => r.inst.name).join(", ")}
+        </p>
+      ) : null}
+
+      {unassigned.length > 0 ? (
+        <div className="card-surface mt-4 overflow-hidden">
+          <div className="border-b border-border bg-[#F3EFEA] px-4 py-2.5">
+            <p className="text-sm font-semibold text-[#C0603F]">Unassigned</p>
+            <p className="text-xs text-muted-foreground">{unassigned.length} waiting for someone</p>
+          </div>
+          <div className="space-y-2 p-3">
+            {unassigned.map((t) => (
+              <TaskBlock key={t.id} task={t} onOpen={() => onOpen(t.id)} onDragStart={() => undefined} />
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <p className="mt-3 px-1 text-xs text-muted-foreground">
+        Swipe left or right for the next or last day. Tap a job to see the booking. Changes are made on the website.
+      </p>
+    </div>
+  );
+}
+
 export default function SchedulePage() {
   const week = useWeek();
   const board = useBoard(week.from, week.to);
@@ -769,6 +948,8 @@ export default function SchedulePage() {
   const reschedule = useRescheduleTask();
   const extend = useExtendRun();
   const [selected, setSelected] = React.useState<number | null>(null);
+  /** The phone shows one day of the week at a time (0 is Monday). */
+  const [dayIdx, setDayIdx] = React.useState(() => Math.max(0, week.days.findIndex((d) => iso(d) === iso(new Date()))));
   const [panel, setPanel] = React.useState<"book" | "offers">("book");
   const [dragId, setDragId] = React.useState<number | null>(null);
   const [dropError, setDropError] = React.useState<string | null>(null);
@@ -878,6 +1059,26 @@ export default function SchedulePage() {
       .finally(() => setExtBusyId(null));
   }
 
+  /** A day forward or back on the phone, rolling into the next or last week. */
+  function stepDay(by: number) {
+    const next = dayIdx + by;
+    if (next < 0) {
+      week.shift(-1);
+      setDayIdx(week.days.length - 1);
+    } else if (next >= week.days.length) {
+      week.shift(1);
+      setDayIdx(0);
+    } else {
+      setDayIdx(next);
+    }
+  }
+
+  function toToday() {
+    week.reset();
+    const idx = (new Date().getDay() + 6) % 7;
+    setDayIdx(Math.min(idx, week.days.length - 1));
+  }
+
   if (board.isLoading || installers.isLoading) return <Loading label="Loading the board…" />;
 
   return (
@@ -888,10 +1089,11 @@ export default function SchedulePage() {
           title="Schedule"
           subtitle={
             isPhoneApp
-              ? "One row per installer, one bar per booking. View only on the phone. Bookings are changed on the website."
+              ? "One day at a time, by installer. View only on the phone."
               : "One row per installer, one bar per booking. Click a bar to change the booking, drag it to move it."
           }
           actions={
+            isPhoneApp ? undefined : (
             <div className="flex items-center gap-1">
               <Button variant="outline" size="icon-sm" onClick={() => week.shift(-1)}>
                 <ChevronLeft className="size-4" />
@@ -903,6 +1105,7 @@ export default function SchedulePage() {
                 <ChevronRight className="size-4" />
               </Button>
             </div>
+            )
           }
         >
           {isPhoneApp ? null : (
@@ -1043,6 +1246,17 @@ export default function SchedulePage() {
             </div>
           ) : null}
 
+          {isPhoneApp ? (
+            <PhoneDay
+              date={dates[Math.min(dayIdx, dates.length - 1)]!}
+              tasks={tasks}
+              unassigned={unassigned}
+              installers={installers.data ?? []}
+              onOpen={open}
+              onStep={stepDay}
+              onToday={toToday}
+            />
+          ) : (
           <div className="card-surface board-scroll overflow-x-auto">
             <div className="min-w-[900px]">
               {/* Day headings, lined up with the lanes underneath. */}
@@ -1186,11 +1400,9 @@ export default function SchedulePage() {
             </div>
           </div>
 
-          {isPhoneApp ? (
-            <p className="mt-3 text-xs text-muted-foreground">
-              Tap a bar to see the booking. Moving, booking and taking someone off a job are done on the website.
-            </p>
-          ) : (
+          )}
+
+          {isPhoneApp ? null : (
             <p className="mt-3 text-xs text-muted-foreground">
               Drop a dispatch on a day to schedule and assign it in one move. A booked run moves as a whole, so dragging
               a 4 day bar to Wednesday shifts all four days. Drop it on the unassigned row to pull someone off.

@@ -75,3 +75,8 @@ packages/mobile/scripts/*
 
 # Terra Ops data backups (keep them off the repo — they hold customer data)
 backups
+
+# iOS signing (never commit)
+credentials.json
+credentials/
+.env.eas.local

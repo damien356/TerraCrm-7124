@@ -10,6 +10,8 @@ import { Input, Select } from "../components/ui/field";
 import { NewJobModal } from "../components/new-job-modal";
 import { useJobs } from "../queries/jobs";
 import { useBootstrap } from "../queries/settings";
+import { PhoneCardList } from "../components/phone-card-list";
+import { isPhoneApp } from "../lib/phone-app";
 
 const money = (n: number) =>
   n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
@@ -36,7 +38,7 @@ export default function JobsPage() {
       }
     >
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[240px] flex-1">
+        <div className={isPhoneApp ? "relative w-full" : "relative min-w-[240px] flex-1"}>
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             className="pl-8"
@@ -45,7 +47,7 @@ export default function JobsPage() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <Select className="w-auto min-w-[160px]" value={statusId} onChange={(e) => setStatusId(e.target.value)}>
+        <Select className={isPhoneApp ? "w-full" : "w-auto min-w-[160px]"} value={statusId} onChange={(e) => setStatusId(e.target.value)}>
           <option value="">All statuses</option>
           {(bootstrap.data?.statuses ?? []).map((s) => (
             <option key={s.id} value={s.id}>
@@ -60,6 +62,34 @@ export default function JobsPage() {
           <Loading />
         ) : (jobs.data ?? []).length === 0 ? (
           <Empty>No jobs match that.</Empty>
+        ) : isPhoneApp ? (
+          <PhoneCardList
+            items={(jobs.data ?? []).map((j) => ({
+              key: j.id,
+              href: `/jobs/${j.id}`,
+              title: `#${j.displayNumber ?? j.number}`,
+              badges: (
+                <>
+                  <Badge colour={j.status?.colour}>{j.status?.name ?? "No status"}</Badge>
+                  {j.supervisorMissing ? (
+                    <Badge colour="#B7791F">
+                      <UserX className="size-3" />
+                    </Badge>
+                  ) : null}
+                </>
+              ),
+              line1:
+                j.company?.name ||
+                [j.contact?.firstName, j.contact?.lastName].filter(Boolean).join(" ") ||
+                "No customer",
+              line2: [j.site?.address, j.site?.suburb].filter(Boolean).join(", ") || "No site",
+              meta: (
+                <span className="tabular">
+                  {j.title || "Untitled"} · {money(j.value)}
+                </span>
+              ),
+            }))}
+          />
         ) : (
           <div className="board-scroll overflow-x-auto">
             <table className="w-full min-w-[880px] text-sm">

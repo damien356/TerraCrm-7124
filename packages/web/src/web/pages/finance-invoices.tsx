@@ -6,6 +6,8 @@ import { Card, CardHeader, Empty, Loading, Stat } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { money, shortDate } from "../lib/money";
 import { useInvoiceList } from "../queries/finance";
+import { PhoneCardList } from "../components/phone-card-list";
+import { isPhoneApp } from "../lib/phone-app";
 
 /**
  * INVOICES.
@@ -61,7 +63,7 @@ export default function InvoicesPage() {
         <Loading label="Loading invoices…" />
       ) : (
         <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className={isPhoneApp ? "grid grid-cols-2 gap-3" : "grid gap-3 sm:grid-cols-2 lg:grid-cols-4"}>
             <Stat label="Outstanding" value={money(s?.outstanding ?? 0)} hint="Billed and not yet paid" />
             <Stat
               label="Overdue"
@@ -83,7 +85,7 @@ export default function InvoicesPage() {
               title="Ageing"
               subtitle="How long the unpaid money has been unpaid. This is the chase list."
             />
-            <div className="grid gap-px bg-border sm:grid-cols-4">
+            <div className={isPhoneApp ? "grid grid-cols-2 gap-px bg-border" : "grid gap-px bg-border sm:grid-cols-4"}>
               {[
                 { label: "Current", value: s?.ageing.current ?? 0, key: "current" },
                 { label: "1 to 30 days", value: s?.ageing.d30 ?? 0, key: "1-30" },
@@ -115,6 +117,27 @@ export default function InvoicesPage() {
                   ? "Nothing outstanding. No invoices have been raised in Terra Ops yet, so this stays empty until they are, or until Xero is connected."
                   : "No invoices match that filter."}
               </Empty>
+            ) : isPhoneApp ? (
+              <PhoneCardList
+                items={rows.map((r) => ({
+                  key: r.id,
+                  href: r.jobId ? `/jobs/${r.jobId}` : undefined,
+                  title: r.jobId ? `${r.number} · job #${r.jobNumber}` : r.number,
+                  badges: (
+                    <Badge colour={r.daysOverdue > 0 ? "#A33A2A" : r.settled ? "#3F7D58" : undefined}>
+                      {r.daysOverdue > 0 ? `${r.daysOverdue} days overdue` : r.status.replace("_", " ")}
+                    </Badge>
+                  ),
+                  line1: r.who || "No customer",
+                  line2: `${r.label || r.kind} · due ${shortDate(r.dueDate)}`,
+                  meta: (
+                    <span className="tabular">
+                      {money(r.total)}
+                      {r.settled ? " · paid" : ` · ${money(r.outstanding)} owing`}
+                    </span>
+                  ),
+                }))}
+              />
             ) : (
               <div className="board-scroll overflow-x-auto">
                 <table className="w-full min-w-[900px] text-sm">

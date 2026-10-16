@@ -11,6 +11,8 @@ import { useCompanyIntel, type ListSort } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
 import { COMPANY_TYPES, COMPANY_TYPE_LABELS } from "../../api/lib/person-tags";
 import { EmailInput } from "../components/email-input";
+import { PhoneCardList } from "../components/phone-card-list";
+import { isPhoneApp } from "../lib/phone-app";
 import { AddressAutocomplete, billingLine } from "../components/address-autocomplete";
 
 export const typeLabel = (t: string) => COMPANY_TYPE_LABELS[t] ?? t.replace(/_/g, " ");
@@ -204,7 +206,7 @@ export default function CompaniesPage() {
       }
     >
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="relative max-w-xs flex-1">
+        <div className={isPhoneApp ? "relative w-full" : "relative max-w-xs flex-1"}>
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             className="pl-8"
@@ -239,6 +241,23 @@ export default function CompaniesPage() {
             No companies yet. Add one when a builder or agency starts sending
             you work.
           </Empty>
+        ) : isPhoneApp ? (
+          <PhoneCardList
+            items={rows.map((c) => ({
+              key: c.id,
+              href: `/companies/${c.id}`,
+              title: c.name,
+              badges:
+                c.outstanding > 0 ? <span className="tabular text-xs font-semibold text-[#C05A2B]">{money(c.outstanding)} owing</span> : null,
+              line1: `${typeLabel(c.type)}${c.contactCount > 0 ? ` · ${c.contactCount} ${c.contactCount === 1 ? "person" : "people"}` : ""}`,
+              meta: (
+                <span className="tabular">
+                  {c.revenue > 0 ? money(c.revenue) : "No revenue yet"} · {c.deliveredJobs} job{c.deliveredJobs === 1 ? "" : "s"}
+                  {c.liveJobs > 0 ? ` +${c.liveJobs} live` : ""} · last {histDate(c.lastJob)}
+                </span>
+              ),
+            }))}
+          />
         ) : (
           <div className="board-scroll overflow-x-auto">
             <table className="w-full min-w-[960px] text-sm">
