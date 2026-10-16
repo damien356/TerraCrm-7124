@@ -1,7 +1,8 @@
 import * as React from "react";
 import { Building2, MapPin, UserPlus } from "lucide-react";
 import { Button } from "./ui/button";
-import { Checkbox, Field, Input, Select, Textarea } from "./ui/field";
+import { Field, Input, Select, Textarea } from "./ui/field";
+import { cn } from "@/lib/utils";
 import { Modal } from "./ui/modal";
 import { Combobox } from "./ui/combobox";
 import { Spinner } from "./ui/card";
@@ -109,7 +110,7 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
   const [form, setForm] = React.useState({
     title: "",
     statusId: "",
-    furnitureOnSite: false,
+    furnitureMoving: "" as "" | "yes" | "no",
     value: "",
     description: "",
     accessNotes: "",
@@ -129,7 +130,7 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
   // A fresh form every time it opens.
   React.useEffect(() => {
     if (!open) return;
-    setForm({ title: "", statusId: "", furnitureOnSite: false, value: "", description: "", accessNotes: "", source: "" });
+    setForm({ title: "", statusId: "", furnitureMoving: "", value: "", description: "", accessNotes: "", source: "" });
     setContact({ mode: "pick", id: "", name: "" });
     setCompany({ mode: "pick", id: "", name: "" });
     setSupervisor({ kind: "none" });
@@ -252,7 +253,9 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
         billToDepositPercent: askPercent ? Number(billPct.trim()) : null,
         newContacts,
         people: jobDraftsToInput(people),
-        furnitureOnSite: form.furnitureOnSite,
+        // Not answered stays null and goes red on the job (notes 18.56).
+        furnitureMoving: form.furnitureMoving === "" ? null : form.furnitureMoving === "yes",
+        furnitureOnSite: form.furnitureMoving === "yes",
         // Typed ex GST, kept inc GST like every quoted job, so GP and cash read it the same way.
         value: form.value ? Math.round(Number(form.value) * 110) / 100 : 0,
         description: form.description || null,
@@ -474,10 +477,22 @@ export function NewJobModal({ open, onClose }: { open: boolean; onClose: () => v
         >
           <Input type="number" inputMode="decimal" value={form.value} onChange={(e) => set("value", e.target.value)} placeholder="0" />
         </Field>
-        <label htmlFor="jobs_cb1" className="flex items-center gap-2 pb-2 text-sm sm:col-span-2">
-          <Checkbox id="jobs_cb1" checked={form.furnitureOnSite} onChange={(e) => set("furnitureOnSite", e.target.checked)} />
-          Furniture on site (forces a 2-man crew)
-        </label>
+        <Field
+          label="Furniture moving"
+          className="sm:col-span-2"
+          hint={form.furnitureMoving === "" ? "Not answered yet. It must be answered before an install is booked." : undefined}
+        >
+          <Select
+            id="jobs_furniture"
+            className={cn(form.furnitureMoving === "" && "border-destructive bg-destructive/5 text-destructive")}
+            value={form.furnitureMoving}
+            onChange={(e) => set("furnitureMoving", e.target.value as "" | "yes" | "no")}
+          >
+            <option value="">Not answered</option>
+            <option value="yes">Yes, we move it (2-man crews)</option>
+            <option value="no">No, rooms cleared by the client</option>
+          </Select>
+        </Field>
         <Field label="Job notes" className="sm:col-span-2">
           <Textarea rows={2} value={form.description} onChange={(e) => set("description", e.target.value)} placeholder="What's happening on this job" />
         </Field>

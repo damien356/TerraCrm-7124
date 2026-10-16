@@ -93,10 +93,12 @@ export async function buildWorkFromQuote(quoteId: number, jobId: number, opts: {
  */
 export async function createJobForQuote(
   quote: QuoteRow,
-  opts: { title?: string; furnitureOnSite?: boolean; source?: string; noAccessNotes?: boolean },
+  opts: { title?: string; furnitureOnSite?: boolean; furnitureMoving?: boolean | null; source?: string; noAccessNotes?: boolean },
 ) {
   if (quote.jobId) throw new Error("This quote is already attached to a job");
-  const furnitureOnSite = opts.furnitureOnSite ?? false;
+  // Notes 18.56: the furniture answer drives the 2-man rule. No answer stays null and reads red on the job.
+  const furnitureOnSite = opts.furnitureMoving ?? opts.furnitureOnSite ?? false;
+  const furnitureMoving = opts.furnitureMoving ?? (opts.furnitureOnSite === true ? true : null);
 
   // The job keeps the quote's number (spec section 1). The quote took it
   // from the job counter, so no job has it. Old quotes made before that
@@ -146,6 +148,7 @@ export async function createJobForQuote(
             billToCompanyId: quote.companyId ?? null,
           }),
       furnitureOnSite,
+      furnitureMoving,
       ...(opts.source ? { source: opts.source } : {}),
       // A copied quote (16 Oct) starts its job with no access notes: those are checked fresh on site.
       accessNotes: opts.noAccessNotes ? null : (site?.accessNotes ?? null),
@@ -225,13 +228,13 @@ export async function fillJobFromQuote(quoteId: number) {
  */
 export async function convertQuoteToJob(
   quote: QuoteRow,
-  opts: { title?: string; furnitureOnSite?: boolean; createTasks?: boolean },
+  opts: { title?: string; furnitureOnSite?: boolean; furnitureMoving?: boolean | null; createTasks?: boolean },
   actor: { name: string; role: string },
 ) {
   const { job, number } = await createJobForQuote(quote, opts);
   const { tasksCreated, materialsCreated } = await buildWorkFromQuote(quote.id, job.id, {
     createTasks: opts.createTasks,
-    furnitureOnSite: opts.furnitureOnSite ?? false,
+    furnitureOnSite: opts.furnitureMoving ?? opts.furnitureOnSite ?? false,
   });
 
   await db.insert(schema.activityLog).values({

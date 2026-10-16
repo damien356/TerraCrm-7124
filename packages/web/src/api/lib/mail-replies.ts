@@ -6,6 +6,7 @@ import { getAttachment, getMessage, header, listMessageIds, MailboxNotConnected,
 import { ensureForJob, ensureForQuote, logMessage, openUnassigned, refInSubject } from "./conversations";
 import { NOTIFY_FROM_ADDRESS, isTerraOpsMail } from "./notify-kinds";
 import { notifyOffice } from "./notify";
+import { noteKeyReply } from "./prep";
 import { bucketForMime } from "./job-mail";
 
 /* ---------------------------------------------------------------------------
@@ -383,6 +384,8 @@ export async function fileReply(accountId: number, address: string, gmailId: str
     await db.insert(schema.messageAttachments).values({ messageId: message.id, mediaId, filename, mime, sizeBytes: bytes.length, storageKey: key, url: "" });
     stored++;
   }
+  // Notes 18.56: where the key is, in answer to a prep email, goes on the job's access notes.
+  if (jobId && !auto) await noteKeyReply({ jobId, contactId: contact?.id ?? null, body: bodyOf(msg), channel: "email", name, photos: stored });
 
   if (contact) {
     await db.insert(schema.activityLog).values({

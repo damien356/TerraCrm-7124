@@ -41,10 +41,16 @@ function suburbLine(suburb?: string | null, state?: string | null) {
   return state ? `${s} ${state}` : s;
 }
 
-/** "Residential" / "Commercial", enough to picture the site and nothing more. */
+/** "House" / "Apartment, high-rise", enough to picture the site and nothing more (notes 18.56). */
+const PROPERTY_SHORT: Record<string, string> = {
+  house: "House",
+  townhouse: "Townhouse/duplex",
+  unit_low: "Unit, low-rise",
+  apartment_high: "Apartment, high-rise",
+  commercial: "Commercial",
+};
 function propertyLabel(type?: string | null) {
-  if (!type) return "";
-  return type.charAt(0).toUpperCase() + type.slice(1).replace(/_/g, " ");
+  return (type && PROPERTY_SHORT[type]) || "";
 }
 
 /**
@@ -211,7 +217,7 @@ export default function OffersScreen() {
                     <Ionicons name="location-outline" size={14} color={c.mutedForeground} />
                     <Text style={{ fontFamily: Fonts.medium, fontSize: 13.5, color: c.mutedForeground }}>
                       {suburbLine(offer.siteSuburb, offer.siteState)}
-                      {offer.propertyType ? ` · ${propertyLabel(offer.propertyType)}` : ""}
+                      {propertyLabel(offer.propertyType) ? ` · ${propertyLabel(offer.propertyType)}` : ""}
                     </Text>
                   </View>
 

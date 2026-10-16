@@ -45,6 +45,8 @@ export const createJobInput = z.object({
   billToContactId: z.number().nullable().optional(),
   billToCompanyId: z.number().nullable().optional(),
   furnitureOnSite: z.boolean().default(false),
+  /** Notes 18.56: do we move the furniture. Yes also sets furnitureOnSite (2-man crew). Null is not answered. */
+  furnitureMoving: z.boolean().nullable().optional(),
   description: z.string().nullable().optional(),
   accessNotes: z.string().nullable().optional(),
   source: z.string().default("other"),
@@ -150,6 +152,9 @@ export async function createJob(input: z.input<typeof createJobInput>, actor: Pi
       .onConflictDoNothing();
   }
   const people = (rawPeople ?? []).map(({ contactKey: k, contactId: id, ...rest }) => ({ ...rest, contactId: idOf(id, k)! }));
+
+  // The furniture answer drives the 2-man rule (notes 18.56).
+  if (jobInput.furnitureMoving != null) jobInput.furnitureOnSite = jobInput.furnitureMoving;
 
   const number = await nextJobNumber();
 
@@ -446,6 +451,10 @@ export const jobs = {
         billToContactId: z.number().nullable().optional(),
         billToCompanyId: z.number().nullable().optional(),
         furnitureOnSite: z.boolean().optional(),
+        /** Notes 18.56: Yes also turns furniture on site on (2-man crew), No turns it off. */
+        furnitureMoving: z.boolean().nullable().optional(),
+        /** Client prep messages on this job. Null goes back to the rule. */
+        prepOn: z.boolean().nullable().optional(),
         description: z.string().nullable().optional(),
         accessNotes: z.string().nullable().optional(),
         source: z.string().optional(),
@@ -468,6 +477,7 @@ export const jobs = {
         if (rest.billToType === "contact") rest.billToCompanyId = null;
       }
       const prevPayer = jobBillTo(before);
+      if (rest.furnitureMoving != null) rest.furnitureOnSite = rest.furnitureMoving;
 
       const [row] = await db
         .update(schema.jobs)

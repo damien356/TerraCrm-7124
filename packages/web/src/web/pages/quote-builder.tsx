@@ -9,6 +9,7 @@ import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
+import { cn } from "@/lib/utils";
 import { Modal } from "../components/ui/modal";
 import { LabourPicker, ProductPicker } from "../components/quote-pickers";
 import { LineAreaStrip, LinkedInstallMark, type LineArea } from "../components/floor-area";
@@ -699,7 +700,7 @@ export default function QuoteBuilderPage() {
   const [declining, setDeclining] = React.useState(false);
   const [declineReason, setDeclineReason] = React.useState("");
   const [converting, setConverting] = React.useState(false);
-  const [convertForm, setConvertForm] = React.useState({ title: "", furnitureOnSite: false, createTasks: true });
+  const [convertForm, setConvertForm] = React.useState({ title: "", furnitureMoving: "" as "" | "yes" | "no", createTasks: true });
   const [notes, setNotes] = React.useState<string | null>(null);
   const [lineNotice, setLineNotice] = React.useState<string | null>(null);
   /** 188001 list item 12: Send and Accept ask for the site first, then carry on. */
@@ -1338,7 +1339,8 @@ export default function QuoteBuilderPage() {
                   const result = await convert.mutateAsync({
                     id: q.id,
                     title: convertForm.title || undefined,
-                    furnitureOnSite: convertForm.furnitureOnSite,
+                    furnitureMoving: convertForm.furnitureMoving === "" ? null : convertForm.furnitureMoving === "yes",
+                    furnitureOnSite: convertForm.furnitureMoving === "yes",
                     createTasks: convertForm.createTasks,
                   });
                   setConverting(false);
@@ -1361,19 +1363,21 @@ export default function QuoteBuilderPage() {
               placeholder={q.site?.address ?? `Quote ${q.ref}`}
             />
           </Field>
-          <label htmlFor={`quote_builder_cb1`} className="flex items-start gap-2 text-sm">
-            <Checkbox id={`quote_builder_cb1`}
-              className="mt-0.5"
-              checked={convertForm.furnitureOnSite}
-              onChange={(e) => setConvertForm((f) => ({ ...f, furnitureOnSite: e.target.checked }))}
-            />
-            <span>
-              Furniture is on site
-              <span className="block text-xs text-muted-foreground">
-                Forces every install dispatch to 2 men. Nobody can be sent on their own.
-              </span>
-            </span>
-          </label>
+          <Field
+            label="Furniture moving"
+            hint={convertForm.furnitureMoving === "" ? "Not answered yet. It must be answered before an install is booked." : "Yes forces every install dispatch to 2 men."}
+          >
+            <Select
+              id="quote_builder_furniture"
+              className={cn(convertForm.furnitureMoving === "" && "border-destructive bg-destructive/5 text-destructive")}
+              value={convertForm.furnitureMoving}
+              onChange={(e) => setConvertForm((f) => ({ ...f, furnitureMoving: e.target.value as "" | "yes" | "no" }))}
+            >
+              <option value="">Not answered</option>
+              <option value="yes">Yes, we move it (2-man crews)</option>
+              <option value="no">No, rooms cleared by the client</option>
+            </Select>
+          </Field>
           <label htmlFor={`quote_builder_cb2`} className="flex items-start gap-2 text-sm">
             <Checkbox id={`quote_builder_cb2`}
               className="mt-0.5"

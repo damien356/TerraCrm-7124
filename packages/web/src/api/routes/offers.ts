@@ -8,6 +8,7 @@ import { staffOnly } from "../middleware/auth";
 import { pushToInstaller } from "../lib/push";
 import { notifyOffice } from "../lib/notify";
 import { blockedReason } from "../lib/availability";
+import { bookingBlock } from "../lib/prep";
 import { lockTaskLabour } from "./costing";
 import { syncJobForTask } from "../lib/job-stage";
 import { installerForStaff, taskForStaff } from "../lib/staff-view";
@@ -154,6 +155,9 @@ export async function sendDirectOffer(
 ) {
   const [task] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, input.taskId));
   if (!task) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
+  // Client prep (notes 18.56): an install isn't offered until the property type and furniture are answered.
+  const block = await bookingBlock(input.taskId);
+  if (block) throw new ORPCError("BAD_REQUEST", { message: block });
 
   if (task.skillId) {
     const [tick] = await db
@@ -222,6 +226,8 @@ export const offers = {
     .handler(async ({ input, context }) => {
       const [task] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, input.taskId));
       if (!task) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
+      const block = await bookingBlock(input.taskId);
+      if (block) throw new ORPCError("BAD_REQUEST", { message: block });
       if (!task.skillId) {
         throw new ORPCError("BAD_REQUEST", {
           message: "Give the task a skill first. A broadcast goes to everyone ticked for that skill.",
@@ -594,6 +600,10 @@ export async function acceptOffer(offerId: number, installerId: number, chosenDa
       .set({ status: "filled", respondedAt: new Date(), updatedAt: new Date() })
       .where(eq(schema.taskOffers.id, offerId));
     throw new ORPCError("BAD_REQUEST", { message: ALREADY_TAKEN });
+  }
+  // Client prep (notes 18.56): an answer went missing after the offer went out. The office has to fill it in.
+  if (await bookingBlock(row.offer.taskId)) {
+    throw new ORPCError("BAD_REQUEST", { message: "The office still has a detail to fill in on this job. Try again shortly or call the office." });
   }
 
   // Which day are they doing it?

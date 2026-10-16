@@ -107,3 +107,15 @@ export function useAddFieldNote() {
   const invalidate = useInvalidateField();
   return useMutation(orpc.field.addNote.mutationOptions({ onSuccess: invalidate }));
 }
+
+/** Client prep (notes 18.56): text the client I'm on the way. Once a day per client. */
+export function useFieldOnMyWay() {
+  const invalidate = useInvalidateField();
+  return useMutation(orpc.fieldPrep.onMyWay.mutationOptions({ onSuccess: invalidate }));
+}
+
+/** Client prep (notes 18.56): the apartment checklist, fire alarm, lift and parking. */
+export function useFieldTickApt() {
+  const invalidate = useInvalidateField();
+  return useMutation(orpc.fieldPrep.tickApt.mutationOptions({ onSuccess: invalidate }));
+}

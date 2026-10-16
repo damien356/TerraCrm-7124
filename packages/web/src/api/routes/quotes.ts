@@ -1829,6 +1829,8 @@ export const quotes = {
         id: z.number(),
         title: z.string().optional(),
         furnitureOnSite: z.boolean().default(false),
+        /** Notes 18.56: Yes or No asked on Convert. Wins over furnitureOnSite when given. */
+        furnitureMoving: z.boolean().nullable().optional(),
         createTasks: z.boolean().default(true),
       }),
     )

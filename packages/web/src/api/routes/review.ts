@@ -373,7 +373,7 @@ export const review = {
               .where(eq(schema.jobs.companyId, madeHere.company.id));
             await db
               .update(schema.sites)
-              .set({ companyId: null, propertyType: "residential" })
+              .set({ companyId: null, propertyType: "" })
               .where(eq(schema.sites.companyId, madeHere.company.id));
             await db.delete(schema.companyContacts).where(eq(schema.companyContacts.companyId, madeHere.company.id));
             await db.delete(schema.companies).where(eq(schema.companies.id, madeHere.company.id));

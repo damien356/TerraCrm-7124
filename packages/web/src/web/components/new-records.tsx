@@ -7,6 +7,8 @@ import { useCompanyMatches } from "../queries/people";
 import { AddressAutocomplete, billingLine, usePlacesOn } from "./address-autocomplete";
 import { useSites } from "../queries/companies";
 import { COMPANY_TYPES, COMPANY_TYPE_LABELS } from "../../api/lib/person-tags";
+import { cn } from "@/lib/utils";
+import { PROPERTY_TYPES, propertyTypeAnswered } from "../../api/lib/property-types";
 import { EmailInput } from "./email-input";
 
 /**
@@ -394,7 +396,7 @@ export interface NewSiteDraft {
   placeId?: string | null;
 }
 
-export const blankSite = (): NewSiteDraft => ({ address: "", suburb: "", state: "QLD", postcode: "", propertyType: "residential" });
+export const blankSite = (): NewSiteDraft => ({ address: "", suburb: "", state: "QLD", postcode: "", propertyType: "" });
 
 /** Whether the draft was picked from Google's list (it has a map pin). */
 export const sitePinned = (s: NewSiteDraft) => typeof s.lat === "number" && typeof s.lng === "number";
@@ -405,20 +407,12 @@ export function sitePayload(s: NewSiteDraft) {
     suburb: s.suburb.trim(),
     state: s.state.trim() || "QLD",
     postcode: s.postcode.trim() || null,
-    propertyType: s.propertyType || "residential",
+    propertyType: s.propertyType || "",
     lat: sitePinned(s) ? s.lat! : null,
     lng: sitePinned(s) ? s.lng! : null,
     placeId: sitePinned(s) ? s.placeId || null : null,
   };
 }
-
-const PROPERTY_TYPES = [
-  ["residential", "House or unit"],
-  ["new_build", "New build"],
-  ["commercial", "Commercial"],
-  ["strata", "Strata / body corporate"],
-  ["other", "Other"],
-] as const;
 
 /** Waits for a pause in typing. */
 function useDebounced<T>(value: T, ms = 250) {
@@ -492,7 +486,13 @@ export function NewSiteFields({
         <Input id="newsite_pc" value={value.postcode} inputMode="numeric" onChange={(e) => set("postcode", e.target.value)} autoComplete="off" />
       </Field>
       <Field label="Property type" className="sm:col-span-2">
-        <Select id="newsite_type" value={value.propertyType} onChange={(e) => set("propertyType", e.target.value)}>
+        <Select
+          id="newsite_type"
+          className={cn(!propertyTypeAnswered(value.propertyType) && "border-destructive bg-destructive/5 text-destructive")}
+          value={propertyTypeAnswered(value.propertyType) ? value.propertyType : ""}
+          onChange={(e) => set("propertyType", e.target.value)}
+        >
+          <option value="">Not answered</option>
           {PROPERTY_TYPES.map(([v, l]) => (
             <option key={v} value={v}>
               {l}

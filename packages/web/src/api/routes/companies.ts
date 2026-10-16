@@ -234,7 +234,8 @@ export const sites = {
         contactId: z.number().nullable().optional(),
         companyId: z.number().nullable().optional(),
         accessNotes: z.string().nullable().optional(),
-        propertyType: z.string().default("residential"),
+        /** Notes 18.56: House, Townhouse/duplex, Unit low-rise, Apartment high-rise, Commercial. Blank is not answered. */
+        propertyType: z.string().max(40).default(""),
         notes: z.string().nullable().optional(),
         ...siteGeoFields,
       }),

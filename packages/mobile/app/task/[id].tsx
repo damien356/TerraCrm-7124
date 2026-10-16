@@ -29,6 +29,7 @@ import {
 import { useShiftLocation } from "@/hooks/use-shift-location";
 import { JobFileSection } from "@/components/job-file";
 import { SiteVisitCard } from "@/components/site-visit";
+import { ClientPrepCard } from "@/components/client-prep";
 import { useVoiceSettings } from "@/queries/crew";
 
 const c = Colors.light;
@@ -372,6 +373,13 @@ export default function TaskScreen() {
         ) : null}
 
         <SiteVisitCard taskId={t.id} live={t.status === "assigned" || t.status === "in_progress"} />
+
+        <ClientPrepCard
+          taskId={t.id}
+          live={t.status === "assigned" || t.status === "in_progress"}
+          unit={t.unit}
+          aptChecks={t.aptChecks}
+        />
 
         <Section title="WHERE">
           <Card>

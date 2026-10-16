@@ -6,6 +6,7 @@ import {
   CalendarDays,
   ChevronDown,
   ChevronRight,
+  ClipboardCheck,
   ClipboardList,
   FileText,
   HandCoins,
@@ -92,6 +93,7 @@ const NAV: NavEntry[] = [
     children: [
       { to: "/schedule", label: "Board", icon: CalendarDays },
       { to: "/crew", label: "Crew map", icon: MapPinned },
+      { to: "/prep-to-fill", label: "Prep answers to fill", icon: ClipboardCheck },
       { to: "/safety", label: "SWMS and SDS", icon: ShieldCheck },
       { to: "/swms-library", label: "SWMS library", icon: BookOpen },
     ],

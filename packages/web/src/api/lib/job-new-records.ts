@@ -88,7 +88,8 @@ export const newSiteInput = z.object({
   suburb: z.string().trim().default(""),
   state: z.string().trim().default("QLD"),
   postcode: optText,
-  propertyType: z.string().default("residential"),
+  /** Notes 18.56: blank is not answered, and reads red on the job. */
+  propertyType: z.string().max(40).default(""),
   /** Lockbox, gate code, parking. Kept on the site for every future job there. */
   accessNotes: optText,
   notes: optText,

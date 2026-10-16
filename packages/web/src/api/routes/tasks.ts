@@ -11,6 +11,7 @@ import { matchInstaller, parseBookingLine } from "../lib/booking-command";
 import { lockTaskLabour } from "./costing";
 import { installerForStaff, taskForStaff } from "../lib/staff-view";
 import { jobText, taskLetter, taskRef } from "../lib/refs";
+import { bookingBlock, bookingBlockNew } from "../lib/prep";
 
 /**
  * TASKS ARE THE DISPATCH UNIT — not jobs. One job can be five separate
@@ -364,6 +365,11 @@ export const tasks = {
     .handler(async ({ input, context }) => {
       const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, input.jobId));
       if (!job) throw new ORPCError("NOT_FOUND", { message: "Job not found" });
+      // Client prep (notes 18.56): no install date until the property type and furniture are answered.
+      if (input.scheduledDate) {
+        const block = await bookingBlockNew(input.jobId, input.skillId, input.title);
+        if (block) throw new ORPCError("BAD_REQUEST", { message: block });
+      }
 
       const [maxSeq] = await db
         .select({ max: sql<number>`coalesce(max(${schema.jobTasks.seq}), 0)` })
@@ -450,6 +456,12 @@ export const tasks = {
     .handler(async ({ input, context }) => {
       const [existing] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, input.id));
       if (!existing) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
+      // Client prep (notes 18.56): dropping an unbooked install on a day books it, so it needs the answers.
+      // Moving one already booked is left alone: its messages hold until answered.
+      if (input.scheduledDate && !existing.scheduledDate) {
+        const block = await bookingBlock(input.id);
+        if (block) throw new ORPCError("BAD_REQUEST", { message: block });
+      }
 
       if (input.installerId) {
         const { task, job } = await assertAssignable(input.id, input.installerId, existing.crewSize);
@@ -902,6 +914,9 @@ export const tasks = {
     )
     .handler(async ({ input, context }) => {
       const dates = [...new Set(input.dates)].sort();
+      // Client prep (notes 18.56): an install can't be booked until the property type and furniture are answered.
+      const block = await bookingBlock(input.taskId);
+      if (block) throw new ORPCError("BAD_REQUEST", { message: block });
       const { task, job, installer } = await assertAssignable(input.taskId, input.installerId, 1);
 
       const needsTwo = task.crewSize > 1;

@@ -1042,3 +1042,29 @@ Audit of anything sent to clients on its own (no code change): only invoice_requ
 Checked on scratch copies: fix1016h/t-bt PASS 70 (15 cases: job needs a Bill to, % asked once, card %, company %, no guessing, drafts follow, typed % stays, sent stay, new version, other payer, accept bills the quote's payer, job Bill to change logged, the fill list, options and search, nothing sent to a client). fix1016g/t-jv PASS 29, fix1016c/t-rf PASS 140, fix1016b/t-cp PASS 173 (on the pd.ref base), t-vq PASS 79 FAIL 2 (the same two fails as on main). Browser on port 4299: New job red until picked then asks the %, job page Bill to, quote 15 % saved on Enter onto the card, New quote and Create quote, Deposit % to fill, Settings, phone at 390px with no overflow and no page errors.
 
 Live, 16 Oct: backup backups/pre-bill-to.db (121 tables, 19344 rows, bad 0, integrity ok); the four columns added; backfill of 15 quotes read back with 0 mismatches (card 1, quote 11, none 3). The three drafts with no card % are set to none: 4389 (ZZTEST), 188005 (Kevin Ryan) and 188004 (Mermaid Beach Dermatology). Quote 26 (188012) follows Jason Covell's 0% card.
+
+### 18.56 Client prep messages before an install (16 Oct)
+Damien's rules, final:
+- Every job needs a property type (House, Townhouse/duplex, Unit low-rise, Apartment high-rise, Commercial) and a furniture moving Yes or No. Missing answers show red and never stop a save. They block booking an install (any task that is not a measure) and hold the job's prep messages.
+- Three days before the first install day: an install email to the people on the job. One day before each booking day: a text with the arrival window (default 7 to 11am, set in Settings). A Monday install gets its text on Sunday. Coordinate days leave the window out and say the installer will call. Everything goes at 10am.
+- Owner plus Tenant: the Tenant gets everything, the Owner gets the install email only. The builder's office never gets anything. Builder and insurance jobs are off by default, with a switch on the job.
+- A date change sends with the new date. A cancelled job sends nothing. Every message goes on the timeline and the job thread. All wording is editable in Settings (admin only).
+- Units and apartments: the email and text carry the unit lines, and the job has a checklist (fire alarm isolated, lift booked and padded, parking and access sorted).
+- On my way: a button on the job page now, and in the app from build 13. Replies about keys are saved to the job's access notes.
+- The 7am email lists "Client prep sending today" and "Needs property type / furniture answer". Stop is on the job's Client prep panel, never a link in the email.
+- Sender +61493089052 until ACMA approves. The measure SMS (spec section 3) is not built.
+
+Schema (sql/2026-10-30-client-prep.sql): jobs.furniture_moving (null is not answered), jobs.prep_on (null follows the default), jobs.apt_checks, and the prep_sends table (one row per job, kind, day and person, so nothing sends twice). The one job ticked Furniture on site becomes a Yes.
+
+Server:
+- lib/property-types.ts (new): the five types, labels, unit types, measure tasks, the unit checklist.
+- lib/prep-templates.ts (new): default wording and the email, day text and On my way renderers.
+- lib/prep.ts (new): settings, the plan for a job, sending (claim the row first, then send, then settle), the 10am timer (PREP_TIMER=off|on), Stop, Put back on, Retry, On my way, the checklist, key replies, the To fill list, the 7am sections and the booking guard.
+- routes/prep.ts (new, staff; settingsSave admin) and routes/fieldPrep.ts (new, crew: On my way and the checklist on their own task).
+- tasks.ts and offers.ts: create, reschedule, book and offers check the booking guard. jobs.ts, quotes.ts and quote-convert.ts take furnitureMoving. New sites start with no property type (companies, job-new-records, review, lead-intake). field.ts sends the property type on the task card. notify.ts adds the two 7am sections. sms-inbound.ts and mail-replies.ts save key replies.
+
+Web: job page facts (property type and furniture, red when missing) and the Client prep panel (components/job-prep.tsx); Settings, Client prep tab (components/prep-settings.tsx); "Prep answers to fill" page under Schedule (pages/prep-to-fill.tsx, open jobs with an install booked); New job, Create job from a quote, and site forms ask both answers.
+
+Mobile (build 13, no OTA): components/client-prep.tsx on the task page (On my way and the unit checklist); offers read the new property types.
+
+Checked on a scratch copy: prep/t-prep PASS 77 (install email to tenant and owner, text to the tenant only, builder contact excluded, window and no exact time, unit lines, no double send, nothing before 10am, timeline and thread, Stop and Put back on, crew On my way and the checklist, key replies by text and email, booking blocks with measures allowed, held job on the To fill list, builder jobs off and the switch, date change, cancelled, coordinate day, the 7am sections, settings admin only).

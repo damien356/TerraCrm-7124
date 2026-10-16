@@ -558,6 +558,16 @@ export const jobs = sqliteTable(
     billToCompanyId: integer("bill_to_company_id").references(() => companies.id, { onDelete: "set null" }),
     /** Forces crew size 2 on install tasks. */
     furnitureOnSite: integer("furniture_on_site", { mode: "boolean" }).notNull().default(false),
+    /**
+     * Notes 18.56: do we move the furniture, Yes or No. Null = not answered yet,
+     * which holds the client prep messages and stops an install being booked.
+     * Yes keeps furniture_on_site in step, so the 2-man crew rule still holds.
+     */
+    furnitureMoving: integer("furniture_moving", { mode: "boolean" }),
+    /** Client prep messages on this job. Null follows the rule: off for builder and insurance jobs, on otherwise. */
+    prepOn: integer("prep_on", { mode: "boolean" }),
+    /** Apartment checklist, JSON { fire, lift, parking: { at, by } }. Office and crew tick it. */
+    aptChecks: text("apt_checks").notNull().default("{}"),
     description: text("description"),
     /** Copied onto task cards for the field. */
     accessNotes: text("access_notes"),
@@ -4050,4 +4060,36 @@ export const referralSnapshots = sqliteTable(
     ...timestamps,
   },
   (t) => [unique("referral_snapshots_quote_uq").on(t.quoteId), unique("referral_snapshots_variation_uq").on(t.variationId)],
+);
+
+/**
+ * Notes 18.56: every client prep message, and every Stop. One row per job,
+ * kind, day it is about and person, so a message can never go twice, even
+ * from two servers. A Stop is a row with recipient '' and blocks that kind
+ * for that day for everyone.
+ */
+export const prepSends = sqliteTable(
+  "prep_sends",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    taskId: integer("task_id").references(() => jobTasks.id, { onDelete: "set null" }),
+    /** install_email · day_sms · omw_sms */
+    kind: text("kind").notNull(),
+    /** YYYY-MM-DD: the booked day the message is about. */
+    forDate: text("for_date").notNull(),
+    /** '' for a Stop, otherwise c:<contact id>. */
+    recipient: text("recipient").notNull().default(""),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    /** email · sms · '' for a Stop */
+    channel: text("channel").notNull().default(""),
+    toAddress: text("to_address"),
+    /** sending · sent · failed · stopped */
+    status: text("status").notNull().default("sending"),
+    detail: text("detail"),
+    messageId: integer("message_id").references(() => messages.id, { onDelete: "set null" }),
+    byName: text("by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [unique("prep_sends_uq").on(t.jobId, t.kind, t.forDate, t.recipient), index("prep_sends_job_idx").on(t.jobId)],
 );

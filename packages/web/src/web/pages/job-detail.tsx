@@ -25,7 +25,8 @@ import { BookInstallerPanel } from "../components/book-installer";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge, TASK_STATUS_COLOUR, TASK_STATUS_LABEL, tintFor } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
+import { Field, Input, Select, Textarea } from "../components/ui/field";
+import { JobPrepCard, JobPrepFacts } from "../components/job-prep";
 import { Modal } from "../components/ui/modal";
 import {
   useAddJobNote,
@@ -532,16 +533,8 @@ export default function JobDetailPage() {
                   <p className="text-xs text-muted-foreground">Not chargeable. Nothing is billed.</p>
                 ) : null}
               </div>
-              <div>
-                <p className="label-xs">Furniture on site</p>
-                <label htmlFor={`job_detail_cb2`} className="mt-1 flex items-center gap-2 text-sm">
-                  <Checkbox id={`job_detail_cb2`}
-                    checked={j.furnitureOnSite}
-                    onChange={(e) => updateJob.mutate({ id: j.id, furnitureOnSite: e.target.checked })}
-                  />
-                  {j.furnitureOnSite ? "Yes, 2-man crews" : "No"}
-                </label>
-              </div>
+              {/* property type and furniture moving, red until answered (notes 18.56) */}
+              <JobPrepFacts job={j} />
             </div>
             {j.accessNotes ? (
               <p className="mt-3 rounded-md bg-secondary px-3 py-2 text-xs text-muted-foreground">
@@ -675,6 +668,9 @@ export default function JobDetailPage() {
             )}
           </Card>
           )}
+
+          {/* what goes to the client before the install, and when (notes 18.56) */}
+          {supplyOnly ? null : <JobPrepCard jobId={j.id} />}
 
           {/* who referred it (notes 18.47). Office sees the name only. */}
           <JobReferrerCard jobId={j.id} isAdmin={isAdmin} />
