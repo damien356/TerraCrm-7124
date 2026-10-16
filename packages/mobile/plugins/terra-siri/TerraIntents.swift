@@ -220,7 +220,7 @@ struct TerraNextJob: AppIntent {
 
 struct TerraDirections: AppIntent {
   static let title: LocalizedStringResource = "Direct me to my next job"
-  static let description = IntentDescription("Opens Apple Maps, Google Maps or Waze to your next job, whichever you picked on the Me tab.")
+  static let description = IntentDescription("Opens your maps app to your next job, whichever you picked on the Me tab.")
 
   func perform() async throws -> some IntentResult & ProvidesDialog & OpensIntent {
     let r = try await TerraVoice.call("directions")
