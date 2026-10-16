@@ -49,6 +49,8 @@ import PublicSelectionPage from "./pages/public-selection";
 import PublicPayPage from "./pages/public-pay";
 import PublicVariationPage from "./pages/public-variation";
 import PublicRepairPage from "./pages/public-repair";
+import PublicAppPage from "./pages/public-app";
+import PublicSetupPage from "./pages/public-setup";
 import RepairsPage from "./pages/repairs";
 import RepairDetailPage from "./pages/repair-detail";
 import LeadsReportPage from "./pages/leads-report";
@@ -75,6 +77,9 @@ function App() {
         <Route path="/pay/:token" component={PublicPayPage} />
         <Route path="/v/:token" component={PublicVariationPage} />
         <Route path="/r/:token" component={PublicRepairPage} />
+        {/* Staff invites (notes 18.55): the app download and the one-time password set-up. */}
+        <Route path="/app" component={PublicAppPage} />
+        <Route path="/setup/:token" component={PublicSetupPage} />
         <Route>
           <Layout>
             <Switch>

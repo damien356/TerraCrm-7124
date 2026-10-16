@@ -80,6 +80,7 @@ import { bootReminders } from "./lib/reminders";
 import { bootDailySummary } from "./lib/notify";
 import { bootPrep } from "./lib/prep";
 import { prep } from "./routes/prep";
+import { invites } from "./routes/invites";
 import { fieldPrep } from "./routes/fieldPrep";
 import { handleInboundSms, inboundSecretOk } from "./lib/sms-inbound";
 import { takeLead, type LeadFile } from "./lib/lead-intake";
@@ -125,6 +126,8 @@ export const router = {
   billTo,
   /** Client prep messages: install email, day before text, On my way (notes 18.56). */
   prep,
+  /** Staff invites: download page and one-time set-up link (notes 18.55). */
+  invites,
   alerts,
   field,
   fieldPrep,
