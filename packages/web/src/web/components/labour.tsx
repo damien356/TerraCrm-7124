@@ -1,4 +1,5 @@
 import * as React from "react";
+import { auDay } from "@/lib/utils";
 import { History, Pencil, Plus, Search, Trash2, Undo2 } from "lucide-react";
 import { Card, CardHeader, Empty, Loading, Spinner } from "./ui/card";
 import { Badge, tintFor } from "./ui/badge";
@@ -463,7 +464,7 @@ export function LabourRatesTab() {
                           ) : (
                             (row.skillName ?? "no skill")
                           )}
-                          {row.effectiveFrom ? ` · rate set ${row.effectiveFrom}` : ""}
+                          {row.effectiveFrom ? ` · rate set ${auDay(row.effectiveFrom)}` : ""}
                         </div>
                       </div>
                     )}
@@ -790,7 +791,7 @@ export function RateHistoryModal({
                       <span className="ml-1 text-xs">min ${r.minimumCharge.toFixed(2)}</span>
                     ) : null}
                   </td>
-                  <td className="px-3 py-2 tabular-nums">{r.effectiveFrom}</td>
+                  <td className="px-3 py-2 tabular-nums">{auDay(r.effectiveFrom)}</td>
                   <td className="px-3 py-2 tabular-nums">{r.effectiveTo ?? "open"}</td>
                   <td className="px-3 py-2 text-xs">{r.createdByName ?? "-"}</td>
                 </tr>
@@ -883,7 +884,7 @@ export function InstallerRatesTab({ installerId }: { installerId: number }) {
                       <div className="text-sm">{row.name}</div>
                       <div className="mt-0.5 text-xs text-muted-foreground">
                         per {UNIT_LABEL[row.unit] ?? row.unit}
-                        {row.custom && row.effectiveFrom ? ` · his rate from ${row.effectiveFrom}` : ""}
+                        {row.custom && row.effectiveFrom ? ` · his rate from ${auDay(row.effectiveFrom)}` : ""}
                         {!row.custom && row.source === "none" ? " · no rate set anywhere" : ""}
                       </div>
                     </div>

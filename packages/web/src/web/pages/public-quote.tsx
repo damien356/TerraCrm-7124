@@ -1,4 +1,5 @@
 import * as React from "react";
+import { auDay } from "@/lib/utils";
 import { useParams } from "wouter";
 import { Check, Download, FileText } from "lucide-react";
 import { Button } from "../components/ui/button";
@@ -183,7 +184,7 @@ export default function PublicQuotePage() {
       ) : null}
       {q.state === "past_valid" ? (
         <PublicMessage title="This quote has passed its valid until date">
-          Prices may have moved since {q.validUntil}. Reply to our email and we will update it for you.
+          Prices may have moved since {auDay(q.validUntil)}. Reply to our email and we will update it for you.
         </PublicMessage>
       ) : null}
 
@@ -194,7 +195,7 @@ export default function PublicQuotePage() {
             <h1 className="text-2xl font-bold tracking-[-0.015em]">{q.ref}</h1>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {q.date}
-              {q.validUntil ? ` · valid until ${q.validUntil}` : ""}
+              {q.validUntil ? ` · valid until ${auDay(q.validUntil)}` : ""}
             </p>
           </div>
           <Button

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { auDay } from "@/lib/utils";
 import { Link } from "wouter";
 import { Info } from "lucide-react";
 import { Page } from "../components/layout";
@@ -234,7 +235,7 @@ export default function ForecastingPage() {
                           <Badge>{t.structure.replace(/_/g, " ")}</Badge>
                         </td>
                         <td className="px-4 py-2.5 text-[13px]">
-                          {t.label} from {t.termsFrom}
+                          {t.label} from {auDay(t.termsFrom)}
                         </td>
                         <td className="tabular px-4 py-2.5 text-right">
                           {t.depositPercent ? `${t.depositPercent}%` : "-"}

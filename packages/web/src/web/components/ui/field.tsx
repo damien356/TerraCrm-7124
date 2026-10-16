@@ -1,7 +1,13 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
+import { DateField } from "./date-field";
 
 export function Input({ className, ...props }: React.ComponentProps<"input">) {
+  // Dates always read DD/MM/YYYY, whatever language the computer is set to (ui/date-field.tsx).
+  if (props.type === "date") {
+    const { type: _type, ...rest } = props;
+    return <DateField className={className} {...rest} />;
+  }
   return (
     <input
       className={cn(

@@ -1,4 +1,5 @@
 import * as React from "react";
+import { auDay } from "@/lib/utils";
 import { AlertTriangle, Ban, Calendar, Check, Clock, Minus, Plus, TriangleAlert, X } from "lucide-react";
 import { Loading, Spinner } from "./ui/card";
 import { Button } from "./ui/button";
@@ -475,7 +476,7 @@ export function BookInstallerPanel({
           label="Installer pay"
           hint={
             t.labourCost != null && !payOverride
-              ? `Off the rate book${t.labourPricedOn ? `, priced ${t.labourPricedOn}` : ""}. He invoices the lot at the end.`
+              ? `Off the rate book${t.labourPricedOn ? `, priced ${auDay(t.labourPricedOn)}` : ""}. He invoices the lot at the end.`
               : "Leave blank to use the rate book."
           }
           className="mt-3"

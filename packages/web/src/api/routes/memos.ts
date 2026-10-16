@@ -1,3 +1,4 @@
+import { auDay } from "../lib/au-day";
 import { z } from "zod";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
@@ -193,7 +194,7 @@ async function runOne(captureId: number, m: StoredMemo, a: StoredAction, actor: 
         .returning();
       a.ref = row ? { table: "office_tasks", id: row.id } : null;
       a.state = "done";
-      a.resultLabel = remindAt ? `Reminder set for ${sayLocal(remindAt)}` : a.dueDate ? `Task added, due ${a.dueDate}` : "Task added";
+      a.resultLabel = remindAt ? `Reminder set for ${sayLocal(remindAt)}` : a.dueDate ? `Task added, due ${auDay(a.dueDate)}` : "Task added";
       a.resultHref = "/";
       if (row && remindAt) a.remindAt = remindAt.toISOString();
       return;

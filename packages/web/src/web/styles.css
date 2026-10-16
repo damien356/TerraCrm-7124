@@ -257,3 +257,9 @@ html.phone-app main {
 html.phone-app main .grid > * {
   min-width: 0;
 }
+/* Room under the last thing on every page so the round mic button never
+ * sits on top of it (Damien, 16 Oct, notes 18.52). The button is 56px tall,
+ * 20px up from the bottom edge. */
+html.phone-app main {
+  padding-bottom: calc(96px + env(safe-area-inset-bottom));
+}

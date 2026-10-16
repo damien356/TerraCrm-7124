@@ -1,3 +1,4 @@
+import { auDay } from "../lib/au-day";
 import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
 import { and, asc, desc, eq, inArray, isNull, lt, ne } from "drizzle-orm";
@@ -451,7 +452,7 @@ export const swms = {
         entityType: "task",
         entityId: input.taskId,
         action: "swms_signed",
-        detail: `${installerName} signed the SWMS for ${today}${basedOn ? ` (re-confirmed from ${basedOn.workDate})` : ""}`,
+        detail: `${installerName} signed the SWMS for ${auDay(today)}${basedOn ? ` (re-confirmed from ${auDay(basedOn.workDate)})` : ""}`,
         actorName: installerName,
         actorRole: "installer",
       });
@@ -596,12 +597,12 @@ export const swms = {
       const pdf = await getObject(r.pdfKey);
       const safeName = r.installerName.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "") || "installer";
       const filename = `SWMS Job ${job.number} ${r.workDate} ${safeName}.pdf`;
-      const subject = `SWMS: Job #${job.number}${r.siteAddress ? `, ${r.siteAddress}` : ""}, ${r.workDate}`;
+      const subject = `SWMS: Job #${job.number}${r.siteAddress ? `, ${r.siteAddress}` : ""}, ${auDay(r.workDate)}`;
       const note = input.message.trim();
       const text = [
         "Hi,",
         "",
-        `Attached is the signed Safe Work Method Statement for ${r.installerName} on ${r.workDate}${r.siteAddress ? ` at ${r.siteAddress}` : ""} (Job #${job.number}).`,
+        `Attached is the signed Safe Work Method Statement for ${r.installerName} on ${auDay(r.workDate)}${r.siteAddress ? ` at ${r.siteAddress}` : ""} (Job #${job.number}).`,
         ...(note ? ["", note] : []),
         "",
         "Thanks,",
@@ -651,7 +652,7 @@ export const swms = {
         entityType: "job",
         entityId: r.jobId,
         action: "swms_emailed",
-        detail: `Emailed the SWMS for ${r.installerName}, ${r.workDate}${sent.length ? ` to ${sent.join(", ")}` : ""}${failed.length ? `. Not sent to ${failed.join(", ")}` : ""}`,
+        detail: `Emailed the SWMS for ${r.installerName}, ${auDay(r.workDate)}${sent.length ? ` to ${sent.join(", ")}` : ""}${failed.length ? `. Not sent to ${failed.join(", ")}` : ""}`,
         actorName: context.actor.name,
         actorRole: context.actor.role === "admin" ? "admin" : "office",
       });

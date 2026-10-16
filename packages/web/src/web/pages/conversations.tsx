@@ -1,4 +1,5 @@
 import * as React from "react";
+import { DateField } from "../components/ui/date-field";
 import { Link } from "wouter";
 import { UnfiledTray } from "../components/mail-filing";
 import { ChevronDown, MessagesSquare, Paperclip, Search, SlidersHorizontal, X } from "lucide-react";
@@ -364,16 +365,14 @@ export default function InboxPage() {
                     </option>
                   ))}
               </select>
-              <input
-                type="date"
-                className={selectClass}
+              <DateField
+                className={`${selectClass} w-36`}
                 value={from}
                 onChange={(e) => setFrom(e.target.value)}
                 aria-label="From"
               />
-              <input
-                type="date"
-                className={selectClass}
+              <DateField
+                className={`${selectClass} w-36`}
                 value={to}
                 onChange={(e) => setTo(e.target.value)}
                 aria-label="To"

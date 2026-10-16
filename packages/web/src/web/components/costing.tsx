@@ -1,4 +1,5 @@
 import * as React from "react";
+import { auDay } from "@/lib/utils";
 import { AlertTriangle, Lock, LockOpen, Plus, Ruler, Trash2 } from "lucide-react";
 import { Card, CardHeader, Empty, Loading, Spinner } from "./ui/card";
 import { Badge } from "./ui/badge";
@@ -187,7 +188,7 @@ export function MeasureUpModal({
             <p className="flex items-start gap-2 rounded-md bg-secondary px-3 py-2 text-xs">
               <Lock className="mt-0.5 size-3.5 shrink-0" />
               <span>
-                Locked at {dollars(frozen.cost)} on the rates of {frozen.pricedOn}. A rate change now won't touch
+                Locked at {dollars(frozen.cost)} on the rates of {auDay(frozen.pricedOn)}. A rate change now won't touch
                 this dispatch.
               </span>
             </p>
@@ -443,7 +444,7 @@ export function JobForecastCard({ jobId }: { jobId: number }) {
                           <p className="text-sm font-medium">{t.title}</p>
                           {t.frozen ? (
                             <Badge>
-                              <Lock className="size-3" /> locked {t.pricedOn}
+                              <Lock className="size-3" /> locked {auDay(t.pricedOn)}
                             </Badge>
                           ) : null}
                           {t.measured === 0 ? <Badge colour="#B4472E">not measured</Badge> : null}

@@ -1,3 +1,4 @@
+import { auDay } from "./au-day";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 
 /**
@@ -278,7 +279,7 @@ export async function renderInvoicePdf(input: InvoicePdfInput): Promise<Buffer> 
   rightY -= 26;
   textRight(ctx, `Invoice # ${input.invoiceNumber}`, { x: 0, w: CONTENT_WIDTH, size: 9, color: MUTED, y: rightY });
   rightY -= 12;
-  textRight(ctx, `Date ${input.invoiceDate}`, { x: 0, w: CONTENT_WIDTH, size: 9, color: MUTED, y: rightY });
+  textRight(ctx, `Date ${auDay(input.invoiceDate)}`, { x: 0, w: CONTENT_WIDTH, size: 9, color: MUTED, y: rightY });
   rightY -= 12;
 
   ctx.y = Math.min(leftY, rightY) - 12;

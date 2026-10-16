@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link } from "wouter";
 import { Bell, BellRing, Check, Clock, ListTodo, X } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, auDay } from "@/lib/utils";
 import { Card, CardHeader, Empty, Loading } from "./ui/card";
 import { useCompleteOfficeTask, useOfficeTasks, useSnoozeOfficeTask } from "../queries/memos";
 
@@ -26,7 +26,7 @@ function when(d: Date | string) {
 
 function dueLabel(dueDate: string) {
   const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
-  if (dueDate < today) return { text: `overdue, ${dueDate}`, late: true };
+  if (dueDate < today) return { text: `overdue, ${auDay(dueDate)}`, late: true };
   if (dueDate === today) return { text: "due today", late: false };
   return { text: `due ${new Date(`${dueDate}T00:00:00`).toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" })}`, late: false };
 }

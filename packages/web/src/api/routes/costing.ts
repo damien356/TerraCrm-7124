@@ -6,6 +6,7 @@ import { adminOnly } from "../middleware/auth";
 import { rateBook } from "./labour";
 import { crewOutputPerDay } from "../lib/day-estimate";
 import { exGst } from "../lib/gst";
+import { quoteThatCounts } from "../lib/job-value";
 import { jobText, quoteRef, taskRef } from "../lib/refs";
 
 /**
@@ -353,14 +354,19 @@ export const costing = {
         db.select().from(schema.installers).where(eq(schema.installers.active, true)),
       ]);
 
-      // The quote that counts: the accepted one, else the newest version.
-      const quote = quoteRows.find((q) => q.status === "accepted") ?? quoteRows[0] ?? null;
+      // The quote that counts: the accepted one, else the newest quote (lib/job-value.ts).
+      const quote = quoteThatCounts(quoteRows);
       const quoteItems = quote
         ? await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quote.id))
         : [];
 
-      /** Sale ex GST. The quote's subtotal, or the job value (stored inc GST) taken back to ex GST. */
-      const revenue = round2(quote ? quote.subtotal : exGst(job.value));
+      /**
+       * Sale ex GST: the job's value (stored inc GST) taken back to ex GST, the
+       * same figure as Value on the job page. It used to be the quote's
+       * subtotal, which disagreed with Value whenever the job value was stale
+       * or had accepted variations on top (notes 18.52).
+       */
+      const revenue = exGst(job.value);
       // Delivery (fix list item 11) is a cost of the goods too, so it stays in here.
       const goods = (k: string) => k === "supply" || k === "accessory" || k === "delivery" || k === "supplier_charge";
       const materials = round2(

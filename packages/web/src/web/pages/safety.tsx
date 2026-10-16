@@ -1,4 +1,5 @@
 import * as React from "react";
+import { auDay } from "@/lib/utils";
 import { Link } from "wouter";
 import { FileText, ShieldAlert, ShieldCheck, Upload } from "lucide-react";
 import { Page } from "../components/layout";
@@ -153,7 +154,7 @@ function Library() {
                       <FileText className="size-3.5" /> {cur.filename || "SDS"}
                     </a>
                     {cur.revision ? <span>{cur.revision}</span> : null}
-                    {cur.issuedOn ? <span>issued {cur.issuedOn}</span> : null}
+                    {cur.issuedOn ? <span>issued {auDay(cur.issuedOn)}</span> : null}
                     {cur.reviewDue ? (
                       c.expired ? (
                         <Badge colour={RUST}>Review was due {cur.reviewDue}, get the new sheet</Badge>

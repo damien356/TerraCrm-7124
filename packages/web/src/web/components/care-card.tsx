@@ -1,4 +1,5 @@
 import * as React from "react";
+import { auDay } from "@/lib/utils";
 import { Link } from "wouter";
 import { HeartHandshake, RotateCcw } from "lucide-react";
 import { Card, CardHeader } from "./ui/card";
@@ -125,7 +126,7 @@ export function CareCard({ jobId, isAdmin }: { jobId: number; isAdmin: boolean }
             <p className="label-xs">What went down</p>
             <p>
               {d.floors.length ? d.floors.map((f) => d.options.floors.find((o) => o.value === f)?.label ?? f).join(", ") : "Could not tell"}
-              {d.floorsFrom ? <span className="text-xs text-muted-foreground"> (from {d.floorsFrom})</span> : null}
+              {d.floorsFrom ? <span className="text-xs text-muted-foreground"> (from {auDay(d.floorsFrom)})</span> : null}
             </p>
             {d.hasCarpet ? (
               <p className="text-xs text-muted-foreground">
@@ -133,7 +134,7 @@ export function CareCard({ jobId, isAdmin }: { jobId: number; isAdmin: boolean }
                 {d.fibre
                   ? `${d.options.fibres.find((o) => o.value === d.fibre)?.label ?? d.fibre}, set on the job`
                   : d.detectedFibre && d.detectedFibre !== "unknown" && d.fibreFrom && d.fibreFrom !== "none"
-                    ? `${d.options.fibres.find((o) => o.value === d.detectedFibre)?.label ?? d.detectedFibre}, from ${d.fibreFrom}`
+                    ? `${d.options.fibres.find((o) => o.value === d.detectedFibre)?.label ?? d.detectedFibre}, from ${auDay(d.fibreFrom)}`
                     : "not known yet"}
                 . Pile:{" "}
                 {d.options.piles.find((o) => o.value === (d.pile || d.detectedPile))?.label ?? "not known"}.

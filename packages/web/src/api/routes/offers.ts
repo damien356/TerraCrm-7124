@@ -1,3 +1,4 @@
+import { auDay } from "../lib/au-day";
 import { z } from "zod";
 import { and, asc, desc, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
@@ -202,7 +203,7 @@ export async function sendDirectOffer(
   // Buzz his phone. A missed offer expires, so this is not optional comms.
   void pushToInstaller(input.installerId, {
     title: "New job offer",
-    body: `${task.title}${task.scheduledDate ? ` on ${task.scheduledDate}` : ""}${pay ? `, $${pay}` : ""}`,
+    body: `${task.title}${task.scheduledDate ? ` on ${auDay(task.scheduledDate)}` : ""}${pay ? `, $${pay}` : ""}`,
     data: { kind: "offer", taskId: input.taskId, offerId: offer!.id },
   });
 
@@ -284,7 +285,7 @@ export const offers = {
       for (const offer of created) {
         void pushToInstaller(offer!.installerId, {
           title: "Job up for grabs",
-          body: `${task.title}${task.scheduledDate ? ` on ${task.scheduledDate}` : ""}${offer!.payAmount ? `, $${offer!.payAmount}` : ""}. First to accept gets it.`,
+          body: `${task.title}${task.scheduledDate ? ` on ${auDay(task.scheduledDate)}` : ""}${offer!.payAmount ? `, $${offer!.payAmount}` : ""}. First to accept gets it.`,
           data: { kind: "offer", taskId: input.taskId, offerId: offer!.id },
         });
       }
@@ -485,14 +486,14 @@ async function lockTask(args: {
     action: args.promotedFromHold ? "hold_confirmed" : "offer_accepted",
     detail: args.promotedFromHold
       ? `${installer?.name ?? "Installer"}'s ${PROVISIONAL_HOLD_HOURS}h hold on "${args.taskTitle}" converted, locked to ${args.day ?? "no date yet"}`
-      : `${installer?.name ?? "Installer"} accepted "${args.taskTitle}"${args.day ? `, locked to ${args.day}` : ""}`,
+      : `${installer?.name ?? "Installer"} accepted "${args.taskTitle}"${args.day ? `, locked to ${auDay(args.day)}` : ""}`,
     actorName: installer?.name ?? "Installer",
     actorRole: "installer",
   });
 
   void notifyOffice("offer_accepted", {
     title: args.promotedFromHold ? "Hold confirmed" : "Offer accepted",
-    body: `${installer?.name ?? "Installer"} has "${args.taskTitle}"${args.day ? ` on ${args.day}` : ""}`,
+    body: `${installer?.name ?? "Installer"} has "${args.taskTitle}"${args.day ? ` on ${auDay(args.day)}` : ""}`,
     data: { kind: "task", taskId: args.taskId, jobId: args.jobId },
   });
 
@@ -659,7 +660,7 @@ export async function acceptOffer(offerId: number, installerId: number, chosenDa
     entityType: "offer",
     entityId: offerId,
     action: "offer_held",
-    detail: `${installer?.name ?? "Installer"} put a ${PROVISIONAL_HOLD_HOURS}h hold on "${row.task.title}"${day ? ` for ${day}` : ""}. Confirms automatically unless someone else takes it`,
+    detail: `${installer?.name ?? "Installer"} put a ${PROVISIONAL_HOLD_HOURS}h hold on "${row.task.title}"${day ? ` for ${auDay(day)}` : ""}. Confirms automatically unless someone else takes it`,
     actorName: installer?.name ?? "Installer",
     actorRole: "installer",
   });

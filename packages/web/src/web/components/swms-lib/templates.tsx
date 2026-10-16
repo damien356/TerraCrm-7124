@@ -1,4 +1,5 @@
 import * as React from "react";
+import { auDay } from "@/lib/utils";
 import { AlertTriangle, ArrowDown, ArrowUp, Copy, Eye, FileText, GripVertical, History, Pencil, Plus, Send, X } from "lucide-react";
 import { Card, CardHeader, Empty, Loading } from "../ui/card";
 import { Badge } from "../ui/badge";
@@ -121,7 +122,7 @@ export function TemplatesTab({ data }: { data: Overview }) {
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" style={{ color: w.kind === "expired_sds" ? AMBER : RUST }} />
                 <span>
                   <span className="font-medium">{w.product}</span>{" "}
-                  {w.kind === "missing_sds" ? "has no SDS on file." : `SDS was due for review on ${w.reviewOn}.`}{" "}
+                  {w.kind === "missing_sds" ? "has no SDS on file." : `SDS was due for review on ${auDay(w.reviewOn)}.`}{" "}
                   <span className="text-muted-foreground">Used by {w.templates.join(", ")}.</span>
                 </span>
               </li>
@@ -488,7 +489,7 @@ function HistoryModal({ t, onClose }: { t: Template; onClose: () => void }) {
                     <p className="mt-0.5 text-xs text-muted-foreground">
                       Reviewed by {r.reviewedByName}
                       {r.reviewedByQualification ? `, ${r.reviewedByQualification}` : ""}
-                      {r.reviewedOn ? `, ${r.reviewedOn}` : ""}
+                      {r.reviewedOn ? `, ${auDay(r.reviewedOn)}` : ""}
                     </p>
                   ) : null}
                   <p className="mt-0.5 text-xs text-muted-foreground">

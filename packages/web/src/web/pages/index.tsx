@@ -15,7 +15,7 @@ import { useBootstrap } from "../queries/settings";
 import { useTopSources } from "../queries/leads";
 import { sourceName } from "../../api/lib/lead-codes";
 import { isPhoneApp } from "../lib/phone-app";
-import { cn } from "../lib/utils";
+import { cn, auDay } from "../lib/utils";
 
 const money = (n: number) =>
   n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
@@ -230,7 +230,7 @@ export default function DashboardPage() {
                   <div key={t.id} className="px-4 py-2.5">
                     <p className="truncate text-sm font-medium">{t.title}</p>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      {t.ref} · {t.scheduledDate} · {t.installerName ?? "unassigned"} ·{" "}
+                      {t.ref} · {auDay(t.scheduledDate)} · {t.installerName ?? "unassigned"} ·{" "}
                       {TASK_STATUS_LABEL[t.status] ?? t.status}
                     </p>
                   </div>

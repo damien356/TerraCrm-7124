@@ -6,6 +6,7 @@ import { checkNewRecords, createNewRecords, newCompanyInput, newContactInput, ne
 import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
+import { syncJobValue } from "../lib/job-value";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
 import { addJobPerson, customerTag, personInput, removeJobTag, updateJobPerson } from "../lib/job-people";
@@ -437,6 +438,11 @@ export const jobs = {
         .set({ ...rest, updatedAt: new Date() })
         .where(eq(schema.jobs.id, id))
         .returning();
+      // A job with a quote takes its value from the quote (lib/job-value.ts). A typed value only sticks without one.
+      if (rest.value !== undefined && (await syncJobValue(id)) && row) {
+        const [fresh] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, id));
+        if (fresh) Object.assign(row, fresh);
+      }
 
       // The furniture rule is a data rule, not a UI rule: turning the flag on
       // forces every install task on the job up to a 2-man crew.
