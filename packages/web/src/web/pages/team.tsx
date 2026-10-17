@@ -19,7 +19,9 @@ import {
 import { InstallerPanel } from "./installers";
 import { useRevokeVoiceKey, useVoiceKeys } from "../queries/visits";
 import { EmailInput } from "../components/email-input";
-import { useSendInvite } from "../queries/invites";
+import { useSendInvite, useSetPassword } from "../queries/invites";
+import { SetPasswordModal } from "../components/set-password-modal";
+import { ReviewerLoginCard } from "../components/reviewer-login-card";
 
 function when(iso: string | null) {
   if (!iso) return "-";
@@ -119,6 +121,10 @@ export default function TeamPage() {
             once and runs out after 48 hours. Sending a new invite stops the older one working. There is no public
             sign-up. Only an Admin can make a login or send an invite. "Switch off" only blocks login. It never deletes
             anything.
+          </li>
+          <li>
+            Set password is for when an invite can't get through. You type the password, so tell them it in person.
+            The invite is still the better way.
           </li>
         </ul>
       </Card>
@@ -257,6 +263,8 @@ export default function TeamPage() {
         </Card>
       )}
 
+      <ReviewerLoginCard />
+
       <AddPersonModal open={adding} onClose={() => setAdding(false)} />
 
       <VoiceKeys />
@@ -296,6 +304,8 @@ function inviteLine(i: InviteRow) {
  */
 function InviteCell({ row, onError }: { row: Person; onError: (m: string | null) => void }) {
   const send = useSendInvite();
+  const setPassword = useSetPassword();
+  const [pwOpen, setPwOpen] = React.useState(false);
   const [showLog, setShowLog] = React.useState(false);
   const [sentNote, setSentNote] = React.useState<string | null>(null);
   const latest = row.invites[0] ?? null;
@@ -341,11 +351,22 @@ function InviteCell({ row, onError }: { row: Person; onError: (m: string | null)
             {send.isPending && send.variables?.channel === "email" ? <Spinner className="border-foreground/20 border-t-foreground" /> : <Send className="size-3.5" />}
             {again ? "Resend by email" : "Send invite by email"}
           </Button>
+          <Button variant="ghost" onClick={() => setPwOpen(true)}>
+            <KeyRound className="size-3.5" />
+            Set password
+          </Button>
         </div>
       ) : (
         <p className="text-muted-foreground">Switched off. Switch on to send an invite.</p>
       )}
       {sentNote ? <p className="text-emerald-700">{sentNote}</p> : null}
+      <SetPasswordModal
+        open={pwOpen}
+        who={`${row.name || row.email} · signs in with ${row.email}`}
+        note={row.hasPassword ? "They already have a password. This replaces it." : null}
+        onClose={() => setPwOpen(false)}
+        onSave={(password) => setPassword.mutateAsync({ profileId: row.id, password })}
+      />
       {row.invites.length ? (
         <button type="button" className="text-primary hover:underline" onClick={() => setShowLog((v) => !v)}>
           {showLog ? "Hide invite log" : `Invite log (${row.invites.length})`}

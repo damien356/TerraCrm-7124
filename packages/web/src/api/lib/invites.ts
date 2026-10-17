@@ -294,14 +294,72 @@ const LINK_WORDS: Record<Exclude<LinkCheck["state"], "ok">, string> = {
 };
 export const linkWords = (s: Exclude<LinkCheck["state"], "ok">) => LINK_WORDS[s];
 
+/** Password rules, the same for the set-up link and an Admin setting one. */
+export function passwordProblem(password: string) {
+  if (password.length < MIN_PASSWORD) return `Use at least ${MIN_PASSWORD} characters.`;
+  if (password.length > MAX_PASSWORD) return `Use ${MAX_PASSWORD} characters or fewer.`;
+  return null;
+}
+
+/** Store a new password on a login, replacing any old one. */
+async function writePassword(userId: string, password: string, now: Date) {
+  const hash = await hashPassword(password);
+  const [existing] = await db
+    .select({ id: schema.account.id })
+    .from(schema.account)
+    .where(and(eq(schema.account.userId, userId), eq(schema.account.providerId, "credential")));
+  if (existing) {
+    await db.update(schema.account).set({ password: hash, updatedAt: now }).where(eq(schema.account.id, existing.id));
+  } else {
+    await db.insert(schema.account).values({
+      id: randomUUID().replace(/-/g, ""),
+      accountId: userId,
+      providerId: "credential",
+      userId,
+      password: hash,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  await db.update(schema.user).set({ emailVerified: true, updatedAt: now }).where(eq(schema.user.id, userId));
+}
+
+/**
+ * An Admin sets a password on a login (Damien 17 Oct, notes 18.58). For the
+ * store reviewer login, and for crew who can't get an invite through. The
+ * Admin types it, so they know it: the invite link is still the normal way.
+ * Phones already signed in stay signed in, the same as the set-up link.
+ * The password itself is never logged, only that it was set and by whom.
+ */
+export async function adminSetPassword(
+  userId: string,
+  password: string,
+  who: { actorName: string; label: string; profileId: number | null },
+  now = new Date(),
+) {
+  const problem = passwordProblem(password);
+  if (problem) throw new InviteError(problem);
+  const [u] = await db.select({ id: schema.user.id }).from(schema.user).where(eq(schema.user.id, userId));
+  if (!u) throw new InviteError("That login no longer exists.");
+  await writePassword(userId, password, now);
+  await db.insert(schema.activityLog).values({
+    entityType: "profile",
+    entityId: who.profileId,
+    action: "password_set",
+    detail: `Password set for ${who.label} by ${who.actorName}`,
+    actorName: who.actorName,
+    actorRole: "admin",
+  });
+}
+
 /**
  * Set the password from the link. The link is claimed first, in one write
  * that only succeeds while it is still good, so two taps can't both use it.
  * An existing password is replaced. Sessions already signed in stay signed in.
  */
 export async function setupLogin(token: string, password: string, now = new Date()) {
-  if (password.length < MIN_PASSWORD) throw new InviteError(`Use at least ${MIN_PASSWORD} characters.`);
-  if (password.length > MAX_PASSWORD) throw new InviteError(`Use ${MAX_PASSWORD} characters or fewer.`);
+  const problem = passwordProblem(password);
+  if (problem) throw new InviteError(problem);
   const check = await checkLink(token, now);
   if (check.state !== "ok") throw new InviteError(linkWords(check.state));
   const inv = (await findByToken(token))!;
@@ -314,25 +372,7 @@ export async function setupLogin(token: string, password: string, now = new Date
   if (!claimed.length) throw new InviteError(linkWords("used"));
 
   try {
-    const hash = await hashPassword(password);
-    const [existing] = await db
-      .select({ id: schema.account.id })
-      .from(schema.account)
-      .where(and(eq(schema.account.userId, inv.userId), eq(schema.account.providerId, "credential")));
-    if (existing) {
-      await db.update(schema.account).set({ password: hash, updatedAt: now }).where(eq(schema.account.id, existing.id));
-    } else {
-      await db.insert(schema.account).values({
-        id: randomUUID().replace(/-/g, ""),
-        accountId: inv.userId,
-        providerId: "credential",
-        userId: inv.userId,
-        password: hash,
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-    await db.update(schema.user).set({ emailVerified: true, updatedAt: now }).where(eq(schema.user.id, inv.userId));
+    await writePassword(inv.userId, password, now);
   } catch (e) {
     await db.update(schema.invites).set({ usedAt: null, updatedAt: new Date() }).where(eq(schema.invites.id, inv.id));
     throw e;

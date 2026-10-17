@@ -12,11 +12,12 @@ import { seedDemo, DEMO_INSTALLER_ID } from "./demo-seed";
 import { todayLocal } from "../lib/local-date";
 
 /**
- * THE GOOGLE PLAY REVIEWER'S DATABASE.
+ * THE STORE REVIEWER'S DATABASE (Google Play and Apple TestFlight).
  *
- * Google needs a login that opens every screen of the Android app. Handing it a
- * real login would show real customers, addresses, phone numbers and prices, so
- * the reviewer login is pointed at a separate, made up Terra instead.
+ * The stores need a login that opens the app. Handing them a real login would
+ * show real customers, addresses, phone numbers and prices, so the reviewer
+ * login is pointed at a separate, made up Terra instead. Since notes 18.58 it
+ * is a Crew login with one demo job (Damien 17 Oct), not an Admin.
  *
  * - The sign-in itself is a normal live login (auth tables are always live).
  * - Every request from that login runs against this demo database.
@@ -137,21 +138,23 @@ async function carryOver(from: TerraDb, to: TerraDb) {
 
   const profiles = await from.select().from(schema.profiles);
   for (const { id: _id, ...p } of profiles) {
-    if (p.role === "admin") await ensureReviewerProfile(to, p.userId, p.name, p.email);
+    if (p.installerId === DEMO_INSTALLER_ID) await ensureReviewerProfile(to, p.userId, p.name, p.email);
   }
 }
 
 /**
- * The reviewer is both office and crew: admin, linked to the demo installer
- * "Mick R.", so the Office tab and Today, Coming up and Offers all show.
- * Put back on every request in case the reviewer edits their own login.
+ * The reviewer is Field crew, linked to the demo installer "Mick R.", whose
+ * only work is the one demo job (demo-seed.ts). No Office tab. Put back on
+ * every request in case anything changes it.
  */
+const REVIEWER_ROLE = "field";
+
 export async function ensureReviewerProfile(target: TerraDb, userId: string, name: string, email: string) {
   const [row] = await target.select().from(schema.profiles).where(eq(schema.profiles.userId, userId));
   if (!row) {
     await target
       .insert(schema.profiles)
-      .values({ userId, name: name || "Play Reviewer", email, role: "admin", installerId: DEMO_INSTALLER_ID, active: true })
+      .values({ userId, name: name || "Store Reviewer", email, role: REVIEWER_ROLE, installerId: DEMO_INSTALLER_ID, active: true })
       .onConflictDoNothing();
     await target
       .update(schema.installers)
@@ -159,10 +162,10 @@ export async function ensureReviewerProfile(target: TerraDb, userId: string, nam
       .where(eq(schema.installers.id, DEMO_INSTALLER_ID));
     return;
   }
-  if (row.role !== "admin" || row.installerId !== DEMO_INSTALLER_ID || !row.active) {
+  if (row.role !== REVIEWER_ROLE || row.installerId !== DEMO_INSTALLER_ID || !row.active) {
     await target
       .update(schema.profiles)
-      .set({ role: "admin", installerId: DEMO_INSTALLER_ID, active: true, updatedAt: new Date() })
+      .set({ role: REVIEWER_ROLE, installerId: DEMO_INSTALLER_ID, active: true, updatedAt: new Date() })
       .where(eq(schema.profiles.id, row.id));
   }
 }

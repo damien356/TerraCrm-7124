@@ -41,3 +41,27 @@ export function useInviteCheck(token: string) {
 export function useInviteSetup() {
   return useMutation(orpc.invites.setup.mutationOptions());
 }
+
+/* Admin sets a password on a login, and the store reviewer login (notes 18.58). */
+
+export function useSetPassword() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.invites.setPassword.mutationOptions({
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: orpc.team.key() }),
+    }),
+  );
+}
+
+export function useReviewerLogin() {
+  return useQuery(orpc.invites.reviewer.queryOptions({ staleTime: 15_000 }));
+}
+
+export function useReviewerSetPassword() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.invites.reviewerSetPassword.mutationOptions({
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: orpc.invites.reviewer.key() }),
+    }),
+  );
+}

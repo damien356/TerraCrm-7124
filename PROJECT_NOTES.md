@@ -262,7 +262,7 @@ Nothing for these exists in the code. Damien to paste or re-state the spec.
 - **Slice 6 signatures:** waiting on the solicitor's T&Cs.
 - **Insurer supervisor:** decided 7 Oct. Optional everywhere, insurers included. No warning.
 - **David's card:** login David Walker is linked to installer card 9 "Dave Kohn" (test name, mobile 0412 000 333). Needs his real name and number. Damien skipped this on 7 Oct.
-- **Test logins on live:** demo.installer@ (profile 15, card 1), qa.board@terra.local (Office), admin.test@terraflooring.local (Office). google-review@ is the Play Store reviewer login, keep until approval.
+- **Test logins on live:** demo.installer@ (profile 15, card 1), admin.test@terraflooring.local (Office, switched off). qa.board@terra.local was renamed to K herselman (k.herselman@floorsbyyou.com.au, field, card 14) on 17 Oct, also a test login. google-review@ is the store reviewer login (Play and TestFlight), crew with one demo job (18.58).
 
 ## 15. Work order (Damien, 7 Oct)
 
@@ -1128,3 +1128,14 @@ Fix (JS only, no new native module): metro.config.js points expo-network at lib/
 Checked: an exported Android bundle had null in that import's slot before the change, and the stand-in module after it.
 
 Android: the last Play build was 10 (9 Oct), from before the crash guard (18.8: safe login storage, recovery screens, phone problem reports). No over-the-air update was ever published (the production branch on EAS is empty), so an Android phone that crashed sent nothing in. The new Android build carries the guard and this fix.
+
+### 18.58 Store reviewer login is crew with one demo job, and Admin "Set password" (17 Oct)
+Damien: google-review@terraflooring.com.au must be a Crew login that only sees one demo job, never real client data. He sets its password himself in Terra Ops and types it into App Store Connect and Play Console. Add an Admin "Set password" on staff logins.
+
+Reviewer (database/demo.ts, demo-seed.ts): it still runs on the made up demo Terra built for the Play reviewer, never live rows, and still has no live profile. Its demo profile is now Field crew, not Admin, so no Office tab. Mick R. (the demo installer it signs in as) now only has work on demo job 9218: the uplift finished this morning (ready to invoice), the carpet lay today, and the light prep offer. Every other demo task and offer moved to the other demo crew. Apple uses the same login for TestFlight Beta App Review.
+
+People page: "Set password" on every row (new password typed twice, at least 8 characters). Replaces any password. Phones already signed in stay signed in, the same as the set-up link. The invite link is still the normal way. Logged in activity_log as password_set with who did it, never the password.
+
+People page, new card "App store reviewer login": shows whether it has a password and when it last signed in, with its own Set password. Routes: invites.setPassword, invites.reviewer, invites.reviewerSetPassword, all Admin only.
+
+Tested (terra-scratch-tests/reviewer): reviewer is role field on installer 1, every crew screen opens, replies carry only job 9218, office routes and the password routes are refused, short passwords refused, staff and reviewer sign in with the Admin set password. 38 pass.

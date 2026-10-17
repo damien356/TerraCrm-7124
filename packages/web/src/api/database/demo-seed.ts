@@ -8,9 +8,10 @@ import { addLocalDays } from "../lib/local-date";
  * for fiction (0491 570 xxx mobiles, 07 5550 xxxx landlines) and every email is
  * @example.com, so even a slip could not reach a person.
  *
- * Dates are laid out around `today` so every crew screen has something on it:
- * two jobs today, more over the coming week, two open offers, and a finished
- * job from yesterday ready to invoice.
+ * The reviewer signs in as crew member Mick R. and sees ONE job, 9218 (notes
+ * 18.58, Damien 17 Oct): the uplift he finished this morning (ready to
+ * invoice), the carpet lay today, and an offer for the light prep. Every other
+ * demo job and task belongs to the other demo crew, so Mick never sees it.
  */
 
 /** The demo crew member the reviewer is signed in as. */
@@ -178,19 +179,19 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
   const taskRows = await d
     .insert(s.jobTasks)
     .values([
-      /* Mick, today */
+      /* Mick, today, the one job he sees */
       { jobId: job(9218), seq: 2, skillId: skill("Broadloom"), title: "Lay carpet, 68 m2", description: "Furniture on site, bring the offsider.", areaM2: 68, scheduledDate: day(0), startTime: "07:30", durationHours: 6, crewSize: 2, status: "assigned", assignedInstallerId: mick, payType: "per_m2", payAmount: 680, labourCost: 680, labourBreakdown: lay(68, 10, "Broadloom carpet lay"), labourPricedOn: day(-3) },
-      { jobId: job(9226), seq: 1, skillId: skill("Measure"), title: "Measure and quote, 14 stairs", areaM2: null, scheduledDate: day(0), startTime: "14:00", durationHours: 1, crewSize: 1, status: "assigned", assignedInstallerId: mick, payType: "per_job", payAmount: 50 },
-      /* Mick, coming up */
-      { jobId: job(9221), seq: 3, skillId: skill("Hybrid"), title: "Lay hybrid plank, 24 m2", areaM2: 24, scheduledDate: day(1), startTime: "07:30", durationHours: 7, crewSize: 1, status: "assigned", assignedInstallerId: mick, payType: "per_m2", payAmount: 336, labourCost: 336, labourBreakdown: lay(24, 14, "Hybrid plank lay"), labourPricedOn: day(-3) },
-      { jobId: job(9224), seq: 2, skillId: skill("Broadloom"), title: "Carpet, 4 bedrooms, 82 m2", areaM2: 82, scheduledDate: day(3), startTime: "07:00", durationHours: 7, crewSize: 2, status: "assigned", assignedInstallerId: mick, payType: "per_m2", payAmount: 820, labourCost: 820, labourBreakdown: lay(82, 10, "Broadloom carpet lay"), labourPricedOn: day(-3) },
-      /* Mick, done yesterday, ready to invoice */
-      { jobId: job(9210), seq: 1, skillId: skill("Broadloom"), title: "Lay carpet, lounge 22 m2", areaM2: 22, scheduledDate: day(-1), startTime: "08:00", durationHours: 3, crewSize: 1, status: "complete", assignedInstallerId: mick, payType: "per_m2", payAmount: 220, labourCost: 220, labourBreakdown: lay(22, 10, "Broadloom carpet lay"), labourPricedOn: day(-5), startedAt: at(-1, 8), completedAt: at(-1, 11, 30), signatureName: "Tom Baker", damageCheckedAt: at(-1, 8), damageNone: true },
-      /* Offers out to Mick */
+      /* Other crew from here on: Mick never sees these jobs */
+      { jobId: job(9226), seq: 1, skillId: skill("Measure"), title: "Measure and quote, 14 stairs", areaM2: null, scheduledDate: day(0), startTime: "14:00", durationHours: 1, crewSize: 1, status: "assigned", assignedInstallerId: 3, payType: "per_job", payAmount: 50 },
+      { jobId: job(9221), seq: 3, skillId: skill("Hybrid"), title: "Lay hybrid plank, 24 m2", areaM2: 24, scheduledDate: day(1), startTime: "07:30", durationHours: 7, crewSize: 1, status: "assigned", assignedInstallerId: 2, payType: "per_m2", payAmount: 336, labourCost: 336, labourBreakdown: lay(24, 14, "Hybrid plank lay"), labourPricedOn: day(-3) },
+      { jobId: job(9224), seq: 2, skillId: skill("Broadloom"), title: "Carpet, 4 bedrooms, 82 m2", areaM2: 82, scheduledDate: day(3), startTime: "07:00", durationHours: 7, crewSize: 2, status: "assigned", assignedInstallerId: 3, payType: "per_m2", payAmount: 820, labourCost: 820, labourBreakdown: lay(82, 10, "Broadloom carpet lay"), labourPricedOn: day(-3) },
+      { jobId: job(9210), seq: 1, skillId: skill("Broadloom"), title: "Lay carpet, lounge 22 m2", areaM2: 22, scheduledDate: day(-1), startTime: "08:00", durationHours: 3, crewSize: 1, status: "complete", assignedInstallerId: 3, payType: "per_m2", payAmount: 220, labourCost: 220, labourBreakdown: lay(22, 10, "Broadloom carpet lay"), labourPricedOn: day(-5), startedAt: at(-1, 8), completedAt: at(-1, 11, 30), signatureName: "Tom Baker", damageCheckedAt: at(-1, 8), damageNone: true },
+      /* Offers: the stairs go to Sam, the light prep on 9218 to Mick and Dave */
       { jobId: job(9224), seq: 3, skillId: skill("Carpet stairs"), title: "Carpet stairs, 13 steps", areaM2: null, scheduledFrom: day(4), scheduledTo: day(6), startTime: "07:30", durationHours: 4, crewSize: 1, status: "offered", payType: "per_job", payAmount: 156 },
       { jobId: job(9218), seq: 3, skillId: skill("Light prep"), title: "Light prep before the lay", scheduledDate: day(2), startTime: "08:00", durationHours: 2, crewSize: 1, status: "offered", payType: "hourly", payAmount: 120 },
-      /* Other crew, for the office board */
-      { jobId: job(9218), seq: 1, skillId: skill("Carpet removal"), title: "Lift old carpet, 68 m2", areaM2: 68, scheduledDate: day(0), startTime: "06:30", durationHours: 1, crewSize: 1, status: "complete", assignedInstallerId: 4, payType: "per_m2", payAmount: 204, startedAt: at(0, 6, 30), completedAt: at(0, 7, 20) },
+      /* Mick, done this morning on 9218, ready to invoice */
+      { jobId: job(9218), seq: 1, skillId: skill("Carpet removal"), title: "Lift old carpet, 68 m2", areaM2: 68, scheduledDate: day(0), startTime: "06:30", durationHours: 1, crewSize: 1, status: "complete", assignedInstallerId: mick, payType: "per_m2", payAmount: 204, labourCost: 204, labourBreakdown: lay(68, 3, "Carpet uplift"), labourPricedOn: day(-3), startedAt: at(0, 6, 30), completedAt: at(0, 7, 20), damageCheckedAt: at(0, 6, 30), damageNone: true },
+      /* Other crew */
       { jobId: job(9221), seq: 1, skillId: skill("Tile removal"), title: "Lift tiles, kitchen and laundry", areaM2: 18, scheduledDate: day(0), startTime: "07:30", durationHours: 5, crewSize: 1, status: "in_progress", assignedInstallerId: 4, payType: "per_m2", payAmount: 396, startedAt: at(0, 7, 35) },
       { jobId: job(9221), seq: 2, skillId: skill("Full prep"), title: "Level and prep subfloor", areaM2: 24, scheduledDate: day(0), startTime: "12:30", durationHours: 4, crewSize: 1, status: "assigned", assignedInstallerId: 2, payType: "hourly", payAmount: 280 },
       { jobId: job(9221), seq: 4, skillId: skill("Silicone"), title: "Silicone perimeter, wet areas", scheduledDate: day(2), startTime: "13:00", durationHours: 2, crewSize: 1, status: "unassigned", payType: "per_job", payAmount: 180 },
@@ -222,7 +223,7 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
   );
 
   await d.insert(s.taskOffers).values([
-    { taskId: task("Carpet stairs, 13 steps").id, installerId: mick, mode: "direct", status: "pending", payAmount: 156, expiresAt: inHours(48) },
+    { taskId: task("Carpet stairs, 13 steps").id, installerId: 3, mode: "direct", status: "pending", payAmount: 156, expiresAt: inHours(48) },
     { taskId: task("Light prep before the lay").id, installerId: mick, mode: "broadcast", status: "pending", payAmount: 120, expiresAt: inHours(48) },
     { taskId: task("Light prep before the lay").id, installerId: 2, mode: "broadcast", status: "pending", payAmount: 120, expiresAt: inHours(48) },
   ]);
@@ -301,6 +302,7 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
   await d.insert(s.activityLog).values([
     { jobId: job(9218), action: "job_created", detail: "Demo job created", actorName: "System" },
     { jobId: job(9218), action: "deposit_paid", detail: "Deposit $1,240 received", actorName: "System" },
-    { jobId: job(9210), action: "task_complete", detail: "Mick R. finished the lounge", actorName: "Mick R.", actorRole: "installer" },
+    { jobId: job(9210), action: "task_complete", detail: "Sam K. finished the lounge", actorName: "Sam K.", actorRole: "installer" },
+    { jobId: job(9218), action: "task_complete", detail: "Mick R. lifted the old carpet", actorName: "Mick R.", actorRole: "installer" },
   ]);
 }
