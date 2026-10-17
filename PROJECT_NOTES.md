@@ -1139,3 +1139,12 @@ People page: "Set password" on every row (new password typed twice, at least 8 c
 People page, new card "App store reviewer login": shows whether it has a password and when it last signed in, with its own Set password. Routes: invites.setPassword, invites.reviewer, invites.reviewerSetPassword, all Admin only.
 
 Tested (terra-scratch-tests/reviewer): reviewer is role field on installer 1, every crew screen opens, replies carry only job 9218, office routes and the password routes are refused, short passwords refused, staff and reviewer sign in with the Admin set password. 38 pass.
+
+### 18.59 Privacy policy page (17 Oct)
+Damien approved the wording with changes: the business details at the top (Terra Flooring, ABN, Nerang address, team@, 1300 number) and a line that anyone can email team@ to see or delete their information. Apple and Google need a public link for the store listings.
+
+New page pages/public-privacy.tsx at /privacy-policy (also /privacy), in the public Switch next to /app, outside Layout, so it opens without a login. Covers the website, Terra Ops and the Terra phone app: what we collect from customers, builders and crew (including location only if allowed), how we use it, what we never do, how we keep it, app store reviewers, your choices, and contact. Damien adds it to the main website himself later.
+
+Link for App Store Connect and Play Console: https://ops.terraflooring.com.au/privacy-policy
+
+Checked signed out on desktop and phone sizes (terra-scratch-tests/privacy/shots): the page shows, no redirect to /login.
