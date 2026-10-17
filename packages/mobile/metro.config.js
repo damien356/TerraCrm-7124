@@ -16,4 +16,15 @@ config.resolver = {
   nodeModulesPaths: [resolve(__dirname, "node_modules"), resolve(workspaceRoot, "node_modules")],
 };
 
+// ── expo-network stand-in (notes 18.57) ────────────────────────────────
+// @better-auth/expo imports expo-network, which Terra does not ship. Left
+// unresolved, that import closed the app straight after the logo. Point it
+// at a small stand-in that keeps the library's "always online" fallback.
+const networkShim = resolve(__dirname, "lib/expo-network-shim.ts");
+const upstreamResolve = config.resolver.resolveRequest;
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (moduleName === "expo-network") return { type: "sourceFile", filePath: networkShim };
+  return (upstreamResolve ?? context.resolveRequest)(context, moduleName, platform);
+};
+
 module.exports = config;

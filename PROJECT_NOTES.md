@@ -1117,3 +1117,14 @@ Mobile: no change. The sign-in screen already says to ring the office for a new 
 Store links: a TestFlight public link only opens once the build has passed Beta App Review. A Google Play internal testing link only works for Google accounts on the tester list.
 
 Checked on a scratch copy: invites/t-inv PASS 121 (Admin only for send, log and links; https links only; the text word for word with no password; only the hash stored; 48 hours; a resend by email voids the text link; failed text and failed email keep the older link; weak password refused; single use; sign in with the chosen password; an existing login's password replaced, old one refused; expired and invalid links; switched off refused both ways; add by email with no mobile; a failed invite keeps the person; no long dashes).
+
+### 18.57 Phone app: closed straight after the logo (17 Oct)
+What the phone sent in (Admin, Team, phone problems): Damien's iPhone, signed out, 16 Oct, "Cannot find module" from asyncRequire inside better-auth's session refresh setup, six closes in a row before the safe start cleared the login.
+
+Cause: @better-auth/expo's online manager runs import("expo-network") the first time the login is read, so it can refetch the session when the phone comes back online. expo-network is an optional peer and Terra never shipped it, so Metro left that import empty in the bundle. Expo's asyncRequire throws on native instead of handing back a rejected promise, so the library's own .catch never ran and the error closed the app. Whether it bites depends on which part of the app reads the login first, which is why it showed signed out and not every time. A new install starts signed out.
+
+Fix (JS only, no new native module): metro.config.js points expo-network at lib/expo-network-shim.ts. The stand-in reports online and never fires, which is exactly the library's fallback for a phone without expo-network. Session refetch on focus is unchanged.
+
+Checked: an exported Android bundle had null in that import's slot before the change, and the stand-in module after it.
+
+Android: the last Play build was 10 (9 Oct), from before the crash guard (18.8: safe login storage, recovery screens, phone problem reports). No over-the-air update was ever published (the production branch on EAS is empty), so an Android phone that crashed sent nothing in. The new Android build carries the guard and this fix.
