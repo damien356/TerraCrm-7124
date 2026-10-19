@@ -39,6 +39,7 @@ function useInstallerMutation(name: "create" | "update" | "setSkill") {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: orpc.installers.key() });
       queryClient.invalidateQueries({ queryKey: orpc.tasks.key() });
+      queryClient.invalidateQueries({ queryKey: orpc.abnCheck.key() });
     },
   });
 }

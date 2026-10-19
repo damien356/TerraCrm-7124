@@ -285,7 +285,26 @@ export const installers = sqliteTable("installers", {
    * business details entirely.
    */
   tradingName: text("trading_name"),
+  /** Notes 18.64: set by the ABN lookup only, never by hand. */
   gstRegistered: integer("gst_registered", { mode: "boolean" }).notNull().default(false),
+  /*
+   * Notes 18.64: the last ABN Lookup (ABR) result for `abn`, Admin only. Cleared
+   * when the ABN changes. Status is Active, Cancelled, not_found or invalid; it
+   * only changes on a definite answer, so a failed call leaves it and sets
+   * abnCheckError instead. Dates are YYYY-MM-DD.
+   */
+  abnLegalName: text("abn_legal_name"),
+  /** JSON array of business and trading names on the ABN. */
+  abnBusinessNames: text("abn_business_names"),
+  abnStatus: text("abn_status"),
+  abnStatusFrom: text("abn_status_from"),
+  abnEntityType: text("abn_entity_type"),
+  abnGstFrom: text("abn_gst_from"),
+  abnGstTo: text("abn_gst_to"),
+  abnState: text("abn_state"),
+  abnPostcode: text("abn_postcode"),
+  abnCheckedAt: integer("abn_checked_at", { mode: "timestamp" }),
+  abnCheckError: text("abn_check_error"),
   businessAddress: text("business_address"),
   invoiceEmail: text("invoice_email"),
   logoUrl: text("logo_url"),
@@ -3251,6 +3270,8 @@ export const installerInvoices = sqliteTable(
     /* Snapshot of the installer's contractor profile at submission time. */
     tradingName: text("trading_name").notNull().default(""),
     installerName: text("installer_name").notNull().default(""),
+    /** Notes 18.64: legal name on the ABN when it was billed. Null on bills from before. */
+    legalName: text("legal_name"),
     abn: text("abn"),
     gstRegistered: integer("gst_registered", { mode: "boolean" }).notNull().default(false),
     businessAddress: text("business_address"),

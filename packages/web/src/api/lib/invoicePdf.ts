@@ -33,6 +33,11 @@ export interface InvoicePdfInput {
   invoiceDate: string;
   tradingName: string;
   installerName: string;
+  /**
+   * Notes 18.64: the legal name on his ABN. When set, the bill is in
+   * "legal name t/a trading name" and says whether he is GST registered.
+   */
+  legalName?: string | null;
   abn: string | null;
   gstRegistered: boolean;
   businessAddress: string | null;
@@ -257,12 +262,25 @@ export async function renderInvoicePdf(input: InvoicePdfInput): Promise<Buffer> 
     }
   }
 
-  text(ctx, input.tradingName || input.installerName, { x: 0, size: 16, bold: true, y: leftY });
-  leftY -= 20;
+  const legal = (input.legalName ?? "").trim();
+  const heading = legal ? (input.tradingName ? `${legal} t/a ${input.tradingName}` : legal) : input.tradingName || input.installerName;
+  // Kept clear of the title on the right; a long company name wraps.
+  if (legal) {
+    for (const line of wrap(heading, ctx.bold, 15, CONTENT_WIDTH * 0.6)) {
+      text(ctx, line, { x: 0, size: 15, bold: true, y: leftY });
+      leftY -= 18;
+    }
+    leftY -= 2;
+  } else {
+    text(ctx, heading, { x: 0, size: 16, bold: true, y: leftY });
+    leftY -= 20;
+  }
 
+  const same = (a: string, b: string) => a.toLowerCase().replace(/[^a-z0-9]/g, "") === b.toLowerCase().replace(/[^a-z0-9]/g, "");
   const smallLines = [
-    input.installerName && input.installerName !== input.tradingName ? input.installerName : null,
+    input.installerName && !same(input.installerName, input.tradingName) && !(legal && same(input.installerName, legal)) ? input.installerName : null,
     input.abn ? `ABN ${input.abn}` : null,
+    legal ? (input.gstRegistered ? "GST registered" : "Not GST registered") : null,
     input.businessAddress,
     input.invoiceEmail,
     input.mobile,
