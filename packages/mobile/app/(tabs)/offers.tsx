@@ -16,7 +16,7 @@ import { useBottomInset } from "@/hooks/use-bottom-gap";
 import { Ionicons } from "@expo/vector-icons";
 import { Colors, Fonts, tintFor } from "@/constants/theme";
 import { EmptyState } from "@/components/task-card";
-import { fmtCountdown, fmtDayLabel, fmtHours, fmtMoney, fmtTime } from "@/lib/format";
+import { addDaysISO, fmtCountdown, fmtDayLabel, fmtHours, fmtMoney, fmtTime } from "@/lib/format";
 import { useAcceptOffer, useDeclineOffer, useOffers } from "@/queries/field";
 
 const c = Colors.light;
@@ -24,13 +24,12 @@ const c = Colors.light;
 /** Every day a task could land on. Empty when the office set one fixed day. */
 function windowDays(from?: string | null, to?: string | null): string[] {
   if (!from) return [];
-  const start = new Date(`${from}T00:00:00`);
-  const end = new Date(`${to ?? from}T00:00:00`);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return [];
+  // Plain calendar strings, so the phone's time zone can never shift a day
+  // (notes 18.61).
+  const end = to ?? from;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || end < from) return [];
   const out: string[] = [];
-  for (const d = new Date(start); d <= end && out.length < 30; d.setDate(d.getDate() + 1)) {
-    out.push(d.toISOString().slice(0, 10));
-  }
+  for (let d = from; d <= end && out.length < 30; d = addDaysISO(d, 1)) out.push(d);
   return out;
 }
 

@@ -34,6 +34,17 @@ import { useVoiceSettings } from "@/queries/crew";
 
 const c = Colors.light;
 
+/** Where a material is, coloured so "still to arrive" stands out (notes 18.61). */
+const WHERE_TONE: Record<string, { bg: string; fg: string }> = {
+  on_site: { bg: "#E4F0E2", fg: "#2F5F2B" },
+  installed: { bg: "#E4F0E2", fg: "#2F5F2B" },
+  warehouse: { bg: "#E3ECF5", fg: "#2D5A86" },
+  to_site: { bg: "#FBEDD8", fg: "#8A5A11" },
+  to_warehouse: { bg: "#FBEDD8", fg: "#8A5A11" },
+  to_order: { bg: "#FBEDD8", fg: "#8A5A11" },
+  by_others: { bg: "#EEEDEA", fg: "#55524C" },
+};
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <View style={{ marginTop: 22 }}>
@@ -266,7 +277,11 @@ export default function TaskScreen() {
           {t.title}
         </Text>
         <Text style={{ fontFamily: Fonts.sans, fontSize: 14, color: c.mutedForeground, marginTop: 4 }}>
-          {fmtDayLabel(t.scheduledDate)} · {fmtTime(t.startTime)} · {fmtHours(t.durationHours)}
+          {(t.dayCount ?? 1) > 1
+            ? `${t.dayCount} day job, ${fmtDayLabel(t.startDate ?? t.scheduledDate)} to ${fmtDayLabel(t.endDate ?? t.scheduledDate)}`
+            : fmtDayLabel(t.scheduledDate)}{" "}
+          · {fmtTime(t.startTime)} · {fmtHours(t.durationHours)}
+          {(t.dayCount ?? 1) > 1 ? " a day" : ""}
           {t.areaM2 ? ` · ${t.areaM2} m²` : ""}
         </Text>
 
@@ -532,17 +547,53 @@ export default function TaskScreen() {
                     paddingBottom: i === 0 ? 9 : 9,
                   }}
                 >
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontFamily: Fonts.sans, fontSize: 14, color: c.foreground }}>{m.description}</Text>
+                  <View style={{ flex: 1, paddingRight: 10 }}>
+                    <Text style={{ fontFamily: Fonts.medium, fontSize: 14, color: c.foreground }}>
+                      {m.product ?? m.description}
+                    </Text>
+                    {m.colour ? (
+                      <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: c.mutedForeground, marginTop: 1 }}>
+                        {m.colour}
+                      </Text>
+                    ) : null}
+                    {m.whereLabel ? (
+                      <View style={{ flexDirection: "row", marginTop: 5 }}>
+                        <View
+                          style={{
+                            backgroundColor: WHERE_TONE[m.where ?? ""]?.bg ?? c.secondary,
+                            paddingHorizontal: 7,
+                            paddingVertical: 3,
+                            borderRadius: 6,
+                          }}
+                        >
+                          <Text
+                            style={{
+                              fontFamily: Fonts.medium,
+                              fontSize: 11,
+                              color: WHERE_TONE[m.where ?? ""]?.fg ?? c.mutedForeground,
+                            }}
+                          >
+                            {m.whereLabel}
+                          </Text>
+                        </View>
+                      </View>
+                    ) : null}
                     {m.original ? (
                       <Text style={{ fontFamily: Fonts.medium, fontSize: 11.5, color: c.mutedForeground, marginTop: 2 }}>
                         Laid on the original job
                       </Text>
                     ) : null}
                   </View>
-                  <Text style={{ fontFamily: Fonts.medium, fontSize: 13.5, color: c.mutedForeground }}>
-                    {m.qty} {m.unit}
-                  </Text>
+                  <View style={{ alignItems: "flex-end" }}>
+                    <Text style={{ fontFamily: Fonts.bold, fontSize: 14, color: c.foreground }}>
+                      {m.count ?? `${m.qty} ${m.unit}`}
+                    </Text>
+                    {m.m2 && m.m2 !== m.count ? (
+                      <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground, marginTop: 1 }}>
+                        {m.m2}
+                      </Text>
+                    ) : null}
+                  </View>
                 </View>
               ))}
               <Text style={{ fontFamily: Fonts.sans, fontSize: 11.5, color: c.mutedForeground, marginTop: 4 }}>

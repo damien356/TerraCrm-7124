@@ -1159,3 +1159,19 @@ Settings, Skills: every skill row now has "Each task" (1, one man alone, or 2 ma
 Live, 19 Oct (backup pre-timber-1man.db): Timber install (skill 11) set to 1. Its two open unassigned tasks, 46 on 188009 and 47 on 188005, set from 2 to 1 (no furniture, no offers out, no second installer), each logged as crew_size_changed.
 
 Tested (terra-scratch-tests/timber): 11 pass. UI: the setting shows, saves and holds after reload.
+
+### 18.61 Booking fixes from Damien's test on 188005-A (19 Oct)
+Damien booked 188005-A (task 47) on his demo installer Damo and listed 11 problems. 8 (levelling rate) he fixed himself, 11 was 18.60. This is 1 to 7, 9 and 10.
+
+1. Dates one day late on the board. The browser turned Date objects into dates with toISOString, which is UTC, so in Brisbane every day before 10am read as the day before. New localYmd and dayOf in web lib/utils, used on the board, labour, prep settings, duplicates, installers and suppliers. The server walks plain YYYY-MM-DD strings (weekdayOf, daysApart, addLocalDays in api/lib/local-date) for planBooking, runDates, drag and extendRun, and sayDate reads in UTC, so the server's clock zone never moves a day. Phone offers window steps strings too.
+2. Weekends. New column installers.works_weekend_days (sql/2026-11-02-works-weekends.sql, default '[]'). Sat and Sun count as days off unless listed. Installer card, "Days he doesn't work": Sat and Sun show red until tapped. checkDays says "Doesn't work weekends". A drag counts the run's gaps in his working days, so a weekend inside the run stays a weekend, a weekday the office took out stays out, and a drop on a Saturday starts Monday (the task date follows).
+3. Days box vs "Set by hand". Book stores manualDays as the count booked when it was typed, or differs from Terra's suggestion. A drag that changes the count updates it.
+4. Self clash. bookedDays already left the task out; it now also leaves out every other dispatch on the same job, and the panel filters the same way. Could not make it show again on a scratch copy of his data. A different job still clashes (188009 on Tue 27 in the test).
+5, 6. Crew app: upcoming gives one card per booked day, with daySeq, dayCount, startDate, endDate and that day's start time. today does the same. Card chip "Day X of Y". Job screen header "6 day job, Tue 20 to Tue 27".
+7. Pay Total adds the lines (payTotal, falls back to labour_cost). Note under it: for the whole job, all N days.
+9. Tiles: fixed pay counts each job once (mobile lib/pay.ts), jobs count distinct.
+10. Materials (api/lib/crew-materials.ts): every supply line with product, colour, count in the unit it is sold in (bags, boxes, rolls), m2 on floors, and where it is (on site, warehouse, ordered to site or warehouse, still to arrive, installed). A floor the accepted quote lays but does not supply shows as "Supplied by others". No prices.
+
+Live, 19 Oct (backup pre-works-weekends.db): the one column added, all 11 installers '[]'. Task 47 on live is untouched and still sits on Tue 20 to Sun 25; Damien rebooks it.
+
+Tested (terra-scratch-tests/booking1019): 66 pass on a copy of live. UI in Brisbane time: the panel books Tue 20 to Fri 23, Mon 26, Tue 27 with Sat and Sun stepped over; the board draws it on those days; the crew app shows Day 1 to 6 of 6 on each, nothing on Sat 24. Phone changes are JS only.

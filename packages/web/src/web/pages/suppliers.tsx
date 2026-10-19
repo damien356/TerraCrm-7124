@@ -19,6 +19,7 @@ import {
   useUpdateSupplier,
   useUpdateSupplierFee,
 } from "../queries/suppliers";
+import { localYmd, dayOf } from "@/lib/utils";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
 
@@ -96,13 +97,11 @@ function windowLabel(from: string | null | undefined, until: string | null | und
 /** true once today is past the charge's end date — it should not be costing. */
 function windowLapsed(until: string | null | undefined) {
   if (!until) return false;
-  return until < new Date().toISOString().slice(0, 10);
+  return until < localYmd();
 }
 
 function dateInput(value: Date | string | null | undefined) {
-  if (!value) return "";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+  return dayOf(value);
 }
 
 function listAge(value: Date | string | null | undefined) {

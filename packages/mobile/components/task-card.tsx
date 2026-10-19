@@ -114,6 +114,9 @@ export function TaskCard({
 
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 11 }}>
             {showDay ? <Chip icon="calendar-outline" label={showDay} /> : null}
+            {(task.dayCount ?? 1) > 1 ? (
+              <Chip icon="layers-outline" label={`Day ${task.daySeq ?? 1} of ${task.dayCount}`} tone="good" />
+            ) : null}
             <Chip icon="time-outline" label={`${fmtTime(task.startTime)} · ${fmtHours(task.durationHours)}`} />
             {task.crewSize > 1 ? <Chip icon="people-outline" label="2 on site" /> : null}
             {task.isSecond ? <Chip icon="person-add-outline" label="You're 2nd man" /> : null}
@@ -174,9 +177,14 @@ export function TaskCard({
                   >
                     <Text style={{ fontFamily: Fonts.bold, fontSize: 14, color: c.foreground }}>Total</Text>
                     <Text style={{ fontFamily: Fonts.bold, fontSize: 16, color: c.foreground }}>
-                      {fmtMoney(task.payAmount)}
+                      {fmtMoney(task.payTotal ?? task.payAmount)}
                     </Text>
                   </View>
+                  {(task.dayCount ?? 1) > 1 ? (
+                    <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground, marginTop: 4 }}>
+                      For the whole job, all {task.dayCount} days.
+                    </Text>
+                  ) : null}
                 </View>
               ) : (
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>

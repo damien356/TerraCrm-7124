@@ -2,6 +2,7 @@ import { jobNumberSql } from "./job-ref";
 import { and, eq, gte, inArray, isNull, lte, ne, or } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { weekdayOf } from "./local-date";
 
 /**
  * The single source of truth for "can this installer work that day".
@@ -9,7 +10,7 @@ import * as schema from "../database/schema";
  * through here server-side, so a blocked day can't be booked from the UI.
  */
 export async function blockedInstallerIds(date: string): Promise<Set<number>> {
-  const weekday = new Date(`${date}T00:00:00`).getDay();
+  const weekday = weekdayOf(date);
   const rows = await db
     .select({
       installerId: schema.installerUnavailability.installerId,
@@ -37,18 +38,23 @@ export async function blockedInstallerIds(date: string): Promise<Set<number>> {
   }
 
   // Legacy per-installer weekday ticks on the installer card still count.
+  // Weekends count too unless the card says he works them (notes 18.61).
   const legacy = await db
-    .select({ id: schema.installers.id, days: schema.installers.unavailableDays })
+    .select({
+      id: schema.installers.id,
+      days: schema.installers.unavailableDays,
+      weekends: schema.installers.worksWeekendDays,
+    })
     .from(schema.installers);
   for (const l of legacy) {
-    if (safeWeekdays(l.days).includes(weekday)) blocked.add(l.id);
+    if (offWeekdays(l.days, l.weekends).includes(weekday)) blocked.add(l.id);
   }
   return blocked;
 }
 
 /** Throws nothing — callers decide. Returns the reason if they're blocked. */
 export async function blockedReason(installerId: number, date: string): Promise<string | null> {
-  const weekday = new Date(`${date}T00:00:00`).getDay();
+  const weekday = weekdayOf(date);
   const rows = await db
     .select()
     .from(schema.installerUnavailability)
@@ -59,6 +65,13 @@ export async function blockedReason(installerId: number, date: string): Promise<
     } else if (r.fromDate && r.toDate && r.fromDate <= date && date <= r.toDate) {
       return r.reason || "Booked out";
     }
+  }
+  if (WEEKEND.includes(weekday)) {
+    const [card] = await db
+      .select({ weekends: schema.installers.worksWeekendDays })
+      .from(schema.installers)
+      .where(eq(schema.installers.id, installerId));
+    if (card && !safeWeekdays(card.weekends).includes(weekday)) return "Doesn't work weekends";
   }
   return null;
 }
@@ -93,19 +106,26 @@ export async function checkDays(args: {
 
   const [rules, legacy, clashes] = await Promise.all([
     db.select().from(schema.installerUnavailability).where(eq(schema.installerUnavailability.installerId, installerId)),
-    db.select({ days: schema.installers.unavailableDays }).from(schema.installers).where(eq(schema.installers.id, installerId)),
+    db
+      .select({ days: schema.installers.unavailableDays, weekends: schema.installers.worksWeekendDays })
+      .from(schema.installers)
+      .where(eq(schema.installers.id, installerId)),
     bookedDays({ installerId, dates, exceptTaskId: args.exceptTaskId ?? null }),
   ]);
   const legacyOff = safeWeekdays(legacy[0]?.days);
+  const weekendOff = legacy[0] ? weekendDaysOff(legacy[0].weekends) : [];
 
   return dates.map((date) => {
-    const weekday = new Date(`${date}T00:00:00`).getDay();
+    const weekday = weekdayOf(date);
     let status: DayStatus = "available";
     let reason: string | null = null;
 
     if (legacyOff.includes(weekday)) {
       status = "normally_unavailable";
       reason = "Doesn't normally work that day";
+    } else if (weekendOff.includes(weekday)) {
+      status = "normally_unavailable";
+      reason = "Doesn't work weekends";
     }
     for (const r of rules) {
       if (r.kind === "recurring") {
@@ -186,11 +206,21 @@ export async function bookedDays(args: {
       ),
   ]);
 
+  // The booking being edited never clashes with itself, and nor does another
+  // dispatch on the same job: the office only wants to hear about other jobs
+  // (notes 18.61).
+  const exceptTask = args.exceptTaskId ? Number(args.exceptTaskId) : null;
+  const [own] = exceptTask
+    ? await db.select({ jobId: schema.jobTasks.jobId }).from(schema.jobTasks).where(eq(schema.jobTasks.id, exceptTask))
+    : [];
+  const ownJob = own?.jobId ?? null;
+
   const seen = new Set<string>();
   const out: { date: string; taskId: number; jobId: number; jobNumber: number | string; title: string; suburb: string }[] = [];
   for (const r of [...dayRows, ...taskRows]) {
     if (!r.date) continue;
-    if (args.exceptTaskId && r.taskId === args.exceptTaskId) continue;
+    if (exceptTask && Number(r.taskId) === exceptTask) continue;
+    if (ownJob != null && Number(r.jobId) === ownJob) continue;
     const key = `${r.taskId}:${r.date}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -209,13 +239,30 @@ export async function nonWorkingWeekdays(installerId: number): Promise<number[]>
       .select({ kind: schema.installerUnavailability.kind, weekdayMask: schema.installerUnavailability.weekdayMask })
       .from(schema.installerUnavailability)
       .where(eq(schema.installerUnavailability.installerId, installerId)),
-    db.select({ days: schema.installers.unavailableDays }).from(schema.installers).where(eq(schema.installers.id, installerId)),
+    db
+      .select({ days: schema.installers.unavailableDays, weekends: schema.installers.worksWeekendDays })
+      .from(schema.installers)
+      .where(eq(schema.installers.id, installerId)),
   ]);
-  const out = new Set<number>(safeWeekdays(legacy[0]?.days));
+  const out = new Set<number>(legacy[0] ? offWeekdays(legacy[0].days, legacy[0].weekends) : []);
   for (const r of rules) {
     if (r.kind === "recurring") for (const d of safeWeekdays(r.weekdayMask)) out.add(d);
   }
   return [...out].sort();
+}
+
+/** Sunday and Saturday. */
+export const WEEKEND = [0, 6];
+
+/** The weekend days an installer does not work: both, unless his card lists them. */
+export function weekendDaysOff(worksWeekendRaw: string | null | undefined): number[] {
+  const works = safeWeekdays(worksWeekendRaw);
+  return WEEKEND.filter((d) => !works.includes(d));
+}
+
+/** Every weekday he is off: the ticked days plus the weekend days he doesn't work. */
+export function offWeekdays(unavailableRaw: string | null | undefined, worksWeekendRaw: string | null | undefined): number[] {
+  return [...new Set([...safeWeekdays(unavailableRaw), ...weekendDaysOff(worksWeekendRaw)])].sort();
 }
 
 export function safeWeekdays(raw: string | null | undefined): number[] {

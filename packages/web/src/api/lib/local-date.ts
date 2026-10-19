@@ -24,6 +24,16 @@ export function addLocalDays(date: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** 0 Sunday to 6 Saturday for a YYYY-MM-DD, the same on any server clock. */
+export function weekdayOf(date: string): number {
+  return new Date(`${date}T00:00:00Z`).getUTCDay();
+}
+
+/** Whole calendar days from a to b. */
+export function daysApart(a: string, b: string): number {
+  return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
+}
+
 /** The first and last instant of a Gold Coast calendar day. */
 export function localDayBounds(date: string): { start: Date; end: Date } {
   const start = new Date(`${date}T00:00:00+10:00`);

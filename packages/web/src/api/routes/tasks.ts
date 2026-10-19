@@ -6,6 +6,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly } from "../middleware/auth";
 import { checkDays, nonWorkingWeekdays } from "../lib/availability";
+import { addLocalDays, weekdayOf } from "../lib/local-date";
 import { daysFromQty } from "../lib/day-estimate";
 import { matchInstaller, parseBookingLine } from "../lib/booking-command";
 import { lockTaskLabour } from "./costing";
@@ -64,21 +65,13 @@ function iso(d: Date) {
 
 /** "Thu 1 Oct", the way the office says a date out loud. */
 function sayDate(date: string) {
-  const d = new Date(`${date}T00:00:00`);
-  return `${DAY_NAMES[d.getDay()]} ${d.getDate()} ${d.toLocaleDateString("en-AU", { month: "short" })}`;
+  const d = new Date(`${date}T00:00:00Z`);
+  return `${DAY_NAMES[d.getUTCDay()]} ${d.getUTCDate()} ${d.toLocaleDateString("en-AU", { month: "short", timeZone: "UTC" })}`;
 }
 
 /** Same date, n days on. Plain calendar days, no weekend logic. */
 function addDays(date: string, n: number) {
-  const d = new Date(`${date}T00:00:00`);
-  d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
-}
-
-/** Calendar days from a to b, so a run keeps its shape when it moves. */
-function daysBetween(a: string, b: string) {
-  const ms = new Date(`${b}T00:00:00`).getTime() - new Date(`${a}T00:00:00`).getTime();
-  return Math.round(ms / 86_400_000);
+  return addLocalDays(date, n);
 }
 
 /**
@@ -88,10 +81,10 @@ function daysBetween(a: string, b: string) {
  */
 function runDates(startDate: string, days: number, off: number[]) {
   const dates: string[] = [];
-  const cursor = new Date(`${startDate}T00:00:00`);
+  let cursor = startDate;
   for (let guard = 0; dates.length < days && guard < 120; guard++) {
-    if (!off.includes(cursor.getDay())) dates.push(cursor.toISOString().slice(0, 10));
-    cursor.setDate(cursor.getDate() + 1);
+    if (!off.includes(weekdayOf(cursor))) dates.push(cursor);
+    cursor = addLocalDays(cursor, 1);
   }
   return dates;
 }
@@ -486,8 +479,37 @@ export const tasks = {
       let bookedDays = 0;
       const runInstaller = input.installerId ?? existing.assignedInstallerId;
       if (existingDays.length && input.scheduledDate) {
-        const offsets = existingDays.map((d) => daysBetween(existingDays[0]!.date, d.date));
-        moved = offsets.map((o) => addDays(input.scheduledDate!, o));
+        // Keep the run's shape, but never land a day on one he doesn't work:
+        // a Tue to Tue run over a weekend dragged a day later still skips
+        // Sat and Sun (notes 18.61). A day that hits one slides to the next
+        // working day, and the days after it keep their order.
+        // Gaps are counted in his working days, so a weekend inside the run
+        // stays a weekend after the move instead of eating a weekday, while a
+        // weekday the office took out by hand stays out.
+        const off = runInstaller ? await nonWorkingWeekdays(runInstaller) : [];
+        const working = (d: string) => !off.includes(weekdayOf(d));
+        const nextWorking = (d: string) => {
+          let date = d;
+          for (let guard = 0; !working(date) && guard < 14; guard++) date = addDays(date, 1);
+          return date;
+        };
+        const offsets = existingDays.map((d) => {
+          let n = 0;
+          for (let x = existingDays[0]!.date, guard = 0; x < d.date && guard < 400; guard++) {
+            x = addDays(x, 1);
+            if (working(x)) n++;
+          }
+          return n;
+        });
+        moved = [];
+        const start = nextWorking(input.scheduledDate!);
+        for (const o of offsets) {
+          let date = start;
+          for (let k = 0; k < o; k++) date = nextWorking(addDays(date, 1));
+          const prev = moved[moved.length - 1];
+          if (prev && date <= prev) date = nextWorking(addDays(prev, 1));
+          moved.push(date);
+        }
         // Rewrite the run rather than nudge each row, so the one-day-per-task
         // unique index can't trip over a date the run already holds.
         await db.delete(schema.taskDays).where(eq(schema.taskDays.taskId, input.id));
@@ -539,9 +561,15 @@ export const tasks = {
       const [row] = await db
         .update(schema.jobTasks)
         .set({
-          scheduledDate: input.scheduledDate,
+          // Dropped on a day he doesn't work, the run starts on his next one.
+          scheduledDate: input.scheduledDate ? (moved[0] ?? input.scheduledDate) : null,
           ...(existingDays.length || moved.length
             ? { scheduledFrom: moved[0] ?? null, scheduledTo: moved[moved.length - 1] ?? null }
+            : {}),
+          // A run that moves keeps its length, and the panel's "set by hand"
+          // note says the same number as the days it shows (notes 18.61).
+          ...(existingDays.length && moved.length && existing.manualDays && existing.manualDays !== moved.length
+            ? { manualDays: moved.length }
             : {}),
           ...(input.startTime !== undefined ? { startTime: input.startTime } : {}),
           ...(input.installerId !== undefined
@@ -842,15 +870,16 @@ export const tasks = {
 
       const dates: string[] = [];
       const skipped: string[] = [];
-      const cursor = new Date(`${input.startDate}T00:00:00`);
+      let date = input.startDate;
       // Walk forward until the run has its days. The cap stops a bad rule
       // (someone marked unavailable every weekday) spinning forever.
+      // Plain calendar strings, so the server clock's time zone never moves a
+      // day (notes 18.61).
       for (let guard = 0; dates.length < input.days && guard < 120; guard++) {
-        const date = cursor.toISOString().slice(0, 10);
-        if (off.includes(cursor.getDay())) skipped.push(date);
+        if (off.includes(weekdayOf(date))) skipped.push(date);
         else if (excluded.has(date)) skipped.push(date);
         else dates.push(date);
-        cursor.setDate(cursor.getDate() + 1);
+        date = addLocalDays(date, 1);
       }
 
       const checks = input.installerId
@@ -1066,11 +1095,10 @@ export const tasks = {
         const last = existing[existing.length - 1]!;
         // The window the run is already running to. A new day on the end keeps
         // the same arrival time as the day before it rather than inventing one.
-        const cursor = new Date(`${last.date}T00:00:00`);
+        let date = last.date;
         for (let guard = 0; added.length < input.by && guard < 120; guard++) {
-          cursor.setDate(cursor.getDate() + 1);
-          const date = iso(cursor);
-          if (off.includes(cursor.getDay())) continue;
+          date = addLocalDays(date, 1);
+          if (off.includes(weekdayOf(date))) continue;
           if (taken.has(date)) continue;
           added.push(date);
         }

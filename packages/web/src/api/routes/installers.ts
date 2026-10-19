@@ -51,6 +51,7 @@ export const installers = {
         ...installer,
         ...(isAdmin ? {} : { creditLimit: 0, bankAccountName: null, bankBsb: null, bankAccountNumber: null }),
         unavailableDays: safeDays(installer.unavailableDays),
+        worksWeekendDays: safeDays(installer.worksWeekendDays),
         skills: skillRows
           .filter((s) => s.link.installerId === installer.id)
           .map((s) => ({
@@ -111,6 +112,7 @@ export const installers = {
       installer: {
         ...installer,
         unavailableDays: safeDays(installer.unavailableDays),
+        worksWeekendDays: safeDays(installer.worksWeekendDays),
         ...(isAdmin ? {} : { creditLimit: 0, bankAccountName: null, bankBsb: null, bankAccountNumber: null }),
       },
       invoicing: {
@@ -167,6 +169,8 @@ export const installers = {
         crewCapacity: z.enum(["solo", "own_offsider", "needs_partner"]).optional(),
         serviceArea: z.string().nullable().optional(),
         unavailableDays: z.array(z.number().int().min(0).max(6)).optional(),
+        /** Weekend days he does work, 0 Sun and 6 Sat. Weekends are off otherwise. */
+        worksWeekendDays: z.array(z.union([z.literal(0), z.literal(6)])).optional(),
         abn: z.string().nullable().optional(),
         insuranceExpiry: z.date().nullable().optional(),
         licenceExpiry: z.date().nullable().optional(),
@@ -187,12 +191,13 @@ export const installers = {
       }),
     )
     .handler(async ({ input }) => {
-      const { id, unavailableDays, ...rest } = input;
+      const { id, unavailableDays, worksWeekendDays, ...rest } = input;
       const [row] = await db
         .update(schema.installers)
         .set({
           ...rest,
           ...(unavailableDays ? { unavailableDays: JSON.stringify(unavailableDays) } : {}),
+          ...(worksWeekendDays ? { worksWeekendDays: JSON.stringify([...new Set(worksWeekendDays)].sort()) } : {}),
           updatedAt: new Date(),
         })
         .where(eq(schema.installers.id, id))

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { auDay } from "@/lib/utils";
+import { auDay, localYmd } from "@/lib/utils";
 import { History, Pencil, Plus, Search, Trash2, Undo2 } from "lucide-react";
 import { Card, CardHeader, Empty, Loading, Spinner } from "./ui/card";
 import { Badge, tintFor } from "./ui/badge";
@@ -45,7 +45,7 @@ export const UNIT_LABEL: Record<string, string> = {
   km: "km",
 };
 
-export const today = () => new Date().toISOString().slice(0, 10);
+export const today = () => localYmd();
 
 /** A percent surcharge is a percentage, not dollars. Same table, different sign. */
 function isPercent(unit: string) {

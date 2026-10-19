@@ -118,7 +118,20 @@ export function BookInstallerPanel({
     excludeDates: mode === "multi" ? dropped : [],
   });
 
-  const planned = plan.data;
+  // Belt and braces on the server's rule: this booking's own days, or another
+  // dispatch on the same job, are never shown as a clash (notes 18.61).
+  const planned = React.useMemo(() => {
+    const p = plan.data;
+    if (!p) return p;
+    const ownJob = t?.jobId ?? null;
+    return {
+      ...p,
+      days: p.days.map((d) => ({
+        ...d,
+        clashes: d.clashes.filter((c) => c.taskId !== taskId && (ownJob == null || c.jobId !== ownJob)),
+      })),
+    };
+  }, [plan.data, taskId, t?.jobId]);
   const dates = planned?.dates ?? [];
   const clashes = (planned?.days ?? []).filter((d) => d.clashes.length > 0);
   const offDays = (planned?.days ?? []).filter((d) => d.status !== "available");
@@ -148,7 +161,13 @@ export function BookInstallerPanel({
         durationHours,
         payAmount: payOverride ? Number(payOverride) : null,
         overrideNote: loud && overrideNote ? overrideNote : null,
-        manualDays: daysByHand ? dates.length : null,
+        // Whatever gets booked is what the note says next time, so the days box
+        // and "Set by hand at N" always agree (notes 18.61). Only a run that
+        // matches Terra's own reckoning is left to follow the rates.
+        manualDays:
+          daysByHand || t.suggested?.basis === "manual" || (t.suggested != null && dates.length !== t.suggested.days)
+            ? dates.length
+            : null,
       })
       .then(() => {
         onBooked?.();

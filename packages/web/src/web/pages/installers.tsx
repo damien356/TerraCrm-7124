@@ -19,16 +19,14 @@ import {
   useRemoveUnavailability,
   useUnavailability,
 } from "../queries/availability";
+import { dayOf } from "@/lib/utils";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
 
 function dateInput(value: Date | string | null) {
-  if (!value) return "";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toISOString().slice(0, 10);
+  return dayOf(value);
 }
 
 /* ---------------------------- new installer ---------------------------- */
@@ -533,6 +531,7 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
     insuranceExpiry: string;
     licenceExpiry: string;
     unavailableDays: number[];
+    worksWeekendDays: number[];
     starRating: number;
     creditLimit: string;
     notes: string;
@@ -554,6 +553,7 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
       insuranceExpiry: dateInput(installer.insuranceExpiry),
       licenceExpiry: dateInput(installer.licenceExpiry),
       unavailableDays: installer.unavailableDays,
+      worksWeekendDays: installer.worksWeekendDays ?? [],
       starRating: installer.starRating,
       creditLimit: String(installer.creditLimit ?? 0),
       notes: installer.notes ?? "",
@@ -582,6 +582,7 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
         insuranceExpiry: form.insuranceExpiry ? new Date(`${form.insuranceExpiry}T00:00:00`) : null,
         licenceExpiry: form.licenceExpiry ? new Date(`${form.licenceExpiry}T00:00:00`) : null,
         unavailableDays: form.unavailableDays,
+        worksWeekendDays: form.worksWeekendDays.filter((n): n is 0 | 6 => n === 0 || n === 6),
         starRating: form.starRating,
         creditLimit: Number(form.creditLimit) || 0,
         notes: form.notes || null,
@@ -731,20 +732,40 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
                 onChange={(e) => set("creditLimit", e.target.value)}
               />
             </Field>
-            <Field label="Days he doesn't work" className="sm:col-span-2">
+            <Field
+              label="Days he doesn't work"
+              hint="Sat and Sun are off unless you tap them on. Bookings skip the red days."
+              className="sm:col-span-2"
+            >
               <div className="flex flex-wrap gap-1.5 pt-1">
                 {DAYS.map((d, i) => {
-                  const off = form.unavailableDays.includes(i);
+                  const weekend = i === 0 || i === 6;
+                  const off = form.unavailableDays.includes(i) || (weekend && !form.worksWeekendDays.includes(i));
                   return (
                     <button
                       key={d}
                       type="button"
-                      onClick={() =>
-                        set(
-                          "unavailableDays",
-                          off ? form.unavailableDays.filter((n) => n !== i) : [...form.unavailableDays, i],
-                        )
-                      }
+                      onClick={() => {
+                        if (!weekend) {
+                          set(
+                            "unavailableDays",
+                            off ? form.unavailableDays.filter((n) => n !== i) : [...form.unavailableDays, i],
+                          );
+                          return;
+                        }
+                        // A weekend day is on only when he works it and it isn't ticked off.
+                        setForm((f) =>
+                          f
+                            ? off
+                              ? {
+                                  ...f,
+                                  unavailableDays: f.unavailableDays.filter((n) => n !== i),
+                                  worksWeekendDays: [...f.worksWeekendDays.filter((n) => n !== i), i],
+                                }
+                              : { ...f, worksWeekendDays: f.worksWeekendDays.filter((n) => n !== i) }
+                            : f,
+                        );
+                      }}
                       className={
                         off
                           ? "rounded-md bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive"

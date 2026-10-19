@@ -14,6 +14,7 @@ import {
   renderOmwSms,
   type PrepTemplates,
 } from "../../api/lib/prep-templates";
+import { localYmd } from "@/lib/utils";
 
 /* Settings, Client prep (notes 18.56): on or off, the arrival window, the send time, and every word. */
 
@@ -41,7 +42,7 @@ export function PrepSettingsCard() {
 
   const day = (() => {
     const d = new Date(Date.now() + 3 * 86_400_000);
-    return d.toISOString().slice(0, 10);
+    return localYmd(d);
   })();
   const facts = {
     firstName: "Sam",

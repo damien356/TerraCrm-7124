@@ -37,11 +37,12 @@ import {
 import { useInstallers, useEligible } from "../queries/installers";
 import { useBroadcast, useOffersForTask, useSendDirect, useWithdrawOffers } from "../queries/offers";
 import { isPhoneApp } from "../lib/phone-app";
+import { localYmd } from "@/lib/utils";
 
 const money = (n?: number | null) =>
   n == null ? "-" : n.toLocaleString("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 });
 
-const iso = (d: Date) => d.toISOString().slice(0, 10);
+const iso = (d: Date) => localYmd(d);
 
 function mondayOf(date: Date) {
   const d = new Date(date);

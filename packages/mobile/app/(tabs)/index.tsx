@@ -7,6 +7,7 @@ import { EmptyState, TaskCard, type FieldTask } from "@/components/task-card";
 import { MonthGrid, ViewModeToggle, WeekStrip } from "@/components/calendar";
 import { addDaysISO, fmtDayLabel, fmtLongDate, fmtMoney, startOfMonthISO, startOfWeekISO, todayISO } from "@/lib/format";
 import { useMe, useOffers, useScheduleRange, useToday } from "@/queries/field";
+import { fixedPay } from "@/lib/pay";
 
 const c = Colors.light;
 
@@ -57,10 +58,9 @@ export default function TodayScreen() {
     return (rangeTasks ?? []).filter((t) => t.scheduledDate === selectedDate);
   }, [viewMode, isToday, today.data, rangeTasks, selectedDate]);
 
-  const dayPay = useMemo(
-    () => tasks.reduce((sum, t) => sum + (t.payType === "per_job" ? (t.payAmount ?? 0) : 0), 0),
-    [tasks],
-  );
+  // A job's pay is for the whole job, so a 6 day lay counts once, at its full
+  // amount, on any day it is on (notes 18.61).
+  const dayPay = useMemo(() => fixedPay(tasks), [tasks]);
   const outstanding = tasks.filter((t) => t.status !== "complete").length;
   const firstName = (me.data?.name ?? "").split(" ")[0];
 

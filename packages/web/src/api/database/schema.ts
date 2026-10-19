@@ -254,6 +254,11 @@ export const installers = sqliteTable("installers", {
   /** JSON array of weekday numbers they don't work, e.g. [0,6]. */
   unavailableDays: text("unavailable_days").notNull().default("[]"),
   /**
+   * JSON array of weekend days (0 Sun, 6 Sat) they do work. Weekends are off
+   * unless listed here (notes 18.61).
+   */
+  worksWeekendDays: text("works_weekend_days").notNull().default("[]"),
+  /**
    * 1-5, set by hand in the office. 5 and 4 star accept instantly; 3 and below
    * sit provisional while higher stars get first crack.
    */

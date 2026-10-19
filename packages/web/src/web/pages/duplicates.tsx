@@ -7,6 +7,7 @@ import { Button } from "../components/ui/button";
 import { Modal } from "../components/ui/modal";
 import { histDate } from "../lib/money";
 import { useDuplicates, useMergeContacts } from "../queries/people";
+import { localYmd } from "@/lib/utils";
 
 /**
  * DUPLICATE CARDS. Admin only.
@@ -25,7 +26,7 @@ const fullName = (p: Person) => `${p.firstName} ${p.lastName}`.trim() || `Card #
 const isoOf = (v: unknown) => {
   if (v == null) return null;
   const d = v instanceof Date ? v : new Date(typeof v === "number" ? v * (v < 1e12 ? 1000 : 1) : String(v));
-  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  return Number.isNaN(d.getTime()) ? null : localYmd(d);
 };
 
 export default function DuplicatesPage() {

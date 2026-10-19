@@ -2,7 +2,7 @@ import { isUnitType, parseAptChecks, propertyTypeAnswered, propertyTypeShort } f
 import { jobNumberSql, taskRefSql } from "../lib/job-ref";
 import { syncJobForTask } from "../lib/job-stage";
 import { z } from "zod";
-import { and, asc, desc, eq, gte, inArray, isNotNull, lte, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -12,7 +12,8 @@ import { signMany } from "../lib/s3";
 import { acceptOffer, declineOffer, expireStale, releaseTask } from "./offers";
 import { OFFICE_ONLY_BUCKETS } from "./media";
 import { addLocalDays, todayLocal } from "../lib/local-date";
-import { taskIdsOn } from "../lib/crew-days";
+import { workDaysFor, type WorkDay } from "../lib/crew-days";
+import { crewMaterials } from "../lib/crew-materials";
 import { completionPhotosOn, minCompletionPhotos, recheckPhotoFlags } from "../lib/site-visits";
 import { assertSwmsDone, swmsNeededFor } from "../lib/swms";
 import { crewPeopleFor } from "../lib/crew-people";
@@ -44,6 +45,8 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
       status: schema.jobTasks.status,
       payType: schema.jobTasks.payType,
       payAmount: schema.jobTasks.payAmount,
+      /* His own labour on the job, the sum the pay lines add up to. */
+      labourCost: schema.jobTasks.labourCost,
       startedAt: schema.jobTasks.startedAt,
       completedAt: schema.jobTasks.completedAt,
       isSecond: sql<number>`case when ${schema.jobTasks.secondInstallerId} = ${installerId} then 1 else 0 end`,
@@ -81,6 +84,8 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
   const people = await crewPeopleFor(jobIds);
   // SWMS: required on the job, and whether I've signed today's.
   const swms = await swmsNeededFor(installerId, jobIds);
+  // The whole run each card belongs to, so a 6 day job reads "Day 2 of 6".
+  const runs = await runsFor(rows.map((r) => r.id));
 
   return rows.map((r) => {
     let payBreakdown: Array<{ name: string; unit: string; qty: number; rate: number | null; total: number | null }> | null =
@@ -100,10 +105,21 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
       }
     }
     const { labourBreakdown: _labourBreakdown, ...rest } = r;
+    const run = runs.get(r.id) ?? (r.scheduledDate ? [r.scheduledDate] : []);
+    const payTotal = payTotalOf(payBreakdown, r.labourCost, r.payAmount);
     return {
       ...rest,
+      // A fixed-price job with no flat amount typed in pays what its lines add
+      // up to, so every app build shows a Total instead of a dash.
+      payAmount: r.payAmount ?? (r.payType === "per_job" ? payTotal : null),
       isSecond: Number(r.isSecond) === 1,
       payBreakdown,
+      payTotal,
+      /* The run (notes 18.61). daySeq is set per day by today and upcoming. */
+      startDate: run[0] ?? r.scheduledDate,
+      endDate: run[run.length - 1] ?? r.scheduledDate,
+      dayCount: Math.max(1, run.length),
+      daySeq: 1,
       swmsRequired: swms.get(r.jobId)?.required ?? false,
       swmsSignedToday: swms.get(r.jobId)?.signedToday ?? false,
       contacts: people.get(r.jobId) ?? [],
@@ -113,6 +129,48 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
       aptChecks: parseAptChecks(r.aptChecks),
     };
   });
+}
+
+/**
+ * What the job pays him all up: the pay lines added together, or failing that
+ * the labour on the job, or the flat amount the office typed in. Null only
+ * when none of those exist (notes 18.61).
+ */
+export function payTotalOf(
+  lines: Array<{ total: number | null }> | null,
+  labourCost: number | null,
+  payAmount: number | null,
+): number | null {
+  const priced = (lines ?? []).filter((l) => typeof l.total === "number");
+  if (priced.length) return Math.round(priced.reduce((s, l) => s + (l.total ?? 0), 0) * 100) / 100;
+  if (labourCost != null && labourCost > 0) return labourCost;
+  return payAmount ?? null;
+}
+
+/** Each task's booked days in order, skipping cancelled ones. */
+async function runsFor(taskIds: number[]) {
+  const out = new Map<number, string[]>();
+  if (taskIds.length === 0) return out;
+  const rows = await db
+    .select({ taskId: schema.taskDays.taskId, date: schema.taskDays.date })
+    .from(schema.taskDays)
+    .where(and(inArray(schema.taskDays.taskId, [...new Set(taskIds)]), sql`${schema.taskDays.status} != 'cancelled'`))
+    .orderBy(asc(schema.taskDays.date));
+  for (const r of rows) {
+    if (!out.has(r.taskId)) out.set(r.taskId, []);
+    out.get(r.taskId)!.push(r.date);
+  }
+  return out;
+}
+
+/** One day of a run, laid over its task card. */
+function dayFields(d: WorkDay) {
+  return {
+    scheduledDate: d.date,
+    daySeq: d.daySeq,
+    dayCount: d.dayCount,
+    ...(d.arrivalStart ? { startTime: d.arrivalStart } : {}),
+  };
 }
 
 /** The original job a callback hangs off, or null for an ordinary job. */
@@ -207,13 +265,19 @@ export const field = {
   today: installerOnly.handler(async ({ context }) => {
     /* Gold Coast date, not UTC, or before 10 am "today" is yesterday. And a
      * multi-day run shows on every one of its days, not only day one. */
-    const ids = await taskIdsOn(context.installerId, todayLocal(), ["assigned", "in_progress", "complete"]);
+    const today = todayLocal();
+    const days = await workDaysFor(context.installerId, today, today, ["assigned", "in_progress", "complete"]);
+    const ids = [...new Set(days.map((d) => d.taskId))];
     if (ids.length === 0) return [];
-    return taskCardsFor(context.installerId, [
+    const cards = await taskCardsFor(context.installerId, [
       sql`(${schema.jobTasks.assignedInstallerId} = ${context.installerId} or ${schema.jobTasks.secondInstallerId} = ${context.installerId})`,
       inArray(schema.jobTasks.id, ids),
       inArray(schema.jobTasks.status, ["assigned", "in_progress", "complete"]),
     ]);
+    return cards.map((card) => {
+      const d = days.find((x) => x.taskId === card.id);
+      return d ? { ...card, ...dayFields(d) } : card;
+    });
   }),
 
   /** My upcoming schedule. */
@@ -222,13 +286,22 @@ export const field = {
     .handler(async ({ input, context }) => {
       const from = input.from ?? todayLocal();
       const to = input.to ?? addLocalDays(todayLocal(), 28);
-      return taskCardsFor(context.installerId, [
+      /* One card for every day he is on site, not just day one (notes 18.61).
+       * Each card's scheduledDate is that day, so every app build files it
+       * under the right day; startDate is the run's first day. */
+      const days = await workDaysFor(context.installerId, from, to, ["assigned", "in_progress"]);
+      const ids = [...new Set(days.map((d) => d.taskId))];
+      if (ids.length === 0) return [];
+      const cards = await taskCardsFor(context.installerId, [
         sql`(${schema.jobTasks.assignedInstallerId} = ${context.installerId} or ${schema.jobTasks.secondInstallerId} = ${context.installerId})`,
-        isNotNull(schema.jobTasks.scheduledDate),
-        gte(schema.jobTasks.scheduledDate, from),
-        lte(schema.jobTasks.scheduledDate, to),
+        inArray(schema.jobTasks.id, ids),
         inArray(schema.jobTasks.status, ["assigned", "in_progress"]),
       ]);
+      const byId = new Map(cards.map((c) => [c.id, c]));
+      return days.flatMap((d) => {
+        const card = byId.get(d.taskId);
+        return card ? [{ ...card, ...dayFields(d) }] : [];
+      });
     }),
 
   /** Finished work — my history and what I earned on it. */
@@ -281,23 +354,17 @@ export const field = {
     const [card] = await taskCardsFor(context.installerId, [eq(schema.jobTasks.id, input.id)]);
     if (!card) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
 
+    // A callback shows the original job's products too, read only, so the
+    // crew knows exactly what went down. Never the cause or who pays.
+    const parentId = await parentJobOf(card.jobId);
     const [checklist, materials, photos, mate] = await Promise.all([
       db
         .select()
         .from(schema.taskChecklistItems)
         .where(eq(schema.taskChecklistItems.taskId, input.id))
         .orderBy(asc(schema.taskChecklistItems.sortOrder)),
-      // Materials only — description, qty, unit. No costs, ever.
-      db
-        .select({
-          id: schema.jobMaterials.id,
-          description: schema.jobMaterials.description,
-          qty: schema.jobMaterials.qty,
-          unit: schema.jobMaterials.unit,
-          status: schema.jobMaterials.status,
-        })
-        .from(schema.jobMaterials)
-        .where(eq(schema.jobMaterials.jobId, card.jobId)),
+      // Materials only: product, colour, count, m2 and where it is. No costs, ever.
+      crewMaterials(card.jobId, parentId),
       db.select().from(schema.taskPhotos).where(eq(schema.taskPhotos.taskId, input.id)),
       // Who else is on this task with me — name only, no rate.
       db
@@ -334,27 +401,11 @@ export const field = {
       }
     }
 
-    // A callback shows the original job's products too, read only, so the
-    // crew knows exactly what went down. Never the cause or who pays.
-    const parentId = await parentJobOf(card.jobId);
-    const originalMaterials = parentId
-      ? await db
-          .select({
-            id: schema.jobMaterials.id,
-            description: schema.jobMaterials.description,
-            qty: schema.jobMaterials.qty,
-            unit: schema.jobMaterials.unit,
-            status: schema.jobMaterials.status,
-          })
-          .from(schema.jobMaterials)
-          .where(eq(schema.jobMaterials.jobId, parentId))
-      : [];
-
     return {
       ...card,
       isCallback: Boolean(parentId),
       checklist,
-      materials: [...materials.map((m) => ({ ...m, original: false })), ...originalMaterials.map((m) => ({ ...m, original: true }))],
+      materials,
       photos,
       crewMate: mate[0] ?? null,
       payBreakdown,
