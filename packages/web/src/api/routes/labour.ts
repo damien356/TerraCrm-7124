@@ -50,6 +50,37 @@ export async function groupForSkill(skillId: number | null | undefined): Promise
 const isGeneralItem = (i: { kind: string; groupName: string }) =>
   i.kind !== "work" || i.groupName === "surcharge" || i.groupName === "other";
 
+type Coverable = { skillId: number | null; wholeGroup: boolean; groupName: string };
+
+/** Notes 18.62: no skill, but meant for every skill in its group (Carpet install min charge). */
+export const isWholeGroup = (i: Coverable) => i.wholeGroup && i.skillId == null;
+
+/** What the price book and the pickers show instead of a skill name. */
+export const wholeGroupLabel = (groupName: string) => `All ${groupName} skills`;
+
+/** A rate item with no skill and no whole group is a gap, unless it is general on purpose. */
+const lacksSkill = (i: Coverable & { kind: string }) => i.skillId == null && !isWholeGroup(i) && !isGeneralItem(i);
+
+/**
+ * Whether an installer ticked for these skills (and so these groups) gets the
+ * item. No skill means everyone, except a whole group item, which only goes to
+ * someone ticked for a skill in that group.
+ */
+export function itemForTicks(i: Coverable, skills: Set<number>, groups: Set<string>) {
+  if (isWholeGroup(i)) return groups.has(i.groupName);
+  return i.skillId == null || skills.has(i.skillId);
+}
+
+/** The groups of the skills an installer is ticked for. */
+async function groupsOf(skillIds: Set<number>) {
+  if (!skillIds.size) return new Set<string>();
+  const rows = await db
+    .select({ g: schema.skills.groupName })
+    .from(schema.skills)
+    .where(inArray(schema.skills.id, [...skillIds]));
+  return new Set(rows.map((r) => r.g));
+}
+
 /** YYYY-MM-DD, one day before the given date. Used to close off the old rate. */
 function dayBefore(date: string) {
   const d = new Date(`${date}T00:00:00Z`);
@@ -184,21 +215,29 @@ export const labour = {
           .orderBy(asc(schema.labourRateItems.sortOrder), asc(schema.labourRateItems.name)),
         loadRates(),
         db
-          .select({ id: schema.skills.id, name: schema.skills.name, active: schema.skills.active, sortOrder: schema.skills.sortOrder })
+          .select({
+            id: schema.skills.id,
+            name: schema.skills.name,
+            groupName: schema.skills.groupName,
+            active: schema.skills.active,
+            sortOrder: schema.skills.sortOrder,
+          })
           .from(schema.skills)
           .orderBy(asc(schema.skills.sortOrder), asc(schema.skills.id)),
       ]);
       const skillName = new Map(skillRows.map((s) => [s.id, s.name]));
+      const nameOf = (i: Coverable) =>
+        isWholeGroup(i) ? wholeGroupLabel(i.groupName) : i.skillId ? (skillName.get(i.skillId) ?? null) : null;
       const needle = (input.search ?? "").trim().toLowerCase();
 
       const rows = items
         .filter((i) => (input.includeInactive ? true : i.active))
-        .filter((i) => (needle ? `${i.name} ${skillName.get(i.skillId ?? -1) ?? ""}`.toLowerCase().includes(needle) : true))
+        .filter((i) => (needle ? `${i.name} ${nameOf(i) ?? ""}`.toLowerCase().includes(needle) : true))
         .map((i) => {
           const std = pick(rates, i.id, null, on);
           return {
             ...i,
-            skillName: i.skillId ? (skillName.get(i.skillId) ?? null) : null,
+            skillName: nameOf(i),
             rate: std.amount,
             minimumCharge: std.minimumCharge,
             effectiveFrom: std.effectiveFrom,
@@ -212,14 +251,17 @@ export const labour = {
       // Gaps between the two lists, worked out on the whole book, not the search.
       const live = items.filter((i) => i.active);
       const usedSkills = new Set(live.map((i) => i.skillId).filter((x): x is number => x != null));
+      const usedGroups = new Set(live.filter(isWholeGroup).map((i) => i.groupName));
       const drift = {
-        itemsNoSkill: live.filter((i) => i.skillId == null && !isGeneralItem(i)).map((i) => ({ id: i.id, name: i.name })),
-        skillsNoItems: skillRows.filter((s) => s.active && !usedSkills.has(s.id)).map((s) => ({ id: s.id, name: s.name })),
+        itemsNoSkill: live.filter(lacksSkill).map((i) => ({ id: i.id, name: i.name })),
+        skillsNoItems: skillRows
+          .filter((s) => s.active && !usedSkills.has(s.id) && !usedGroups.has(s.groupName))
+          .map((s) => ({ id: s.id, name: s.name })),
       };
 
       return {
         on,
-        rows: rows.map((r) => ({ ...r, noSkill: r.active && r.skillId == null && !isGeneralItem(r) })),
+        rows: rows.map((r) => ({ ...r, noSkill: r.active && lacksSkill(r) })),
         priced: rows.filter((r) => r.rate != null).length,
         drift,
         units: UNITS,
@@ -260,6 +302,8 @@ export const labour = {
       z.object({
         name: z.string().min(1),
         skillId: z.number().nullable().default(null),
+        /** Notes 18.62: every skill in groupName. Takes the skill off. */
+        wholeGroup: z.boolean().default(false),
         groupName: z.enum(GROUPS).default("other"),
         kind: z.enum(KINDS).default("work"),
         unit: z.enum(UNITS).default("m2"),
@@ -276,10 +320,11 @@ export const labour = {
       const [{ max }] = await db
         .select({ max: sql<number>`coalesce(max(sort_order), 0)` })
         .from(schema.labourRateItems);
-      const groupName = (await groupForSkill(input.skillId)) ?? input.groupName;
+      const skillId = input.wholeGroup ? null : input.skillId;
+      const groupName = (await groupForSkill(skillId)) ?? input.groupName;
       const [row] = await db
         .insert(schema.labourRateItems)
-        .values({ ...input, groupName, sortOrder: (max ?? 0) + 1 })
+        .values({ ...input, skillId, groupName, sortOrder: (max ?? 0) + 1 })
         .returning();
       return row;
     }),
@@ -290,6 +335,8 @@ export const labour = {
         id: z.number(),
         name: z.string().min(1).optional(),
         skillId: z.number().nullable().optional(),
+        /** Notes 18.62: true puts it on every skill in its group and takes the skill off. */
+        wholeGroup: z.boolean().optional(),
         groupName: z.enum(GROUPS).optional(),
         kind: z.enum(KINDS).optional(),
         unit: z.enum(UNITS).optional(),
@@ -304,6 +351,9 @@ export const labour = {
     )
     .handler(async ({ input }) => {
       const { id, ...rest } = input;
+      // One skill, or every skill in the group, never both.
+      if (rest.wholeGroup === true) rest.skillId = null;
+      else if (rest.skillId != null) rest.wholeGroup = false;
       if (rest.skillId !== undefined || rest.groupName !== undefined) {
         // The skill wins. Picking a skill moves the item into its section, and
         // an item under a skill cannot be moved out of it by hand.
@@ -485,9 +535,10 @@ export const labour = {
       ]);
 
       const ticked = new Set(ticks.map((t) => t.skillId));
+      const tickedGroups = await groupsOf(ticked);
       const rows = items
         // Surcharges and allowances aren't tied to a trade, so they always show.
-        .filter((i) => input.allItems || i.skillId == null || ticked.has(i.skillId))
+        .filter((i) => input.allItems || itemForTicks(i, ticked, tickedGroups))
         .map((i) => {
           const standard = pick(rates, i.id, null, on);
           const mine = pick(rates, i.id, input.installerId, on);
@@ -569,7 +620,7 @@ export const labour = {
           .where(eq(schema.labourRateItems.active, true))
           .orderBy(asc(schema.labourRateItems.sortOrder), asc(schema.labourRateItems.name)),
         loadRates(),
-        db.select({ id: schema.skills.id, name: schema.skills.name }).from(schema.skills),
+        db.select({ id: schema.skills.id, name: schema.skills.name, groupName: schema.skills.groupName }).from(schema.skills),
         db
           .select({ id: schema.installers.id, name: schema.installers.name })
           .from(schema.installers)
@@ -589,6 +640,16 @@ export const labour = {
         canDo.set(t.skillId, list);
       }
 
+      /** A whole group item can be laid by anyone ticked for a skill in the group. */
+      const tickedFor = (i: Coverable) => {
+        if (i.skillId) return canDo.get(i.skillId) ?? [];
+        if (!isWholeGroup(i)) return [];
+        const ids = skillRows.filter((s) => s.groupName === i.groupName).flatMap((s) => canDo.get(s.id) ?? []);
+        return [...new Set(ids)];
+      };
+      const nameOf = (i: Coverable) =>
+        isWholeGroup(i) ? wholeGroupLabel(i.groupName) : i.skillId ? (skillName.get(i.skillId) ?? null) : null;
+
       const needle = input.search.trim().toLowerCase();
       const wanted = input.groupName.trim().toLowerCase();
 
@@ -601,12 +662,12 @@ export const labour = {
         })
         .filter((i) => {
           if (!needle) return true;
-          const hay = `${i.name} ${i.groupName} ${i.unit} ${skillName.get(i.skillId ?? -1) ?? ""}`;
+          const hay = `${i.name} ${i.groupName} ${i.unit} ${nameOf(i) ?? ""}`;
           return hay.toLowerCase().includes(needle);
         })
         .map((i) => {
           const std = pick(rates, i.id, null, on);
-          const ticked = i.skillId ? (canDo.get(i.skillId) ?? []) : [];
+          const ticked = tickedFor(i);
 
           const layers: { installerId: number; name: string; rate: number | null; ownRate: boolean }[] = [];
           const dearer: { installerId: number; name: string; rate: number }[] = [];
@@ -635,7 +696,7 @@ export const labour = {
             kind: i.kind,
             unit: i.unit,
             skillId: i.skillId,
-            skillName: i.skillId ? (skillName.get(i.skillId) ?? null) : null,
+            skillName: nameOf(i),
             notes: i.notes,
             /** What Terra pays. Never shown to an installer or a customer. */
             rate: std.amount,
@@ -689,8 +750,9 @@ export const labour = {
     ]);
 
     const ticked = new Set(ticks.map((t) => t.skillId));
+    const tickedGroups = await groupsOf(ticked);
     const mine = items
-      .filter((i) => i.skillId == null || ticked.has(i.skillId))
+      .filter((i) => itemForTicks(i, ticked, tickedGroups))
       .map((i) => ({ item: i, now: pick(rates, i.id, context.installerId, on) }))
       .filter((r) => r.now.amount != null);
 
@@ -707,7 +769,7 @@ export const labour = {
 
     const changes = pendingFrom
       ? items
-          .filter((i) => i.skillId == null || ticked.has(i.skillId))
+          .filter((i) => itemForTicks(i, ticked, tickedGroups))
           .map((i) => ({ item: i, before: pick(rates, i.id, context.installerId, on), after: pick(rates, i.id, context.installerId, pendingFrom) }))
           .filter((r) => r.before.amount !== r.after.amount)
           .map((r) => ({

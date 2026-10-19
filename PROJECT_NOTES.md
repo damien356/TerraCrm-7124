@@ -1175,3 +1175,16 @@ Damien booked 188005-A (task 47) on his demo installer Damo and listed 11 proble
 Live, 19 Oct (backup pre-works-weekends.db): the one column added, all 11 installers '[]'. Task 47 on live is untouched and still sits on Tue 20 to Sun 25; Damien rebooks it.
 
 Tested (terra-scratch-tests/booking1019): 66 pass on a copy of live. UI in Brisbane time: the panel books Tue 20 to Fri 23, Mon 26, Tue 27 with Sat and Sun stepped over; the board draws it on those days; the crew app shows Day 1 to 6 of 6 on each, nothing on Sat 24. Phone changes are JS only.
+
+### 18.62 Rate book tidy, item 12 and 13 of the 188005-A list (19 Oct)
+Live data (backup pre-rates-apply.db, script dry run on a copy first):
+- Timber Flooring repair (106) moved from Timber install to Timber repair. It is on accepted quote 23, not dispatched yet, so its dispatch now goes to a Timber repair installer.
+- Vinyl coving 150mm (89) moved from Vinyl sheet to 150mm Coving. Still no price.
+- Carpet install min charge (105) now covers every carpet skill: skill null, new column labour_rate_items.whole_group = 1 (sql/2026-11-03-rate-whole-group.sql). One row, one price ($250).
+- Hybrid/laminate winder (88) deleted. Nothing used it. Hybrid stairs, winder (23) stays.
+- Labor standard helper (104, $320) folded into Day rate, one man (73, $320): quote_items 107 on sent quote 20 relinked to 73, its words and price kept; 104 switched off, not deleted. Labor leading hand (103, $580) renamed Day rate, leading hand, group other, next to the other day rates. Its rate history and quote 20 line stay on it.
+- Featheredge (101) given Carpet stairs.
+Code: whole group items (isWholeGroup, itemForTicks in routes/labour.ts) go to anyone ticked for a skill in the group: installer card, crew Rates tab, quoting picker (layers from every skill in the group), costing suggestions on a task of that group. Price book reads "All carpet skills", is not flagged no skill, and counts for skillsNoItems. Settings skill select has "All <group> skills"; New rate item has "Every skill in the group below". Picking one skill clears it, picking it clears the skill.
+Until this is published, live still runs the old code, which shows the min charge as no skill to everyone.
+Item 13 (a list, no prices touched): ticked skills with an unpriced item are Measure & quote, Light prep, Vinyl plank / LVT (5 stairs items), 150mm Coving, Timber install (5 solid timber stairs items), Nosings (2). Screeding has no items at all.
+Tested (terra-scratch-tests/booking1019/t-rates.body.ts): 60 pass on a copy of live after the script.

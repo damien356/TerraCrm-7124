@@ -3,7 +3,7 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
-import { rateBook } from "./labour";
+import { isWholeGroup, rateBook } from "./labour";
 import { crewOutputPerDay } from "../lib/day-estimate";
 import { exGst } from "../lib/gst";
 import { quoteThatCounts } from "../lib/job-value";
@@ -248,7 +248,11 @@ export const costing = {
       // What to offer in the picker: this skill's items, plus every surcharge
       // and allowance, since those are not tied to a trade.
       const suggestions = itemRows
-        .filter((i) => (task.skill ? i.skillId === task.skill.id : false) || i.kind !== "work")
+        .filter(
+          (i) =>
+            (task.skill ? i.skillId === task.skill.id || (isWholeGroup(i) && i.groupName === task.skill.groupName) : false) ||
+            i.kind !== "work",
+        )
         .map((i) => ({ id: i.id, name: i.name, unit: i.unit, kind: i.kind, groupName: i.groupName }));
 
       return {

@@ -406,6 +406,12 @@ export const labourRateItems = sqliteTable(
     active: integer("active", { mode: "boolean" }).notNull().default(true),
     /** Copy from previous job (16 Oct). Site specific work (prep, uplift, stairs, furniture). Unticked on a copy. */
     sitePrep: integer("site_prep", { mode: "boolean" }).notNull().default(false),
+    /**
+     * Notes 18.62. On an item with no skill: it belongs to every skill in its
+     * group, so anyone ticked for any of them sees it. "Carpet install min
+     * charge" is the first: one row, one price, every carpet skill.
+     */
+    wholeGroup: integer("whole_group", { mode: "boolean" }).notNull().default(false),
     ...timestamps,
   },
   (t) => [index("rate_items_group_idx").on(t.groupName), index("rate_items_skill_idx").on(t.skillId)],

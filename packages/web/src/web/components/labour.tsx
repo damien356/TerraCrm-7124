@@ -31,6 +31,8 @@ export const RATE_GROUPS = [
   "other",
 ] as const;
 const RATE_KINDS = ["work", "surcharge", "allowance"] as const;
+/** Groups made of skills, so an item can go to every skill in one (notes 18.62). */
+const WHOLE_GROUPS: string[] = ["carpet", "resilient", "timber", "prep", "demolition", "trades"];
 
 /** How a unit reads on screen. The data keeps the plain code. */
 export const UNIT_LABEL: Record<string, string> = {
@@ -417,13 +419,19 @@ export function LabourRatesTab() {
                         <div className="flex flex-wrap items-center gap-2">
                           <Select
                             aria-label={`Skill for ${row.name}`}
-                            value={row.skillId == null ? "" : String(row.skillId)}
-                            onChange={(e) =>
-                              update.mutate({ id: row.id, skillId: e.target.value ? Number(e.target.value) : null })
-                            }
+                            value={row.wholeGroup && row.skillId == null ? "all" : row.skillId == null ? "" : String(row.skillId)}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              if (v === "all") update.mutate({ id: row.id, wholeGroup: true });
+                              else if (!v) update.mutate({ id: row.id, skillId: null, wholeGroup: false });
+                              else update.mutate({ id: row.id, skillId: Number(v) });
+                            }}
                             className="h-8 max-w-full flex-1 text-xs"
                           >
                             <option value="">No skill</option>
+                            {WHOLE_GROUPS.includes(row.groupName) ? (
+                              <option value="all">All {row.groupName} skills</option>
+                            ) : null}
                             {skillOptions
                               .filter((sk) => sk.active || sk.id === row.skillId)
                               .map((sk) => (
@@ -634,6 +642,8 @@ function NewRateItemModal({ open, onClose }: { open: boolean; onClose: () => voi
   const skills = (boot.data?.allSkills ?? []).filter((sk) => sk.active);
   const [name, setName] = React.useState("");
   const [skillId, setSkillId] = React.useState<number | null>(null);
+  /** Notes 18.62: every skill in the group, one row and one price. */
+  const [wholeGroup, setWholeGroup] = React.useState(false);
   const [groupName, setGroupName] = React.useState<(typeof RATE_GROUPS)[number]>("carpet");
   const skill = skills.find((sk) => sk.id === skillId) ?? null;
   // An item under a skill sits in that skill's section, the server does the same.
@@ -650,10 +660,12 @@ function NewRateItemModal({ open, onClose }: { open: boolean; onClose: () => voi
         groupName: (lockedGroup ?? groupName) as (typeof RATE_GROUPS)[number],
         kind,
         unit,
-        skillId,
+        skillId: wholeGroup ? null : skillId,
+        wholeGroup,
       });
       setName("");
       setSkillId(null);
+      setWholeGroup(false);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -684,10 +696,15 @@ function NewRateItemModal({ open, onClose }: { open: boolean; onClose: () => voi
         </Field>
         <Field label="Skill">
           <Select
-            value={skillId == null ? "" : String(skillId)}
-            onChange={(e) => setSkillId(e.target.value ? Number(e.target.value) : null)}
+            value={wholeGroup ? "all" : skillId == null ? "" : String(skillId)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setWholeGroup(v === "all");
+              setSkillId(v && v !== "all" ? Number(v) : null);
+            }}
           >
             <option value="">No skill (every installer sees it)</option>
+            <option value="all">Every skill in the group below</option>
             {skills.map((sk) => (
               <option key={sk.id} value={sk.id}>
                 {sk.name}
@@ -696,8 +713,8 @@ function NewRateItemModal({ open, onClose }: { open: boolean; onClose: () => voi
           </Select>
         </Field>
         <p className="-mt-1 text-xs text-muted-foreground">
-          Installers see it on their card when they're ticked for this skill. Leave it blank only for loadings, travel
-          and day rates.
+          Installers see it on their card when they're ticked for this skill. Every skill in the group goes to anyone
+          ticked for one of them, like a carpet minimum charge. Leave it blank only for loadings, travel and day rates.
         </p>
         <div className="grid grid-cols-3 gap-3">
           <Field label="Group">
