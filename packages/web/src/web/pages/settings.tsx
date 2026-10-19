@@ -327,6 +327,21 @@ function SkillLine({ skill }: { skill: SkillRow }) {
       {/* How it gets crewed and how fast it goes. This is what turns a quantity
           into days on site, so it is real numbers, not a crew 1 / crew 2 guess. */}
       <div className="flex w-full flex-wrap items-center gap-3 pl-1">
+        {/* The "2 man" flag. New tasks of this skill start at this crew size, and a
+            2 man task can only go to someone who brings an offsider, or to a pair.
+            Furniture on site still forces 2 whatever this says. */}
+        <div className="flex items-center gap-1.5">
+          <Label className="mb-0">Each task</Label>
+          <Select
+            value={String(skill.defaultCrewSize ?? 1)}
+            onChange={(e) => update.mutate({ id: skill.id, defaultCrewSize: Number(e.target.value) })}
+            className="h-8 w-40"
+            aria-label={`${skill.name}: one man or 2 man`}
+          >
+            <option value="1">1, one man alone</option>
+            <option value="2">2 man</option>
+          </Select>
+        </div>
         <div className="flex items-center gap-1.5">
           <Label className="mb-0">Min crew</Label>
           <Select

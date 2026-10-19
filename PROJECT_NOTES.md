@@ -1148,3 +1148,14 @@ New page pages/public-privacy.tsx at /privacy-policy (also /privacy), in the pub
 Link for App Store Connect and Play Console: https://ops.terraflooring.com.au/privacy-policy
 
 Checked signed out on desktop and phone sizes (terra-scratch-tests/privacy/shots): the page shows, no redirect to /login.
+
+### 18.60 Timber install is no longer 2 man, and the 2 man setting is on Settings (19 Oct)
+Damien: take the "2 man" flag off Timber install so one installer can take a timber task alone, and show him where it lives.
+
+The flag is the skill's default crew size (skills.default_crew_size). New tasks of the skill start at it (dispatch-build), a 2 man task only goes to someone who brings an offsider or to a pair, and the "2 man" badge on the installer skills list reads it. Furniture on site still forces 2 whatever it says. Until now it could only be picked when a skill was first added.
+
+Settings, Skills: every skill row now has "Each task" (1, one man alone, or 2 man) at the start of the crew line. Admin only, saves on change. Changing it only affects tasks made after; a task already on a job keeps its own crew size.
+
+Live, 19 Oct (backup pre-timber-1man.db): Timber install (skill 11) set to 1. Its two open unassigned tasks, 46 on 188009 and 47 on 188005, set from 2 to 1 (no furniture, no offers out, no second installer), each logged as crew_size_changed.
+
+Tested (terra-scratch-tests/timber): 11 pass. UI: the setting shows, saves and holds after reload.
