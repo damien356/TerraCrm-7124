@@ -67,7 +67,9 @@ export const team = {
     const lastSeen = db
       .select({
         userId: schema.session.userId,
-        seenAt: sql<number>`max(${schema.session.createdAt})`.as("seen_at"),
+        // A login now runs for months, so the sign-in date says little. The
+        // session is touched once a day while it is in use.
+        seenAt: sql<number>`max(coalesce(${schema.session.updatedAt}, ${schema.session.createdAt}))`.as("seen_at"),
       })
       .from(schema.session)
       .groupBy(schema.session.userId)
@@ -352,6 +354,10 @@ export const team = {
         )
         .returning();
       if (!updated) throw new ORPCError("BAD_REQUEST", { message: "There must always be at least one active Admin." });
+      // Switched off locks the login out at once: every request from it gets
+      // "Account disabled" (middleware/auth.ts), and the crew phone then lets
+      // go of its saved login and says the office switched it off. The session
+      // rows are left alone so Last seen still shows (notes 18.63).
       return updated;
     }),
 };

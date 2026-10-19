@@ -42,6 +42,14 @@ export const auth = betterAuth({
     },
   },
   secret: process.env.BETTER_AUTH_SECRET,
+  // A login lasts 90 days from the last time it was used, and every day it is
+  // used pushes that on again. So a crew phone stays signed in for as long as
+  // the installer keeps opening Terra, and only the office switching the login
+  // off (Admin, People, which also ends its sessions) signs it out (notes 18.63).
+  session: {
+    expiresIn: 60 * 60 * 24 * 90,
+    updateAge: 60 * 60 * 24,
+  },
   // Only our own sites and the phone app may sign in with a cookie. The old
   // rule echoed back whatever origin asked, which let any site in. Sandbox and
   // preview servers still trust the asking origin, because their hostnames

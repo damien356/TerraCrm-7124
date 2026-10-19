@@ -1188,3 +1188,19 @@ Code: whole group items (isWholeGroup, itemForTicks in routes/labour.ts) go to a
 Until this is published, live still runs the old code, which shows the min charge as no skill to everyone.
 Item 13 (a list, no prices touched): ticked skills with an unpriced item are Measure & quote, Light prep, Vinyl plank / LVT (5 stairs items), 150mm Coving, Timber install (5 solid timber stairs items), Nosings (2). Screeding has no items at all.
 Tested (terra-scratch-tests/booking1019/t-rates.body.ts): 60 pass on a copy of live after the script.
+
+### 18.63 Crew app stays signed in (19 Oct)
+Damien's iPhone went back to Sign in on every swipe close. The server logins were still good (d.lacey made new sessions at 17:55, 18:58 and 19:43 on 19 Oct, each one valid to 26 Oct), so the phone was losing its saved login, not the server ending it.
+Cause: lib/crash-guard.ts read the keychain with the default setting (only while the phone is unlocked). When iOS woke Terra in the background with the phone locked (location, a relaunch), the read failed and the guard wiped the login as unreadable. Its storage_reset report went into the same locked keychain, so it never arrived; live only has session_expired rows (activity_log 2400 to 2592).
+Phone (needs a new build, the fingerprint differs from 1.0.2 on the phone):
+- iOS keeps the login in keychain service terra.login, readable after the first unlock since restart. Values in the old slot move across on first read, then the old slot is cleared.
+- On iOS a failed read never wipes. The login counts as unreadable for now: the app shows the cannot reach screen, and reads again when it comes back to the front. Android keeps the old wipe and report.
+- Every read and write is remembered for the run, so a locked keychain later in the run changes nothing.
+- The Better Auth chunk marker is "\x01ba-chunks:", which the old count missed. chunkCount() reads both.
+- The cookie jar no longer drops the cookie on its own stored expiry date (lib/auth.ts serverJudges). The server decides.
+- Only the office switching the login off makes the phone let go by itself: whoami gives 403 Account disabled, the phone wipes its login, clears the web token too, and Sign in says "The office has switched off this login. Ask the office if you need it back." No server sign out, so the session row stays for Last seen.
+Server (live when published):
+- A login lasts 90 days from its last use, renewed once a day while in use (api/auth.ts session).
+- People, Last seen is the latest use of any session, not the latest sign in.
+- Switching a login off leaves its sessions alone; every request is refused as Account disabled (middleware/auth.ts), which is what tells the phone.
+Tested: unit tests on a fake iOS keychain (terra-scratch-tests/login1019/unit: guard 22 pass, the old wipe reproduced 3 pass, cookie jar 6 pass). API test t-login.body.ts 29 pass on a copy of live: an hour later, the next day, two weeks unused, past 90 days unused ends, switched off, switched back on, office login unchanged. Crew app on web against a copy, server clock moved with faketime: signed in after an hour, signed in the next day with the session moved on to 18 Jan, switched off shows the note and drops the token. Not testable here: a real locked iPhone. Logins already wiped need one more sign in after the new build.

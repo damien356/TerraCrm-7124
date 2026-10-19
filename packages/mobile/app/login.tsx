@@ -23,6 +23,7 @@ const c = Colors.light;
 const NOTE_TEXT: Record<LoginNote, string> = {
   expired: "Your login expired. Sign in again.",
   reset: "Terra had trouble reading your saved login on this phone, so it signed you out. Sign in again.",
+  disabled: "The office has switched off this login. Ask the office if you need it back.",
 };
 
 /**

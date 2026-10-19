@@ -49,12 +49,43 @@ const safeTokenStore = {
 };
 
 /**
+ * The saved sign-in cookie, with its end date taken off (notes 18.63).
+ *
+ * @better-auth/expo stops sending a cookie once the date it came with has
+ * passed. That date is only ever renewed when a sign-in call answers, but the
+ * server slides the login forward on every ordinary request too, so the phone's
+ * copy of the date fell behind and the phone gave up on a login the server
+ * still honoured. Now the phone always sends it and the server alone decides.
+ * A sign-out still clears it, and a cookie the server cancels is still dropped.
+ */
+const COOKIE_KEY = "better-auth_cookie";
+
+export function serverJudges(raw: string | null): string | null {
+  if (!raw || raw[0] !== "{") return raw;
+  try {
+    const jar = JSON.parse(raw) as Record<string, { value?: string; expires?: string | null }>;
+    if (!jar || typeof jar !== "object") return raw;
+    let changed = false;
+    for (const c of Object.values(jar)) {
+      if (c && typeof c === "object" && c.expires != null) {
+        c.expires = null;
+        changed = true;
+      }
+    }
+    return changed ? JSON.stringify(jar) : raw;
+  } catch {
+    return raw;
+  }
+}
+
+/**
  * Wipe the login off this phone without asking the server. For the recovery
  * screen and a session the server no longer knows. The next session check
  * comes back signed out.
  */
 export function forgetLoginOnPhone() {
   clearSavedLogin();
+  setWebSessionToken(null);
   managedToken = "";
 }
 
@@ -89,8 +120,8 @@ export const authClient = createAuthClient({
       // SecureStore straight, at load, so one unreadable value closed the app
       // on every launch until it was reinstalled.
       storage: {
-        getItem: (key) => safeGet(key),
-        setItem: (key, value) => safeSet(key, value),
+        getItem: (key) => (key === COOKIE_KEY ? serverJudges(safeGet(key)) : safeGet(key)),
+        setItem: (key, value) => safeSet(key, key === COOKIE_KEY ? (serverJudges(value) ?? value) : value),
       },
     }),
   ],

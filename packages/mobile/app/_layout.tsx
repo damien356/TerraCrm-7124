@@ -8,6 +8,8 @@ import {
   markReady,
   queueProblem,
   rememberSignedIn,
+  retrySavedLogin,
+  savedLoginUnreadable,
   setLoginNote,
   wasSignedIn,
 } from "../lib/crash-guard";
@@ -26,7 +28,7 @@ import { ActivityIndicator, AppState, View } from "react-native";
 import { ErrorBoundary } from "../components/__ErrorBoundary";
 import { OneDollarStatsProvider } from "../lib/__analytics";
 import { isWeb, startWebSafeArea } from "../lib/__web-safe-area";
-import { authClient } from "../lib/auth";
+import { authClient, forgetLoginOnPhone } from "../lib/auth";
 import { sendProblems } from "../lib/crash-report";
 import { CannotReachScreen, StartupBoundary } from "../components/startup-screens";
 import {
@@ -70,9 +72,39 @@ function Navigation() {
   const unreachable =
     !session.isPending &&
     !session.data &&
-    !!sessionError &&
-    (!sessionError.status || sessionError.status >= 500) &&
-    hasSavedLogin();
+    ((!!sessionError && (!sessionError.status || sessionError.status >= 500) && hasSavedLogin()) ||
+      // The iPhone would not open its keychain yet (still locked after a
+      // restart). The login is there, just unreadable for now: never a sign-out.
+      savedLoginUnreadable());
+
+  const refetchSession = session.refetch;
+  // Back at the front after a locked keychain: read the login again and ask.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active" || !savedLoginUnreadable()) return;
+      retrySavedLogin();
+      void refetchSession();
+    });
+    return () => sub.remove();
+  }, [refetchSession]);
+
+  // The office switched this login off (Admin, People). Only then does the
+  // phone let go of a login by itself (notes 18.63).
+  const whoError = who.error as { status?: number; code?: string; message?: string } | null;
+  const switchedOff = !!session.data && whoError?.status === 403 && /disabled|no Terra Ops login/i.test(whoError.message ?? "");
+  useEffect(() => {
+    if (!switchedOff) return;
+    forgetLoginOnPhone();
+    forgetSignedIn();
+    setLoginNote("disabled");
+    queryClient.clear();
+    // No server sign-out: the office side keeps the session row so People
+    // still shows when this phone was last used.
+    const atom = authClient.$store.atoms.session as
+      | { get: () => Record<string, unknown>; set: (v: Record<string, unknown>) => void }
+      | undefined;
+    atom?.set({ ...atom.get(), data: null, error: null, isPending: false, isRefetching: false });
+  }, [switchedOff]);
 
   // The first screen is up: later crashes get the recovery screen, not a close.
   useEffect(() => {
@@ -96,12 +128,12 @@ function Navigation() {
       void sendProblems();
       return;
     }
-    if (!sessionError && wasSignedIn()) {
+    if (!sessionError && !switchedOff && wasSignedIn()) {
       setLoginNote("expired");
       queueProblem({ kind: "session_expired", message: "Saved login was no longer valid, sent to Sign in." });
       forgetSignedIn();
     }
-  }, [session.isPending, session.data, sessionError, unreachable]);
+  }, [session.isPending, session.data, sessionError, unreachable, switchedOff]);
 
   useEffect(() => {
     if (session.isPending || inCallback || unreachable) return;
