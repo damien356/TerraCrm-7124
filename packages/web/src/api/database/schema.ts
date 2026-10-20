@@ -1085,6 +1085,13 @@ export const suppliers = sqliteTable(
     termsEom: integer("terms_eom", { mode: "boolean" }).notNull().default(true),
     notes: text("notes").notNull().default(""),
     active: integer("active", { mode: "boolean" }).notNull().default(true),
+    /**
+     * Step 3 (20 Oct): bills from this supplier never come with a Terra PO
+     * (power, phones, software, rent, tools, subbies). Their invoices with no
+     * PO are labelled "No PO needed" instead of sitting in "Needs you".
+     * The label never changes what is owed: owed is payState only.
+     */
+    noPoNeeded: integer("no_po_needed", { mode: "boolean" }).notNull().default(false),
     ...timestamps,
   },
   (t) => [unique("suppliers_code_uq").on(t.code)],
@@ -3613,9 +3620,14 @@ export const supplierInvoices = sqliteTable(
     /** JSON array of the printed lines: description, qty, unit, unitPrice, total. */
     lines: text("lines").notNull().default("[]"),
     /**
-     * matched     ties to its PO and the money agrees
-     * different   ties to its PO but the money does not
-     * needs_you   could not be tied to a PO with confidence
+     * matched       ties to its PO and the money agrees
+     * different     ties to its PO but the money does not
+     * needs_you     could not be tied to a PO with confidence
+     * no_po_needed  no PO, and the supplier is ticked "No PO needed"
+     * historical    no PO, dated before Ops POs started (17 Oct 2026)
+     *
+     * The last two only take an invoice off the "Needs you" list. They never
+     * touch payState, so they never change what is owed, overdue or due.
      */
     matchStatus: text("match_status").notNull().default("needs_you"),
     /** How it was matched or why not, in plain words. */
@@ -3685,11 +3697,15 @@ export const invoiceRequests = sqliteTable(
     sentAt: integer("sent_at", { mode: "timestamp" }),
     gmailMessageId: text("gmail_message_id"),
     error: text("error"),
+    /** Step 3: the job and PO, once the statement line names an Ops PO or the invoice arrives and matches. */
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    poId: integer("po_id").references(() => purchaseOrders.id, { onDelete: "set null" }),
     ...timestamps,
   },
   (t) => [
     unique("invoice_requests_dedupe_unique").on(t.dedupeKey),
     index("invoice_requests_status_idx").on(t.status),
+    index("invoice_requests_job_idx").on(t.jobId),
   ],
 );
 
@@ -4167,4 +4183,42 @@ export const invites = sqliteTable(
     ...timestamps,
   },
   (t) => [index("invites_profile_idx").on(t.profileId)],
+);
+
+/**
+ * Step 1 (20 Oct): the shared AI log. One row for every thing an Ops helper
+ * did or wants a person to do: a PO it drafted, an invoice it labelled, a
+ * request it sent. Rows with status "waiting" are the "Waiting for you" tray.
+ * Writing a row never sends anything to anyone.
+ */
+export const aiActions = sqliteTable(
+  "ai_actions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** purchasing · invoices · mail */
+    agent: text("agent").notNull(),
+    /** A key from lib/ai-actions.ts AI_ACTION_KINDS, e.g. po_drafted. */
+    kind: text("kind").notNull(),
+    /** waiting · done · dismissed */
+    status: text("status").notNull().default("done"),
+    title: text("title").notNull(),
+    detail: text("detail").notNull().default(""),
+    /** Where the person goes to act on it, e.g. /jobs/4226. */
+    path: text("path"),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    supplierId: integer("supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
+    poId: integer("po_id").references(() => purchaseOrders.id, { onDelete: "set null" }),
+    invoiceId: integer("invoice_id").references(() => supplierInvoices.id, { onDelete: "set null" }),
+    requestId: integer("request_id").references(() => invoiceRequests.id, { onDelete: "set null" }),
+    /** JSON, anything extra the screen needs. */
+    data: text("data").notNull().default("{}"),
+    resolvedAt: integer("resolved_at", { mode: "timestamp" }),
+    resolvedBy: text("resolved_by"),
+    ...timestamps,
+  },
+  (t) => [
+    index("ai_actions_status_idx").on(t.status, t.createdAt),
+    index("ai_actions_job_idx").on(t.jobId),
+    index("ai_actions_po_idx").on(t.poId),
+  ],
 );

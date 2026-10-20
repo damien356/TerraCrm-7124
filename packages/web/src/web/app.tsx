@@ -44,6 +44,7 @@ import DuplicatesPage from "./pages/duplicates";
 import CompanyTypesPage from "./pages/company-types";
 import DepositsToFillPage from "./pages/deposits-to-fill";
 import PrepToFillPage from "./pages/prep-to-fill";
+import AiTrayPage from "./pages/ai-tray";
 import PublicQuotePage from "./pages/public-quote";
 import PublicSelectionPage from "./pages/public-selection";
 import PublicPayPage from "./pages/public-pay";
@@ -122,6 +123,7 @@ function App() {
               <Route path="/marketing/segments" component={SegmentsPage} />
               <Route path="/marketing/care" component={CarePage} />
               <Route path="/terra-ai" component={TerraAiPage} />
+              <Route path="/ai-tray" component={AiTrayPage} />
               <Route path="/review/duplicates" component={DuplicatesPage} />
               <Route path="/review" component={ReviewPage} />
               <Route path="/installers">{() => <Redirect to="/team" />}</Route>

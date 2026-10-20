@@ -10,6 +10,7 @@ import { sendAsTeam } from "./agent-mail";
 import { isLiveServer } from "./runtime";
 import { NOTIFY_FROM_ADDRESS, isTerraOpsMail } from "./notify-kinds";
 import { checkReplies, REPLY_MAILBOXES, type ReplyRun } from "./mail-replies";
+import { logAiAction } from "./ai-actions";
 
 /* ---------------------------------------------------------------------------
  * The email agent. Every 15 minutes it reads new mail with a PDF in billing@,
@@ -198,6 +199,16 @@ export async function sendInvoiceRequest(id: number) {
       .set({ status: "sent", sentAt: new Date(), gmailMessageId: out.id, error: null, updatedAt: new Date() })
       .where(eq(schema.invoiceRequests.id, id))
       .returning();
+    await logAiAction({
+      kind: "request_sent",
+      title: `Asked ${r.supplierNameRaw} for missing invoice ${r.invoiceNumber}`,
+      detail: `Sent to ${r.toAddress}. It closes by itself when the invoice arrives.`,
+      path: "/finance/suppliers-owed",
+      supplierId: r.supplierId,
+      jobId: r.jobId,
+      poId: r.poId,
+      requestId: r.id,
+    });
     return u!;
   } catch (e) {
     await db.update(schema.invoiceRequests).set({ error: String((e as Error).message ?? e).slice(0, 300), updatedAt: new Date() }).where(eq(schema.invoiceRequests.id, id));

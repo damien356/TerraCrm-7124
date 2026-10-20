@@ -195,6 +195,14 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     await afterRepairAccepted(locked.id, jobId, args.actor).catch((e) => console.error("[quote-accept] timber repair offer failed:", e));
   }
 
+  // Step 2 (20 Oct): draft one PO per supplier for what is still to order.
+  // Drafts only, never sent. A failure never stops the accept.
+  const { draftPosForJob } = await import("./po-helper");
+  const drafts = await draftPosForJob({ jobId, quoteRef: ref }).catch((e) => {
+    console.error("[quote-accept] PO helper failed:", e);
+    return null;
+  });
+
   // The Order product task. The material selection form is never sent by
   // itself (fix list 13 Oct, item 10): the office sends it from the job page.
   const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, jobId));
@@ -208,6 +216,9 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     invoice?.kind === "variation" ? `Variation ${invoice.number} raised for ${money(invoice.total)}.` : "",
     !prev && !invoice ? "No deposit on this quote. Raise the invoice from the job's Client invoices card when it is ready to bill." : "",
     !prev ? "Send the material selection form from the job page so the client can check the colours before you order." : "",
+    drafts?.drafted.length
+      ? `Ops drafted ${drafts.drafted.length === 1 ? "PO" : "POs"} ${drafts.drafted.map((d) => d.number).join(", ")}. Not sent. Check and send from the job page.`
+      : "",
     rework?.changes.length ? `Ops changed:\n${rework.changes.map((c) => `- ${c}`).join("\n")}` : "",
     rework?.flags.length ? `To sort by hand (crew have not been told):\n${rework.flags.map((f) => `- ${f}`).join("\n")}` : "",
   ]
@@ -257,5 +268,6 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     taskId: task?.id ?? null,
     work: built,
     rework,
+    poDrafts: drafts?.drafted ?? [],
   };
 }

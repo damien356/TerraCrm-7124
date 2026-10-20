@@ -351,8 +351,29 @@ export async function sendDailySummary(now = new Date()) {
   const s = await notifySettings();
   const summary = await buildDailySummary(now);
   const lines = dailySummaryText(summary);
+  const late = lateLine(now);
+  if (late) lines.splice(1, 0, late);
   const sent = await emailOffice(s.emailTo, `Daily summary, ${shortDay(summary.today)}`, lines, `${OPS_URL}/`);
   return { ...sent, to: s.emailTo };
+}
+
+/** Minutes past midnight, Gold Coast time (UTC+10, no daylight saving). */
+const gcMinutes = (now: Date) => {
+  const t = new Date(now.getTime() + 10 * 3600_000);
+  return t.getUTCHours() * 60 + t.getUTCMinutes();
+};
+
+/**
+ * Said at the top of the email when it goes after 7:15, so a late summary
+ * explains itself instead of looking like the 7am one. Exported for tests.
+ */
+export function lateLine(now: Date): string | null {
+  const m = gcMinutes(now);
+  if (m < SEND_FROM_HOUR * 60 + 15) return null;
+  const h = Math.floor(m / 60);
+  const mm = String(m % 60).padStart(2, "0");
+  const clock = `${h > 12 ? h - 12 : h}:${mm}${h >= 12 ? "pm" : "am"}`;
+  return `Sent late, at ${clock}. The server was asleep at 7am.`;
 }
 
 let running = false;
@@ -399,6 +420,19 @@ export async function tickDailySummary(now = new Date()) {
 let booted = false;
 let ticking = false;
 export const dailySummaryTicking = () => ticking;
+
+/**
+ * The outside wake call (cron-job.org at 6:58 and 7:05). Loading the URL wakes
+ * a sleeping server; this then runs one pass of the timer straight away rather
+ * than waiting up to 5 minutes for the next one. The pass itself still sends at
+ * most once per day (the notify_daily_sent_on claim) and only 7am to noon, so
+ * calling this any number of times never sends a second email.
+ */
+export async function wakeDailySummary(now = new Date()) {
+  if (!ticking) return { ticking: false, sent: false };
+  const sent = await tickDailySummary(now);
+  return { ticking: true, sent };
+}
 
 export function bootDailySummary() {
   if (booted) return;

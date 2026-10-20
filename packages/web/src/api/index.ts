@@ -49,6 +49,7 @@ import { officeTasks } from "./routes/officeTasks";
 import { referrals } from "./routes/referrals";
 import { billTo } from "./routes/billTo";
 import { alerts } from "./routes/alerts";
+import { aiActions } from "./routes/aiActions";
 import { voice } from "./routes/voice";
 import { visits } from "./routes/visits";
 import { purchasing } from "./routes/purchasing";
@@ -78,7 +79,7 @@ import { readUnsubscribeToken } from "./lib/marketing";
 import { bootMailAgent } from "./lib/mail-agent";
 import { finishConnect } from "./lib/gmail";
 import { bootReminders } from "./lib/reminders";
-import { bootDailySummary } from "./lib/notify";
+import { bootDailySummary, wakeDailySummary } from "./lib/notify";
 import { bootPrep } from "./lib/prep";
 import { prep } from "./routes/prep";
 import { invites } from "./routes/invites";
@@ -134,6 +135,8 @@ export const router = {
   /** Staff invites: download page and one-time set-up link (notes 18.55). */
   invites,
   alerts,
+  /** Step 1 (20 Oct): the AI log and the "Waiting for you" tray. Admin only. */
+  aiActions,
   field,
   fieldPrep,
   /** Hands-free crew: Siri asks, confirm-back before anything is sent. */
@@ -271,6 +274,17 @@ app.post("/api/webhooks/clicksend/inbound/:secret", async (c) => {
     console.error("[sms-inbound] failed", e);
     /* A 500 makes ClickSend retry, which is what we want for a hiccup. */
     return c.json({ ok: false }, 500);
+  }
+});
+
+// Outside wake call for the 7am summary. No login, no data back, sends nothing
+// itself: it runs one pass of the daily timer, which sends once a day at most.
+app.get("/api/wake", async (c) => {
+  try {
+    const out = await wakeDailySummary();
+    return c.json({ ok: true, ticking: out.ticking }, 200);
+  } catch {
+    return c.json({ ok: true, ticking: false }, 200);
   }
 });
 

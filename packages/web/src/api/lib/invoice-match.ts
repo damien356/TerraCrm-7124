@@ -8,6 +8,35 @@ import { INVOICES_TO } from "./gmail";
 import { checkInvoicePrices } from "./price-check";
 import { notifyOffice } from "./notify";
 import { mergedTargets } from "./job-redirect";
+import { logAiAction } from "./ai-actions";
+
+/**
+ * Step 3 (20 Oct). Invoices dated before this came in before Ops raised POs,
+ * so having no PO is expected. The first Ops PO went out on 17 Oct.
+ */
+export const HISTORICAL_BEFORE = "2026-10-17";
+
+/**
+ * The label for an invoice with no PO. Only "needs_you" puts it on Needs you.
+ * The other two keep it off that list and change nothing else: payState and
+ * what is owed are never touched here.
+ */
+export async function noPoLabel(inv: {
+  supplierId: number | null;
+  invoiceDate: string | null;
+  jobId?: number | null;
+  poRefRaw?: string | null;
+  otherRefs?: string | null;
+}): Promise<"no_po_needed" | "historical" | "needs_you"> {
+  // An invoice from a supplier Ops doesn't know always needs a person.
+  if (!inv.supplierId) return "needs_you";
+  const [s] = await db.select({ noPoNeeded: schema.suppliers.noPoNeeded }).from(schema.suppliers).where(eq(schema.suppliers.id, inv.supplierId));
+  if (s?.noPoNeeded) return "no_po_needed";
+  // Old, but it names an Ops job or PO: someone should look, so it stays.
+  const citesOps = Boolean(inv.jobId) || poRefsIn(inv.poRefRaw, inv.otherRefs).length > 0 || /\b188\d{3}\b/.test(`${inv.poRefRaw ?? ""} ${inv.otherRefs ?? ""}`);
+  if (inv.invoiceDate && inv.invoiceDate < HISTORICAL_BEFORE && !citesOps) return "historical";
+  return "needs_you";
+}
 
 /* ---------------------------------------------------------------------------
  * Matching supplier paperwork to POs.
@@ -305,12 +334,47 @@ export async function recordInvoice(doc: SupplierDoc, meta: DocMeta) {
     .returning();
   await placeInvoice(inv!.id);
 
-  // A request for this invoice is now answered.
-  await db
+  // A request for this invoice is now answered. It takes the invoice's job and PO with it.
+  const [placed] = await db.select({ jobId: schema.supplierInvoices.jobId, poId: schema.supplierInvoices.poId }).from(schema.supplierInvoices).where(eq(schema.supplierInvoices.id, inv!.id));
+  const answered = await db
     .update(schema.invoiceRequests)
-    .set({ status: "received", updatedAt: new Date() })
-    .where(and(eq(schema.invoiceRequests.dedupeKey, key), ne(schema.invoiceRequests.status, "received")));
+    .set({ status: "received", ...(placed?.poId ? { poId: placed.poId, jobId: placed.jobId } : {}), updatedAt: new Date() })
+    .where(and(eq(schema.invoiceRequests.dedupeKey, key), ne(schema.invoiceRequests.status, "received")))
+    .returning();
+  for (const q of answered) await logRequest(q, `Invoice ${q.invoiceNumber} arrived, so the request is closed.`, inv!.id);
   return { id: inv!.id };
+}
+
+/**
+ * Step 3: a missing-invoice request on the supplier card and, once it is tied
+ * to a PO, on the job too. Never stops the work it describes.
+ */
+async function logRequest(q: typeof schema.invoiceRequests.$inferSelect, what: string, invoiceId: number | null = null) {
+  try {
+    const [po] = q.poId ? await db.select({ number: schema.purchaseOrders.number }).from(schema.purchaseOrders).where(eq(schema.purchaseOrders.id, q.poId)) : [];
+    const detail = po ? `${what} PO ${po.number}.` : what;
+    if (q.supplierId) {
+      await db.insert(schema.activityLog).values({ entityType: "supplier", entityId: q.supplierId, action: "invoice_request", detail, actorName: "Invoice matching", actorRole: "system" });
+    }
+    if (q.jobId) {
+      await db.insert(schema.activityLog).values({ jobId: q.jobId, entityType: "invoice_request", entityId: q.id, action: "invoice_request", detail: `${q.supplierNameRaw}: ${detail}`, actorName: "Invoice matching", actorRole: "system" });
+      await logAiAction({ kind: "request_linked", title: `Request for ${q.supplierNameRaw} invoice ${q.invoiceNumber} on the job`, detail, path: `/jobs/${q.jobId}`, jobId: q.jobId, supplierId: q.supplierId, poId: q.poId, requestId: q.id, invoiceId });
+    }
+  } catch (e) {
+    console.error("[invoice-match] request log failed:", (e as Error).message ?? e);
+  }
+}
+
+/** The Ops PO a statement row names, when it names exactly one and it is this supplier's. */
+async function poForStatementLine(supplierId: number, reference: string | null | undefined) {
+  if (!reference) return null;
+  const refs = poRefsIn(reference);
+  if (!refs.length) return null;
+  const pos = await db
+    .select({ id: schema.purchaseOrders.id, jobId: schema.purchaseOrders.jobId, supplierId: schema.purchaseOrders.supplierId })
+    .from(schema.purchaseOrders)
+    .where(inArray(schema.purchaseOrders.number, refs));
+  return pos.length === 1 && pos[0]!.supplierId === supplierId ? pos[0]! : null;
 }
 
 /** (Re)link an invoice to its PO and recompare. Safe to call again after a manual fix. */
@@ -339,6 +403,22 @@ export async function placeInvoice(invoiceId: number, forcePoId?: number | null)
       if (!clash) dedupe = key;
     }
   }
+  // No PO: label it. A person unlinking by hand always puts it back on Needs you.
+  const label = poId ? null : forcePoId === undefined ? await noPoLabel({ ...inv, supplierId }) : "needs_you";
+  if (label && label !== "needs_you" && inv.matchStatus !== label) {
+    await logAiAction({
+      kind: "invoice_labelled",
+      title: `${inv.supplierNameRaw} invoice ${inv.invoiceNumber} labelled ${label === "no_po_needed" ? "No PO needed" : "Before POs"}`,
+      detail:
+        label === "no_po_needed"
+          ? "The supplier is ticked No PO needed, so it stays off Needs you. It still counts in what is owed."
+          : `Dated before ${auDate(HISTORICAL_BEFORE)}, when Ops started raising POs, so it stays off Needs you. It still counts in what is owed.`,
+      path: "/finance/suppliers-owed",
+      supplierId,
+      invoiceId,
+      jobId: inv.jobId,
+    });
+  }
   await db
     .update(schema.supplierInvoices)
     .set({
@@ -346,7 +426,7 @@ export async function placeInvoice(invoiceId: number, forcePoId?: number | null)
       supplierId,
       dedupeKey: dedupe,
       matchNote: note,
-      matchStatus: poId ? inv.matchStatus : "needs_you",
+      matchStatus: poId ? inv.matchStatus : label!,
       diffExGst: poId ? inv.diffExGst : null,
       updatedAt: new Date(),
     })
@@ -413,7 +493,7 @@ export async function recordStatement(doc: SupplierDoc, meta: DocMeta) {
 export async function applyStatement(statementId: number) {
   const [st] = await db.select().from(schema.supplierStatements).where(eq(schema.supplierStatements.id, statementId));
   if (!st) return { requested: 0, markedPaid: 0, rowsAddUp: false };
-  const lines = safeJson<Array<{ invoiceNumber: string; date: string | null; amountIncGst: number | null; outstandingIncGst: number | null; isPayment: boolean }>>(st.lines, []);
+  const lines = safeJson<Array<{ invoiceNumber: string; date: string | null; amountIncGst: number | null; outstandingIncGst: number | null; isPayment: boolean; reference?: string | null }>>(st.lines, []);
   const [sup] = st.supplierId ? await db.select().from(schema.suppliers).where(eq(schema.suppliers.id, st.supplierId)) : [];
   const name = sup?.name ?? st.supplierNameRaw;
 
@@ -435,7 +515,8 @@ export async function applyStatement(statementId: number) {
     const [already] = await db.select({ id: schema.invoiceRequests.id }).from(schema.invoiceRequests).where(eq(schema.invoiceRequests.dedupeKey, key));
     if (already) continue;
     const text = requestText(name, { invoiceNumber: l.invoiceNumber, invoiceDate: l.date, amountIncGst: l.amountIncGst }, st.statementDate);
-    await db.insert(schema.invoiceRequests).values({
+    const po = await poForStatementLine(st.supplierId, l.reference);
+    const [req] = await db.insert(schema.invoiceRequests).values({
       supplierId: st.supplierId,
       supplierNameRaw: name,
       invoiceNumber: l.invoiceNumber,
@@ -447,7 +528,10 @@ export async function applyStatement(statementId: number) {
       subject: text.subject,
       body: text.body,
       status: sup?.email ? "waiting_ok" : "no_email",
-    });
+      jobId: po?.jobId ?? null,
+      poId: po?.id ?? null,
+    }).returning();
+    if (req) await logRequest(req, `Statement of ${st.statementDate ? auDate(st.statementDate) : "?"} lists invoice ${req.invoiceNumber}, which never arrived. Request drafted.`);
     requested++;
     missing.push(l.invoiceNumber);
   }

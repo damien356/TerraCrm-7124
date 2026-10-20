@@ -39,6 +39,17 @@ import { isUnderlayCategory, ordersByRoll, rollOrder, wholeUnits } from "./order
 
 export const WAREHOUSE_ADDRESS = "2/22 Lawrence Dr, Nerang QLD 4211";
 
+/** The job's site address on one line, or "" when the job has none. */
+export async function siteAddressFor(jobId: number) {
+  const [row] = await db
+    .select({ address: schema.sites.address, suburb: schema.sites.suburb, state: schema.sites.state, postcode: schema.sites.postcode })
+    .from(schema.jobs)
+    .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
+    .where(eq(schema.jobs.id, jobId));
+  if (!row?.address) return "";
+  return [row.address, [row.suburb, row.state, row.postcode].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+}
+
 export type PoLineInput = {
   kind: "goods" | "charge" | "freight";
   jobMaterialId?: number | null;

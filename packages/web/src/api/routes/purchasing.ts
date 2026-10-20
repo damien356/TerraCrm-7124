@@ -5,7 +5,8 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly } from "../middleware/auth";
-import { cancelPo, commitPo, nextPoNumber, pricePo, supplierDeliversTo, WAREHOUSE_ADDRESS, writeLines, type PoLineInput, type PoPricingInput } from "../lib/purchase-orders";
+import { cancelPo, commitPo, nextPoNumber, pricePo, siteAddressFor, supplierDeliversTo, WAREHOUSE_ADDRESS, writeLines, type PoLineInput, type PoPricingInput } from "../lib/purchase-orders";
+import { resolveAiActionsForPo } from "../lib/ai-actions";
 import { renderPoPdf } from "../lib/poPdf";
 import { sendAsTeam } from "../lib/agent-mail";
 import { INVOICES_TO } from "../lib/gmail";
@@ -61,16 +62,6 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 async function profileIdFor(userId: string) {
   const [p] = await db.select({ id: schema.profiles.id }).from(schema.profiles).where(eq(schema.profiles.userId, userId));
   return p?.id ?? null;
-}
-
-async function siteAddressFor(jobId: number) {
-  const [row] = await db
-    .select({ address: schema.sites.address, suburb: schema.sites.suburb, state: schema.sites.state, postcode: schema.sites.postcode })
-    .from(schema.jobs)
-    .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
-    .where(eq(schema.jobs.id, jobId));
-  if (!row?.address) return "";
-  return [row.address, [row.suburb, row.state, row.postcode].filter(Boolean).join(" ")].filter(Boolean).join(", ");
 }
 
 function pricingOf(input: PoInput): PoPricingInput {
@@ -326,11 +317,12 @@ export const purchasing = {
     return { ...row!, priced };
   }),
 
-  removeDraft: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  removeDraft: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     const po = await loadPo(input.id);
     if (po.status !== "draft") throw new ORPCError("BAD_REQUEST", { message: "Only a draft can be deleted. Cancel it instead." });
     // Kept as cancelled, not deleted, so its letter is never handed out again. A printed draft can't clash.
     await db.update(schema.purchaseOrders).set({ status: "cancelled", notes: [po.notes, "Draft removed, never sent."].filter(Boolean).join(" "), updatedAt: new Date() }).where(eq(schema.purchaseOrders.id, po.id));
+    await resolveAiActionsForPo(po.id, context.actor.name, "dismissed");
     return { ok: true };
   }),
 
@@ -346,7 +338,7 @@ export const purchasing = {
    */
   send: adminOnly
     .input(z.object({ id: z.number(), to: z.string().max(200).optional(), saveEmail: z.boolean().default(false) }))
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
       const po = await loadPo(input.id);
       if (po.status === "cancelled") throw new ORPCError("BAD_REQUEST", { message: "This PO is cancelled." });
       if (po.totalExGst <= 0) throw new ORPCError("BAD_REQUEST", { message: "This PO is $0. Put the costs in first." });
@@ -368,23 +360,26 @@ export const purchasing = {
       }
       await putObject(`purchase-orders/${po.number}.pdf`, pdf, "application/pdf", filename).catch(() => {});
       await commitPo(po.id, "email", to);
+      await resolveAiActionsForPo(po.id, context.actor.name);
       return { ok: true, to };
     }),
 
   /** Phoned through, or put in on the supplier's portal. Same effect as sending, no email. */
-  markSent: adminOnly.input(z.object({ id: z.number(), how: z.string().max(100).default("phoned") })).handler(async ({ input }) => {
+  markSent: adminOnly.input(z.object({ id: z.number(), how: z.string().max(100).default("phoned") })).handler(async ({ input, context }) => {
     const po = await loadPo(input.id);
     if (po.status === "cancelled") throw new ORPCError("BAD_REQUEST", { message: "This PO is cancelled." });
     await commitPo(po.id, "other", input.how);
+    await resolveAiActionsForPo(po.id, context.actor.name);
     return { ok: true };
   }),
 
-  cancel: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input }) => {
+  cancel: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     try {
       await cancelPo(input.id);
     } catch (e) {
       throw new ORPCError("BAD_REQUEST", { message: (e as Error).message });
     }
+    await resolveAiActionsForPo(input.id, context.actor.name, "dismissed");
     return { ok: true };
   }),
 

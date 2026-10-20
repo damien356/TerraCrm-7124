@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -102,6 +102,25 @@ const feePatch = z.object({
   sortOrder: z.number().int().optional(),
 });
 
+/**
+ * The "No PO needed" tick moved. Only invoices with no PO change, and only
+ * their match label. payState is never touched, so what is owed stays the same.
+ */
+async function relabelNoPoInvoices(supplierId: number, on: boolean) {
+  const rows = await db
+    .update(schema.supplierInvoices)
+    .set({ matchStatus: on ? "no_po_needed" : "needs_you", updatedAt: new Date() })
+    .where(
+      and(
+        eq(schema.supplierInvoices.supplierId, supplierId),
+        isNull(schema.supplierInvoices.poId),
+        eq(schema.supplierInvoices.matchStatus, on ? "needs_you" : "no_po_needed"),
+      ),
+    )
+    .returning({ id: schema.supplierInvoices.id });
+  return rows.length;
+}
+
 async function logSupplier(supplierId: number, action: string, detail: string, actorName: string) {
   await db.insert(schema.activityLog).values({
     entityType: "supplier",
@@ -194,10 +213,13 @@ export const suppliers = {
         priceListSource: z.string().optional(),
         notes: z.string().optional(),
         active: z.boolean().optional(),
+        /** Step 3: invoices from them with no PO are fine. Off "Needs you", still counted in what is owed. */
+        noPoNeeded: z.boolean().optional(),
       }),
     )
     .handler(async ({ input, context }) => {
       const { id, priceListEffectiveFrom, priceListValidUntil, ...rest } = input;
+      const [was] = input.noPoNeeded === undefined ? [] : await db.select({ noPoNeeded: schema.suppliers.noPoNeeded }).from(schema.suppliers).where(eq(schema.suppliers.id, id));
       const [row] = await db
         .update(schema.suppliers)
         .set({
@@ -214,6 +236,17 @@ export const suppliers = {
         .returning();
       if (!row) throw new ORPCError("NOT_FOUND", { message: "Supplier not found" });
       await logSupplier(id, "supplier_updated", row.name, context.actor.name || "Office");
+      if (input.noPoNeeded !== undefined && was && was.noPoNeeded !== input.noPoNeeded) {
+        const moved = await relabelNoPoInvoices(id, input.noPoNeeded);
+        await logSupplier(
+          id,
+          "supplier_no_po_needed",
+          input.noPoNeeded
+            ? `Ticked "No PO needed". ${moved} invoice${moved === 1 ? "" : "s"} with no PO moved off Needs you. They still count in what is owed.`
+            : `Unticked "No PO needed". ${moved} invoice${moved === 1 ? "" : "s"} with no PO back on Needs you.`,
+          context.actor.name || "Office",
+        );
+      }
       return row;
     }),
 

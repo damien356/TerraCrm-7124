@@ -32,13 +32,28 @@ const dueOf = (i: Pick<Inv, "dueDate" | "invoiceDate" | "supplierId">, tm: Map<n
 };
 const groupKey = (supplierId: number | null, raw: string) => (supplierId ? `s:${supplierId}` : `n:${squash(raw)}`);
 
-/** How an invoice and its PO sit together, in the words on the screen. */
+/**
+ * How an invoice and its PO sit together, in the words on the screen.
+ *
+ * Step 3 (20 Oct): no_po_needed and historical are labels for invoices with
+ * no PO that are fine that way. They only keep the invoice off "Needs you".
+ * They never touch payState, so the owed, overdue and due totals still count
+ * every unpaid invoice, labelled or not.
+ */
 function pairState(inv: Pick<Inv, "poId" | "matchStatus" | "checkedAt">) {
+  if (!inv.poId && inv.matchStatus === "no_po_needed") return "no_po_needed" as const;
+  if (!inv.poId && inv.matchStatus === "historical") return "historical" as const;
   if (!inv.poId) return "no_po" as const;
   if (inv.matchStatus === "matched") return "matched" as const;
   if (inv.matchStatus === "different") return inv.checkedAt ? ("checked" as const) : ("different" as const);
   return "no_po" as const;
 }
+
+/** Labelled fine with no PO (step 3). Off "Needs you", even with no supplier card. Still owed. */
+const labelledOff = (inv: Pick<Inv, "poId" | "matchStatus" | "checkedAt">) => {
+  const st = pairState(inv);
+  return st === "no_po_needed" || st === "historical";
+};
 
 async function autoSendOn() {
   const [s] = await db.select().from(schema.settings).where(eq(schema.settings.key, AUTO_SEND_KEY));
@@ -130,7 +145,7 @@ export const payables = {
       if (due && due < now) r.overdueIncGst += amt;
       else if (due && due <= soon) r.dueSoonIncGst += amt;
       if (due && due >= now && (!r.nextDue || due < r.nextDue)) r.nextDue = due;
-      if (!i.supplierId || (pairState(i) === "no_po" && !i.checkedAt) || pairState(i) === "different") r.needsYou++;
+      if (!labelledOff(i) && (!i.supplierId || (pairState(i) === "no_po" && !i.checkedAt) || pairState(i) === "different")) r.needsYou++;
     }
     // Open price checks count as something to look at on that supplier's row.
     const flags = await db.select({ supplierId: schema.priceFlags.supplierId }).from(schema.priceFlags).where(eq(schema.priceFlags.status, "open"));
@@ -154,6 +169,7 @@ export const payables = {
     for (const i of unpaid) {
       const st = pairState(i);
       const who = (i.supplierId && supName.get(i.supplierId)) || i.supplierNameRaw;
+      if (labelledOff(i)) continue;
       if (!i.supplierId) {
         needsYou.push({ kind: "unknown_supplier", id: i.id, title: `${i.docType === "credit" ? "Credit" : "Invoice"} ${i.invoiceNumber} from ${who}`, detail: "Not a supplier in Ops. Pick which supplier this is.", supplierKey: groupKey(null, i.supplierNameRaw), amount: signed(i), date: i.invoiceDate });
       } else if (st === "no_po" && !i.checkedAt) {

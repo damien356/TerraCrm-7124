@@ -59,6 +59,8 @@ export const PAIR_META: Record<string, { label: string; colour: string }> = {
   different: { label: "Price different", colour: "#D08A1E" },
   checked: { label: "Checked", colour: "#4A7FA5" },
   no_po: { label: "No PO", colour: "#C0603F" },
+  no_po_needed: { label: "No PO needed", colour: "#7A736D" },
+  historical: { label: "Before POs", colour: "#7A736D" },
   no_invoice: { label: "No invoice yet", colour: "#7A736D" },
 };
 
@@ -72,7 +74,7 @@ const nextKey = () => `l${++keySeq}`;
 const dayOf = (d: Date | string) => new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short" });
 
 function pairOf(i: { matchStatus: string; checkedAt: Date | string | null; poId: number | null }) {
-  if (!i.poId) return "no_po";
+  if (!i.poId) return i.matchStatus === "no_po_needed" || i.matchStatus === "historical" ? i.matchStatus : "no_po";
   if (i.matchStatus === "matched") return "matched";
   if (i.matchStatus === "different") return i.checkedAt ? "checked" : "different";
   return "no_po";

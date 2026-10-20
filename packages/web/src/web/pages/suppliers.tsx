@@ -404,6 +404,7 @@ function FreightCard({
     deliversTo: string;
     freightMethod: string;
     freightNote: string;
+    noPoNeeded: boolean;
   };
 }) {
   const update = useUpdateSupplier();
@@ -438,6 +439,21 @@ function FreightCard({
             <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
               Untick it and any delivery charge on their schedule is kept on file but never costed. The carrier
               invoices us for that leg instead, so costing both would bill the same freight twice.
+            </span>
+          </span>
+        </label>
+        <label htmlFor={`no-po-${supplier.id}`} className="flex items-start gap-2.5 text-sm font-medium">
+          <Checkbox
+            id={`no-po-${supplier.id}`}
+            className="mt-0.5"
+            checked={supplier.noPoNeeded}
+            onChange={(e) => update.mutate({ id: supplier.id, noPoNeeded: e.target.checked })}
+          />
+          <span>
+            No PO needed
+            <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+              Tick it for a supplier you buy from without a PO, like a hardware store or fuel. Their invoices with no PO
+              stay off Needs you, and Ops drafts no PO to them. They still count in what you owe.
             </span>
           </span>
         </label>

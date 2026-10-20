@@ -15,6 +15,7 @@ import {
   CopyCheck,
   HardHat,
   HeartHandshake,
+  Inbox,
   MessagesSquare,
   KeyRound,
   LayoutDashboard,
@@ -140,6 +141,7 @@ const NAV: NavEntry[] = [
     label: "Admin",
     icon: SettingsIcon,
     children: [
+      { to: "/ai-tray", label: "Waiting for you", icon: Inbox },
       { to: "/settings", label: "Settings", icon: SettingsIcon },
       { to: "/products", label: "Price book", icon: Tags },
       { to: "/team", label: "People", icon: KeyRound },
@@ -164,6 +166,7 @@ const ADMIN_ONLY_PATHS = [
   "/finance/referrers-owed",
   "/marketing",
   "/terra-ai",
+  "/ai-tray",
   "/reports",
   "/settings",
   "/products",

@@ -29,6 +29,7 @@ const statementLineSchema = z.object({
   amountIncGst: z.number().nullable().describe("Original amount inc GST. Negative for credits and payments."),
   outstandingIncGst: z.number().nullable().describe("Still owing on this row, if the statement shows it."),
   isPayment: z.boolean().describe("True for a payment or receipt row rather than an invoice or credit."),
+  reference: z.string().nullable().describe("The customer order reference on this row ('Your ref', 'Order', 'Cust PO'), exactly as printed. Null if the statement does not show one."),
 });
 
 const docSchema = z.object({
