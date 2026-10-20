@@ -147,6 +147,7 @@ export const installers = {
     .input(
       z.object({
         name: z.string().min(1),
+        fullName: z.string().nullable().optional(),
         mobile: z.string().nullable().optional(),
         email: z.string().nullable().optional(),
         crewCapacity: z.enum(["solo", "own_offsider", "needs_partner"]).default("solo"),
@@ -161,7 +162,7 @@ export const installers = {
     .handler(async ({ input }) => {
       const [row] = await db
         .insert(schema.installers)
-        .values({ ...input, ...abnChangeColumns(input.abn) })
+        .values({ ...input, fullName: input.fullName?.trim() || null, ...abnChangeColumns(input.abn) })
         .returning();
       // Notes 18.64: an ABN typed on a new card is looked up straight away.
       if (row && abnDigits(row.abn)) return (await checkInstallerAbn(row.id)) ? (await reread(row.id)) ?? row : row;
@@ -172,7 +173,9 @@ export const installers = {
     .input(
       z.object({
         id: z.number(),
-        name: z.string().min(1).optional(),
+        name: z.string().trim().min(1, "His short name can't be empty.").optional(),
+        /** Notes 18.66: his full legal name, for the ABN check and bills. */
+        fullName: z.string().nullable().optional(),
         mobile: z.string().nullable().optional(),
         email: z.string().nullable().optional(),
         crewCapacity: z.enum(["solo", "own_offsider", "needs_partner"]).optional(),
@@ -213,6 +216,7 @@ export const installers = {
         .update(schema.installers)
         .set({
           ...rest,
+          ...(rest.fullName !== undefined ? { fullName: rest.fullName?.trim() || null } : {}),
           ...(abnChanged ? abnChangeColumns(rest.abn) : rest.abn !== undefined ? { abn: current.abn } : {}),
           ...(unavailableDays ? { unavailableDays: JSON.stringify(unavailableDays) } : {}),
           ...(worksWeekendDays ? { worksWeekendDays: JSON.stringify([...new Set(worksWeekendDays)].sort()) } : {}),

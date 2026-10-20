@@ -243,7 +243,13 @@ export const skills = sqliteTable("skills", {
 
 export const installers = sqliteTable("installers", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  /** The short name he goes by. Schedule, Crew, the phone and texts. */
   name: text("name").notNull(),
+  /**
+   * Notes 18.66: his full legal name, as on his ABN. Only for the ABN name
+   * check and bills. Null when it is the same as his short name.
+   */
+  fullName: text("full_name"),
   mobile: text("mobile"),
   email: text("email"),
   /** Better Auth user id once they've accepted their app invite. */

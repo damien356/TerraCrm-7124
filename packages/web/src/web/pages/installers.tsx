@@ -21,6 +21,8 @@ import {
 } from "../queries/availability";
 import { dayOf } from "@/lib/utils";
 import { AbnField, abnDay, abnShort } from "../components/abn-check";
+import { abnVerdict } from "../../api/lib/abn-names";
+import { useSyncedForm } from "../hooks/use-synced-form";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -299,45 +301,45 @@ function BlackoutCard({ installerId }: { installerId: number }) {
  * accounts would have nowhere to pay it. The readiness strip below says so
  * plainly rather than letting him find out on the job.
  */
-function InstallerInvoicingTab({ id }: { id: number }) {
+type InstallerRow = NonNullable<ReturnType<typeof useInstaller>["data"]>["installer"];
+
+/** His invoicing profile as the form holds it. */
+function invoicingForm(installer: InstallerRow) {
+  return {
+    tradingName: installer.tradingName ?? "",
+    abn: installer.abn ?? "",
+    businessAddress: installer.businessAddress ?? "",
+    invoiceEmail: installer.invoiceEmail ?? installer.email ?? "",
+    bankAccountName: installer.bankAccountName ?? "",
+    bankBsb: installer.bankBsb ?? "",
+    bankAccountNumber: installer.bankAccountNumber ?? "",
+    nextInvoiceNumber: installer.nextInvoiceNumber == null ? "" : String(installer.nextInvoiceNumber),
+    logoUrl: installer.logoUrl ?? null,
+  };
+}
+type InvoicingForm = ReturnType<typeof invoicingForm>;
+
+function InstallerInvoicingTab({ id, cardNames }: { id: number; cardNames: { name: string; fullName: string } | null }) {
   const detail = useInstaller(id);
   const update = useUpdateInstaller();
   const [error, setError] = React.useState<string | null>(null);
   const [saved, setSaved] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
-  const [form, setForm] = React.useState<{
-    tradingName: string;
-    abn: string;
-    businessAddress: string;
-    invoiceEmail: string;
-    bankAccountName: string;
-    bankBsb: string;
-    bankAccountNumber: string;
-    nextInvoiceNumber: string;
-    logoUrl: string | null;
-  } | null>(null);
 
   const installer = detail.data?.installer;
   const invoicing = detail.data?.invoicing;
   const abnCheck = detail.data?.abnCheck ?? null;
+  // Notes 18.66: follows the saved card, and Save sends only what was edited.
+  const { form, setForm, dirty, reset } = useSyncedForm(installer ? invoicingForm(installer) : null, installer?.id);
+  // The name check runs on the names in the form now, his card tab included.
+  const names = {
+    name: cardNames?.name ?? installer?.name ?? "",
+    fullName: cardNames ? cardNames.fullName : (installer?.fullName ?? null),
+    tradingName: form?.tradingName ?? installer?.tradingName ?? null,
+  };
+  const verdict = abnCheck ? abnVerdict(abnCheck, names) : null;
 
-  React.useEffect(() => {
-    if (!installer) return;
-    setForm({
-      tradingName: installer.tradingName ?? "",
-      abn: installer.abn ?? "",
-      businessAddress: installer.businessAddress ?? "",
-      invoiceEmail: installer.invoiceEmail ?? installer.email ?? "",
-      bankAccountName: installer.bankAccountName ?? "",
-      bankBsb: installer.bankBsb ?? "",
-      bankAccountNumber: installer.bankAccountNumber ?? "",
-      nextInvoiceNumber: installer.nextInvoiceNumber == null ? "" : String(installer.nextInvoiceNumber),
-      logoUrl: installer.logoUrl ?? null,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- hydrate once per installer
-  }, [installer?.id]);
-
-  function set<K extends keyof NonNullable<typeof form>>(key: K, value: NonNullable<typeof form>[K]) {
+  function set<K extends keyof InvoicingForm>(key: K, value: InvoicingForm[K]) {
     setSaved(false);
     setForm((f) => (f ? { ...f, [key]: value } : f));
   }
@@ -359,26 +361,32 @@ function InstallerInvoicingTab({ id }: { id: number }) {
   }
 
   async function save() {
-    if (!form) return;
+    if (!form || !installer) return;
     setError(null);
+    setSaved(false);
     const numbered = form.nextInvoiceNumber.trim();
     if (numbered && !/^\d+$/.test(numbered)) {
       setError("The starting invoice number has to be a whole number.");
       return;
     }
+    const patch: Parameters<typeof update.mutateAsync>[0] = { id };
+    for (const k of dirty) {
+      if (k === "tradingName") patch.tradingName = form.tradingName.trim() || null;
+      else if (k === "abn") patch.abn = form.abn.trim() || null;
+      else if (k === "businessAddress") patch.businessAddress = form.businessAddress.trim() || null;
+      else if (k === "invoiceEmail") patch.invoiceEmail = form.invoiceEmail.trim() || null;
+      else if (k === "bankAccountName") patch.bankAccountName = form.bankAccountName.trim() || null;
+      else if (k === "bankBsb") patch.bankBsb = form.bankBsb.trim() || null;
+      else if (k === "bankAccountNumber") patch.bankAccountNumber = form.bankAccountNumber.trim() || null;
+      // Once he has raised one, the number is locked and we never send it.
+      else if (k === "nextInvoiceNumber" && !(invoicing && invoicing.raised > 0)) patch.nextInvoiceNumber = numbered ? Number(numbered) : null;
+    }
+    // The invoice email box starts on his login email. Saving keeps that.
+    if (installer.invoiceEmail == null && form.invoiceEmail.trim()) patch.invoiceEmail = form.invoiceEmail.trim();
     try {
-      await update.mutateAsync({
-        id,
-        tradingName: form.tradingName.trim() || null,
-        abn: form.abn.trim() || null,
-        businessAddress: form.businessAddress.trim() || null,
-        invoiceEmail: form.invoiceEmail.trim() || null,
-        bankAccountName: form.bankAccountName.trim() || null,
-        bankBsb: form.bankBsb.trim() || null,
-        bankAccountNumber: form.bankAccountNumber.trim() || null,
-        // Once he has raised one, the number is locked and we never send it.
-        ...(invoicing && invoicing.raised > 0 ? {} : { nextInvoiceNumber: numbered ? Number(numbered) : null }),
-      });
+      if (Object.keys(patch).length > 1) await update.mutateAsync(patch);
+      const fresh = await detail.refetch();
+      if (fresh.data) reset(invoicingForm(fresh.data.installer));
       setSaved(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -390,7 +398,7 @@ function InstallerInvoicingTab({ id }: { id: number }) {
   const locked = invoicing.raised > 0;
   const blockers: string[] = [];
   if (installer?.nextInvoiceNumber == null) blockers.push("no starting invoice number");
-  if (abnCheck && !abnCheck.passes) blockers.push(abnShort(abnCheck));
+  if (abnCheck && verdict && !verdict.passes) blockers.push(abnShort({ state: abnCheck.state, mismatch: verdict.mismatch }));
   if (!form.bankAccountName.trim() || !form.bankBsb.trim() || !form.bankAccountNumber.trim())
     blockers.push("bank details incomplete");
 
@@ -429,8 +437,7 @@ function InstallerInvoicingTab({ id }: { id: number }) {
             value={form.abn}
             onChange={(v) => set("abn", v)}
             savedAbn={installer?.abn ?? null}
-            name={installer?.name ?? ""}
-            tradingName={form.tradingName.trim() || null}
+            names={names}
             check={abnCheck}
           />
         </Field>
@@ -442,7 +449,7 @@ function InstallerInvoicingTab({ id }: { id: number }) {
         </Field>
         <Field label="GST" hint="Set by the ABN lookup only. GST is added to his pay only when he's registered.">
           <p className="flex h-9 items-center text-sm font-medium">
-            {installer?.gstRegistered && abnCheck?.passes
+            {installer?.gstRegistered && abnCheck && verdict?.passes
               ? `GST registered${abnCheck.gstFrom ? ` from ${abnDay(abnCheck.gstFrom)}` : ""}`
               : installer?.gstRegistered
                 ? "GST registered, waiting on his ABN to pass"
@@ -520,81 +527,79 @@ function InstallerInvoicingTab({ id }: { id: number }) {
   );
 }
 
+/** His card as the form holds it. */
+function cardForm(installer: InstallerRow) {
+  return {
+    name: installer.name,
+    fullName: installer.fullName ?? "",
+    mobile: installer.mobile ?? "",
+    email: installer.email ?? "",
+    crewCapacity: installer.crewCapacity as "solo" | "own_offsider" | "needs_partner",
+    serviceArea: installer.serviceArea ?? "",
+    abn: installer.abn ?? "",
+    colour: installer.colour,
+    insuranceExpiry: dateInput(installer.insuranceExpiry),
+    licenceExpiry: dateInput(installer.licenceExpiry),
+    unavailableDays: installer.unavailableDays,
+    worksWeekendDays: installer.worksWeekendDays ?? [],
+    starRating: installer.starRating,
+    creditLimit: String(installer.creditLimit ?? 0),
+    notes: installer.notes ?? "",
+    active: installer.active,
+  };
+}
+type CardForm = ReturnType<typeof cardForm>;
+
 export function InstallerPanel({ id, onClose }: { id: number; onClose: () => void }) {
   const [panel, setPanel] = React.useState<"card" | "rates" | "invoicing">("card");
   const detail = useInstaller(id);
   const bootstrap = useBootstrap();
   const update = useUpdateInstaller();
   const [error, setError] = React.useState<string | null>(null);
-  const [form, setForm] = React.useState<{
-    name: string;
-    mobile: string;
-    email: string;
-    crewCapacity: "solo" | "own_offsider" | "needs_partner";
-    serviceArea: string;
-    abn: string;
-    colour: string;
-    insuranceExpiry: string;
-    licenceExpiry: string;
-    unavailableDays: number[];
-    worksWeekendDays: number[];
-    starRating: number;
-    creditLimit: string;
-    notes: string;
-    active: boolean;
-  } | null>(null);
+  const [saved, setSaved] = React.useState(false);
 
   const installer = detail.data?.installer;
+  // Notes 18.66: the form follows the saved card, and Save sends only what was edited.
+  const { form, setForm, dirty, reset } = useSyncedForm(installer ? cardForm(installer) : null, installer?.id);
 
-  React.useEffect(() => {
-    if (!installer) return;
-    setForm({
-      name: installer.name,
-      mobile: installer.mobile ?? "",
-      email: installer.email ?? "",
-      crewCapacity: installer.crewCapacity as "solo" | "own_offsider" | "needs_partner",
-      serviceArea: installer.serviceArea ?? "",
-      abn: installer.abn ?? "",
-      colour: installer.colour,
-      insuranceExpiry: dateInput(installer.insuranceExpiry),
-      licenceExpiry: dateInput(installer.licenceExpiry),
-      unavailableDays: installer.unavailableDays,
-      worksWeekendDays: installer.worksWeekendDays ?? [],
-      starRating: installer.starRating,
-      creditLimit: String(installer.creditLimit ?? 0),
-      notes: installer.notes ?? "",
-      active: installer.active,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- hydrate the form only when a different installer is opened
-  }, [installer?.id]);
-
-  function set<K extends keyof NonNullable<typeof form>>(key: K, value: NonNullable<typeof form>[K]) {
+  function set<K extends keyof CardForm>(key: K, value: CardForm[K]) {
+    setSaved(false);
     setForm((f) => (f ? { ...f, [key]: value } : f));
   }
 
   async function save() {
     if (!form) return;
     setError(null);
+    setSaved(false);
+    if (!form.name.trim()) {
+      setError("His short name can't be empty.");
+      return;
+    }
+    const patch: Parameters<typeof update.mutateAsync>[0] = { id };
+    for (const k of dirty) {
+      if (k === "name") patch.name = form.name.trim();
+      else if (k === "fullName") patch.fullName = form.fullName.trim() || null;
+      else if (k === "mobile") patch.mobile = form.mobile || null;
+      else if (k === "email") patch.email = form.email || null;
+      else if (k === "crewCapacity") patch.crewCapacity = form.crewCapacity;
+      else if (k === "serviceArea") patch.serviceArea = form.serviceArea || null;
+      else if (k === "abn") patch.abn = form.abn || null;
+      else if (k === "colour") patch.colour = form.colour;
+      else if (k === "insuranceExpiry") patch.insuranceExpiry = form.insuranceExpiry ? new Date(`${form.insuranceExpiry}T00:00:00`) : null;
+      else if (k === "licenceExpiry") patch.licenceExpiry = form.licenceExpiry ? new Date(`${form.licenceExpiry}T00:00:00`) : null;
+      else if (k === "unavailableDays") patch.unavailableDays = form.unavailableDays;
+      else if (k === "worksWeekendDays") patch.worksWeekendDays = form.worksWeekendDays.filter((n): n is 0 | 6 => n === 0 || n === 6);
+      else if (k === "starRating") patch.starRating = form.starRating;
+      else if (k === "creditLimit") patch.creditLimit = Number(form.creditLimit) || 0;
+      else if (k === "notes") patch.notes = form.notes || null;
+      else if (k === "active") patch.active = form.active;
+    }
     try {
-      await update.mutateAsync({
-        id,
-        name: form.name,
-        mobile: form.mobile || null,
-        email: form.email || null,
-        crewCapacity: form.crewCapacity,
-        serviceArea: form.serviceArea || null,
-        abn: form.abn || null,
-        colour: form.colour,
-        insuranceExpiry: form.insuranceExpiry ? new Date(`${form.insuranceExpiry}T00:00:00`) : null,
-        licenceExpiry: form.licenceExpiry ? new Date(`${form.licenceExpiry}T00:00:00`) : null,
-        unavailableDays: form.unavailableDays,
-        worksWeekendDays: form.worksWeekendDays.filter((n): n is 0 | 6 => n === 0 || n === 6),
-        starRating: form.starRating,
-        creditLimit: Number(form.creditLimit) || 0,
-        notes: form.notes || null,
-        active: form.active,
-      });
-      onClose();
+      if (Object.keys(patch).length > 1) await update.mutateAsync(patch);
+      // Take the saved card back straight away, with its ABN check.
+      const fresh = await detail.refetch();
+      if (fresh.data) reset(cardForm(fresh.data.installer));
+      setSaved(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -608,7 +613,7 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
     <Modal
       open
       onClose={onClose}
-      title={installer?.name ?? "Installer"}
+      title={form?.name.trim() || installer?.name || "Installer"}
       subtitle="Skills, rates and availability. He can only ever be offered a task he's ticked for."
       width={panel === "rates" ? "max-w-5xl" : "max-w-3xl"}
       footer={
@@ -616,6 +621,7 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>
+          {panel === "card" && saved && !update.isPending ? <span className="self-center text-sm text-muted-foreground">Saved.</span> : null}
           {panel === "card" ? (
             <Button onClick={save} disabled={!form || update.isPending}>
               {update.isPending ? <Spinner className="border-white/40 border-t-white" /> : null}
@@ -648,14 +654,22 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
       </div>
 
       {panel === "rates" ? <InstallerRatesTab installerId={id} /> : null}
-      {panel === "invoicing" ? <InstallerInvoicingTab id={id} /> : null}
+      {panel === "invoicing" ? <InstallerInvoicingTab id={id} cardNames={form ? { name: form.name, fullName: form.fullName } : null} /> : null}
 
       {panel === "card" && (detail.isLoading || !form) ? <Loading /> : null}
       {panel === "card" && !(detail.isLoading || !form) ? (
         <div className="flex flex-col gap-4">
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Name">
-              <Input value={form.name} onChange={(e) => set("name", e.target.value)} />
+            <Field label="Short name" hint="What he goes by. Schedule, Crew, his phone and texts.">
+              <Input value={form.name} aria-label="Short name" onChange={(e) => set("name", e.target.value)} />
+            </Field>
+            <Field label="Full name" hint="His legal name, as on his ABN. For the ABN check and bills.">
+              <Input
+                value={form.fullName}
+                aria-label="Full name"
+                placeholder="As on his ABN"
+                onChange={(e) => set("fullName", e.target.value)}
+              />
             </Field>
             <Field label="Mobile">
               <Input value={form.mobile} onChange={(e) => set("mobile", e.target.value)} />
@@ -682,8 +696,7 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
                 value={form.abn}
                 onChange={(v) => set("abn", v)}
                 savedAbn={installer?.abn ?? null}
-                name={form.name}
-                tradingName={installer?.tradingName ?? null}
+                names={{ name: form.name, fullName: form.fullName, tradingName: installer?.tradingName ?? null }}
                 check={detail.data?.abnCheck ?? null}
               />
             </Field>

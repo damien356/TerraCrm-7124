@@ -3,6 +3,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { localDate } from "./local-date";
 import { abnDigits, formatAbn, lookupAbn, type AbnResult } from "./abn-lookup";
+import { abnDate, abnVerdict, normName, type AbnState } from "./abn-names";
 
 /* ---------------------------------------------------------------------------
  * The ABN check on an installer card (notes 18.64). Admin only.
@@ -11,26 +12,18 @@ import { abnDigits, formatAbn, lookupAbn, type AbnResult } from "./abn-lookup";
  *   Active or Cancelled, GST from and to, state and postcode.
  * - GST on his pay comes from the lookup only. Registered today means GST is
  *   added; anything else means none.
- * - It passes when the ABN is Active and his own name or the trading name on
- *   his card matches the legal name or a business name on the ABN, ignoring
- *   Pty Ltd, Ltd, capitals and punctuation. He can't invoice from his phone
- *   until it passes.
+ * - It passes when the ABN is Active and his short name, his full name or
+ *   the trading name on his card matches the legal name or a business name
+ *   on the ABN, ignoring Pty Ltd, Ltd, capitals and punctuation (notes
+ *   18.66, see abn-names.ts). He can't invoice from his phone until it passes.
  * - Bills, pay and Xero carry the legal name, plus "t/a" his business name.
- *   His own name stays on Schedule, Crew, the phone and texts.
+ *   His short name stays on Schedule, Crew, the phone and texts.
  * ------------------------------------------------------------------------- */
 
 type Installer = typeof schema.installers.$inferSelect;
 
-/** Lower case, no punctuation, no Pty, Ltd, Limited or Proprietary. */
-export function normName(value: string | null | undefined) {
-  return (value ?? "")
-    .toLowerCase()
-    .replace(/&/g, " and ")
-    .replace(/[^a-z0-9 ]+/g, " ")
-    .split(/\s+/)
-    .filter((w) => w && !["pty", "ltd", "limited", "proprietary"].includes(w))
-    .join(" ");
-}
+export { abnDate, normName, namesMatch } from "./abn-names";
+export type { AbnState } from "./abn-names";
 
 export function abnNames(i: Pick<Installer, "abnBusinessNames">): string[] {
   try {
@@ -41,34 +34,12 @@ export function abnNames(i: Pick<Installer, "abnBusinessNames">): string[] {
   }
 }
 
-/** "1 May 2025" for a register date. */
-export function abnDate(iso: string | null | undefined) {
-  if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return iso ?? "";
-  return new Date(`${iso.slice(0, 10)}T00:00:00Z`).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
-}
-
 /** Is GST on today, by the register's dates. */
 export function gstOnToday(status: string | null, gstFrom: string | null, gstTo: string | null, today = localDate()) {
   if (status !== "Active" || !gstFrom) return false;
   if (gstFrom > today) return false;
   return !gstTo || gstTo >= today;
 }
-
-/** Does the card's name match the ABN. Null when there is nothing to compare yet. */
-export function namesMatch(
-  card: { name: string; tradingName: string | null },
-  abr: { legalName: string | null; entityType?: string | null; businessNames: string[] },
-) {
-  if (!abr.legalName) return null;
-  const theirs = new Set([abr.legalName, ...abr.businessNames].map(normName).filter(Boolean));
-  // A sole trader's middle names are left out of the compare.
-  const parts = normName(abr.legalName).split(" ");
-  if (/individual|sole trader/i.test(abr.entityType ?? "") && parts.length > 2) theirs.add(`${parts[0]} ${parts[parts.length - 1]}`);
-  const ours = [card.name, card.tradingName].map(normName).filter(Boolean);
-  return ours.some((n) => theirs.has(n));
-}
-
-export type AbnState = "missing" | "unchecked" | "active" | "cancelled" | "not_found" | "invalid" | "error";
 
 export type AbnCheckView = {
   abn: string | null;
@@ -105,8 +76,8 @@ export function businessNameFor(i: Pick<Installer, "tradingName" | "abnLegalName
   return fromAbn ?? null;
 }
 
-export function billNameFor(i: Pick<Installer, "name" | "tradingName" | "abnLegalName" | "abnBusinessNames">) {
-  if (!i.abnLegalName) return (i.tradingName ?? "").trim() || i.name;
+export function billNameFor(i: Pick<Installer, "name" | "fullName" | "tradingName" | "abnLegalName" | "abnBusinessNames">) {
+  if (!i.abnLegalName) return (i.tradingName ?? "").trim() || (i.fullName ?? "").trim() || i.name;
   const t = businessNameFor(i);
   return t ? `${i.abnLegalName} t/a ${t}` : i.abnLegalName;
 }
@@ -114,8 +85,6 @@ export function billNameFor(i: Pick<Installer, "name" | "tradingName" | "abnLega
 export function abnView(i: Installer): AbnCheckView {
   const names = abnNames(i);
   const hasAbn = abnDigits(i.abn).length > 0;
-  const match = namesMatch({ name: i.name, tradingName: i.tradingName }, { legalName: i.abnLegalName, entityType: i.abnEntityType, businessNames: names });
-  const mismatch = match === false;
   let state: AbnState;
   if (!hasAbn) state = "missing";
   else if (i.abnStatus === "Active") state = "active";
@@ -125,23 +94,10 @@ export function abnView(i: Installer): AbnCheckView {
   else if (i.abnCheckError) state = "error";
   else state = "unchecked";
 
-  const passes = state === "active" && !mismatch;
-  const warning =
-    state === "missing"
-      ? "No ABN on his card."
-      : state === "unchecked"
-        ? "Not checked yet."
-        : state === "error"
-          ? `Could not check: ${i.abnCheckError}`
-          : state === "cancelled"
-            ? `ABN cancelled${i.abnStatusFrom ? ` from ${abnDate(i.abnStatusFrom)}` : ""}.`
-            : state === "not_found"
-              ? "ABN not found on the register."
-              : state === "invalid"
-                ? "Not a valid ABN."
-                : mismatch
-                  ? "Name does not match the ABN. Neither his name nor his trading name matches the legal name or a business name."
-                  : null;
+  const { passes, mismatch, warning } = abnVerdict(
+    { state, statusFrom: i.abnStatusFrom, checkError: i.abnCheckError, legalName: i.abnLegalName, entityType: i.abnEntityType, businessNames: names },
+    { name: i.name, fullName: i.fullName, tradingName: i.tradingName },
+  );
 
   return {
     abn: i.abn,
