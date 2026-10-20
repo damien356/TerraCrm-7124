@@ -197,7 +197,10 @@ function InvoiceRow({
           >
             #{row.invoiceNumber}
           </button>
-          <p className="text-xs text-muted-foreground">{row.tradingName || row.installerName}</p>
+          <p className="text-xs text-muted-foreground">
+            {/* Notes 18.64: legal name t/a business name. Bills from before have no legal name. */}
+            {row.legalName ? (row.tradingName ? `${row.legalName} t/a ${row.tradingName}` : row.legalName) : row.tradingName || row.installerName}
+          </p>
         </td>
         <td className="px-4 py-2.5 text-[13px]">{installerName(row.installerId)}</td>
         <td className="px-4 py-2.5 text-xs text-muted-foreground">
@@ -261,8 +264,8 @@ function InvoiceRow({
                     <dd>{row.abn || "not on file"}</dd>
                   </div>
                   <div className="flex justify-between gap-4">
-                    <dt className="text-muted-foreground">GST registered</dt>
-                    <dd>{row.gstRegistered ? "Yes" : "No"}</dd>
+                    <dt className="text-muted-foreground">GST</dt>
+                    <dd>{row.gstRegistered ? "GST registered" : "Not GST registered"}</dd>
                   </div>
                   <div className="flex justify-between gap-4">
                     <dt className="text-muted-foreground">Address</dt>

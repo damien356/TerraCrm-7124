@@ -7,6 +7,8 @@ import { adminOnly, staffOnly } from "../middleware/auth";
 import { blockedInstallerIds } from "../lib/availability";
 import { installerLogoKey, signGet, signPut } from "../lib/s3";
 import { taskForStaff } from "../lib/staff-view";
+import { abnChangeColumns, abnView, checkInstallerAbn, hideAbnCheck } from "../lib/abn-check";
+import { abnDigits } from "../lib/abn-lookup";
 
 /**
  * Skills are TICKS on the installer card (`installer_skills`) with a per-skill
@@ -48,7 +50,7 @@ export const installers = {
       const taskCounts = new Map(openTasks.map((t) => [t.installerId, Number(t.count)]));
 
       return rows.map((installer) => ({
-        ...installer,
+        ...(isAdmin ? installer : hideAbnCheck(installer)),
         ...(isAdmin ? {} : { creditLimit: 0, bankAccountName: null, bankBsb: null, bankAccountNumber: null }),
         unavailableDays: safeDays(installer.unavailableDays),
         worksWeekendDays: safeDays(installer.worksWeekendDays),
@@ -110,11 +112,13 @@ export const installers = {
 
     return {
       installer: {
-        ...installer,
+        ...(isAdmin ? installer : hideAbnCheck(installer)),
         unavailableDays: safeDays(installer.unavailableDays),
         worksWeekendDays: safeDays(installer.worksWeekendDays),
         ...(isAdmin ? {} : { creditLimit: 0, bankAccountName: null, bankBsb: null, bankAccountNumber: null }),
       },
+      /** Notes 18.64: the ABN check. Admin only, null for Office. */
+      abnCheck: isAdmin ? abnView(installer) : null,
       invoicing: {
         raised: Number(invoiceStats[0]?.count ?? 0),
         lastNumber: invoiceStats[0]?.lastNumber ?? null,
@@ -155,7 +159,12 @@ export const installers = {
       }),
     )
     .handler(async ({ input }) => {
-      const [row] = await db.insert(schema.installers).values(input).returning();
+      const [row] = await db
+        .insert(schema.installers)
+        .values({ ...input, ...abnChangeColumns(input.abn) })
+        .returning();
+      // Notes 18.64: an ABN typed on a new card is looked up straight away.
+      if (row && abnDigits(row.abn)) return (await checkInstallerAbn(row.id)) ? (await reread(row.id)) ?? row : row;
       return row;
     }),
 
@@ -180,6 +189,7 @@ export const installers = {
         starRating: z.number().int().min(1).max(5).optional(),
         creditLimit: z.number().min(0).optional(),
         tradingName: z.string().nullable().optional(),
+        /** Notes 18.64: GST comes from the ABN lookup. Only accepted when it is no change. */
         gstRegistered: z.boolean().optional(),
         businessAddress: z.string().nullable().optional(),
         invoiceEmail: z.string().nullable().optional(),
@@ -191,18 +201,27 @@ export const installers = {
       }),
     )
     .handler(async ({ input }) => {
-      const { id, unavailableDays, worksWeekendDays, ...rest } = input;
-      const [row] = await db
+      const { id, unavailableDays, worksWeekendDays, gstRegistered, ...rest } = input;
+      const [current] = await db.select().from(schema.installers).where(eq(schema.installers.id, id));
+      if (!current) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
+      if (gstRegistered !== undefined && gstRegistered !== current.gstRegistered) {
+        throw new ORPCError("BAD_REQUEST", { message: "GST is set by the ABN lookup only. It can't be changed by hand." });
+      }
+      // Notes 18.64: a new ABN clears the old lookup and is looked up again below.
+      const abnChanged = rest.abn !== undefined && abnDigits(rest.abn) !== abnDigits(current.abn);
+      const [updated] = await db
         .update(schema.installers)
         .set({
           ...rest,
+          ...(abnChanged ? abnChangeColumns(rest.abn) : rest.abn !== undefined ? { abn: current.abn } : {}),
           ...(unavailableDays ? { unavailableDays: JSON.stringify(unavailableDays) } : {}),
           ...(worksWeekendDays ? { worksWeekendDays: JSON.stringify([...new Set(worksWeekendDays)].sort()) } : {}),
           updatedAt: new Date(),
         })
         .where(eq(schema.installers.id, id))
         .returning();
-      if (!row) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
+      if (!updated) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
+      const row = abnChanged && abnDigits(updated.abn) && (await checkInstallerAbn(id)) ? ((await reread(id)) ?? updated) : updated;
       // One person, one record: name, phone and email live on the login too.
       const sync = {
         ...(rest.name !== undefined ? { name: rest.name } : {}),
@@ -375,4 +394,9 @@ function safeDays(raw: string): number[] {
   } catch {
     return [];
   }
+}
+
+async function reread(id: number) {
+  const [row] = await db.select().from(schema.installers).where(eq(schema.installers.id, id));
+  return row ?? null;
 }

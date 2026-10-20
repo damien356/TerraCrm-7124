@@ -10,6 +10,7 @@ import { ownTaskOrThrow } from "./field";
 import { getObject, invoicePdfKey, putObject, signGet } from "../lib/s3";
 import { renderInvoicePdf, type InvoiceLineItem } from "../lib/invoicePdf";
 import { sendEmail } from "../lib/email";
+import { abnView } from "../lib/abn-check";
 
 /**
  * The installer's own invoice to Terra for a completed task. Installers can
@@ -20,6 +21,9 @@ import { sendEmail } from "../lib/email";
  */
 
 const BILLING_EMAIL = "billing@terraflooring.com.au";
+
+/** Notes 18.64: neutral on purpose. He never sees the check itself. */
+const ABN_BLOCK = "Ask Terra office to check your ABN before you invoice.";
 
 async function taskInvoiceContext(taskId: number, installerId: number) {
   const task = await ownTaskOrThrow(taskId, installerId);
@@ -88,6 +92,7 @@ export const installerInvoices = {
       .where(and(eq(schema.installerInvoices.taskId, input.taskId), eq(schema.installerInvoices.installerId, context.installerId)));
 
     const logoUrl = installer.logoUrl ? await signGet(installer.logoUrl) : null;
+    const abn = abnView(installer);
 
     return {
       alreadySubmitted: !!existing,
@@ -96,19 +101,20 @@ export const installerInvoices = {
       /** Submitted is not the same as received. The screen says which of the two. */
       emailedToTerra: existing ? !!existing.emailedToTerraAt : false,
       emailError: existing?.emailError ?? null,
-      canSubmit: !existing && installer.nextInvoiceNumber != null && (!installer.gstRegistered || !!installer.abn),
+      canSubmit: !existing && installer.nextInvoiceNumber != null && abn.passes,
       blockedReason: existing
         ? null
         : installer.nextInvoiceNumber == null
           ? "Terra office hasn't set up your invoice numbering yet. Ask them to enable invoicing before you submit."
-          : installer.gstRegistered && !installer.abn
-            ? "You're marked as GST registered but have no ABN on file. Ask Terra office to add it."
+          : !abn.passes
+            ? ABN_BLOCK
             : !installer.bankBsb || !installer.bankAccountNumber || !installer.bankAccountName
               ? "Add your bank details before submitting an invoice."
               : null,
       job: { number: jobRef(job), ref: taskRef(jobRef(job), task.seq), siteAddress: site?.address ?? null, taskTitle: task.title },
       profile: {
-        tradingName: installer.tradingName,
+        // Notes 18.64: the name his bill goes out in, legal name t/a his business name.
+        tradingName: abn.billName,
         installerName: installer.name,
         abn: installer.abn,
         gstRegistered: installer.gstRegistered,
@@ -147,9 +153,8 @@ export const installerInvoices = {
     if (installer.nextInvoiceNumber == null) {
       throw new ORPCError("BAD_REQUEST", { message: "Terra office hasn't set up your invoice numbering yet." });
     }
-    if (installer.gstRegistered && !installer.abn) {
-      throw new ORPCError("BAD_REQUEST", { message: "An ABN is required on file before a GST-registered invoice can be submitted." });
-    }
+    const abn = abnView(installer);
+    if (!abn.passes) throw new ORPCError("BAD_REQUEST", { message: ABN_BLOCK });
     if (!installer.bankBsb || !installer.bankAccountNumber || !installer.bankAccountName) {
       throw new ORPCError("BAD_REQUEST", { message: "Bank details are required before submitting an invoice." });
     }
@@ -173,8 +178,9 @@ export const installerInvoices = {
     const pdfBuffer = await renderInvoicePdf({
       invoiceNumber,
       invoiceDate: now.toISOString().slice(0, 10),
-      tradingName: installer.tradingName ?? "",
+      tradingName: abn.businessName ?? "",
       installerName: installer.name,
+      legalName: abn.legalName,
       abn: installer.abn,
       gstRegistered: installer.gstRegistered,
       businessAddress: installer.businessAddress,
@@ -206,8 +212,9 @@ export const installerInvoices = {
         installerId: context.installerId,
         invoiceNumber,
         status: "submitted",
-        tradingName: installer.tradingName ?? "",
+        tradingName: abn.businessName ?? "",
         installerName: installer.name,
+        legalName: abn.legalName,
         abn: installer.abn,
         gstRegistered: installer.gstRegistered,
         businessAddress: installer.businessAddress,
@@ -243,7 +250,7 @@ export const installerInvoices = {
     }
 
     const attachments = [{ filename: `invoice-${invoiceNumber}.pdf`, content: pdfBuffer.toString("base64") }];
-    const subject = `Invoice #${invoiceNumber} from ${installer.tradingName || installer.name}, Job #${jobRef(job)}`;
+    const subject = `Invoice #${invoiceNumber} from ${abn.billName}, Job #${jobRef(job)}`;
     const bodyHtml = `<p>Invoice #${invoiceNumber} for job ${jobRef(job)}, task ${taskRef(jobRef(job), task.seq)} "${task.title}".</p><p>Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.</p>`;
     const bodyText = `Invoice #${invoiceNumber} for job ${jobRef(job)}, task ${taskRef(jobRef(job), task.seq)} "${task.title}". Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.`;
 
@@ -309,7 +316,7 @@ export const installerInvoices = {
     const [jobRow] = row.jobId ? await db.select({ number: schema.jobs.number, displayNumber: schema.jobs.displayNumber }).from(schema.jobs).where(eq(schema.jobs.id, row.jobId)) : [];
     const jobNo = jobRow ? jobRef(jobRow) : String(row.jobNumber);
     const attachments = [{ filename: `invoice-${row.invoiceNumber}.pdf`, content: pdfBuffer.toString("base64") }];
-    const subject = `Invoice #${row.invoiceNumber} from ${row.tradingName || row.installerName}, Job #${jobNo}`;
+    const subject = `Invoice #${row.invoiceNumber} from ${billNameOf(row)}, Job #${jobNo}`;
     const bodyHtml = `<p>Invoice #${row.invoiceNumber} for job #${jobNo}, task "${row.taskTitle}".</p><p>Total: ${row.total.toFixed(2)}${row.gstRegistered ? " inc GST" : ""}.</p>`;
     const bodyText = `Invoice #${row.invoiceNumber} for job #${jobNo}, task "${row.taskTitle}". Total: ${row.total.toFixed(2)}${row.gstRegistered ? " inc GST" : ""}.`;
 
@@ -462,3 +469,9 @@ export const installerInvoices = {
       return row;
     }),
 };
+
+/** The name a stored bill went out in. Bills from before notes 18.64 have no legal name. */
+export function billNameOf(row: { legalName: string | null; tradingName: string; installerName: string }) {
+  if (!row.legalName) return row.tradingName || row.installerName;
+  return row.tradingName ? `${row.legalName} t/a ${row.tradingName}` : row.legalName;
+}

@@ -21,6 +21,7 @@ import {
 import { pushToOffice } from "./push";
 import { isLiveServer } from "./runtime";
 import { feesWaiting } from "./referral-fees";
+import { openAbnTasks } from "./abn-check";
 
 /* ---------------------------------------------------------------------------
  * Telling the office something happened. Fix list 11 Oct, item 15.
@@ -221,9 +222,10 @@ export async function buildDailySummary(now = new Date()) {
   const overdueTasks = tasks.filter((t) => t.dueDate && t.dueDate < today);
   const otherTasks = tasks.filter((t) => !(t.dueDate && t.dueDate < today));
   const referralFees = await referralLine();
+  const abnChecks = await abnLine();
   // Notes 18.56: client prep. Imported here, not at the top, because lib/prep imports this file.
   const prep = await (await import("./prep")).prepForSummary(now);
-  return { today, overdueTasks, otherTasks, todayJobs, lateCrew, lateInvoices, recentAlerts, referralFees, prep };
+  return { today, overdueTasks, otherTasks, todayJobs, lateCrew, lateInvoices, recentAlerts, referralFees, prep, abnChecks };
 }
 
 /**
@@ -235,17 +237,36 @@ async function referralLine() {
   try {
     const w = await feesWaiting();
     if (!w.count && !w.flagged) return null;
-    const to = (await notifySettings()).emailTo
-      .split(/[,;\s]+/)
-      .map((x) => x.trim().toLowerCase())
-      .filter(Boolean);
-    const admins = to.length
-      ? await db.select({ email: schema.profiles.email }).from(schema.profiles).where(and(eq(schema.profiles.role, "admin"), inArray(sql`lower(${schema.profiles.email})`, to)))
-      : [];
-    const adminOnly = to.length > 0 && to.every((x) => admins.some((a) => a.email.trim().toLowerCase() === x));
-    return { ...w, showAmount: adminOnly };
+    return { ...w, showAmount: await everyRecipientAdmin() };
   } catch (e) {
     console.error("[notify] referral line failed:", (e as Error).message ?? e);
+    return null;
+  }
+}
+
+/** True only when every address the summary goes to is an Admin's. */
+async function everyRecipientAdmin() {
+  const to = (await notifySettings()).emailTo
+    .split(/[,;\s]+/)
+    .map((x) => x.trim().toLowerCase())
+    .filter(Boolean);
+  const admins = to.length
+    ? await db.select({ email: schema.profiles.email }).from(schema.profiles).where(and(eq(schema.profiles.role, "admin"), inArray(sql`lower(${schema.profiles.email})`, to)))
+    : [];
+  return to.length > 0 && to.every((x) => admins.some((a) => a.email.trim().toLowerCase() === x));
+}
+
+/**
+ * Notes 18.64: open ABN check tasks, one line like the referral fees. The
+ * names only go in when the summary goes to Admins only. Never throws.
+ */
+async function abnLine() {
+  try {
+    const open = await openAbnTasks();
+    if (!open.length) return null;
+    return { count: open.length, titles: (await everyRecipientAdmin()) ? open.map((t) => t.title) : [] };
+  } catch (e) {
+    console.error("[notify] ABN line failed:", (e as Error).message ?? e);
     return null;
   }
 }
@@ -312,6 +333,15 @@ export function dailySummaryText(s: Awaited<ReturnType<typeof buildDailySummary>
     if (r.count) parts.push(`Referral fees waiting to be paid: ${r.count}${r.showAmount ? `, ${money(r.total)} ex GST` : ""}.`);
     if (r.flagged) parts.push(`Referral fees for you to decide: ${r.flagged}.`);
     out.push("REFERRAL FEES\n" + parts.join("\n") + "\nFinance, Referrers owed.");
+  }
+  const a = s.abnChecks;
+  if (a?.count) {
+    out.push(
+      "ABN CHECKS\n" +
+        `Installer ABN changes for you to look at: ${a.count}.` +
+        (a.titles.length ? `\n${a.titles.map((t) => t.replace(/^ABN check: /, "")).join("\n")}` : "") +
+        "\nPeople, ABN checks.",
+    );
   }
   return out;
 }

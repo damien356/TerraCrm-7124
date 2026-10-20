@@ -86,6 +86,8 @@ import { fieldPrep } from "./routes/fieldPrep";
 import { handleInboundSms, inboundSecretOk } from "./lib/sms-inbound";
 import { takeLead, type LeadFile } from "./lib/lead-intake";
 import { bootTimberRepair } from "./lib/timber-repair";
+import { bootAbnRecheck } from "./lib/abn-recheck";
+import { abnCheck } from "./routes/abnCheck";
 import { leads } from "./routes/leads";
 import { timber } from "./routes/timber";
 
@@ -103,6 +105,8 @@ export const router = {
   companies,
   sites,
   installers,
+  /** Notes 18.64: ABN Lookup on installer cards, Admin only. */
+  abnCheck,
   /** Blackout dates — typed in plain English, enforced server-side. */
   availability,
   jobs,
@@ -396,5 +400,7 @@ bootPrep();
 bootCareEngine();
 // Timber repairs: pushes the office when Marc has not priced one in 2 hours. Same gate.
 bootTimberRepair();
+// The monthly ABN recheck on installer cards (notes 18.64). Same gate.
+bootAbnRecheck();
 
 export default app;

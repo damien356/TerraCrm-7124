@@ -20,6 +20,7 @@ import {
   useUnavailability,
 } from "../queries/availability";
 import { dayOf } from "@/lib/utils";
+import { AbnField, abnDay, abnShort } from "../components/abn-check";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -306,7 +307,6 @@ function InstallerInvoicingTab({ id }: { id: number }) {
   const [uploading, setUploading] = React.useState(false);
   const [form, setForm] = React.useState<{
     tradingName: string;
-    gstRegistered: boolean;
     abn: string;
     businessAddress: string;
     invoiceEmail: string;
@@ -319,12 +319,12 @@ function InstallerInvoicingTab({ id }: { id: number }) {
 
   const installer = detail.data?.installer;
   const invoicing = detail.data?.invoicing;
+  const abnCheck = detail.data?.abnCheck ?? null;
 
   React.useEffect(() => {
     if (!installer) return;
     setForm({
       tradingName: installer.tradingName ?? "",
-      gstRegistered: installer.gstRegistered,
       abn: installer.abn ?? "",
       businessAddress: installer.businessAddress ?? "",
       invoiceEmail: installer.invoiceEmail ?? installer.email ?? "",
@@ -370,7 +370,6 @@ function InstallerInvoicingTab({ id }: { id: number }) {
       await update.mutateAsync({
         id,
         tradingName: form.tradingName.trim() || null,
-        gstRegistered: form.gstRegistered,
         abn: form.abn.trim() || null,
         businessAddress: form.businessAddress.trim() || null,
         invoiceEmail: form.invoiceEmail.trim() || null,
@@ -391,7 +390,7 @@ function InstallerInvoicingTab({ id }: { id: number }) {
   const locked = invoicing.raised > 0;
   const blockers: string[] = [];
   if (installer?.nextInvoiceNumber == null) blockers.push("no starting invoice number");
-  if (form.gstRegistered && !form.abn.trim()) blockers.push("GST registered with no ABN");
+  if (abnCheck && !abnCheck.passes) blockers.push(abnShort(abnCheck));
   if (!form.bankAccountName.trim() || !form.bankBsb.trim() || !form.bankAccountNumber.trim())
     blockers.push("bank details incomplete");
 
@@ -417,15 +416,23 @@ function InstallerInvoicingTab({ id }: { id: number }) {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Trading / business name" hint="Printed at the top of his invoice. Falls back to his own name.">
+        <Field label="Trading / business name" hint="His bills go out in the legal name on his ABN, then t/a this name. Empty uses the first business name on his ABN.">
           <Input
             value={form.tradingName}
             placeholder={installer?.name ?? ""}
             onChange={(e) => set("tradingName", e.target.value)}
           />
         </Field>
-        <Field label="ABN">
-          <Input value={form.abn} onChange={(e) => set("abn", e.target.value)} />
+        <Field label="ABN" className="sm:col-span-2">
+          <AbnField
+            installerId={id}
+            value={form.abn}
+            onChange={(v) => set("abn", v)}
+            savedAbn={installer?.abn ?? null}
+            name={installer?.name ?? ""}
+            tradingName={form.tradingName.trim() || null}
+            check={abnCheck}
+          />
         </Field>
         <Field label="Business / home address" className="sm:col-span-2">
           <Textarea rows={2} value={form.businessAddress} onChange={(e) => set("businessAddress", e.target.value)} />
@@ -433,15 +440,14 @@ function InstallerInvoicingTab({ id }: { id: number }) {
         <Field label="Invoice email" hint="His copy of every submitted invoice lands here.">
           <Input value={form.invoiceEmail} onChange={(e) => set("invoiceEmail", e.target.value)} />
         </Field>
-        <Field label="GST" hint="GST is only ever added if he's registered for it.">
-          <label htmlFor="installer-gst-registered" className="flex h-9 items-center gap-2 text-sm">
-            <Checkbox
-              id="installer-gst-registered"
-              checked={form.gstRegistered}
-              onChange={(e) => set("gstRegistered", e.target.checked)}
-            />
-            Registered for GST
-          </label>
+        <Field label="GST" hint="Set by the ABN lookup only. GST is added to his pay only when he's registered.">
+          <p className="flex h-9 items-center text-sm font-medium">
+            {installer?.gstRegistered && abnCheck?.passes
+              ? `GST registered${abnCheck.gstFrom ? ` from ${abnDay(abnCheck.gstFrom)}` : ""}`
+              : installer?.gstRegistered
+                ? "GST registered, waiting on his ABN to pass"
+                : "Not GST registered"}
+          </p>
         </Field>
       </div>
 
@@ -670,8 +676,16 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
             <Field label="Service area">
               <Input value={form.serviceArea} onChange={(e) => set("serviceArea", e.target.value)} />
             </Field>
-            <Field label="ABN">
-              <Input value={form.abn} onChange={(e) => set("abn", e.target.value)} />
+            <Field label="ABN" className="sm:col-span-2">
+              <AbnField
+                installerId={id}
+                value={form.abn}
+                onChange={(v) => set("abn", v)}
+                savedAbn={installer?.abn ?? null}
+                name={form.name}
+                tradingName={installer?.tradingName ?? null}
+                check={detail.data?.abnCheck ?? null}
+              />
             </Field>
             <Field label="Insurance expiry">
               <Input

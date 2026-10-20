@@ -17,6 +17,7 @@ import {
   useUpdatePerson,
 } from "../queries/team";
 import { InstallerPanel } from "./installers";
+import { AbnChaseList } from "../components/abn-check";
 import { useRevokeVoiceKey, useVoiceKeys } from "../queries/visits";
 import { EmailInput } from "../components/email-input";
 import { useSendInvite, useSetPassword } from "../queries/invites";
@@ -267,6 +268,7 @@ export default function TeamPage() {
 
       <AddPersonModal open={adding} onClose={() => setAdding(false)} />
 
+      <AbnChaseList onOpen={setOpenId} />
       <VoiceKeys />
       <PhoneProblems />
       {openId !== null ? <InstallerPanel id={openId} onClose={() => setOpenId(null)} /> : null}
