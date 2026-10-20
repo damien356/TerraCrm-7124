@@ -2,6 +2,7 @@ import * as React from "react";
 import { ClientQuotesCard } from "../components/quote-copy";
 import { ReferrerSection } from "../components/referrals";
 import { useBootstrap } from "../queries/settings";
+import { BuyerTradeTab } from "../components/trade/buyer-tab";
 import { Link, useParams } from "wouter";
 import { ArrowLeft, Building2, Mail, MapPin, Phone, Trash2 } from "lucide-react";
 import { Page } from "../components/layout";
@@ -278,6 +279,7 @@ export default function ContactDetailPage() {
           <ClientQuotesCard contactId={c.id} />
 
           {isAdmin ? <ReferrerSection contactId={c.id} /> : null}
+          {isAdmin ? <BuyerTradeTab kind="contact" refId={c.id} /> : null}
 
           <Card>
             <CardHeader title="History" />

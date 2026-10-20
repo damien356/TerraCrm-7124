@@ -1,5 +1,6 @@
 import * as React from "react";
 import { AlertTriangle, CalendarClock, ChevronLeft, PackageCheck, Search, Tag, TrendingDown } from "lucide-react";
+import { Link } from "wouter";
 import { Page } from "../components/layout";
 import { SwatchEditor } from "../components/product-swatch";
 import { Card, CardHeader, Empty, Loading, Stat } from "../components/ui/card";
@@ -21,6 +22,7 @@ import {
   useSetProductFibre,
 } from "../queries/products";
 import { PRODUCT_CATEGORIES, PRODUCT_CATEGORY_LABELS } from "../../api/lib/product-categories";
+import { useBootstrap } from "../queries/settings";
 import { FIBRES, FIBRE_LABELS, PILES, PILE_LABELS } from "../../api/lib/care-codes";
 import { boardSizeText } from "../../api/lib/board-size";
 
@@ -1092,6 +1094,7 @@ function SpecialsTab({ onSelect }: { onSelect: (id: number) => void }) {
 /* ---------------------------------- page ---------------------------------- */
 
 export default function ProductsPage() {
+  const isAdmin = useBootstrap().data?.actor.role === "admin";
   const [tab, setTab] = React.useState<"book" | "specials">("book");
   const [range, setRange] = React.useState<{ supplierId: number | null; range: string } | null>(null);
   const [search, setSearch] = React.useState("");
@@ -1125,6 +1128,12 @@ export default function ProductsPage() {
             Specials
             {board.data?.counts.live ? ` (${board.data.counts.live})` : ""}
           </Button>
+          {/* Trade sales (notes 18.65): Admin only. */}
+          {isAdmin ? (
+            <Link href="/finance/trade?tab=products">
+              <Button variant="ghost">Trade list</Button>
+            </Link>
+          ) : null}
         </>
       }
     >

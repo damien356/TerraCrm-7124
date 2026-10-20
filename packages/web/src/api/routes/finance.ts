@@ -7,6 +7,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { cardDepositChanged, quoteBillTo } from "../lib/bill-to";
 import { adminOnly } from "../middleware/auth";
+import { tradeCashTotals } from "../lib/trade-pay";
 import { costCashOut, costHasGst, exGst } from "../lib/gst";
 import { termsOf } from "../lib/supplier-terms";
 import {
@@ -758,6 +759,14 @@ export const finance = {
         overdue: r.e.dueDate < now,
       }));
     }),
+
+  /**
+   * Trade materials receipts for Admin financial totals. Cash in less refunds,
+   * by method. Offsets are shown apart because they are not cash.
+   */
+  tradeReceipts: adminOnly
+    .input(z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+    .handler(({ input }) => tradeCashTotals(input.from, input.to)),
 
   /* ------------------------------ invoices ------------------------------ */
 

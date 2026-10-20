@@ -1,6 +1,7 @@
 import { Resend } from "resend";
 import { inDemo } from "../database";
 import { SENDERS } from "./senders";
+import { captureEmail } from "./email-capture";
 
 /* ---------------------------------------------------------------------------
  * Terra's outbound email. ONE pipe, and every marketing send in the app goes
@@ -125,6 +126,9 @@ export async function sendEmail({
   references,
   attachments,
 }: SendArgs): Promise<SendOutcome> {
+  /* Test runs write the email to a folder and send nothing (notes 18.65). */
+  const captured = captureEmail({ via: "relay", from, to, subject, text, html, attachments: attachments?.map((a) => ({ filename: a.filename, content: Buffer.from(a.content, "base64") })) });
+  if (captured) return { ok: true, providerId: `captured-${captured}` };
   if (!emailConfigured()) return { ok: false, deferred: true, reason: "RESEND_API_KEY not set" };
   /* The Google Play reviewer's demo: the screen behaves as if it sent, nothing leaves. */
   if (inDemo()) return { ok: true, providerId: "demo-not-sent" };

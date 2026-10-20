@@ -9,6 +9,7 @@ import { installerLogoKey, signGet, signPut } from "../lib/s3";
 import { taskForStaff } from "../lib/staff-view";
 import { abnChangeColumns, abnView, checkInstallerAbn, hideAbnCheck } from "../lib/abn-check";
 import { abnDigits } from "../lib/abn-lookup";
+import { clearEntityOnAbnChange } from "../lib/trade-sales";
 
 /**
  * Skills are TICKS on the installer card (`installer_skills`) with a per-skill
@@ -222,6 +223,8 @@ export const installers = {
         .returning();
       if (!updated) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
       const row = abnChanged && abnDigits(updated.abn) && (await checkInstallerAbn(id)) ? ((await reread(id)) ?? updated) : updated;
+      // A changed ABN clears the trade "same entity" check, so offsets stop until Admin verifies again.
+      if (abnChanged) await clearEntityOnAbnChange(id, rest.abn);
       // One person, one record: name, phone and email live on the login too.
       const sync = {
         ...(rest.name !== undefined ? { name: rest.name } : {}),

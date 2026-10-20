@@ -24,6 +24,7 @@ import { checkSignature, signatureInput, tidySignature } from "../lib/signature"
 import { SUPPLY_TERMS, SUPPLY_TERMS_TITLE, SUPPLY_TERMS_VERSION } from "../lib/supplyTerms";
 import { cardPaymentsOn, checkoutForInvoice, confirmSession, invoiceIdFromToken, owingOn, payUrl } from "../lib/stripe";
 import { INVOICE_KIND_LABEL } from "../lib/client-invoices";
+import { confirmTradeSession, publicTradeState, saleIdFromToken, tradeCheckout } from "../lib/trade-pay";
 import { publicVariation } from "./publicVariation";
 
 /* ---------------------------------------------------------------------------
@@ -446,4 +447,41 @@ const payPage = {
     }),
 };
 
-export const publicPages = { quote: quotePage, selection: selectionPage, pay: payPage, variation: publicVariation };
+/* ------------------------- trade invoice by card ------------------------- */
+/* /tp/<token>: totals only. No lines, costs, offsets or other buyers (notes 18.65).
+ * Keeps working when Trade sales is switched off, so no buyer money is lost. */
+
+function tradeSaleForToken(token: string) {
+  const id = saleIdFromToken(token);
+  if (!id) throw notFound();
+  return id;
+}
+
+const tradePay = {
+  get: withUser.input(z.object({ token: z.string().min(1).max(80) })).handler(async ({ input }) => {
+    const state = await publicTradeState(tradeSaleForToken(input.token));
+    if (!state) throw notFound();
+    return { ...state, bank: bank() };
+  }),
+  checkout: withUser.input(z.object({ token: z.string().min(1).max(80) })).handler(async ({ input }) => {
+    const saleId = tradeSaleForToken(input.token);
+    if (!cardPaymentsOn()) throw bad("Card payments are not available right now. Please pay by bank transfer.");
+    try {
+      const out = await tradeCheckout(saleId);
+      return { url: out.url };
+    } catch (e) {
+      throw bad(String((e as Error)?.message ?? e).replace(/^Stripe: /, "Card payment could not start: "));
+    }
+  }),
+  confirm: withUser
+    .input(z.object({ token: z.string().min(1).max(80), sessionId: z.string().min(10).max(250) }))
+    .handler(async ({ input }) => {
+      const saleId = tradeSaleForToken(input.token);
+      const out = await confirmTradeSession(input.sessionId, saleId).catch((e) => ({ ok: false as const, reason: String((e as Error)?.message ?? e) }));
+      const state = await publicTradeState(saleId);
+      if (!state) throw notFound();
+      return { result: out.ok ? out.state : "not_confirmed", ...state, bank: bank() };
+    }),
+};
+
+export const publicPages = { quote: quotePage, selection: selectionPage, pay: payPage, tradePay, variation: publicVariation };

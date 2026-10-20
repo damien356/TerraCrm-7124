@@ -47,6 +47,9 @@ import PrepToFillPage from "./pages/prep-to-fill";
 import PublicQuotePage from "./pages/public-quote";
 import PublicSelectionPage from "./pages/public-selection";
 import PublicPayPage from "./pages/public-pay";
+import PublicTradePayPage from "./pages/public-trade-pay";
+import TradePage from "./pages/trade";
+import TradeSalePage from "./pages/trade-sale";
 import PublicVariationPage from "./pages/public-variation";
 import PublicRepairPage from "./pages/public-repair";
 import PublicAppPage from "./pages/public-app";
@@ -76,6 +79,7 @@ function App() {
         <Route path="/q/:token" component={PublicQuotePage} />
         <Route path="/m/:token" component={PublicSelectionPage} />
         <Route path="/pay/:token" component={PublicPayPage} />
+        <Route path="/tp/:token" component={PublicTradePayPage} />
         <Route path="/v/:token" component={PublicVariationPage} />
         <Route path="/r/:token" component={PublicRepairPage} />
         {/* Staff invites (notes 18.55): the app download and the one-time password set-up. */}
@@ -115,6 +119,8 @@ function App() {
               <Route path="/finance/referrers-owed" component={ReferrersOwedPage} />
               <Route path="/finance/profitability" component={ProfitabilityPage} />
               <Route path="/finance/callbacks" component={CallbacksReportPage} />
+              <Route path="/finance/trade" component={TradePage} />
+              <Route path="/finance/trade/:id" component={TradeSalePage} />
               <Route path="/reports/leads" component={LeadsReportPage} />
               <Route path="/repairs" component={RepairsPage} />
               <Route path="/repairs/:id" component={RepairDetailPage} />

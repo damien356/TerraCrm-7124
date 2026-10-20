@@ -41,6 +41,7 @@ import {
   Hammer,
   ChartColumn,
   X,
+  PackageOpen,
 } from "lucide-react";
 import { authClient } from "../lib/auth";
 import { hasAppMenu, isPhoneApp } from "../lib/phone-app";
@@ -120,6 +121,7 @@ const NAV: NavEntry[] = [
       { to: "/finance/expenses", label: "Expenses", icon: BanknoteArrowDown },
       { to: "/finance/suppliers-owed", label: "Suppliers owed", icon: HandCoins },
       { to: "/finance/referrers-owed", label: "Referrers owed", icon: Handshake },
+      { to: "/finance/trade", label: "Trade sales", icon: PackageOpen },
       { to: "/suppliers", label: "Suppliers", icon: Truck },
       { to: "/finance/profitability", label: "Profitability", icon: PieChart },
       { to: "/finance/callbacks", label: "Callbacks", icon: LifeBuoy },
@@ -162,6 +164,8 @@ const ADMIN_ONLY_PATHS = [
   "/finance/callbacks",
   "/finance/suppliers-owed",
   "/finance/referrers-owed",
+  // Trade sales (notes 18.65): Admin only, every screen and every procedure.
+  "/finance/trade",
   "/marketing",
   "/terra-ai",
   "/reports",

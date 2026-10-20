@@ -4162,3 +4162,416 @@ export const invites = sqliteTable(
   },
   (t) => [index("invites_profile_idx").on(t.profileId)],
 );
+
+/* ---------------------------------------------------------------------------
+ * Warehouse stock ledger (tables from 2026-10-06-stock.sql, already on live).
+ * ON HAND is the sum of movements for a product. Never typed in, never edited:
+ * a mistake is undone with a reversing movement. Used by trade sales (notes
+ * 18.65). The product stock columns on live are deliberately NOT declared here.
+ * ------------------------------------------------------------------------- */
+export const stockMovements = sqliteTable(
+  "stock_movements",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    productId: integer("product_id").notNull().references(() => products.id, { onDelete: "restrict" }),
+    /** opening · received · job_used · stocktake · adjustment · reversal · trade_out · trade_return (older kinds kept readable) */
+    kind: text("kind").notNull(),
+    /** Signed. In is positive, out is negative. In the product's stock unit. */
+    qty: real("qty").notNull(),
+    balanceBefore: real("balance_before").notNull(),
+    balanceAfter: real("balance_after").notNull(),
+    /** Ex GST per stock unit at the time. Admin only. */
+    unitCostExGst: real("unit_cost_ex_gst"),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    reservationId: integer("reservation_id"),
+    installerId: integer("installer_id").references(() => installers.id, { onDelete: "set null" }),
+    accountEntryId: integer("account_entry_id"),
+    poId: integer("po_id"),
+    poLineId: integer("po_line_id"),
+    stocktakeId: integer("stocktake_id"),
+    /** The row this one undoes. */
+    reversesId: integer("reverses_id"),
+    source: text("source").notNull().default("office"),
+    note: text("note").notNull().default(""),
+    byProfileId: integer("by_profile_id"),
+    byName: text("by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [
+    index("stock_movements_product_idx").on(t.productId, t.id),
+    index("stock_movements_job_idx").on(t.jobId),
+    index("stock_movements_installer_idx").on(t.installerId),
+    unique("stock_movements_reverses_uq").on(t.reversesId),
+  ],
+);
+
+/* ---------------------------------------------------------------------------
+ * Trade sales (notes 18.65, sql/2026-11-04-trade-sales.sql). Materials sold
+ * to installers and other trade buyers. Admin only, every route. Own tables
+ * and own numbering (S188000-1), never on a job or quote. Xero is not written.
+ * ------------------------------------------------------------------------- */
+export const tradeSettings = sqliteTable("trade_settings", {
+  id: integer("id").primaryKey(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+  markupPct: real("markup_pct").notNull().default(15),
+  nextNumber: integer("next_number").notNull().default(188000),
+  /** JSON array of product category names on the trade list. */
+  categories: text("categories").notNull().default("[]"),
+  /** JSON array of supplier ids on the trade list. */
+  supplierIds: text("supplier_ids").notNull().default("[]"),
+  updatedByName: text("updated_by_name").notNull().default(""),
+  ...timestamps,
+});
+
+export const tradeProductRules = sqliteTable(
+  "trade_product_rules",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    productId: integer("product_id").notNull().references(() => products.id, { onDelete: "restrict" }),
+    /** auto (follows category and supplier ticks) · include · exclude. Exclude always wins. */
+    mode: text("mode").notNull().default("auto"),
+    /** Final material rate ex GST per selling unit. Blank = cost plus the trade markup. */
+    priceOverride: real("price_override"),
+    /** Admin has confirmed this product is GST taxable at 10%. Unconfirmed cannot be finalised. */
+    gstConfirmed: integer("gst_confirmed", { mode: "boolean" }).notNull().default(false),
+    /** box · lm · m2 · each · roll. Null = worked out from the product. */
+    sellUnit: text("sell_unit"),
+    /** What one selling unit is, e.g. "4.5kg bag". */
+    unitLabel: text("unit_label").notNull().default(""),
+    /** With an override: the override already covers the supplier fees, so none are added. */
+    feesIncluded: integer("fees_included", { mode: "boolean" }).notNull().default(false),
+    updatedByName: text("updated_by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [unique("trade_product_rules_product_unique").on(t.productId)],
+);
+
+export const tradeBuyers = sqliteTable(
+  "trade_buyers",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    installerId: integer("installer_id").references(() => installers.id, { onDelete: "restrict" }),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "restrict" }),
+    companyId: integer("company_id").references(() => companies.id, { onDelete: "restrict" }),
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    /** JSON array of the categories this buyer may buy. */
+    categories: text("categories").notNull().default("[]"),
+    creditApproved: integer("credit_approved", { mode: "boolean" }).notNull().default(false),
+    creditApprovedByName: text("credit_approved_by_name"),
+    creditApprovedAt: integer("credit_approved_at", { mode: "timestamp" }),
+    termsDays: integer("terms_days").notNull().default(7),
+    /** itemised · combined ("Freight and levies"). Layout only. */
+    feePresentation: text("fee_presentation").notNull().default("itemised"),
+    /** The ABN an Admin verified as the same entity as the installer card. Cleared when the card ABN changes. */
+    entityAbn: text("entity_abn"),
+    entityVerifiedAt: integer("entity_verified_at", { mode: "timestamp" }),
+    entityVerifiedByName: text("entity_verified_by_name"),
+    notes: text("notes").notNull().default(""),
+    createdByName: text("created_by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [
+    unique("trade_buyers_installer_unique").on(t.installerId),
+    unique("trade_buyers_contact_unique").on(t.contactId),
+    unique("trade_buyers_company_unique").on(t.companyId),
+  ],
+);
+
+export const tradeSales = sqliteTable(
+  "trade_sales",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** 188000 shows as S188000. The invoice is S188000-1, credit notes -2, -3. */
+    number: integer("number").notNull(),
+    buyerId: integer("buyer_id").notNull().references(() => tradeBuyers.id, { onDelete: "restrict" }),
+    /** draft · finalised · cancelled */
+    status: text("status").notNull().default("draft"),
+    /** pay · deduct (deduct from next pay, installer buyers only) */
+    settleBy: text("settle_by").notNull().default("pay"),
+    billName: text("bill_name").notNull().default(""),
+    billAbn: text("bill_abn"),
+    billEmail: text("bill_email"),
+    billAddress: text("bill_address"),
+    /** Snapshot at finalise. Null = pay before collection. */
+    termsDays: integer("terms_days"),
+    payBeforeCollection: integer("pay_before_collection", { mode: "boolean" }).notNull().default(true),
+    feePresentation: text("fee_presentation").notNull().default("itemised"),
+    markupPct: real("markup_pct"),
+    subtotal: real("subtotal").notNull().default(0),
+    gst: real("gst").notNull().default(0),
+    total: real("total").notNull().default(0),
+    dueDate: text("due_date"),
+    finalisedAt: integer("finalised_at", { mode: "timestamp" }),
+    finalisedByName: text("finalised_by_name"),
+    sentAt: integer("sent_at", { mode: "timestamp" }),
+    sentTo: text("sent_to"),
+    cancelledAt: integer("cancelled_at", { mode: "timestamp" }),
+    cancelledByName: text("cancelled_by_name"),
+    cancelReason: text("cancel_reason"),
+    /** An Admin let goods go before payment. Reason, who, when. */
+    arrangementNote: text("arrangement_note"),
+    arrangementByName: text("arrangement_by_name"),
+    arrangementAt: integer("arrangement_at", { mode: "timestamp" }),
+    rev: integer("rev").notNull().default(0),
+    notes: text("notes").notNull().default(""),
+    createdByName: text("created_by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [unique("trade_sales_number_unique").on(t.number), index("trade_sales_buyer_idx").on(t.buyerId, t.status)],
+);
+
+export const tradeSaleLines = sqliteTable(
+  "trade_sale_lines",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    saleId: integer("sale_id").notNull().references(() => tradeSales.id, { onDelete: "restrict" }),
+    sort: integer("sort").notNull().default(0),
+    /** product · fee (a supplier fee on a product line) · delivery (typed by Admin) */
+    kind: text("kind").notNull().default("product"),
+    parentLineId: integer("parent_line_id"),
+    productId: integer("product_id").references(() => products.id, { onDelete: "restrict" }),
+    feeRuleId: integer("fee_rule_id"),
+    /** fuel · levy · baling · delivery ... from the fee rule. */
+    feeKind: text("fee_kind"),
+    description: text("description").notNull().default(""),
+    /** Colour or size, e.g. "Grey, 4.5kg bag". */
+    detail: text("detail").notNull().default(""),
+    sellUnit: text("sell_unit").notNull().default("each"),
+    unitLabel: text("unit_label").notNull().default(""),
+    qty: real("qty").notNull().default(0),
+    /** calculated · override · typed */
+    priceSource: text("price_source").notNull().default("calculated"),
+    typedReason: text("typed_reason"),
+    standardCostExGst: real("standard_cost_ex_gst"),
+    costUnit: text("cost_unit"),
+    costPerSellUnit: real("cost_per_sell_unit"),
+    stockPerSellUnit: real("stock_per_sell_unit"),
+    stockUnit: text("stock_unit"),
+    m2PerBox: real("m2_per_box"),
+    rollWidthM: real("roll_width_m"),
+    markupPct: real("markup_pct"),
+    feeCostExGst: real("fee_cost_ex_gst"),
+    unitPriceExGst: real("unit_price_ex_gst").notNull().default(0),
+    discountPct: real("discount_pct").notNull().default(0),
+    lineExGst: real("line_ex_gst").notNull().default(0),
+    gstRate: real("gst_rate").notNull().default(10),
+    gstAmount: real("gst_amount").notNull().default(0),
+    lineIncGst: real("line_inc_gst").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [index("trade_sale_lines_sale_idx").on(t.saleId, t.sort), index("trade_sale_lines_product_idx").on(t.productId)],
+);
+
+export const tradeCreditNotes = sqliteTable(
+  "trade_credit_notes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    saleId: integer("sale_id").notNull().references(() => tradeSales.id, { onDelete: "restrict" }),
+    /** 2, 3, ... on the sale. S188000-2. */
+    seq: integer("seq").notNull(),
+    reason: text("reason").notNull().default(""),
+    subtotal: real("subtotal").notNull().default(0),
+    gst: real("gst").notNull().default(0),
+    total: real("total").notNull().default(0),
+    sentAt: integer("sent_at", { mode: "timestamp" }),
+    sentTo: text("sent_to"),
+    idemKey: text("idem_key").notNull(),
+    createdByName: text("created_by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [unique("trade_credit_notes_seq_unique").on(t.saleId, t.seq), unique("trade_credit_notes_idem_unique").on(t.idemKey)],
+);
+
+export const tradeCreditLines = sqliteTable(
+  "trade_credit_lines",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    creditId: integer("credit_id").notNull().references(() => tradeCreditNotes.id, { onDelete: "restrict" }),
+    saleLineId: integer("sale_line_id").notNull().references(() => tradeSaleLines.id, { onDelete: "restrict" }),
+    qty: real("qty").notNull().default(0),
+    lineExGst: real("line_ex_gst").notNull().default(0),
+    gstAmount: real("gst_amount").notNull().default(0),
+    lineIncGst: real("line_inc_gst").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [index("trade_credit_lines_line_idx").on(t.saleLineId)],
+);
+
+export const tradePayments = sqliteTable(
+  "trade_payments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    saleId: integer("sale_id").notNull().references(() => tradeSales.id, { onDelete: "restrict" }),
+    /** payment (money in) · refund (money out) · payment_reversal · refund_reversal (a mistaken entry undone) */
+    kind: text("kind").notNull().default("payment"),
+    /** card · bank · cash · other */
+    method: text("method").notNull().default("bank"),
+    /** Always positive. `kind` carries the direction. */
+    amount: real("amount").notNull(),
+    paidDate: text("paid_date").notNull(),
+    reference: text("reference").notNull().default(""),
+    /** Stripe payment intent (payments) or refund id (refunds). Unique, so a payment lands once. */
+    stripeRef: text("stripe_ref"),
+    creditId: integer("credit_id"),
+    reversesId: integer("reverses_id"),
+    idemKey: text("idem_key").notNull(),
+    byName: text("by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [
+    unique("trade_payments_stripe_unique").on(t.stripeRef),
+    unique("trade_payments_idem_unique").on(t.idemKey),
+    unique("trade_payments_reverses_unique").on(t.reversesId),
+    index("trade_payments_sale_idx").on(t.saleId),
+  ],
+);
+
+export const tradeFulfilments = sqliteTable(
+  "trade_fulfilments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    saleId: integer("sale_id").notNull().references(() => tradeSales.id, { onDelete: "restrict" }),
+    /** collected · dispatched. Switching changes this label only, never stock. */
+    method: text("method").notNull(),
+    /** Admin let it go below zero on hand. */
+    stockOverrideReason: text("stock_override_reason"),
+    byName: text("by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [unique("trade_fulfilments_sale_unique").on(t.saleId)],
+);
+
+export const tradeReturns = sqliteTable(
+  "trade_returns",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    saleId: integer("sale_id").notNull().references(() => tradeSales.id, { onDelete: "restrict" }),
+    saleLineId: integer("sale_line_id").notNull().references(() => tradeSaleLines.id, { onDelete: "restrict" }),
+    /** In selling units. */
+    qty: real("qty").notNull(),
+    reason: text("reason").notNull().default(""),
+    idemKey: text("idem_key").notNull(),
+    byName: text("by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [unique("trade_returns_idem_unique").on(t.idemKey), index("trade_returns_line_idx").on(t.saleLineId)],
+);
+
+export const tradeStockLinks = sqliteTable(
+  "trade_stock_links",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    movementId: integer("movement_id").notNull().references(() => stockMovements.id, { onDelete: "restrict" }),
+    saleId: integer("sale_id").notNull(),
+    saleLineId: integer("sale_line_id").notNull(),
+    fulfilmentId: integer("fulfilment_id"),
+    returnId: integer("return_id"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+  },
+  (t) => [
+    unique("trade_stock_links_movement_unique").on(t.movementId),
+    unique("trade_stock_links_out_unique").on(t.saleLineId, t.fulfilmentId),
+    unique("trade_stock_links_return_unique").on(t.returnId),
+  ],
+);
+
+export const installerAgreements = sqliteTable(
+  "installer_agreements",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    installerId: integer("installer_id").notNull().references(() => installers.id, { onDelete: "restrict" }),
+    /** standing_offset (a signed standing materials offset agreement) · other */
+    kind: text("kind").notNull().default("standing_offset"),
+    title: text("title").notNull().default(""),
+    fileKey: text("file_key").notNull(),
+    filename: text("filename").notNull(),
+    signedDate: text("signed_date").notNull(),
+    validUntil: text("valid_until"),
+    note: text("note").notNull().default(""),
+    archivedAt: integer("archived_at", { mode: "timestamp" }),
+    byName: text("by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [index("installer_agreements_installer_idx").on(t.installerId)],
+);
+
+export const tradeOffsets = sqliteTable(
+  "trade_offsets",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    saleId: integer("sale_id").notNull().references(() => tradeSales.id, { onDelete: "restrict" }),
+    installerId: integer("installer_id").notNull().references(() => installers.id, { onDelete: "restrict" }),
+    /** The approved installer bill it comes off. Null until one exists. */
+    billId: integer("bill_id").references(() => installerInvoices.id, { onDelete: "restrict" }),
+    /** proposed · approved · confirmed · cancelled */
+    status: text("status").notNull().default("proposed"),
+    amount: real("amount").notNull(),
+    agreementRef: text("agreement_ref").notNull().default(""),
+    agreementId: integer("agreement_id").references(() => installerAgreements.id, { onDelete: "restrict" }),
+    agreementFileKey: text("agreement_file_key"),
+    agreementFilename: text("agreement_filename"),
+    proposedByName: text("proposed_by_name").notNull().default(""),
+    approvedByName: text("approved_by_name"),
+    approvedAt: integer("approved_at", { mode: "timestamp" }),
+    confirmedByName: text("confirmed_by_name"),
+    confirmedAt: integer("confirmed_at", { mode: "timestamp" }),
+    confirmedAmount: real("confirmed_amount"),
+    xeroRef: text("xero_ref"),
+    cancelledByName: text("cancelled_by_name"),
+    cancelledAt: integer("cancelled_at", { mode: "timestamp" }),
+    cancelReason: text("cancel_reason"),
+    /** A payment or balance clash found at confirm time. Nothing is applied while set. */
+    conflict: text("conflict"),
+    ...timestamps,
+  },
+  (t) => [index("trade_offsets_sale_idx").on(t.saleId, t.status), index("trade_offsets_bill_idx").on(t.billId, t.status)],
+);
+
+/** Every money event on an installer bill. The bill's own total never changes. */
+export const installerBillSettlements = sqliteTable(
+  "installer_bill_settlements",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    billId: integer("bill_id").notNull().references(() => installerInvoices.id, { onDelete: "restrict" }),
+    /** cash · cash_reversal · offset · offset_reversal */
+    kind: text("kind").notNull(),
+    /** Always zero or more. `kind` carries the direction. */
+    amount: real("amount").notNull(),
+    offsetId: integer("offset_id").references(() => tradeOffsets.id, { onDelete: "restrict" }),
+    saleId: integer("sale_id"),
+    paidDate: text("paid_date"),
+    reference: text("reference").notNull().default(""),
+    reversesId: integer("reverses_id"),
+    reason: text("reason").notNull().default(""),
+    idemKey: text("idem_key").notNull(),
+    byName: text("by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [
+    unique("installer_bill_settlements_idem_unique").on(t.idemKey),
+    unique("installer_bill_settlements_reverses_unique").on(t.reversesId),
+    index("installer_bill_settlements_bill_idx").on(t.billId),
+  ],
+);
+
+/** The trade audit trail. Not activity_log: Office reads that on the dashboard. Admin only. */
+export const tradeAudit = sqliteTable(
+  "trade_audit",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    entityType: text("entity_type").notNull(),
+    entityId: integer("entity_id"),
+    saleId: integer("sale_id"),
+    billId: integer("bill_id"),
+    action: text("action").notNull(),
+    detail: text("detail").notNull().default(""),
+    actorName: text("actor_name").notNull().default(""),
+    actorRole: text("actor_role").notNull().default(""),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+  },
+  (t) => [
+    index("trade_audit_sale_idx").on(t.saleId),
+    index("trade_audit_bill_idx").on(t.billId),
+    index("trade_audit_entity_idx").on(t.entityType, t.entityId),
+  ],
+);

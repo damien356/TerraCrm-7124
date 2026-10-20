@@ -296,7 +296,14 @@ export async function handleWebhook(raw: string, signature: string | null | unde
   if (event.type !== "checkout.session.completed" && event.type !== "checkout.session.async_payment_succeeded") {
     return { status: 200 as const, body: { ok: true, ignored: event.type } };
   }
-  const out = await applySession(event.data?.object ?? ({} as Session));
+  const obj = event.data?.object ?? ({} as Session);
+  if (obj.metadata?.terra_trade_sale_id) {
+    // A trade sale (notes 18.65). Its own records, never a job invoice.
+    const { applyTradeSession } = await import("./trade-pay");
+    const t = await applyTradeSession(obj);
+    return { status: 200 as const, body: { ok: true, result: t.ok ? t.state : t.reason } };
+  }
+  const out = await applySession(obj);
   return { status: 200 as const, body: { ok: true, result: out.ok ? out.state : out.reason } };
 }
 
@@ -308,3 +315,7 @@ export async function cardPayFor(inv: Invoice | null) {
 }
 
 export const _test = { form, sign };
+
+/** For trade sales (lib/trade-pay.ts), which has its own records and links. */
+export const stripeRequest = stripe;
+export type StripeSession = Session;

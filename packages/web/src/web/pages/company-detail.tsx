@@ -13,6 +13,7 @@ import { PaymentTermsCard } from "../components/payment-terms";
 import { ClientQuotesCard } from "../components/quote-copy";
 import { ReferrerSection } from "../components/referrals";
 import { useBootstrap } from "../queries/settings";
+import { BuyerTradeTab } from "../components/trade/buyer-tab";
 import { useCompany, useUpdateCompany } from "../queries/companies";
 import { useCompanyIntelDetail } from "../queries/intel";
 import { histDate, money, pct } from "../lib/money";
@@ -293,6 +294,7 @@ export default function CompanyDetailPage() {
           <ClientQuotesCard companyId={c.id} />
 
           {isAdmin ? <ReferrerSection companyId={c.id} abn={c.abn} /> : null}
+          {isAdmin ? <BuyerTradeTab kind="company" refId={c.id} /> : null}
         </div>
 
         <Card>

@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db, inDemo } from "../database";
 import * as schema from "../database/schema";
+import { captureEmail } from "./email-capture";
 import { readState, seal, sealConfigured, signState, unseal } from "./secret-box";
 
 /* ---------------------------------------------------------------------------
@@ -372,6 +373,9 @@ export async function canSendFrom(address: string) {
  */
 export async function sendFromMailbox(address: string, mail: OutgoingMail): Promise<SentMail> {
   if (!(SENDING_MAILBOXES as readonly string[]).includes(address)) throw new Error(`${address} may not send`);
+  /* Test runs write the email to a folder and send nothing (notes 18.65). */
+  const captured = captureEmail({ via: `gmail ${address}`, from: address, to: mail.to, cc: mail.cc, subject: mail.subject, text: mail.text, attachments: mail.attachments });
+  if (captured) return { id: `captured-${captured}`, threadId: "", messageIdHeader: "" };
   if (!(await canSendFrom(address))) throw new MailboxNotConnected(`${address.split("@")[0]}@ is not connected for sending`);
   const mime = buildMime(address, mail);
   let res: { id?: string; threadId?: string };

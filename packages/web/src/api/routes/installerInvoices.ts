@@ -11,6 +11,8 @@ import { getObject, invoicePdfKey, putObject, signGet } from "../lib/s3";
 import { renderInvoicePdf, type InvoiceLineItem } from "../lib/invoicePdf";
 import { sendEmail } from "../lib/email";
 import { abnView } from "../lib/abn-check";
+import { runGuarded, whoOf } from "../lib/trade-core";
+import { billStatusStmts, officeBillLines } from "../lib/trade-settle";
 
 /**
  * The installer's own invoice to Terra for a completed task. Installers can
@@ -393,9 +395,12 @@ export const installerInvoices = {
         .from(schema.installerInvoices)
         .where(where.length ? and(...where) : undefined)
         .orderBy(desc(schema.installerInvoices.submittedAt));
+      // Materials offsets show as a ref, an amount and the net to pay. Nothing else from the trade sale (notes 18.65).
+      const lines = await officeBillLines(rows.map((r) => r.id));
+      const withNet = rows.map((r) => ({ ...r, settlement: lines.get(r.id) ?? null }));
       // Office sees the invoices. Bank details stay with Admin.
-      if (context.actor.role === "admin") return rows;
-      return rows.map((r) => ({ ...r, bankAccountName: null, bankBsb: null, bankAccountNumber: null }));
+      if (context.actor.role === "admin") return withNet;
+      return withNet.map((r) => ({ ...r, bankAccountName: null, bankBsb: null, bankAccountNumber: null }));
     }),
 
   /** A signed link to any invoice PDF, for accounts. Office gets it too (Damien, 7 Oct), bank details and all. */
@@ -414,19 +419,33 @@ export const installerInvoices = {
         adminNotes: z.string().nullable().optional(),
       }),
     )
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
       const now = new Date();
       const stamps: Record<string, Date> = {};
       if (input.status === "approved") stamps.approvedAt = now;
       if (input.status === "scheduled_for_payment") stamps.scheduledAt = now;
       if (input.status === "paid") stamps.paidAt = now;
-      const [row] = await db
+      const [exists] = await db.select({ id: schema.installerInvoices.id }).from(schema.installerInvoices).where(eq(schema.installerInvoices.id, input.invoiceId));
+      if (!exists) throw new ORPCError("NOT_FOUND", { message: "Invoice not found" });
+      /* The settlement guard (notes 18.65, answer C). Never switched off.
+       * Paid or scheduled is refused while a materials offset is waiting. Mark
+       * paid writes one cash row in the same batch, guarded on the old status,
+       * so a double click records the cash once. The button is the same; it
+       * records a payment, it never makes one. */
+      const { stmts, noop } = await billStatusStmts(input.invoiceId, input.status, whoOf(context.actor));
+      const update = db
         .update(schema.installerInvoices)
-        .set({ status: input.status, adminNotes: input.adminNotes ?? undefined, ...stamps, updatedAt: now })
-        .where(eq(schema.installerInvoices.id, input.invoiceId))
-        .returning();
-      if (!row) throw new ORPCError("NOT_FOUND", { message: "Invoice not found" });
-      return row;
+        .set({ status: input.status, adminNotes: input.adminNotes ?? undefined, ...(noop ? {} : stamps), updatedAt: now })
+        .where(eq(schema.installerInvoices.id, input.invoiceId));
+      if (noop) await update;
+      else
+        await runGuarded([...stmts, update]).catch(async (e) => {
+          // Two clicks at once: the first one saved, the second finds it done.
+          const [now2] = await db.select({ status: schema.installerInvoices.status }).from(schema.installerInvoices).where(eq(schema.installerInvoices.id, input.invoiceId));
+          if (now2?.status !== input.status) throw e;
+        });
+      const [row] = await db.select().from(schema.installerInvoices).where(eq(schema.installerInvoices.id, input.invoiceId));
+      return row!;
     }),
 
   /** Pending variation requests waiting on the office. */

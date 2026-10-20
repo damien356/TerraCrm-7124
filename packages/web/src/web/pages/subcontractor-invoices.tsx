@@ -214,9 +214,25 @@ function InvoiceRow({
         <td className="tabular px-4 py-2.5 text-right text-muted-foreground">
           {row.gstRegistered ? moneyExact(row.gstAmount) : "No GST"}
         </td>
-        <td className="tabular px-4 py-2.5 text-right font-semibold">{moneyExact(row.total)}</td>
+        <td className="tabular px-4 py-2.5 text-right font-semibold">
+          {moneyExact(row.total)}
+          {/* Materials offsets (notes 18.65): only the ref, the amount and the net to pay. */}
+          {row.settlement?.offsets.length ? (
+            <div className="mt-1 space-y-0.5 text-xs font-normal">
+              {row.settlement.offsets.map((o) => (
+                <p key={o.ref} className="text-muted-foreground">
+                  Less materials {o.ref} {moneyExact(o.amount)}
+                  {o.pending ? " (on hold)" : ""}
+                </p>
+              ))}
+              <p className="font-semibold text-foreground">Net to pay {moneyExact(row.settlement.netToPay)}</p>
+            </div>
+          ) : null}
+        </td>
         <td className="px-4 py-2.5">
           <Badge colour={STATUS_COLOUR[row.status]}>{STATUS_LABEL[row.status] ?? row.status}</Badge>
+          {row.settlement?.onHold ? <p className="mt-1 text-xs text-[var(--gold-deep)]">On hold: materials offset waiting</p> : null}
+          {row.settlement?.legacyPaid ? <p className="mt-1 text-xs text-muted-foreground">Paid before payment records</p> : null}
         </td>
         <td className="px-4 py-2.5">
           <div className="flex items-center justify-end gap-1.5">

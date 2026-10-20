@@ -90,6 +90,8 @@ import { bootAbnRecheck } from "./lib/abn-recheck";
 import { abnCheck } from "./routes/abnCheck";
 import { leads } from "./routes/leads";
 import { timber } from "./routes/timber";
+import { trade } from "./routes/trade";
+import { tradeSettle } from "./routes/tradeSettle";
 
 // Terra Ops — Terra Flooring only. Admin procedures are built on `adminOnly`,
 // the installer app talks exclusively to `field` (installerOnly, scoped to the
@@ -142,6 +144,10 @@ export const router = {
   visits,
   /** The installer's own invoice to Terra for a completed task. */
   installerInvoices,
+  /** Trade sales from warehouse stock, Admin only (notes 18.65). */
+  trade,
+  /** Materials offsets against installer bills, agreements and remittances. Admin only. */
+  tradeSettle,
   /** Presigned direct-to-storage uploads for photos, video and plans. */
   upload,
   /** Rooms and zones the work covers — photos hang off these. */

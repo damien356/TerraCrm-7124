@@ -14,6 +14,7 @@ import {
   uploadInstallerLogo,
 } from "../queries/installers";
 import { useBootstrap } from "../queries/settings";
+import { BuyerTradeTab } from "../components/trade/buyer-tab";
 import {
   useAddUnavailabilityFromText,
   useRemoveUnavailability,
@@ -521,7 +522,7 @@ function InstallerInvoicingTab({ id }: { id: number }) {
 }
 
 export function InstallerPanel({ id, onClose }: { id: number; onClose: () => void }) {
-  const [panel, setPanel] = React.useState<"card" | "rates" | "invoicing">("card");
+  const [panel, setPanel] = React.useState<"card" | "rates" | "invoicing" | "trade">("card");
   const detail = useInstaller(id);
   const bootstrap = useBootstrap();
   const update = useUpdateInstaller();
@@ -627,11 +628,15 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
     >
       {/* Two views on the one man: his details, and what Terra pays him. */}
       <div className="mb-4 flex gap-1 rounded-lg border border-border bg-background p-1">
-        {([
-          { id: "card", label: "His card" },
-          { id: "rates", label: "Rates" },
-          { id: "invoicing", label: "Invoicing" },
-        ] as const).map((t) => (
+        {(
+          [
+            { id: "card", label: "His card" },
+            { id: "rates", label: "Rates" },
+            { id: "invoicing", label: "Invoicing" },
+            // Trade sales (notes 18.65): Admin only.
+            ...(bootstrap.data?.actor.role === "admin" ? [{ id: "trade", label: "Trade" }] : []),
+          ] as Array<{ id: "card" | "rates" | "invoicing" | "trade"; label: string }>
+        ).map((t) => (
           <button
             key={t.id}
             type="button"
@@ -649,6 +654,7 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
 
       {panel === "rates" ? <InstallerRatesTab installerId={id} /> : null}
       {panel === "invoicing" ? <InstallerInvoicingTab id={id} /> : null}
+      {panel === "trade" && bootstrap.data?.actor.role === "admin" ? <BuyerTradeTab kind="installer" refId={id} /> : null}
 
       {panel === "card" && (detail.isLoading || !form) ? <Loading /> : null}
       {panel === "card" && !(detail.isLoading || !form) ? (
