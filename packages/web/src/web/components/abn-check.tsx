@@ -5,11 +5,16 @@ import { Card, CardHeader, Empty, Loading, Spinner } from "./ui/card";
 import { Input } from "./ui/field";
 import { useAbnChaseList, useAbnLookup, useAbnRecheck } from "../queries/abnCheck";
 import { useInstaller } from "../queries/installers";
+import { abnVerdict, NAME_MISMATCH, namesMatch, type CardNames } from "../../api/lib/abn-names";
 
 /*
  * Notes 18.64: the ABN check on an installer card. Admin only: the server
  * sends the check to Admins and nothing to anyone else, so for Office this
  * renders just the plain input.
+ *
+ * Notes 18.66: the name side of the check always runs on the names in the
+ * form right now (short name, full name, trading name), saved or not, with
+ * the same rule the server uses (abn-names.ts).
  */
 
 export type AbnCheckView = NonNullable<NonNullable<ReturnType<typeof useInstaller>["data"]>["abnCheck"]>;
@@ -106,8 +111,10 @@ function DetailRows({ d }: { d: Details }) {
 }
 
 /** The saved answer on his card, with Check now. */
-export function AbnSavedPanel({ installerId, check }: { installerId: number; check: AbnCheckView }) {
+export function AbnSavedPanel({ installerId, check, names }: { installerId: number; check: AbnCheckView; names: CardNames }) {
   const recheck = useAbnRecheck();
+  // The saved lookup, against the names in the form now.
+  const { passes, warning } = abnVerdict(check, names);
   const [error, setError] = React.useState<string | null>(null);
   const hasAnswer = check.status === "Active" || check.status === "Cancelled";
 
@@ -123,14 +130,14 @@ export function AbnSavedPanel({ installerId, check }: { installerId: number; che
   return (
     <div
       className={
-        check.passes
+        passes
           ? "rounded-lg border border-emerald-300 bg-emerald-50/60 px-3 py-2 text-sm"
           : "rounded-lg border border-red-300 bg-red-50/60 px-3 py-2 text-sm"
       }
       aria-label="ABN check"
     >
       <div className="flex items-start justify-between gap-3">
-        <AbnVerdict passes={check.passes} warning={check.warning} />
+        <AbnVerdict passes={passes} warning={warning} />
         {check.state !== "missing" ? (
           <Button size="sm" variant="outline" onClick={run} disabled={recheck.isPending}>
             {recheck.isPending ? <Spinner /> : <RefreshCw className="size-3.5" />}
@@ -152,13 +159,13 @@ export function AbnSavedPanel({ installerId, check }: { installerId: number; che
 }
 
 /** What the register says for an ABN that has been typed and not saved yet. */
-function AbnLivePreview({ abn, name, tradingName }: { abn: string; name: string; tradingName: string | null }) {
+function AbnLivePreview({ abn, names }: { abn: string; names: CardNames }) {
   const [settled, setSettled] = React.useState(abn);
   React.useEffect(() => {
     const t = setTimeout(() => setSettled(abn), 500);
     return () => clearTimeout(t);
   }, [abn]);
-  const lookup = useAbnLookup({ abn: settled, name, tradingName }, digits(settled).length === 11);
+  const lookup = useAbnLookup({ abn: settled }, digits(settled).length === 11);
   if (digits(abn).length !== 11) return <p className="text-xs text-muted-foreground">An ABN is 11 digits.</p>;
   if (lookup.isPending || settled !== abn) return <p className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /> Looking it up</p>;
   if (lookup.isError) return <p className="text-xs text-destructive">Could not look it up: {lookup.error.message}</p>;
@@ -174,14 +181,15 @@ function AbnLivePreview({ abn, name, tradingName }: { abn: string; name: string;
     );
   }
   const f = r.found;
-  const passes = f.status === "Active" && !f.mismatch;
+  const mismatch = namesMatch(names, f) === false;
+  const passes = f.status === "Active" && !mismatch;
   const warning =
     f.status === "Cancelled"
       ? `ABN cancelled${f.statusFrom ? ` from ${abnDay(f.statusFrom)}` : ""}.`
       : f.status !== "Active"
         ? `ABN is ${f.status || "not active"}.`
-        : f.mismatch
-          ? "Name does not match the ABN. Neither his name nor his trading name matches the legal name or a business name."
+        : mismatch
+          ? NAME_MISMATCH
           : null;
   return (
     <div className={passes ? "rounded-lg border border-emerald-300 bg-emerald-50/60 px-3 py-2 text-sm" : "rounded-lg border border-red-300 bg-red-50/60 px-3 py-2 text-sm"}>
@@ -201,16 +209,15 @@ export function AbnField({
   value,
   onChange,
   savedAbn,
-  name,
-  tradingName,
+  names,
   check,
 }: {
   installerId: number;
   value: string;
   onChange: (v: string) => void;
   savedAbn: string | null;
-  name: string;
-  tradingName: string | null;
+  /** The names in the form now, saved or not. */
+  names: CardNames;
   check: AbnCheckView | null;
 }) {
   const changed = digits(value) !== digits(savedAbn);
@@ -220,12 +227,12 @@ export function AbnField({
       {check ? (
         changed ? (
           digits(value) ? (
-            <AbnLivePreview abn={value} name={name} tradingName={tradingName} />
+            <AbnLivePreview abn={value} names={names} />
           ) : (
             <p className="text-xs text-red-700">No ABN. He can't invoice from his phone until his ABN passes.</p>
           )
         ) : (
-          <AbnSavedPanel installerId={installerId} check={check} />
+          <AbnSavedPanel installerId={installerId} check={check} names={names} />
         )
       ) : null}
     </div>

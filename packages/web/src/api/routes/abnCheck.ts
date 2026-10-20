@@ -16,12 +16,12 @@ import { abnView, checkInstallerAbn, gstOnToday, namesMatch } from "../lib/abn-c
 export const abnCheck = {
   /** What the register says for an ABN being typed. Saves nothing. */
   lookup: adminOnly
-    .input(z.object({ abn: z.string().min(1).max(40), name: z.string().default(""), tradingName: z.string().nullable().default(null) }))
+    .input(z.object({ abn: z.string().min(1).max(40), name: z.string().default(""), fullName: z.string().nullable().default(null), tradingName: z.string().nullable().default(null) }))
     .handler(async ({ input }) => {
       const r = await lookupAbn(input.abn);
       if (r.kind !== "found") return { kind: r.kind, message: r.message, found: null };
       const gstRegistered = gstOnToday(r.status, r.gstFrom, r.gstTo);
-      const match = namesMatch({ name: input.name, tradingName: input.tradingName }, r);
+      const match = namesMatch({ name: input.name, fullName: input.fullName, tradingName: input.tradingName }, r);
       return {
         kind: r.kind,
         message: null,
