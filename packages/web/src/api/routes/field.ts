@@ -86,6 +86,12 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
   const swms = await swmsNeededFor(installerId, jobIds);
   // The whole run each card belongs to, so a 6 day job reads "Day 2 of 6".
   const runs = await runsFor(rows.map((r) => r.id));
+  // GST shows on his card only if he is GST registered.
+  const [me] = await db
+    .select({ gst: schema.installers.gstRegistered })
+    .from(schema.installers)
+    .where(eq(schema.installers.id, installerId));
+  const gstRegistered = Boolean(me?.gst);
 
   return rows.map((r) => {
     let payBreakdown: Array<{ name: string; unit: string; qty: number; rate: number | null; total: number | null }> | null =
@@ -115,6 +121,7 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
       isSecond: Number(r.isSecond) === 1,
       payBreakdown,
       payTotal,
+      gstRegistered,
       /* The run (notes 18.61). daySeq is set per day by today and upcoming. */
       startDate: run[0] ?? r.scheduledDate,
       endDate: run[run.length - 1] ?? r.scheduledDate,
@@ -383,12 +390,6 @@ export const field = {
       .select({ labourCost: schema.jobTasks.labourCost, labourBreakdown: schema.jobTasks.labourBreakdown })
       .from(schema.jobTasks)
       .where(eq(schema.jobTasks.id, input.id));
-    // GST is only added for an installer who is GST registered. Someone who
-    // is not registered cannot charge GST, so his screen never suggests it.
-    const [me] = await db
-      .select({ gst: schema.installers.gstRegistered })
-      .from(schema.installers)
-      .where(eq(schema.installers.id, context.installerId));
 
     let payBreakdown: Array<{ name: string; unit: string; qty: number; rate: number | null; total: number | null }> | null =
       null;
@@ -416,7 +417,9 @@ export const field = {
       crewMate: mate[0] ?? null,
       payBreakdown,
       payTotalExGst: taskRow?.labourCost ?? null,
-      gstRegistered: Boolean(me?.gst),
+      // GST is only added for an installer who is GST registered. Someone who
+      // is not registered cannot charge GST, so his screen never suggests it.
+      gstRegistered: Boolean(card?.gstRegistered),
     };
   }),
 

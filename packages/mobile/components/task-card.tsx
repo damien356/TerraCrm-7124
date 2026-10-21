@@ -175,7 +175,9 @@ export function TaskCard({
                       paddingTop: 6,
                     }}
                   >
-                    <Text style={{ fontFamily: Fonts.bold, fontSize: 14, color: c.foreground }}>Total</Text>
+                    <Text style={{ fontFamily: Fonts.bold, fontSize: 14, color: c.foreground }}>
+                      {task.gstRegistered ? "Total ex GST" : "Total"}
+                    </Text>
                     <Text style={{ fontFamily: Fonts.bold, fontSize: 16, color: c.foreground }}>
                       {fmtMoney(task.payTotal ?? task.payAmount)}
                     </Text>
