@@ -6,6 +6,7 @@ import { Card, CardHeader, Empty, Loading, Stat } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { money, shortDate } from "../lib/money";
 import { useExpenses } from "../queries/finance";
+import { UNVERIFIED_LEAD, UNVERIFIED_REST, Unverified } from "../components/unverified";
 
 /**
  * EXPENSES.
@@ -87,14 +88,25 @@ export default function ExpensesPage() {
         <Loading label="Loading expenses…" />
       ) : (
         <div className="space-y-4">
+          <Card className="border-[var(--warning)]/45 bg-[var(--warning)]/[0.08] px-4 py-3">
+            <div className="flex items-start gap-2.5">
+              <TriangleAlert className="mt-0.5 size-4 shrink-0 text-[var(--warning)]" />
+              <p className="text-[13px]">
+                <span className="font-bold" data-testid="balance-unverified-banner">{UNVERIFIED_LEAD}</span> {"\u2014"}{" "}
+                <span className="font-semibold">{UNVERIFIED_REST}</span> Paid or unpaid here is Terra's own record of each cost, not
+                Xero.
+              </p>
+            </div>
+          </Card>
+
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Stat
               label="Overdue"
               value={money(overdue)}
               tone={overdue > 0 ? "danger" : "default"}
-              hint="Past the date it should have gone out"
+              hint={<>Past the date it should have gone out.<Unverified className="mt-1" /></>}
             />
-            <Stat label="Invoiced" value={money(invoiced)} hint="Bill is in, real due date" />
+            <Stat label="Invoiced" value={money(invoiced)} hint={<>Bill is in, real due date.<Unverified className="mt-1" /></>} />
             <Stat label="Committed" value={money(committed)} hint="Ordered or booked, not yet billed" />
             <Stat label="Budget" value={money(budget)} hint="Terra's own estimate, no bill yet" />
           </div>
@@ -117,7 +129,12 @@ export default function ExpensesPage() {
           <Card>
             <CardHeader
               title="Owed out"
-              subtitle={`Everything unpaid with a date inside the next ${days} days, soonest first.`}
+              subtitle={
+                <>
+                  Everything unpaid with a date inside the next {days} days, soonest first.
+                  <Unverified className="mt-1" />
+                </>
+              }
               action={<Badge>{rows.length}</Badge>}
             />
             {rows.length === 0 ? (

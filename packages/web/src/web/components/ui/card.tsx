@@ -39,7 +39,7 @@ export function Stat({
   label: string;
   value: React.ReactNode;
   tone?: "default" | "warning" | "danger" | "success";
-  hint?: string;
+  hint?: React.ReactNode;
 }) {
   const toneClass = {
     default: "text-foreground",
@@ -55,7 +55,7 @@ export function Stat({
       <p className={cn("tabular mt-1.5 text-[26px] font-bold leading-none tracking-[-0.02em]", toneClass)}>
         {value}
       </p>
-      {hint ? <p className="mt-1.5 text-xs text-muted-foreground">{hint}</p> : null}
+      {hint ? <div className="mt-1.5 text-xs text-muted-foreground">{hint}</div> : null}
     </div>
   );
 }

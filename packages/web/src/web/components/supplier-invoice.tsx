@@ -2,6 +2,7 @@ import * as React from "react";
 import { Link } from "wouter";
 import { Check, FileText, Mail, RotateCcw, Send, TriangleAlert, Upload, X } from "lucide-react";
 import { Loading, Spinner } from "./ui/card";
+import { Unverified } from "./unverified";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "./ui/field";
@@ -267,6 +268,7 @@ export function InvoicePanel({ id, onClose }: { id: number; onClose: () => void 
               {busy ? <Spinner className="self-center" /> : null}
             </div>
             {inv.paidNote ? <p className="text-xs text-muted-foreground">{inv.paidNote}</p> : null}
+            <Unverified />
             {inv.jobId ? (
               <Link to={`/jobs/${inv.jobId}`} className="text-xs font-medium text-primary hover:underline">
                 Open the job

@@ -4,6 +4,7 @@ import { ArrowLeft, ChevronRight, FileText, Inbox, Mail, Settings as SettingsIco
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Page } from "../components/layout";
 import { Card, CardHeader, Empty, Loading, Spinner, Stat } from "../components/ui/card";
+import { UNVERIFIED_LEAD, UNVERIFIED_REST, Unverified } from "../components/unverified";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { money, moneyExact, shortDate } from "../lib/money";
@@ -37,14 +38,6 @@ const NEEDS_LABEL: Record<NeedsItem["kind"], { label: string; colour: string }> 
   late_invoice: { label: "No invoice yet", colour: "#7A736D" },
   mailbox: { label: "Mailbox", colour: "#C0603F" },
 };
-
-/**
- * Every figure here is Terra's own record: invoices read from email, less the
- * ones marked paid by a statement or by hand. Xero is not connected, so
- * payments and credits entered only in Xero are not in it (21 Oct). Wording
- * waiting on Damien's pick.
- */
-const NOT_CHECKED = "Not checked against Xero yet. Recorded payments and credits may be missing.";
 
 const dayOf = (d: Date | string | null) => (d ? new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : "");
 
@@ -138,22 +131,23 @@ function Overview({
         <div className="flex items-start gap-2.5">
           <TriangleAlert className="mt-0.5 size-4 shrink-0 text-[var(--warning)]" />
           <p className="text-[13px]">
-            <span className="font-semibold">Balance not verified.</span> {NOT_CHECKED} Owed, overdue, due soon and every supplier row below are from Terra's
-            own records only: invoices read from email, less those marked paid on a statement or by hand.
+            <span className="font-bold" data-testid="balance-unverified-banner">{UNVERIFIED_LEAD}</span> {"\u2014"} <span className="font-semibold">{UNVERIFIED_REST}</span>{" "}
+            Owed, overdue, due soon and every supplier row below are from Terra's own records only: invoices read from email, less those marked paid on a
+            statement or by hand.
           </p>
         </div>
       </Card>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Owed" value={money(d.totals.owedIncGst)} hint="Unpaid invoices, inc GST. Not checked against Xero." />
-        <Stat label="Overdue" value={money(d.totals.overdueIncGst)} tone={d.totals.overdueIncGst > 0 ? "danger" : "default"} hint="Past the due date. Not checked against Xero." />
-        <Stat label="Due in 14 days" value={money(d.totals.dueSoonIncGst)} tone={d.totals.dueSoonIncGst > 0 ? "warning" : "default"} hint="Not overdue yet. Not checked against Xero." />
+        <Stat label="Owed" value={money(d.totals.owedIncGst)} hint={<>Unpaid invoices, inc GST.<Unverified className="mt-1" /></>} />
+        <Stat label="Overdue" value={money(d.totals.overdueIncGst)} tone={d.totals.overdueIncGst > 0 ? "danger" : "default"} hint={<>Past the due date.<Unverified className="mt-1" /></>} />
+        <Stat label="Due in 14 days" value={money(d.totals.dueSoonIncGst)} tone={d.totals.dueSoonIncGst > 0 ? "warning" : "default"} hint={<>Not overdue yet.<Unverified className="mt-1" /></>} />
         <Stat label="Ordered, not billed" value={money(d.totals.awaitingExGst)} hint="Sent POs with no invoice, ex GST" />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
         <Card>
-          <CardHeader title="By supplier" subtitle="Most overdue first. Tap a supplier to see each PO next to its invoice. Owed and overdue are not checked against Xero yet." action={<Badge>{d.suppliers.length}</Badge>} />
+          <CardHeader title="By supplier" subtitle={<>Most overdue first. Tap a supplier to see each PO next to its invoice.<Unverified className="mt-1" /></>} action={<Badge>{d.suppliers.length}</Badge>} />
           {d.suppliers.length === 0 ? (
             <Empty>Nothing owed and no POs waiting on an invoice.</Empty>
           ) : (
@@ -450,7 +444,7 @@ function SupplierDetail({
             </div>
           </div>
 
-          <p className="text-xs text-[var(--warning)]">{NOT_CHECKED}</p>
+          <Unverified className="text-[13px]" />
 
           {d.supplier && !d.supplier.email ? <AddEmail supplierId={d.supplier.id} name={d.supplier.name} /> : null}
 
@@ -560,7 +554,7 @@ function SupplierDetail({
                 )}
               </Card>
               <Card>
-                <CardHeader title="Recent statements" />
+                <CardHeader title="Recent statements" subtitle={<>Balances as the supplier's statement shows them.<Unverified className="mt-1" /></>} />
                 {d.statements.length === 0 ? (
                   <Empty>No statements read yet.</Empty>
                 ) : (

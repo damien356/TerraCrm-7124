@@ -80,6 +80,7 @@ import { bootMailAgent } from "./lib/mail-agent";
 import { finishConnect } from "./lib/gmail";
 import { bootReminders } from "./lib/reminders";
 import { bootDailySummary, wakeDailySummary } from "./lib/notify";
+import { judgeWake } from "./lib/wake-guard";
 import { bootPrep } from "./lib/prep";
 import { prep } from "./routes/prep";
 import { invites } from "./routes/invites";
@@ -277,9 +278,17 @@ app.post("/api/webhooks/clicksend/inbound/:secret", async (c) => {
   }
 });
 
-// Outside wake call for the 7am summary. No login, no data back, sends nothing
-// itself: it runs one pass of the daily timer, which sends once a day at most.
+// Outside wake call for the 7am summary (cron-job.org). Needs the secret in the
+// X-Terra-Wake-Key header and is rate limited (lib/wake-guard). No login, no
+// data back. It runs one pass of the daily timer, which sends once a day at most.
 app.get("/api/wake", async (c) => {
+  c.header("cache-control", "no-store");
+  const v = judgeWake(c.req.raw.headers);
+  if (v.status !== 200) {
+    if (v.retryAfterSec) c.header("retry-after", String(v.retryAfterSec));
+    if (v.status === 429) console.warn("[wake] rate limited");
+    return c.json({ ok: false }, v.status);
+  }
   try {
     const out = await wakeDailySummary();
     return c.json({ ok: true, ticking: out.ticking }, 200);
