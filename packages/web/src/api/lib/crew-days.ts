@@ -1,14 +1,17 @@
 import { and, asc, inArray, ne, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { dayOf, resolveRun, windowDates } from "./task-run";
 
 /**
  * Which days an installer is booked on which task.
  *
  * A three day lay is one task with three `task_days` rows, so "what am I on
  * today" cannot be answered from `job_tasks.scheduled_date`, which is only day
- * one. Older tasks booked before task days existed have no rows at all, and
- * for those the scheduled date is the only day.
+ * one. Older tasks booked before task days existed have no rows at all. For
+ * those the run comes from lib/task-run.ts: a start to end range where the day
+ * count says how to read it, else the one scheduled date. A schedule that
+ * cannot be read is still shown on every date it could cover, flagged.
  *
  * Covers (a task day handed to someone other than the task's own installer)
  * are left out on purpose: every crew write goes through `ownTaskOrThrow`,
@@ -23,6 +26,8 @@ export interface WorkDay {
   arrivalStart: string | null;
   arrivalEnd: string | null;
   coordinate: boolean;
+  /** Set when the office has not booked the days properly. Plain words. */
+  scheduleIncomplete?: string | null;
 }
 
 const mine = (installerId: number) =>
@@ -35,7 +40,14 @@ export async function workDaysFor(
   statuses: string[] = ["assigned", "in_progress"],
 ): Promise<WorkDay[]> {
   const tasks = await db
-    .select({ id: schema.jobTasks.id, scheduledDate: schema.jobTasks.scheduledDate })
+    .select({
+      id: schema.jobTasks.id,
+      status: schema.jobTasks.status,
+      scheduledDate: schema.jobTasks.scheduledDate,
+      scheduledFrom: schema.jobTasks.scheduledFrom,
+      scheduledTo: schema.jobTasks.scheduledTo,
+      manualDays: schema.jobTasks.manualDays,
+    })
     .from(schema.jobTasks)
     .where(and(mine(installerId), inArray(schema.jobTasks.status, statuses)));
   if (tasks.length === 0) return [];
@@ -70,16 +82,24 @@ export async function workDaysFor(
           coordinate: d.coordinate,
         });
       });
-    } else if (t.scheduledDate && t.scheduledDate >= from && t.scheduledDate <= to) {
-      out.push({
-        taskId: t.id,
-        date: t.scheduledDate,
-        daySeq: 1,
-        dayCount: 1,
-        arrivalStart: null,
-        arrivalEnd: null,
-        coordinate: false,
-      });
+    } else {
+      const r = resolveRun(t, []);
+      // An incomplete schedule shows on every date it could cover, flagged.
+      for (const date of r.days.length ? r.days : windowDates(r)) {
+        if (date < from || date > to) continue;
+        const at = dayOf(r, date);
+        if (!at) continue;
+        out.push({
+          taskId: t.id,
+          date,
+          daySeq: at.daySeq ?? 1,
+          dayCount: at.dayCount ?? 1,
+          arrivalStart: null,
+          arrivalEnd: null,
+          coordinate: false,
+          scheduleIncomplete: at.incomplete,
+        });
+      }
     }
   }
   return out.sort((a, b) => (a.date === b.date ? 0 : a.date < b.date ? -1 : 1));

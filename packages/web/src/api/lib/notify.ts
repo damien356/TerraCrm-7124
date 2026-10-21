@@ -1,9 +1,8 @@
 import { dayDate } from "./prep-templates";
-import { and, asc, eq, gte, inArray, isNull, lt, lte, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lt, ne, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { sendEmail } from "./email";
-import { jobNumberSql, taskRefSql } from "./job-ref";
 import { localDate, localDayBounds, addLocalDays } from "./local-date";
 import {
   ALERT_KINDS,
@@ -23,6 +22,7 @@ import { pushToOffice } from "./push";
 import { isLiveServer } from "./runtime";
 import { feesWaiting } from "./referral-fees";
 import { openAbnTasks } from "./abn-check";
+import { crewBoard } from "./task-run";
 
 /* ---------------------------------------------------------------------------
  * Telling the office something happened. Fix list 11 Oct, item 15.
@@ -168,7 +168,7 @@ export async function buildDailySummary(now = new Date()) {
   const today = localDate(now);
   const { start: dayStart } = localDayBounds(today);
 
-  const [tasks, todayJobs, lateCrew, lateInvoices, recentAlerts] = await Promise.all([
+  const [tasks, board, lateInvoices, recentAlerts] = await Promise.all([
     db
       .select({ id: schema.officeTasks.id, title: schema.officeTasks.title, dueDate: schema.officeTasks.dueDate, assignedName: schema.officeTasks.assignedName, jobId: schema.officeTasks.jobId })
       .from(schema.officeTasks)
@@ -176,36 +176,8 @@ export async function buildDailySummary(now = new Date()) {
       .where(and(eq(schema.officeTasks.status, "open"), eq(schema.officeTasks.adminOnly, false)))
       .orderBy(asc(sql`coalesce(${schema.officeTasks.dueDate}, '9999')`), asc(schema.officeTasks.id))
       .limit(60),
-    db
-      .select({
-        id: schema.jobTasks.id,
-        title: schema.jobTasks.title,
-        startTime: schema.jobTasks.startTime,
-        installerName: schema.installers.name,
-        jobNumber: jobNumberSql,
-        ref: taskRefSql,
-        suburb: schema.sites.suburb,
-      })
-      .from(schema.jobTasks)
-      .leftJoin(schema.installers, eq(schema.installers.id, schema.jobTasks.assignedInstallerId))
-      .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
-      .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
-      .where(and(eq(schema.jobTasks.scheduledDate, today), ne(schema.jobTasks.status, "cancelled")))
-      .orderBy(asc(schema.jobTasks.startTime)),
-    db
-      .select({ id: schema.jobTasks.id, title: schema.jobTasks.title, scheduledDate: schema.jobTasks.scheduledDate, ref: taskRefSql, installerName: schema.installers.name })
-      .from(schema.jobTasks)
-      .leftJoin(schema.installers, eq(schema.installers.id, schema.jobTasks.assignedInstallerId))
-      .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
-      .where(
-        and(
-          lte(schema.jobTasks.scheduledDate, addLocalDays(today, -1)),
-          gte(schema.jobTasks.scheduledDate, addLocalDays(today, -60)),
-          inArray(schema.jobTasks.status, ["unassigned", "offered", "assigned", "in_progress"]),
-        ),
-      )
-      .orderBy(asc(schema.jobTasks.scheduledDate))
-      .limit(20),
+    // Same rule as the dashboard (lib/task-run.ts): working days on today's Brisbane date.
+    crewBoard(today, { lateSince: addLocalDays(today, -60) }),
     db
       .select({ id: schema.invoices.id, number: schema.invoices.number, total: schema.invoices.total, amountPaid: schema.invoices.amountPaid, dueDate: schema.invoices.dueDate })
       .from(schema.invoices)
@@ -220,13 +192,27 @@ export async function buildDailySummary(now = new Date()) {
       .limit(30),
   ]);
 
+  const todayJobs = board.todayTasks.map((t) => ({
+    id: t.id,
+    title: t.title,
+    startTime: t.startTime,
+    installerName: t.installerName,
+    jobNumber: t.jobNumber,
+    ref: t.ref,
+    suburb: t.siteSuburb,
+    dayLabel: t.dayLabel,
+    dayCount: t.dayCount,
+    scheduleIncomplete: t.scheduleIncomplete,
+  }));
+  const lateCrew = board.late.slice(0, 20).map((t) => ({ id: t.id, title: t.title, scheduledDate: t.lastDay, ref: t.ref, installerName: t.installerName }));
+  const scheduleIncomplete = board.incomplete.slice(0, 20).map((t) => ({ id: t.id, title: t.title, ref: t.ref, installerName: t.installerName, reason: t.reason }));
   const overdueTasks = tasks.filter((t) => t.dueDate && t.dueDate < today);
   const otherTasks = tasks.filter((t) => !(t.dueDate && t.dueDate < today));
   const referralFees = await referralLine();
   const abnChecks = await abnLine();
   // Notes 18.56: client prep. Imported here, not at the top, because lib/prep imports this file.
   const prep = await (await import("./prep")).prepForSummary(now);
-  return { today, overdueTasks, otherTasks, todayJobs, lateCrew, lateInvoices, recentAlerts, referralFees, prep, abnChecks };
+  return { today, overdueTasks, otherTasks, todayJobs, lateCrew, scheduleIncomplete, lateInvoices, recentAlerts, referralFees, prep, abnChecks };
 }
 
 /**
@@ -286,19 +272,30 @@ export function dailySummaryText(s: Awaited<ReturnType<typeof buildDailySummary>
     "TODAY'S JOBS\n" +
       (s.todayJobs.length
         ? s.todayJobs
-            .map((j) => `${j.startTime ? `${j.startTime} ` : ""}${j.ref ?? j.jobNumber}: ${j.title}${j.suburb ? `, ${j.suburb}` : ""}. ${j.installerName ?? "Nobody on it yet"}`)
+            .map(
+              (j) =>
+                `${j.startTime ? `${j.startTime} ` : ""}${j.ref ?? j.jobNumber}: ${j.title}${j.suburb ? `, ${j.suburb}` : ""}.` +
+                `${j.scheduleIncomplete ? " Schedule incomplete." : j.dayCount && j.dayCount > 1 ? ` ${j.dayLabel}.` : ""} ${j.installerName ?? "Nobody on it yet"}`,
+            )
             .join("\n")
         : "Nothing booked."),
   );
 
   const overdue: string[] = [
     ...s.overdueTasks.map((t) => `Task: ${t.title || "Follow up"} (due ${shortDay(t.dueDate!)}${t.assignedName ? `, ${t.assignedName}` : ""})`),
-    ...s.lateCrew.map((t) => `Crew task not finished: ${t.ref ?? ""} ${t.title} (${t.scheduledDate ? shortDay(t.scheduledDate) : "no date"}${t.installerName ? `, ${t.installerName}` : ""})`),
+    ...s.lateCrew.map((t) => `Crew task not finished: ${t.ref ?? ""} ${t.title} (last day ${t.scheduledDate ? shortDay(t.scheduledDate) : "no date"}${t.installerName ? `, ${t.installerName}` : ""})`),
     ...s.lateInvoices.map(
       (i) => `Invoice ${i.number}: ${money(Math.max(0, i.total - i.amountPaid))} owing, due ${i.dueDate ? i.dueDate.toLocaleDateString("en-AU", { day: "numeric", month: "short", timeZone: "Australia/Brisbane" }) : "?"}`,
     ),
   ];
   out.push("OVERDUE\n" + (overdue.length ? overdue.join("\n") : "Nothing overdue."));
+
+  if (s.scheduleIncomplete.length) {
+    out.push(
+      "SCHEDULE INCOMPLETE\n" +
+        s.scheduleIncomplete.map((t) => `${t.ref ?? ""} ${t.title}${t.installerName ? `, ${t.installerName}` : ""}: ${t.reason} Book the days on the job.`).join("\n"),
+    );
+  }
 
   out.push(
     "OPEN TASKS\n" +

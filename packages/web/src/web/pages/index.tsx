@@ -74,7 +74,7 @@ export default function DashboardPage() {
           label="Overdue"
           value={d.atRisk.length}
           tone={d.atRisk.length ? "danger" : "default"}
-          hint="past their day, not finished"
+          hint="past their last working day, not finished"
         />
         <div className={isPhoneApp ? "col-span-2" : "contents"}>
           <Stat label="Open jobs" value={d.counts.openJobs} hint={`${money(d.pipelineValue)} last 30 days`} />
@@ -111,6 +111,11 @@ export default function DashboardPage() {
                         <Badge>
                           <Users2 className="size-3" />2 man
                         </Badge>
+                      ) : null}
+                      {t.scheduleIncomplete ? (
+                        <Badge colour="#B45309">Schedule incomplete</Badge>
+                      ) : t.dayCount && t.dayCount > 1 ? (
+                        <Badge>{t.dayLabel}</Badge>
                       ) : null}
                     </div>
                     <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -222,7 +227,7 @@ export default function DashboardPage() {
             <Card>
               <CardHeader
                 title="Overdue"
-                subtitle="Day has passed, still not finished"
+                subtitle="Final working day has passed, still not finished"
                 action={<AlertTriangle className="size-4 text-destructive" />}
               />
               <div className="divide-y divide-border">
@@ -234,6 +239,26 @@ export default function DashboardPage() {
                       {TASK_STATUS_LABEL[t.status] ?? t.status}
                     </p>
                   </div>
+                ))}
+              </div>
+            </Card>
+          ) : null}
+
+          {d.scheduleIncomplete.length > 0 ? (
+            <Card>
+              <CardHeader
+                title="Schedule incomplete"
+                subtitle="Booked, but the working days are not set"
+                action={<AlertTriangle className="size-4 text-[var(--warning)]" />}
+              />
+              <div className="divide-y divide-border">
+                {d.scheduleIncomplete.slice(0, 5).map((t) => (
+                  <Link key={t.id} to={`/jobs/${t.jobId}`} className="block px-4 py-2.5 hover:bg-muted/40">
+                    <p className="truncate text-sm font-medium">{t.title}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {t.ref} · {t.installerName ?? "unassigned"} · {t.reason}
+                    </p>
+                  </Link>
                 ))}
               </div>
             </Card>
