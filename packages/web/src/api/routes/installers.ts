@@ -1,10 +1,11 @@
 import { z } from "zod";
-import { and, asc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly } from "../middleware/auth";
 import { blockedInstallerIds } from "../lib/availability";
+import { mayWorkBetween, slotCols, workSlots } from "../lib/task-run";
 import { installerLogoKey, signGet, signPut } from "../lib/s3";
 import { taskForStaff } from "../lib/staff-view";
 import { abnChangeColumns, abnView, checkInstallerAbn, hideAbnCheck } from "../lib/abn-check";
@@ -316,18 +317,20 @@ export const installers = {
         .where(and(eq(schema.installerSkills.skillId, input.skillId), eq(schema.installers.active, true)))
         .orderBy(asc(schema.installers.name));
 
-      const clashes = input.date
-        ? await db
-            .select({ installerId: schema.jobTasks.assignedInstallerId })
-            .from(schema.jobTasks)
-            .where(
-              and(
-                eq(schema.jobTasks.scheduledDate, input.date),
-                inArray(schema.jobTasks.status, ["assigned", "in_progress"]),
-              ),
-            )
+      // Busy means working that Brisbane date on any day of a run, not only on
+      // the task's first date. A schedule nobody can read counts as maybe busy.
+      const slots = input.date
+        ? await workSlots(
+            await db
+              .select(slotCols)
+              .from(schema.jobTasks)
+              .where(and(inArray(schema.jobTasks.status, ["assigned", "in_progress"]), mayWorkBetween(input.date, input.date))),
+            input.date,
+            input.date,
+          )
         : [];
-      const busy = new Set(clashes.map((c) => c.installerId));
+      const busy = new Set(slots.map((c) => c.installerId));
+      const sureBusy = new Set(slots.filter((c) => !c.incomplete).map((c) => c.installerId));
       // Blackout dates and standing rules, both resolved server-side.
       const blocked = input.date ? await blockedInstallerIds(input.date) : new Set<number>();
 
@@ -344,6 +347,8 @@ export const installers = {
           rate: isAdmin ? r.link.rate : null,
           canLead: r.link.canLead,
           busyThatDay: busy.has(r.installer.id),
+          /** Busy only because a schedule cannot be read, so it might be free. */
+          busyScheduleIncomplete: busy.has(r.installer.id) && !sureBusy.has(r.installer.id),
           unavailableThatDay: off,
           /** A needs_partner installer can't cover a 2-man task on their own. */
           canCoverAlone: input.crewSize < 2 || r.installer.crewCapacity === "own_offsider",
@@ -362,32 +367,35 @@ export const installers = {
     return rows.map((r) => ({ id: r.id, name: r.name, insuranceExpiry: r.insuranceExpiry }));
   }),
 
-  /** Availability heat for the week: how many tasks each installer holds per day. */
+  /**
+   * Availability heat for the week: how many tasks each installer holds per
+   * Brisbane day. Every working day of a run counts, and the second installer
+   * and a day's cover count too. Hours are the task's day hours. A day only a
+   * schedule nobody can read puts there is counted in `incomplete`.
+   */
   load: staffOnly
     .input(z.object({ from: z.string(), to: z.string() }))
     .handler(async ({ input }) => {
-      const rows = await db
-        .select({
-          installerId: schema.jobTasks.assignedInstallerId,
-          date: schema.jobTasks.scheduledDate,
-          hours: sql<number>`sum(${schema.jobTasks.durationHours})`,
-          tasks: sql<number>`count(*)`,
-        })
+      const tasks = await db
+        .select({ ...slotCols, hours: schema.jobTasks.durationHours })
         .from(schema.jobTasks)
         .where(
           and(
-            gte(schema.jobTasks.scheduledDate, input.from),
-            lte(schema.jobTasks.scheduledDate, input.to),
             inArray(schema.jobTasks.status, ["assigned", "in_progress", "complete"]),
+            mayWorkBetween(input.from, input.to),
           ),
-        )
-        .groupBy(schema.jobTasks.assignedInstallerId, schema.jobTasks.scheduledDate);
-      return rows.map((r) => ({
-        installerId: r.installerId,
-        date: r.date,
-        hours: Number(r.hours ?? 0),
-        tasks: Number(r.tasks ?? 0),
-      }));
+        );
+      const hoursOf = new Map(tasks.map((t) => [t.id, Number(t.hours ?? 0)]));
+      const cells = new Map<string, { installerId: number; date: string; hours: number; tasks: number; incomplete: number }>();
+      for (const sl of await workSlots(tasks, input.from, input.to)) {
+        const key = `${sl.installerId}|${sl.date}`;
+        const c = cells.get(key) ?? { installerId: sl.installerId, date: sl.date, hours: 0, tasks: 0, incomplete: 0 };
+        c.tasks += 1;
+        c.hours += hoursOf.get(sl.taskId) ?? 0;
+        if (sl.incomplete) c.incomplete += 1;
+        cells.set(key, c);
+      }
+      return [...cells.values()];
     }),
 };
 

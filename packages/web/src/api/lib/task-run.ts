@@ -183,6 +183,85 @@ export async function dayRowsFor(taskIds: number[]) {
   return out;
 }
 
+/* ---------------------------------------------------------------------------
+ * Worker days: who is on which task on which Brisbane date.
+ *
+ * The busy clash, the load heat, the availability clash list, the SWMS board
+ * and client prep all ask the same question, so they all use this. Before,
+ * each read job_tasks.scheduled_date as the only day when a task had no day
+ * rows, so day 2 of a range looked free.
+ *
+ * Who works a date: the day row's cover installer when it names one, else the
+ * task's own installer and second installer. A schedule that cannot be read
+ * gives a slot on every date it could cover, with `incomplete` set, so the
+ * caller can flag it. It is never read as day one only.
+ * ------------------------------------------------------------------------- */
+
+export interface SlotTask extends RunTask {
+  assignedInstallerId: number | null;
+  secondInstallerId: number | null;
+}
+
+export interface WorkSlot {
+  taskId: number;
+  date: string;
+  installerId: number;
+  daySeq: number | null;
+  dayCount: number | null;
+  /** Plain words when the schedule cannot be read. The date is a maybe. */
+  incomplete: string | null;
+}
+
+/** SQL candidates: tasks that could have a working day between two dates. workSlots has the final say. */
+export function mayWorkBetween(from: string, to: string) {
+  return or(
+    sql`exists (select 1 from ${schema.taskDays} d where d.task_id = ${schema.jobTasks.id} and d.date >= ${from} and d.date <= ${to} and d.status != 'cancelled')`,
+    and(
+      sql`not exists (select 1 from ${schema.taskDays} d where d.task_id = ${schema.jobTasks.id})`,
+      lte(schema.jobTasks.scheduledDate, to),
+      sql`coalesce(${schema.jobTasks.scheduledTo}, ${schema.jobTasks.scheduledDate}) >= ${from}`,
+    ),
+  );
+}
+
+/** Pure. Every worker day of one task between two dates, inclusive. */
+export function slotsOf(task: SlotTask, rows: RunDay[], from: string, to: string): WorkSlot[] {
+  if (task.status === "cancelled") return [];
+  const run = resolveRun(task, rows);
+  const crew = [...new Set([task.assignedInstallerId, task.secondInstallerId].filter((x): x is number => Boolean(x)))];
+  const out: WorkSlot[] = [];
+  for (const date of run.days.length ? run.days : windowDates(run)) {
+    if (date < from || date > to) continue;
+    const at = dayOf(run, date);
+    if (!at) continue;
+    const cover = run.coverOn.get(date);
+    for (const installerId of cover ? [cover] : crew) {
+      out.push({ taskId: task.id, date, installerId, daySeq: at.daySeq, dayCount: at.dayCount, incomplete: at.incomplete });
+    }
+  }
+  return out;
+}
+
+/** Worker days for many tasks, day rows read in one go. */
+export async function workSlots(tasks: SlotTask[], from: string, to: string): Promise<WorkSlot[]> {
+  const rows = await dayRowsFor(tasks.map((t) => t.id));
+  return tasks
+    .flatMap((t) => slotsOf(t, rows.get(t.id) ?? [], from, to))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.taskId - b.taskId));
+}
+
+/** The columns workSlots needs, for a select. */
+export const slotCols = {
+  id: schema.jobTasks.id,
+  status: schema.jobTasks.status,
+  scheduledDate: schema.jobTasks.scheduledDate,
+  scheduledFrom: schema.jobTasks.scheduledFrom,
+  scheduledTo: schema.jobTasks.scheduledTo,
+  manualDays: schema.jobTasks.manualDays,
+  assignedInstallerId: schema.jobTasks.assignedInstallerId,
+  secondInstallerId: schema.jobTasks.secondInstallerId,
+};
+
 const runCols = {
   id: schema.jobTasks.id,
   status: schema.jobTasks.status,

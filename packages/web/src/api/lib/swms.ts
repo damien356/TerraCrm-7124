@@ -1,9 +1,10 @@
 import { jobNumberSql } from "./job-ref";
-import { and, eq, gte, inArray, lte, ne, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { todayLocal } from "./local-date";
+import { mayWorkBetween, slotCols, workSlots } from "./task-run";
 import { openBlockingFlags } from "./swms-checks";
 
 /* ---------------------------------------------------------------------------
@@ -110,6 +111,8 @@ export type BoardRow = {
   installerName: string;
   taskTitles: string[];
   record: { id: number; signedAt: Date; signedName: string; kind: string } | null;
+  /** Set when the date comes from a schedule nobody can read. Plain words. */
+  scheduleIncomplete: string | null;
 };
 
 /**
@@ -119,12 +122,9 @@ export type BoardRow = {
 export async function swmsBoard(from: string, to: string): Promise<BoardRow[]> {
   const tasks = await db
     .select({
-      id: schema.jobTasks.id,
+      ...slotCols,
       jobId: schema.jobTasks.jobId,
       title: schema.jobTasks.title,
-      scheduledDate: schema.jobTasks.scheduledDate,
-      a: schema.jobTasks.assignedInstallerId,
-      b: schema.jobTasks.secondInstallerId,
       jobNumber: jobNumberSql,
       jobTitle: schema.jobs.title,
       address: schema.sites.address,
@@ -139,45 +139,30 @@ export async function swmsBoard(from: string, to: string): Promise<BoardRow[]> {
       and(
         sql`${swmsRequiredSql} = 1`,
         inArray(schema.jobTasks.status, ["assigned", "in_progress", "complete"]),
-        or(
-          and(gte(schema.jobTasks.scheduledDate, from), lte(schema.jobTasks.scheduledDate, to)),
-          sql`exists (select 1 from task_days d where d.task_id = ${schema.jobTasks.id} and d.date >= ${from} and d.date <= ${to})`,
-        ),
+        mayWorkBetween(from, to),
       ),
     );
   if (tasks.length === 0) return [];
 
-  const ids = tasks.map((t) => t.id);
-  const days = await db
-    .select({ taskId: schema.taskDays.taskId, date: schema.taskDays.date, installerId: schema.taskDays.installerId })
-    .from(schema.taskDays)
-    .where(and(inArray(schema.taskDays.taskId, ids), ne(schema.taskDays.status, "cancelled")));
-  const daysByTask = new Map<number, typeof days>();
-  for (const d of days) {
-    if (!daysByTask.has(d.taskId)) daysByTask.set(d.taskId, []);
-    daysByTask.get(d.taskId)!.push(d);
+  // Every working day of a run, the same rule as Today (lib/task-run.ts). A
+  // schedule nobody can read still lists its possible days, flagged.
+  const slotsByTask = new Map<number, Array<{ date: string; installerId: number; incomplete: string | null }>>();
+  for (const sl of await workSlots(tasks, from, to)) {
+    if (!slotsByTask.has(sl.taskId)) slotsByTask.set(sl.taskId, []);
+    slotsByTask.get(sl.taskId)!.push(sl);
   }
 
   // job|date|installer -> row
   const rows = new Map<string, BoardRow>();
   for (const t of tasks) {
-    const crew = [t.a, t.b].filter((x): x is number => Boolean(x));
-    const run = daysByTask.get(t.id);
-    const slots: Array<{ date: string; installerId: number }> = [];
-    if (run && run.length) {
-      for (const d of run) {
-        if (d.date < from || d.date > to) continue;
-        const who = d.installerId ? [d.installerId] : crew;
-        for (const i of who) slots.push({ date: d.date, installerId: i });
-      }
-    } else if (t.scheduledDate && t.scheduledDate >= from && t.scheduledDate <= to) {
-      for (const i of crew) slots.push({ date: t.scheduledDate, installerId: i });
-    }
+    const slots = slotsByTask.get(t.id) ?? [];
     for (const s of slots) {
       const key = `${t.jobId}|${s.date}|${s.installerId}`;
       const row = rows.get(key);
       if (row) {
         if (!row.taskTitles.includes(t.title)) row.taskTitles.push(t.title);
+        // Sure if any task puts him there for sure.
+        if (!s.incomplete) row.scheduleIncomplete = null;
         continue;
       }
       rows.set(key, {
@@ -190,6 +175,7 @@ export async function swmsBoard(from: string, to: string): Promise<BoardRow[]> {
         installerName: "",
         taskTitles: [t.title],
         record: null,
+        scheduleIncomplete: s.incomplete,
       });
     }
   }

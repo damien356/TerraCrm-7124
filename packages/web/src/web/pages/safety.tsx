@@ -103,6 +103,9 @@ function Board() {
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         {r.installerName} · {r.taskTitles.join(", ")}
                       </p>
+                      {r.scheduleIncomplete ? (
+                        <p className="mt-0.5 text-xs font-medium text-[#8A5A0B]">Schedule incomplete. {r.scheduleIncomplete}</p>
+                      ) : null}
                     </div>
                     {r.record ? (
                       <Badge colour={GREEN}>

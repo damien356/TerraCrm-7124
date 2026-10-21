@@ -557,7 +557,7 @@ function DispatchPanel({
                 {(eligible.data ?? []).map((i) => (
                   <option key={i.id} value={i.id} disabled={!i.canCoverAlone}>
                     {i.name}
-                    {i.busyThatDay ? " · already on a job" : ""}
+                    {i.busyThatDay ? (i.busyScheduleIncomplete ? " · maybe on a job (schedule incomplete)" : " · already on a job") : ""}
                     {i.unavailableThatDay ? " · not available" : ""}
                     {!i.canCoverAlone ? " · can't do 2-man alone" : ""}
                   </option>

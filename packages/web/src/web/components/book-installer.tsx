@@ -365,7 +365,7 @@ export function BookInstallerPanel({
                       }
                     >
                       {d.clashes.length > 0
-                        ? `On Job #${d.clashes[0]!.jobNumber} already${d.clashes.length > 1 ? ` +${d.clashes.length - 1}` : ""}`
+                        ? `${d.clashes.every((c) => c.scheduleIncomplete) ? "Maybe on" : "On"} Job #${d.clashes[0]!.jobNumber}${d.clashes.every((c) => c.scheduleIncomplete) ? " (schedule incomplete)" : " already"}${d.clashes.length > 1 ? ` +${d.clashes.length - 1}` : ""}`
                         : d.status === "available"
                           ? "Available"
                           : (d.reason ?? "Unavailable")}

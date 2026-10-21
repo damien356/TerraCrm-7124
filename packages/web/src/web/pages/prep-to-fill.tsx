@@ -41,7 +41,12 @@ export default function PrepToFillPage() {
                     {r.title ? ` ${r.title}` : ""}
                   </Link>
                   {r.address ? <p className="text-xs text-muted-foreground">{r.address}</p> : null}
-                  <p className="text-xs text-muted-foreground">First install day {dayDate(r.firstDay)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {r.scheduleIncomplete ? "First possible install day" : "First install day"} {dayDate(r.firstDay)}
+                  </p>
+                  {r.scheduleIncomplete ? (
+                    <p className="text-xs font-medium text-[#8A5A0B]">Schedule incomplete. {r.scheduleIncomplete}</p>
+                  ) : null}
                   <p className="text-xs font-medium text-destructive">Needs {r.missing.join(" and ")}</p>
                 </div>
                 <div className="w-full sm:w-[300px]">

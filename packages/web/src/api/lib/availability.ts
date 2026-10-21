@@ -1,8 +1,9 @@
 import { jobNumberSql } from "./job-ref";
-import { and, eq, gte, inArray, isNull, lte, ne, or } from "drizzle-orm";
+import { and, eq, gte, inArray, lte, or } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { weekdayOf } from "./local-date";
+import { mayWorkBetween, slotCols, workSlots } from "./task-run";
 
 /**
  * The single source of truth for "can this installer work that day".
@@ -84,7 +85,7 @@ export type DayCheck = {
   /** Why the day is flagged, in the words the office wrote. */
   reason: string | null;
   /** Other work already on this installer that day. Never blocks, always shown. */
-  clashes: { taskId: number; jobId: number; jobNumber: number | string; title: string; suburb: string }[];
+  clashes: { taskId: number; jobId: number; jobNumber: number | string; title: string; suburb: string; scheduleIncomplete?: string | null }[];
 };
 
 /**
@@ -144,67 +145,45 @@ export async function checkDays(args: {
   });
 }
 
-/** Work already sitting on one installer across a set of dates. */
+/**
+ * Work already sitting on one installer across a set of dates. Every working
+ * day of a run counts (lib/task-run.ts), not only the task's first date. A
+ * date that only a schedule nobody can read puts him on comes back with
+ * `scheduleIncomplete` set, so the office sees a maybe, not a sure clash.
+ */
 export async function bookedDays(args: {
   installerId: number;
   dates: string[];
   exceptTaskId?: number | null;
-}): Promise<{ date: string; taskId: number; jobId: number; jobNumber: number | string; title: string; suburb: string }[]> {
+}): Promise<
+  { date: string; taskId: number; jobId: number; jobNumber: number | string; title: string; suburb: string; scheduleIncomplete: string | null }[]
+> {
   const { installerId, dates } = args;
   if (dates.length === 0) return [];
   const live = ["assigned", "in_progress"] as const;
+  const want = new Set(dates);
+  const from = [...want].sort()[0]!;
+  const to = [...want].sort().reverse()[0]!;
 
-  // Two sources: the day rows a booked run writes, and the single scheduled
-  // date every task has carried since before runs existed.
-  const [dayRows, taskRows] = await Promise.all([
-    db
-      .select({
-        date: schema.taskDays.date,
-        taskId: schema.jobTasks.id,
-        jobId: schema.jobs.id,
-        jobNumber: jobNumberSql,
-        title: schema.jobTasks.title,
-        suburb: schema.sites.suburb,
-      })
-      .from(schema.taskDays)
-      .innerJoin(schema.jobTasks, eq(schema.jobTasks.id, schema.taskDays.taskId))
-      .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
-      .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
-      .where(
-        and(
-          inArray(schema.taskDays.date, dates),
-          ne(schema.taskDays.status, "cancelled"),
-          inArray(schema.jobTasks.status, [...live]),
-          or(
-            eq(schema.taskDays.installerId, installerId),
-            and(isNull(schema.taskDays.installerId), eq(schema.jobTasks.assignedInstallerId, installerId)),
-            and(isNull(schema.taskDays.installerId), eq(schema.jobTasks.secondInstallerId, installerId)),
-          ),
-        ),
-      ),
-    db
-      .select({
-        date: schema.jobTasks.scheduledDate,
-        taskId: schema.jobTasks.id,
-        jobId: schema.jobs.id,
-        jobNumber: jobNumberSql,
-        title: schema.jobTasks.title,
-        suburb: schema.sites.suburb,
-      })
-      .from(schema.jobTasks)
-      .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
-      .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
-      .where(
-        and(
-          inArray(schema.jobTasks.scheduledDate, dates),
-          inArray(schema.jobTasks.status, [...live]),
-          or(
-            eq(schema.jobTasks.assignedInstallerId, installerId),
-            eq(schema.jobTasks.secondInstallerId, installerId),
-          ),
-        ),
-      ),
-  ]);
+  const tasks = await db
+    .select({
+      ...slotCols,
+      jobId: schema.jobs.id,
+      jobNumber: jobNumberSql,
+      title: schema.jobTasks.title,
+      suburb: schema.sites.suburb,
+    })
+    .from(schema.jobTasks)
+    .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
+    .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
+    .where(and(inArray(schema.jobTasks.status, [...live]), mayWorkBetween(from, to)));
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const rows = (await workSlots(tasks, from, to))
+    .filter((sl) => sl.installerId === installerId && want.has(sl.date))
+    .map((sl) => {
+      const t = byId.get(sl.taskId)!;
+      return { date: sl.date, taskId: t.id, jobId: t.jobId, jobNumber: t.jobNumber, title: t.title, suburb: t.suburb, scheduleIncomplete: sl.incomplete };
+    });
 
   // The booking being edited never clashes with itself, and nor does another
   // dispatch on the same job: the office only wants to hear about other jobs
@@ -216,8 +195,8 @@ export async function bookedDays(args: {
   const ownJob = own?.jobId ?? null;
 
   const seen = new Set<string>();
-  const out: { date: string; taskId: number; jobId: number; jobNumber: number | string; title: string; suburb: string }[] = [];
-  for (const r of [...dayRows, ...taskRows]) {
+  const out: { date: string; taskId: number; jobId: number; jobNumber: number | string; title: string; suburb: string; scheduleIncomplete: string | null }[] = [];
+  for (const r of rows) {
     if (!r.date) continue;
     if (exceptTask && Number(r.taskId) === exceptTask) continue;
     if (ownJob != null && Number(r.jobId) === ownJob) continue;

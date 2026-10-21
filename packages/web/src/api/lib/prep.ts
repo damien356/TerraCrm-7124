@@ -5,6 +5,7 @@ import { ensureForJob, logMessage } from "./conversations";
 import { sendJobEmail } from "./job-mail";
 import { jobRef } from "./job-ref";
 import { addLocalDays, localDate } from "./local-date";
+import { mayWorkBetween, resolveRun } from "./task-run";
 import { clientAutoSmsOn } from "./notify";
 import { isBuilderType, parseTags } from "./person-tags";
 import { isMeasureSkill, isUnitType, parseAptChecks, propertyTypeAnswered, propertyTypeLabel } from "./property-types";
@@ -191,17 +192,31 @@ type InstallDay = {
 
 /** Every install day on the job, one per date, oldest first. Measures and cancelled work left out. */
 export async function installDays(jobId: number, s: Pick<PrepSettings, "windowStart" | "windowEnd">): Promise<InstallDay[]> {
+  return (await installSchedule(jobId, s)).days;
+}
+
+/**
+ * The install days, plus any install task whose schedule cannot be read. Those
+ * give no days here: a client is never told a guessed date. The plan holds and
+ * says why instead (lib/task-run.ts has the rule).
+ */
+export async function installSchedule(
+  jobId: number,
+  s: Pick<PrepSettings, "windowStart" | "windowEnd">,
+): Promise<{ days: InstallDay[]; incomplete: Array<{ taskId: number; reason: string; from: string | null; to: string | null }> }> {
   const tasks = await db
     .select({ task: schema.jobTasks, skillName: schema.skills.name })
     .from(schema.jobTasks)
     .leftJoin(schema.skills, eq(schema.skills.id, schema.jobTasks.skillId))
     .where(and(eq(schema.jobTasks.jobId, jobId), ne(schema.jobTasks.status, "cancelled")));
   const installs = tasks.filter((t) => !isMeasureSkill(t.skillName ?? t.task.title));
-  if (!installs.length) return [];
-  const days = await db
+  if (!installs.length) return { days: [], incomplete: [] };
+  const allDays = await db
     .select()
     .from(schema.taskDays)
-    .where(and(inArray(schema.taskDays.taskId, installs.map((t) => t.task.id)), ne(schema.taskDays.status, "cancelled")));
+    .where(inArray(schema.taskDays.taskId, installs.map((t) => t.task.id)));
+  const days = allDays.filter((d) => d.status !== "cancelled");
+  const incomplete: Array<{ taskId: number; reason: string; from: string | null; to: string | null }> = [];
   type Raw = { date: string; taskId: number; installerId: number | null; start: string | null; end: string | null; coordinate: boolean; booked: boolean };
   const raw: Raw[] = [];
   for (const t of installs) {
@@ -217,22 +232,31 @@ export async function installDays(jobId: number, s: Pick<PrepSettings, "windowSt
           coordinate: d.coordinate,
           booked: d.status === "booked",
         });
-    } else if (t.task.scheduledDate) {
-      /* Booked before day rows existed: one day, the default window. */
-      raw.push({
-        date: t.task.scheduledDate,
-        taskId: t.task.id,
-        installerId: t.task.assignedInstallerId,
-        start: null,
-        end: null,
-        coordinate: false,
-        booked: t.task.status !== "complete",
-      });
+    } else {
+      /* No live day rows: the shared rule reads the range or the one date,
+         default window. Unreadable is flagged, never guessed as day one. */
+      const run = resolveRun(t.task, allDays.filter((d) => d.taskId === t.task.id));
+      if (run.incomplete) {
+        // Finished work needs no client messages, so an old unreadable range is not a hold.
+        if (t.task.status === "complete") continue;
+        incomplete.push({ taskId: t.task.id, reason: run.incomplete, from: run.windowFrom, to: run.windowTo });
+        continue;
+      }
+      for (const date of run.days)
+        raw.push({
+          date,
+          taskId: t.task.id,
+          installerId: t.task.assignedInstallerId,
+          start: null,
+          end: null,
+          coordinate: false,
+          booked: t.task.status !== "complete",
+        });
     }
   }
   const byDate = new Map<string, Raw[]>();
   for (const r of raw) byDate.set(r.date, [...(byDate.get(r.date) ?? []), r]);
-  return [...byDate.entries()]
+  const out = [...byDate.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, rs]) => {
       const timed = rs.filter((r) => !r.coordinate);
@@ -245,6 +269,7 @@ export async function installDays(jobId: number, s: Pick<PrepSettings, "windowSt
       const lead = timed[0] ?? rs[0]!;
       return { date, taskId: lead.taskId, installerId: lead.installerId, window, booked: rs.some((r) => r.booked) };
     });
+  return { days: out, incomplete };
 }
 
 /* ------------------------------ the plan --------------------------------- */
@@ -269,7 +294,9 @@ export async function jobPlan(jobId: number, now = new Date()) {
   const s = await prepSettings();
   const today = localDate(now);
   const people = await recipients(j);
-  const days = await installDays(jobId, s);
+  const sched = await installSchedule(jobId, s);
+  const days = sched.days;
+  const scheduleIncomplete = sched.incomplete.length ? sched.incomplete.map((x) => x.reason).join(" ") : null;
   const sends = await db.select().from(schema.prepSends).where(eq(schema.prepSends.jobId, jobId)).orderBy(asc(schema.prepSends.id));
   const missing = missingAnswers(j.job, j.site?.propertyType);
   const unit = isUnitType(j.site?.propertyType);
@@ -285,7 +312,9 @@ export async function jobPlan(jobId: number, now = new Date()) {
         ? builderJob(j) && j.job.prepOn == null
           ? "Off: builder and insurance jobs are off unless switched on here."
           : "Switched off on this job."
-        : missing.length
+        : scheduleIncomplete
+          ? `Held: the install schedule is incomplete. ${scheduleIncomplete} Book the days on the job.`
+          : missing.length
           ? `Held: answer the ${missing.join(" and ")} on the job.`
           : !people.length
             ? "Nobody to send to: tag the Owner or Tenant on the job, or tick the site contact."
@@ -371,6 +400,7 @@ export async function jobPlan(jobId: number, now = new Date()) {
     cancelled,
     closed: isClosed(j.statusName),
     hold,
+    scheduleIncomplete,
     missing,
     propertyType: j.site?.propertyType ?? null,
     propertyLabel: propertyTypeLabel(j.site?.propertyType),
@@ -575,10 +605,12 @@ async function jobsWithInstallsSoon(today: string) {
     .from(schema.taskDays)
     .innerJoin(schema.jobTasks, eq(schema.jobTasks.id, schema.taskDays.taskId))
     .where(and(gte(schema.taskDays.date, today), lte(schema.taskDays.date, to), ne(schema.taskDays.status, "cancelled"), ne(schema.jobTasks.status, "cancelled")));
+  // No day rows: any range or date that reaches into the next 3 days, so day 2
+  // of a run is not missed. The plan resolves the days.
   const fromTasks = await db
     .selectDistinct({ jobId: schema.jobTasks.jobId })
     .from(schema.jobTasks)
-    .where(and(gte(schema.jobTasks.scheduledDate, today), lte(schema.jobTasks.scheduledDate, to), ne(schema.jobTasks.status, "cancelled")));
+    .where(and(mayWorkBetween(today, to), ne(schema.jobTasks.status, "cancelled")));
   return [...new Set([...fromDays, ...fromTasks].map((r) => r.jobId))].sort((a, b) => a - b);
 }
 
@@ -808,22 +840,27 @@ export async function jobsToFill(now = new Date()) {
   const fromTasks = await db
     .selectDistinct({ jobId: schema.jobTasks.jobId })
     .from(schema.jobTasks)
-    .where(and(gte(schema.jobTasks.scheduledDate, today), ne(schema.jobTasks.status, "cancelled")));
+    .where(and(mayWorkBetween(today, "9999-12-31"), ne(schema.jobTasks.status, "cancelled")));
   const ids = [...new Set([...fromDays, ...fromTasks].map((r) => r.jobId))];
-  const out: Array<{ jobId: number; ref: string; title: string; address: string; firstDay: string; missing: string[]; siteId: number | null; propertyType: string | null; furnitureMoving: boolean | null }> = [];
+  const out: Array<{ jobId: number; ref: string; title: string; address: string; firstDay: string; scheduleIncomplete: string | null; missing: string[]; siteId: number | null; propertyType: string | null; furnitureMoving: boolean | null }> = [];
   for (const id of ids) {
     const j = await loadJob(id);
     if (!j || isClosed(j.statusName)) continue;
     const missing = missingAnswers(j.job, j.site?.propertyType);
     if (!missing.length) continue;
-    const days = (await installDays(id, s)).filter((d) => d.date >= today);
-    if (!days.length) continue;
+    const sched = await installSchedule(id, s);
+    const days = sched.days.filter((d) => d.date >= today);
+    // An unreadable schedule still lists the job, flagged, from its first possible date.
+    const maybe = sched.incomplete.filter((x) => (x.to ?? x.from ?? "") >= today);
+    const firstDay = days[0]?.date ?? maybe.map((x) => (x.from && x.from >= today ? x.from : today)).sort()[0];
+    if (!firstDay) continue;
     out.push({
       jobId: id,
       ref: jobRef(j.job),
       title: j.job.title,
       address: [j.site?.address, j.site?.suburb].filter(Boolean).join(", "),
-      firstDay: days[0]!.date,
+      firstDay,
+      scheduleIncomplete: maybe.length ? maybe.map((x) => x.reason).join(" ") : null,
       missing,
       siteId: j.site?.id ?? null,
       propertyType: j.site?.propertyType ?? null,
