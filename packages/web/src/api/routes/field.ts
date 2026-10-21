@@ -383,6 +383,12 @@ export const field = {
       .select({ labourCost: schema.jobTasks.labourCost, labourBreakdown: schema.jobTasks.labourBreakdown })
       .from(schema.jobTasks)
       .where(eq(schema.jobTasks.id, input.id));
+    // GST is only added for an installer who is GST registered. Someone who
+    // is not registered cannot charge GST, so his screen never suggests it.
+    const [me] = await db
+      .select({ gst: schema.installers.gstRegistered })
+      .from(schema.installers)
+      .where(eq(schema.installers.id, context.installerId));
 
     let payBreakdown: Array<{ name: string; unit: string; qty: number; rate: number | null; total: number | null }> | null =
       null;
@@ -410,6 +416,7 @@ export const field = {
       crewMate: mate[0] ?? null,
       payBreakdown,
       payTotalExGst: taskRow?.labourCost ?? null,
+      gstRegistered: Boolean(me?.gst),
     };
   }),
 

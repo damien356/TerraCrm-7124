@@ -673,7 +673,7 @@ export default function TaskScreen() {
                       <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground, marginTop: 2 }}>
                         {line.qty} {unitLabel(line.unit)}
                         {line.rate != null ? ` @ ${fmtMoney2(line.rate)}/${unitLabel(line.unit)}` : ""}
-                        {" +GST"}
+                        {t.gstRegistered ? " +GST" : ""}
                       </Text>
                     </View>
                     <Text style={{ fontFamily: Fonts.bold, fontSize: 14, color: c.foreground }}>
@@ -683,20 +683,36 @@ export default function TaskScreen() {
                 ))}
 
                 <View style={{ borderTopWidth: 1, borderTopColor: c.border, marginTop: 4, paddingTop: 10, gap: 4 }}>
-                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                    <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: c.mutedForeground }}>
-                      Total ex GST
-                    </Text>
-                    <Text style={{ fontFamily: Fonts.medium, fontSize: 15, color: c.foreground }}>
-                      {fmtMoney2(t.payTotalExGst)}
-                    </Text>
-                  </View>
-                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                    <Text style={{ fontFamily: Fonts.bold, fontSize: 16, color: c.foreground }}>Total inc GST</Text>
-                    <Text style={{ fontFamily: Fonts.bold, fontSize: 18, color: c.primary }}>
-                      {fmtMoney2(t.payTotalExGst != null ? t.payTotalExGst * 1.1 : null)}
-                    </Text>
-                  </View>
+                  {t.gstRegistered ? (
+                    <>
+                      <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                        <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: c.mutedForeground }}>
+                          Total ex GST
+                        </Text>
+                        <Text style={{ fontFamily: Fonts.medium, fontSize: 15, color: c.foreground }}>
+                          {fmtMoney2(t.payTotalExGst)}
+                        </Text>
+                      </View>
+                      <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                        <Text style={{ fontFamily: Fonts.bold, fontSize: 16, color: c.foreground }}>Total inc GST</Text>
+                        <Text style={{ fontFamily: Fonts.bold, fontSize: 18, color: c.primary }}>
+                          {fmtMoney2(t.payTotalExGst != null ? t.payTotalExGst * 1.1 : null)}
+                        </Text>
+                      </View>
+                    </>
+                  ) : (
+                    <>
+                      <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                        <Text style={{ fontFamily: Fonts.bold, fontSize: 16, color: c.foreground }}>Total</Text>
+                        <Text style={{ fontFamily: Fonts.bold, fontSize: 18, color: c.primary }}>
+                          {fmtMoney2(t.payTotalExGst)}
+                        </Text>
+                      </View>
+                      <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground }}>
+                        Not GST registered, so no GST on this pay.
+                      </Text>
+                    </>
+                  )}
                 </View>
               </View>
             ) : (
