@@ -27,16 +27,25 @@ export async function noPoLabel(inv: {
   jobId?: number | null;
   poRefRaw?: string | null;
   otherRefs?: string | null;
-}): Promise<"no_po_needed" | "historical" | "needs_you"> {
+}): Promise<NoPoLabel> {
+  const none: NoPoLabel = { status: "needs_you", source: null, note: "" };
   // An invoice from a supplier Ops doesn't know always needs a person.
-  if (!inv.supplierId) return "needs_you";
+  if (!inv.supplierId) return none;
   const [s] = await db.select({ noPoNeeded: schema.suppliers.noPoNeeded }).from(schema.suppliers).where(eq(schema.suppliers.id, inv.supplierId));
-  if (s?.noPoNeeded) return "no_po_needed";
+  if (s?.noPoNeeded) return { status: "no_po_needed", source: "supplier", note: "Supplier is ticked No PO needed." };
   // Old, but it names an Ops job or PO: someone should look, so it stays.
   const citesOps = Boolean(inv.jobId) || poRefsIn(inv.poRefRaw, inv.otherRefs).length > 0 || /\b188\d{3}\b/.test(`${inv.poRefRaw ?? ""} ${inv.otherRefs ?? ""}`);
-  if (inv.invoiceDate && inv.invoiceDate < HISTORICAL_BEFORE && !citesOps) return "historical";
-  return "needs_you";
+  if (inv.invoiceDate && inv.invoiceDate < HISTORICAL_BEFORE && !citesOps)
+    return { status: "historical", source: "date", note: `Dated before ${auDate(HISTORICAL_BEFORE)}, when Ops started raising POs, and names no Ops job or PO.` };
+  return none;
 }
+
+export type NoPoLabel = {
+  status: "no_po_needed" | "historical" | "needs_you";
+  /** See supplierInvoices.labelSource. Null when not labelled. */
+  source: "supplier" | "date" | "review" | null;
+  note: string;
+};
 
 /* ---------------------------------------------------------------------------
  * Matching supplier paperwork to POs.
@@ -404,21 +413,38 @@ export async function placeInvoice(invoiceId: number, forcePoId?: number | null)
     }
   }
   // No PO: label it. A person unlinking by hand always puts it back on Needs you.
-  const label = poId ? null : forcePoId === undefined ? await noPoLabel({ ...inv, supplierId }) : "needs_you";
-  if (label && label !== "needs_you" && inv.matchStatus !== label) {
+  // A label from the backlog review stays until a person takes it off, so a
+  // rematch that still finds no PO never undoes what Damien approved.
+  const kept: NoPoLabel | null =
+    inv.labelSource === "review" && (inv.matchStatus === "no_po_needed" || inv.matchStatus === "historical")
+      ? { status: inv.matchStatus, source: "review", note: inv.labelNote }
+      : null;
+  // A person took the label off: no automatic label goes back on.
+  const removed = inv.labelSource === "removed";
+  const label: NoPoLabel | null = poId
+    ? null
+    : forcePoId === undefined
+      ? (kept ?? (removed ? { status: "needs_you", source: null, note: "" } : await noPoLabel({ ...inv, supplierId })))
+      : { status: "needs_you", source: null, note: "" };
+  if (label && label.status !== "needs_you" && (inv.matchStatus !== label.status || inv.labelSource !== label.source)) {
     await logAiAction({
       kind: "invoice_labelled",
-      title: `${inv.supplierNameRaw} invoice ${inv.invoiceNumber} labelled ${label === "no_po_needed" ? "No PO needed" : "Before POs"}`,
-      detail:
-        label === "no_po_needed"
-          ? "The supplier is ticked No PO needed, so it stays off Needs you. It still counts in what is owed."
-          : `Dated before ${auDate(HISTORICAL_BEFORE)}, when Ops started raising POs, so it stays off Needs you. It still counts in what is owed.`,
+      title: `${inv.supplierNameRaw} invoice ${inv.invoiceNumber} labelled ${label.status === "no_po_needed" ? "No PO needed" : "Before POs"}`,
+      detail: `${label.note} Only the missing PO warning is off. Price checks stay on, and it still counts in what is owed.`,
       path: "/finance/suppliers-owed",
       supplierId,
       invoiceId,
       jobId: inv.jobId,
     });
   }
+  const labelChanged = !label || label.status !== inv.matchStatus || label.source !== inv.labelSource;
+  const labelCols = removed && label?.status === "needs_you"
+    ? {}
+    : !label || label.status === "needs_you"
+    ? { labelSource: null, labelNote: "", labelledAt: null, labelledBy: null }
+    : labelChanged
+      ? { labelSource: label.source, labelNote: label.note, labelledAt: new Date(), labelledBy: "Invoice matching" }
+      : {};
   await db
     .update(schema.supplierInvoices)
     .set({
@@ -426,7 +452,8 @@ export async function placeInvoice(invoiceId: number, forcePoId?: number | null)
       supplierId,
       dedupeKey: dedupe,
       matchNote: note,
-      matchStatus: poId ? inv.matchStatus : label!,
+      matchStatus: poId ? inv.matchStatus : label!.status,
+      ...labelCols,
       diffExGst: poId ? inv.diffExGst : null,
       updatedAt: new Date(),
     })

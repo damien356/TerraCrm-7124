@@ -96,6 +96,13 @@ export function NotifySettingsCard() {
                 <span className="block text-xs text-muted-foreground">One email a day: today's jobs, open tasks and anything overdue.</span>
               </span>
             </label>
+            <p className="mt-1.5 pl-6 text-xs text-muted-foreground" data-testid="summary-last-sent">
+              {s.lastScheduled
+                ? `Last 7am email left ${new Date(s.lastScheduled.at).toLocaleString("en-AU", { timeZone: "Australia/Brisbane", weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}, by ${
+                    s.lastScheduled.via === "wake" ? "the wake call" : "the timer"
+                  }, to ${s.lastScheduled.to}.`
+                : "No 7am email recorded yet. The send time is kept from 21 Oct on."}
+            </p>
             <div className="mt-2 flex flex-wrap items-center gap-3 pl-6 text-xs">
               <button type="button" className="font-medium text-primary hover:underline" onClick={() => setShowPreview((v) => !v)}>
                 {showPreview ? "Hide preview" : "Preview today's"}

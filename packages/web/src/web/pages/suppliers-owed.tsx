@@ -11,7 +11,7 @@ import { orpc } from "../lib/api";
 import { PAIR_META } from "../components/purchase-orders";
 import { InvoicePanel, RequestModal, UploadPdfButton, errText, requestStatus } from "../components/supplier-invoice";
 import { PriceFlagRow } from "../components/price-checks";
-import { useOwed, useSupplierOwed } from "../queries/payables";
+import { useLabelledInvoices, useOwed, useSupplierOwed, useUnlabelInvoice } from "../queries/payables";
 import { usePriceChecks } from "../queries/price-checks";
 import { EmailInput } from "../components/email-input";
 
@@ -37,6 +37,14 @@ const NEEDS_LABEL: Record<NeedsItem["kind"], { label: string; colour: string }> 
   late_invoice: { label: "No invoice yet", colour: "#7A736D" },
   mailbox: { label: "Mailbox", colour: "#C0603F" },
 };
+
+/**
+ * Every figure here is Terra's own record: invoices read from email, less the
+ * ones marked paid by a statement or by hand. Xero is not connected, so
+ * payments and credits entered only in Xero are not in it (21 Oct). Wording
+ * waiting on Damien's pick.
+ */
+const NOT_CHECKED = "Not checked against Xero yet. Recorded payments and credits may be missing.";
 
 const dayOf = (d: Date | string | null) => (d ? new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : "");
 
@@ -126,16 +134,26 @@ function Overview({
         </Card>
       ) : null}
 
+      <Card className="border-[var(--warning)]/45 bg-[var(--warning)]/[0.08] px-4 py-3">
+        <div className="flex items-start gap-2.5">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-[var(--warning)]" />
+          <p className="text-[13px]">
+            <span className="font-semibold">Balance not verified.</span> {NOT_CHECKED} Owed, overdue, due soon and every supplier row below are from Terra's
+            own records only: invoices read from email, less those marked paid on a statement or by hand.
+          </p>
+        </div>
+      </Card>
+
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Owed" value={money(d.totals.owedIncGst)} hint="Unpaid invoices, inc GST" />
-        <Stat label="Overdue" value={money(d.totals.overdueIncGst)} tone={d.totals.overdueIncGst > 0 ? "danger" : "default"} hint="Past the due date" />
-        <Stat label="Due in 14 days" value={money(d.totals.dueSoonIncGst)} tone={d.totals.dueSoonIncGst > 0 ? "warning" : "default"} hint="Not overdue yet" />
+        <Stat label="Owed" value={money(d.totals.owedIncGst)} hint="Unpaid invoices, inc GST. Not checked against Xero." />
+        <Stat label="Overdue" value={money(d.totals.overdueIncGst)} tone={d.totals.overdueIncGst > 0 ? "danger" : "default"} hint="Past the due date. Not checked against Xero." />
+        <Stat label="Due in 14 days" value={money(d.totals.dueSoonIncGst)} tone={d.totals.dueSoonIncGst > 0 ? "warning" : "default"} hint="Not overdue yet. Not checked against Xero." />
         <Stat label="Ordered, not billed" value={money(d.totals.awaitingExGst)} hint="Sent POs with no invoice, ex GST" />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
         <Card>
-          <CardHeader title="By supplier" subtitle="Most overdue first. Tap a supplier to see each PO next to its invoice." action={<Badge>{d.suppliers.length}</Badge>} />
+          <CardHeader title="By supplier" subtitle="Most overdue first. Tap a supplier to see each PO next to its invoice. Owed and overdue are not checked against Xero yet." action={<Badge>{d.suppliers.length}</Badge>} />
           {d.suppliers.length === 0 ? (
             <Empty>Nothing owed and no POs waiting on an invoice.</Empty>
           ) : (
@@ -265,10 +283,109 @@ function Overview({
             </Card>
           ) : null}
 
+          <LabelledCard unpaid={d.labelledUnpaid} onInvoice={onInvoice} />
+
           <AutoSendNote on={d.autoSend} />
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Invoices labelled No PO needed or Before POs. The label only takes the
+ * missing PO warning off Needs you. They still count in every total, and
+ * price checks on them stay open. Search, see who labelled each one and why,
+ * and take a label off (21 Oct).
+ */
+function LabelledCard({ unpaid, onInvoice }: { unpaid: number; onInvoice: (id: number) => void }) {
+  const [open, setOpen] = React.useState(false);
+  const [search, setSearch] = React.useState("");
+  const [source, setSource] = React.useState<"all" | "supplier" | "date" | "review">("all");
+  const q = useLabelledInvoices(search.trim(), source, open);
+  const unlabel = useUnlabelInvoice();
+  return (
+    <Card>
+      <CardHeader
+        title="Labelled, no PO"
+        subtitle="Off Needs you for the missing PO only. Still owed, still price checked."
+        action={
+          <Button size="sm" variant="outline" onClick={() => setOpen((o) => !o)}>
+            {open ? "Hide" : `Show${unpaid ? ` · ${unpaid} unpaid` : ""}`}
+          </Button>
+        }
+      />
+      {open ? (
+        <div className="space-y-2 px-4 pb-3">
+          <div className="flex gap-2">
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Supplier, invoice no or reason"
+              aria-label="Search labelled invoices"
+              className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 text-sm"
+            />
+            <select value={source} onChange={(e) => setSource(e.target.value as typeof source)} aria-label="Where the label came from" className="h-8 rounded-md border border-border bg-background px-2 text-sm">
+              <option value="all">All</option>
+              <option value="review">Backlog review</option>
+              <option value="supplier">Supplier tick</option>
+              <option value="date">Dated before POs</option>
+            </select>
+          </div>
+          {q.isLoading ? (
+            <Loading />
+          ) : !q.data?.items.length ? (
+            <Empty>No labelled invoices{search ? " match" : ""}.</Empty>
+          ) : (
+            <>
+              <p className="text-[11px] text-muted-foreground">
+                {q.data.total} labelled{q.data.total > q.data.items.length ? `, first ${q.data.items.length} shown` : ""}
+              </p>
+              <ul className="max-h-[420px] divide-y divide-border overflow-y-auto rounded-md border border-border">
+                {q.data.items.map((r) => (
+                  <li key={r.id} className="px-3 py-2 text-sm">
+                    <div className="flex items-start gap-2">
+                      <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onInvoice(r.id)}>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge colour="#7A736D">{r.labelWords}</Badge>
+                          <span className="text-[11px] text-muted-foreground">{r.sourceWords}</span>
+                          {r.payState === "paid" ? <Badge colour="#4A7FA5">Paid</Badge> : null}
+                        </div>
+                        <p className="mt-0.5 font-medium">
+                          {r.supplier} · {r.invoiceNumber}
+                          {r.date ? <span className="text-xs font-normal text-muted-foreground"> · {shortDate(r.date)}</span> : null}
+                        </p>
+                        {r.note ? <p className="text-xs text-muted-foreground">{r.note}</p> : null}
+                        {r.labelledBy ? (
+                          <p className="text-[11px] text-muted-foreground">
+                            By {r.labelledBy}
+                            {r.labelledAt ? `, ${dayOf(r.labelledAt)}` : ""}
+                          </p>
+                        ) : null}
+                      </button>
+                      <div className="flex flex-col items-end gap-1">
+                        <span className="tabular text-sm font-semibold">{moneyExact(r.amount)}</span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={unlabel.isPending}
+                          onClick={() => {
+                            if (window.confirm(`Take the label off ${r.supplier} invoice ${r.invoiceNumber}? It goes back on Needs you as missing a PO. Nothing else changes.`))
+                              unlabel.mutate({ invoiceId: r.id });
+                          }}
+                        >
+                          Take off
+                        </Button>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      ) : null}
+    </Card>
   );
 }
 
@@ -332,6 +449,8 @@ function SupplierDetail({
               </p>
             </div>
           </div>
+
+          <p className="text-xs text-[var(--warning)]">{NOT_CHECKED}</p>
 
           {d.supplier && !d.supplier.email ? <AddEmail supplierId={d.supplier.id} name={d.supplier.name} /> : null}
 

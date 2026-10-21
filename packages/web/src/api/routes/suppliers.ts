@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -105,19 +105,24 @@ const feePatch = z.object({
 /**
  * The "No PO needed" tick moved. Only invoices with no PO change, and only
  * their match label. payState is never touched, so what is owed stays the same.
+ *
+ * Tick on labels the ones still on Needs you, marked as the tick's own.
+ * Tick off takes back only the tick's own labels. Labels from the backlog
+ * review, or the before-POs date, are separate and stay (21 Oct).
  */
-async function relabelNoPoInvoices(supplierId: number, on: boolean) {
-  const rows = await db
-    .update(schema.supplierInvoices)
-    .set({ matchStatus: on ? "no_po_needed" : "needs_you", updatedAt: new Date() })
-    .where(
-      and(
-        eq(schema.supplierInvoices.supplierId, supplierId),
-        isNull(schema.supplierInvoices.poId),
-        eq(schema.supplierInvoices.matchStatus, on ? "needs_you" : "no_po_needed"),
-      ),
-    )
-    .returning({ id: schema.supplierInvoices.id });
+async function relabelNoPoInvoices(supplierId: number, on: boolean, actorName: string) {
+  const inv = schema.supplierInvoices;
+  const rows = on
+    ? await db
+        .update(inv)
+        .set({ matchStatus: "no_po_needed", labelSource: "supplier", labelNote: "Supplier is ticked No PO needed.", labelledAt: new Date(), labelledBy: actorName, updatedAt: new Date() })
+        .where(and(eq(inv.supplierId, supplierId), isNull(inv.poId), eq(inv.matchStatus, "needs_you"), or(isNull(inv.labelSource), ne(inv.labelSource, "removed"))))
+        .returning({ id: inv.id })
+    : await db
+        .update(inv)
+        .set({ matchStatus: "needs_you", labelSource: null, labelNote: "", labelledAt: null, labelledBy: null, updatedAt: new Date() })
+        .where(and(eq(inv.supplierId, supplierId), isNull(inv.poId), eq(inv.matchStatus, "no_po_needed"), eq(inv.labelSource, "supplier")))
+        .returning({ id: inv.id });
   return rows.length;
 }
 
@@ -237,7 +242,7 @@ export const suppliers = {
       if (!row) throw new ORPCError("NOT_FOUND", { message: "Supplier not found" });
       await logSupplier(id, "supplier_updated", row.name, context.actor.name || "Office");
       if (input.noPoNeeded !== undefined && was && was.noPoNeeded !== input.noPoNeeded) {
-        const moved = await relabelNoPoInvoices(id, input.noPoNeeded);
+        const moved = await relabelNoPoInvoices(id, input.noPoNeeded, context.actor.name || "Office");
         await logSupplier(
           id,
           "supplier_no_po_needed",

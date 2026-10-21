@@ -92,6 +92,22 @@ async function alreadyReported(jobId: number, supplierId: number | null, materia
  * a PO is left alone. Never throws; a failure is logged and the accept goes on.
  */
 export async function draftPosForJob(args: { jobId: number; quoteRef: string }): Promise<PoHelperResult> {
+  // One pass per job at a time (21 Oct). Two accepts landing together, or a
+  // retry while the first is still pricing, wait their turn. The second then
+  // finds the materials already on the first one's drafts and drafts nothing.
+  const prev = jobLocks.get(args.jobId) ?? Promise.resolve();
+  const run = prev.then(() => draftPosForJobNow(args));
+  const tail = run.catch(() => undefined);
+  jobLocks.set(args.jobId, tail);
+  try {
+    return await run;
+  } finally {
+    if (jobLocks.get(args.jobId) === tail) jobLocks.delete(args.jobId);
+  }
+}
+const jobLocks = new Map<number, Promise<unknown>>();
+
+async function draftPosForJobNow(args: { jobId: number; quoteRef: string }): Promise<PoHelperResult> {
   const out: PoHelperResult = { drafted: [], skipped: 0 };
   try {
     const materials = await openMaterials(args.jobId);

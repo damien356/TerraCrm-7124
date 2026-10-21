@@ -1,5 +1,5 @@
 -- Steps 1 to 3 (20 Oct): AI log and tray, supplier PO helper, invoice labels.
--- One new table and three new columns. No existing row is changed by this file.
+-- One new table and seven new columns. No existing value is changed by this file.
 CREATE TABLE IF NOT EXISTS ai_actions (
   id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
   agent text NOT NULL,
@@ -26,3 +26,9 @@ ALTER TABLE suppliers ADD COLUMN no_po_needed integer DEFAULT false NOT NULL;
 ALTER TABLE invoice_requests ADD COLUMN job_id integer REFERENCES jobs(id) ON DELETE set null;
 ALTER TABLE invoice_requests ADD COLUMN po_id integer REFERENCES purchase_orders(id) ON DELETE set null;
 CREATE INDEX IF NOT EXISTS invoice_requests_job_idx ON invoice_requests (job_id);
+-- 21 Oct: who labelled an invoice, so the supplier tick and the backlog review
+-- can each be undone on their own. All four start empty on every row.
+ALTER TABLE supplier_invoices ADD COLUMN label_source text;
+ALTER TABLE supplier_invoices ADD COLUMN label_note text DEFAULT '' NOT NULL;
+ALTER TABLE supplier_invoices ADD COLUMN labelled_at integer;
+ALTER TABLE supplier_invoices ADD COLUMN labelled_by text;

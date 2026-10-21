@@ -41,3 +41,9 @@ export const useSendRequest = () => useMutation(orpc.payables.requestSend.mutati
 export const useCancelRequest = () => useMutation(orpc.payables.requestCancel.mutationOptions({ onSuccess: usePayablesRefresh() }));
 export const useSetAutoSend = () => useMutation(orpc.payables.setAutoSend.mutationOptions({ onSuccess: usePayablesRefresh() }));
 export const useUploadSupplierPdf = () => useMutation(orpc.payables.uploadPdf.mutationOptions({ onSuccess: usePayablesRefresh() }));
+
+/** Invoices labelled No PO needed or Before POs, searchable (21 Oct). */
+export function useLabelledInvoices(search: string, source: "all" | "supplier" | "date" | "review", enabled = true) {
+  return useQuery(orpc.payables.labelled.queryOptions({ input: { search, source }, enabled, staleTime: 10_000 }));
+}
+export const useUnlabelInvoice = () => useMutation(orpc.payables.unlabel.mutationOptions({ onSuccess: usePayablesRefresh() }));

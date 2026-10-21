@@ -9,6 +9,7 @@ import {
   ALERT_KINDS,
   CLIENT_AUTO_SMS_KEY,
   NOTIFY_DAILY_KEY,
+  NOTIFY_DAILY_LAST_KEY,
   NOTIFY_DAILY_SENT_KEY,
   NOTIFY_EMAIL_TO_DEFAULT,
   NOTIFY_EMAIL_TO_KEY,
@@ -346,15 +347,58 @@ export function dailySummaryText(s: Awaited<ReturnType<typeof buildDailySummary>
   return out;
 }
 
+/** How a summary went out: the 5 minute timer, the outside wake call, or Send it to me now. */
+export type SummaryVia = "timer" | "wake" | "by_hand";
+const VIA_WORDS: Record<SummaryVia, string> = { timer: "the 5 minute timer", wake: "the outside wake call", by_hand: "Send it to me now" };
+
 /** Send the summary now. Exported so it can be sent by hand from Settings. */
-export async function sendDailySummary(now = new Date()) {
+export async function sendDailySummary(now = new Date(), via: SummaryVia = "by_hand") {
   const s = await notifySettings();
   const summary = await buildDailySummary(now);
   const lines = dailySummaryText(summary);
-  const late = lateLine(now);
+  const late = via === "by_hand" ? null : lateLine(now);
   if (late) lines.splice(1, 0, late);
   const sent = await emailOffice(s.emailTo, `Daily summary, ${shortDay(summary.today)}`, lines, `${OPS_URL}/`);
+  await recordSummarySend(via, s.emailTo, sent);
   return { ...sent, to: s.emailTo };
+}
+
+/**
+ * Write down every send and every failure, with the real time it happened,
+ * so a backup of live shows when the 7am email actually left (21 Oct). The
+ * Resend key can only send, so this is the only record Ops has. Never throws.
+ */
+async function recordSummarySend(via: SummaryVia, to: string, out: { ok: boolean; providerId?: string; reason?: string }) {
+  try {
+    const at = new Date();
+    const clock = clockOf(at);
+    // The scheduled send only. Send it to me now is logged below but never stands in for 7am.
+    if (out.ok && via !== "by_hand") {
+      const value = JSON.stringify({ at: at.toISOString(), day: localDate(at), via, to, providerId: out.providerId ?? "" });
+      await db.insert(schema.settings).values({ key: NOTIFY_DAILY_LAST_KEY, value }).onConflictDoUpdate({ target: schema.settings.key, set: { value, updatedAt: at } });
+    }
+    await db.insert(schema.activityLog).values({
+      entityType: "notify",
+      action: out.ok ? "daily_summary_sent" : "daily_summary_failed",
+      detail: out.ok
+        ? `Daily summary sent to ${to} at ${clock}, by ${VIA_WORDS[via]}. Resend id ${out.providerId || "none"}.`
+        : `Daily summary not sent at ${clock}, by ${VIA_WORDS[via]}: ${out.reason ?? "unknown reason"}.`,
+      actorName: "Daily summary",
+      actorRole: "system",
+    });
+  } catch (e) {
+    console.error("[notify] could not record the summary send:", (e as Error).message ?? e);
+  }
+}
+
+/** The last scheduled summary that went out, for Settings. Null before the first one. */
+export async function lastSummarySend(): Promise<{ at: string; day: string; via: SummaryVia; to: string; providerId: string } | null> {
+  const [row] = await db.select().from(schema.settings).where(eq(schema.settings.key, NOTIFY_DAILY_LAST_KEY));
+  try {
+    return row?.value ? JSON.parse(row.value) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Minutes past midnight, Gold Coast time (UTC+10, no daylight saving). */
@@ -370,16 +414,22 @@ const gcMinutes = (now: Date) => {
 export function lateLine(now: Date): string | null {
   const m = gcMinutes(now);
   if (m < SEND_FROM_HOUR * 60 + 15) return null;
+  // The time only. Why it was late is not known from here, so it never guesses (21 Oct).
+  return `Sent late, at ${clockOf(now)} instead of 7am.`;
+}
+
+/** "7:03am", Gold Coast time. */
+function clockOf(now: Date) {
+  const m = gcMinutes(now);
   const h = Math.floor(m / 60);
   const mm = String(m % 60).padStart(2, "0");
-  const clock = `${h > 12 ? h - 12 : h}:${mm}${h >= 12 ? "pm" : "am"}`;
-  return `Sent late, at ${clock}. The server was asleep at 7am.`;
+  return `${h > 12 ? h - 12 : h === 0 ? 12 : h}:${mm}${h >= 12 ? "pm" : "am"}`;
 }
 
 let running = false;
 
 /** One pass of the timer. Sends at most once per Gold Coast day. */
-export async function tickDailySummary(now = new Date()) {
+export async function tickDailySummary(now = new Date(), via: Exclude<SummaryVia, "by_hand"> = "timer") {
   if (running) return false;
   running = true;
   try {
@@ -399,7 +449,7 @@ export async function tickDailySummary(now = new Date()) {
       })
       .returning({ key: schema.settings.key });
     if (!claimed.length) return false;
-    const out = await sendDailySummary(now);
+    const out = await sendDailySummary(now, via);
     if (!out.ok) {
       console.error(`[notify] daily summary not sent: ${out.reason}`);
       // Give the day back so the next tick tries again, still only until noon.
@@ -430,7 +480,7 @@ export const dailySummaryTicking = () => ticking;
  */
 export async function wakeDailySummary(now = new Date()) {
   if (!ticking) return { ticking: false, sent: false };
-  const sent = await tickDailySummary(now);
+  const sent = await tickDailySummary(now, "wake");
   return { ticking: true, sent };
 }
 

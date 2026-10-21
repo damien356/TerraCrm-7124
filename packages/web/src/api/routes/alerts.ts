@@ -5,7 +5,7 @@ import * as schema from "../database/schema";
 import { adminOnly, staffOnly } from "../middleware/auth";
 import { jobNumberSql } from "../lib/job-ref";
 import { ALERT_KIND_KEYS, ALERT_KINDS, NOTIFY_FROM, type AlertKind } from "../lib/notify-kinds";
-import { buildDailySummary, dailySummaryText, notifySettings, saveNotifySettings, sendDailySummary } from "../lib/notify";
+import { buildDailySummary, dailySummaryText, lastSummarySend, notifySettings, saveNotifySettings, sendDailySummary } from "../lib/notify";
 import { emailConfigured } from "../lib/email";
 
 /* ---------------------------------------------------------------------------
@@ -89,6 +89,7 @@ export const alerts = {
       ...s,
       from: NOTIFY_FROM,
       emailReady: emailConfigured(),
+      lastScheduled: await lastSummarySend(),
       kinds: ALERT_KIND_KEYS.map((k) => ({ key: k, label: ALERT_KINDS[k].label, group: ALERT_KINDS[k].group })),
     };
   }),

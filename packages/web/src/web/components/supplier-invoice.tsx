@@ -303,6 +303,7 @@ function ErrorLine({ text }: { text: string }) {
 const REQ_STATUS: Record<string, { label: string; colour: string }> = {
   waiting_ok: { label: "Waiting for your okay", colour: "#D08A1E" },
   no_email: { label: "No email on file", colour: "#C0603F" },
+  sending: { label: "Sending", colour: "#4A7FA5" },
   sent: { label: "Sent", colour: "#4A7FA5" },
   received: { label: "Invoice received", colour: "#3F7D3A" },
   cancelled: { label: "Cancelled", colour: "#A9A29B" },

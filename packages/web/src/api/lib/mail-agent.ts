@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db, inDemo } from "../database";
 import * as schema from "../database/schema";
 import { readSupplierPdf } from "../agent/supplier-docs";
@@ -190,8 +190,26 @@ export async function ingestPdf(bytes: Buffer, ctx: { filename: string; from: st
 export async function sendInvoiceRequest(id: number) {
   const [r] = await db.select().from(schema.invoiceRequests).where(eq(schema.invoiceRequests.id, id));
   if (!r) throw new Error("Request not found");
-  if (r.status === "sent" || r.status === "received") return r;
+  if (r.status === "sent" || r.status === "received" || r.status === "sending") return r;
+  if (r.status === "cancelled") throw new Error("This request was cancelled.");
   if (!r.toAddress) throw new Error("No email on file for this supplier. Add one on the Suppliers page.");
+  // The invoice came in after the request was made: close it, send nothing.
+  const [have] = await db.select({ id: schema.supplierInvoices.id }).from(schema.supplierInvoices).where(eq(schema.supplierInvoices.dedupeKey, r.dedupeKey));
+  if (have) {
+    const [u] = await db.update(schema.invoiceRequests).set({ status: "received", updatedAt: new Date() }).where(eq(schema.invoiceRequests.id, id)).returning();
+    return u!;
+  }
+  // Claim it first, so the mail agent's pass and a tap on Send at the same
+  // moment can never both send it (21 Oct). Only one update can win.
+  const claimed = await db
+    .update(schema.invoiceRequests)
+    .set({ status: "sending", updatedAt: new Date() })
+    .where(and(eq(schema.invoiceRequests.id, id), inArray(schema.invoiceRequests.status, ["waiting_ok", "no_email"])))
+    .returning({ id: schema.invoiceRequests.id });
+  if (!claimed.length) {
+    const [now] = await db.select().from(schema.invoiceRequests).where(eq(schema.invoiceRequests.id, id));
+    return now!;
+  }
   try {
     const out = await sendAsTeam({ to: r.toAddress, subject: r.subject, text: r.body });
     const [u] = await db
@@ -211,7 +229,11 @@ export async function sendInvoiceRequest(id: number) {
     });
     return u!;
   } catch (e) {
-    await db.update(schema.invoiceRequests).set({ error: String((e as Error).message ?? e).slice(0, 300), updatedAt: new Date() }).where(eq(schema.invoiceRequests.id, id));
+    // Not sent: give it back, so it can be tried again.
+    await db
+      .update(schema.invoiceRequests)
+      .set({ status: r.status === "no_email" ? "no_email" : "waiting_ok", error: String((e as Error).message ?? e).slice(0, 300), updatedAt: new Date() })
+      .where(and(eq(schema.invoiceRequests.id, id), eq(schema.invoiceRequests.status, "sending")));
     throw e;
   }
 }

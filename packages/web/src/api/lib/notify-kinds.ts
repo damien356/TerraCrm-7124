@@ -51,6 +51,8 @@ export const NOTIFY_EMAIL_TO_KEY = "notify_email_to";
 export const NOTIFY_DAILY_KEY = "notify_daily_on";
 export const NOTIFY_URGENT_KEY = "notify_urgent_kinds";
 export const NOTIFY_DAILY_SENT_KEY = "notify_daily_sent_on";
+/** JSON of the last scheduled summary actually sent: real time, how, to whom, Resend id (21 Oct). */
+export const NOTIFY_DAILY_LAST_KEY = "notify_daily_last_sent";
 export const CLIENT_AUTO_SMS_KEY = "client_auto_sms_on";
 
 export const NOTIFY_EMAIL_TO_DEFAULT = "damien@terraflooring.com.au";

@@ -49,11 +49,21 @@ function pairState(inv: Pick<Inv, "poId" | "matchStatus" | "checkedAt">) {
   return "no_po" as const;
 }
 
-/** Labelled fine with no PO (step 3). Off "Needs you", even with no supplier card. Still owed. */
+/**
+ * Labelled fine with no PO (step 3). The label only answers "where is the
+ * PO?". It takes that one warning off Needs you and nothing else (21 Oct):
+ *   an invoice with no supplier card still asks which supplier it is
+ *   price checks are their own list and stay open
+ *   a PO difference can't apply, because a labelled invoice has no PO
+ *   an exact repeat is stopped when the email is read, label or not
+ * It still counts in owed, overdue and due, because payState is untouched.
+ */
 const labelledOff = (inv: Pick<Inv, "poId" | "matchStatus" | "checkedAt">) => {
   const st = pairState(inv);
   return st === "no_po_needed" || st === "historical";
 };
+const LABEL_WORDS = { no_po_needed: "No PO needed", historical: "Before POs" } as const;
+const SOURCE_WORDS = { supplier: "Supplier tick", date: "Dated before POs", review: "Backlog review" } as const;
 
 async function autoSendOn() {
   const [s] = await db.select().from(schema.settings).where(eq(schema.settings.key, AUTO_SEND_KEY));
@@ -145,7 +155,7 @@ export const payables = {
       if (due && due < now) r.overdueIncGst += amt;
       else if (due && due <= soon) r.dueSoonIncGst += amt;
       if (due && due >= now && (!r.nextDue || due < r.nextDue)) r.nextDue = due;
-      if (!labelledOff(i) && (!i.supplierId || (pairState(i) === "no_po" && !i.checkedAt) || pairState(i) === "different")) r.needsYou++;
+      if (!i.supplierId || (pairState(i) === "no_po" && !i.checkedAt) || pairState(i) === "different") r.needsYou++;
     }
     // Open price checks count as something to look at on that supplier's row.
     const flags = await db.select({ supplierId: schema.priceFlags.supplierId }).from(schema.priceFlags).where(eq(schema.priceFlags.status, "open"));
@@ -169,7 +179,6 @@ export const payables = {
     for (const i of unpaid) {
       const st = pairState(i);
       const who = (i.supplierId && supName.get(i.supplierId)) || i.supplierNameRaw;
-      if (labelledOff(i)) continue;
       if (!i.supplierId) {
         needsYou.push({ kind: "unknown_supplier", id: i.id, title: `${i.docType === "credit" ? "Credit" : "Invoice"} ${i.invoiceNumber} from ${who}`, detail: "Not a supplier in Ops. Pick which supplier this is.", supplierKey: groupKey(null, i.supplierNameRaw), amount: signed(i), date: i.invoiceDate });
       } else if (st === "no_po" && !i.checkedAt) {
@@ -230,6 +239,8 @@ export const payables = {
       suppliers: list,
       needsYou,
       priceChecksOpen: flags.length,
+      /** Unpaid and labelled No PO needed or Before POs. Still in every total above. */
+      labelledUnpaid: unpaid.filter((i) => labelledOff(i)).length,
       mailboxesConnected: mailboxes.filter((m) => m.connected).length,
       autoSend: await autoSendOn(),
     };
@@ -420,6 +431,76 @@ export const payables = {
       .update(schema.supplierInvoices)
       .set({ checkedAt: input.checked ? new Date() : null, checkedBy: input.checked ? context.actor.name : null, updatedAt: new Date() })
       .where(eq(schema.supplierInvoices.id, input.invoiceId));
+    return { ok: true };
+  }),
+
+  /* --------------------------------- labels --------------------------------- */
+
+  /**
+   * Every invoice carrying a No PO needed or Before POs label, newest first,
+   * so a label can always be found and taken off (21 Oct). Search matches the
+   * supplier, invoice number, label reason and who labelled it.
+   */
+  labelled: adminOnly
+    .input(z.object({ search: z.string().max(100).default(""), source: z.enum(["all", "supplier", "date", "review"]).default("all") }))
+    .handler(async ({ input }) => {
+      const suppliers = await db.select({ id: schema.suppliers.id, name: schema.suppliers.name }).from(schema.suppliers);
+      const supName = new Map(suppliers.map((s) => [s.id, s.name]));
+      const rows = await db
+        .select()
+        .from(schema.supplierInvoices)
+        .where(and(isNull(schema.supplierInvoices.poId), inArray(schema.supplierInvoices.matchStatus, ["no_po_needed", "historical"])))
+        .orderBy(desc(schema.supplierInvoices.invoiceDate), desc(schema.supplierInvoices.id));
+      const words = input.search.toLowerCase().split(/\s+/).filter(Boolean);
+      const items = rows
+        .filter((i) => labelledOff(i))
+        .map((i) => {
+          const label = i.matchStatus as keyof typeof LABEL_WORDS;
+          const source = (i.labelSource ?? "") as keyof typeof SOURCE_WORDS | "";
+          return {
+            id: i.id,
+            supplier: (i.supplierId && supName.get(i.supplierId)) || i.supplierNameRaw,
+            supplierKey: groupKey(i.supplierId, i.supplierNameRaw),
+            invoiceNumber: i.invoiceNumber,
+            date: i.invoiceDate,
+            amount: signed(i),
+            payState: i.payState,
+            label,
+            labelWords: LABEL_WORDS[label],
+            source: source || null,
+            sourceWords: source ? SOURCE_WORDS[source] : "Not recorded",
+            note: i.labelNote,
+            labelledBy: i.labelledBy,
+            labelledAt: i.labelledAt,
+          };
+        })
+        .filter((r) => input.source === "all" || r.source === input.source)
+        .filter((r) => {
+          if (!words.length) return true;
+          const hay = `${r.supplier} ${r.invoiceNumber} ${r.labelWords} ${r.sourceWords} ${r.note} ${r.labelledBy ?? ""}`.toLowerCase();
+          return words.every((w) => hay.includes(w));
+        });
+      return { total: items.length, items: items.slice(0, 300) };
+    }),
+
+  /**
+   * Take a label off one invoice. It goes back on Needs you as missing a PO.
+   * Only the label changes: amount, paid state and job costs stay as they are.
+   */
+  unlabel: adminOnly.input(z.object({ invoiceId: z.number() })).handler(async ({ input, context }) => {
+    const [inv] = await db.select().from(schema.supplierInvoices).where(eq(schema.supplierInvoices.id, input.invoiceId));
+    if (!inv) throw new ORPCError("NOT_FOUND", { message: "Invoice not found" });
+    if (!labelledOff(inv)) throw new ORPCError("BAD_REQUEST", { message: "This invoice has no label." });
+    const was = `${LABEL_WORDS[inv.matchStatus as keyof typeof LABEL_WORDS]} (${inv.labelSource ? SOURCE_WORDS[inv.labelSource as keyof typeof SOURCE_WORDS] : "source not recorded"})`;
+    const who = context.actor.name || "Office";
+    // Marked removed, so a rematch or the supplier tick never puts it back on.
+    await db
+      .update(schema.supplierInvoices)
+      .set({ matchStatus: "needs_you", labelSource: "removed", labelNote: `${was} taken off by ${who}.`, labelledAt: new Date(), labelledBy: who, updatedAt: new Date() })
+      .where(eq(schema.supplierInvoices.id, inv.id));
+    const detail = `Label ${was} taken off ${inv.supplierNameRaw} invoice ${inv.invoiceNumber}. Back on Needs you.${inv.labelNote ? ` It said: ${inv.labelNote}` : ""}`;
+    await db.insert(schema.activityLog).values({ jobId: inv.jobId, entityType: "supplier_invoice", entityId: inv.id, action: "invoice_unlabelled", detail, actorName: who, actorRole: "admin" });
+    if (inv.supplierId) await db.insert(schema.activityLog).values({ entityType: "supplier", entityId: inv.supplierId, action: "invoice_unlabelled", detail, actorName: who, actorRole: "admin" });
     return { ok: true };
   }),
 

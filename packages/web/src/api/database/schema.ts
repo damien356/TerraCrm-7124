@@ -3630,6 +3630,23 @@ export const supplierInvoices = sqliteTable(
      * touch payState, so they never change what is owed, overdue or due.
      */
     matchStatus: text("match_status").notNull().default("needs_you"),
+    /**
+     * Who put a no_po_needed or historical label on, so each kind can be
+     * taken off on its own (21 Oct):
+     *   supplier  the supplier's "No PO needed" tick. Untick takes these off.
+     *   date      auto, dated before Ops POs started
+     *   review    the backlog review Damien approved, one invoice at a time.
+     *             The supplier tick never touches these.
+     *   removed   a person took the label off. The invoice is back on
+     *             Needs you and stays there: no automatic label goes back
+     *             on, and the supplier tick skips it.
+     * Null when never labelled.
+     */
+    labelSource: text("label_source"),
+    /** Why it carries the label, in plain words. Searchable. */
+    labelNote: text("label_note").notNull().default(""),
+    labelledAt: integer("labelled_at", { mode: "timestamp" }),
+    labelledBy: text("labelled_by"),
     /** How it was matched or why not, in plain words. */
     matchNote: text("match_note").notNull().default(""),
     /** Invoice ex-GST minus PO ex-GST. Positive = charged more than ordered. */
@@ -3692,7 +3709,7 @@ export const invoiceRequests = sqliteTable(
     toAddress: text("to_address"),
     subject: text("subject").notNull().default(""),
     body: text("body").notNull().default(""),
-    /** waiting_ok · sent · received · cancelled · no_email */
+    /** waiting_ok · sending (claimed, going now) · sent · received · cancelled · no_email */
     status: text("status").notNull().default("waiting_ok"),
     sentAt: integer("sent_at", { mode: "timestamp" }),
     gmailMessageId: text("gmail_message_id"),
