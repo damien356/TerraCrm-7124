@@ -26,9 +26,10 @@ export function installerForStaff<T extends InstallerPrivate | null | undefined>
   return { ...row, creditLimit: 0, bankAccountName: null, bankBsb: null, bankAccountNumber: null };
 }
 
-type TaskPrivate = { labourBreakdown: string | null };
+type TaskPrivate = { labourBreakdown: string | null; benchmarkBreakdown?: string | null };
 
+/** The hourly benchmark's rate-by-rate lines follow the labour breakdown: Admin only. */
 export function taskForStaff<T extends TaskPrivate>(row: T, actor: Who): T {
   if (isAdmin(actor)) return row;
-  return { ...row, labourBreakdown: null };
+  return { ...row, labourBreakdown: null, ...("benchmarkBreakdown" in row ? { benchmarkBreakdown: null } : {}) };
 }

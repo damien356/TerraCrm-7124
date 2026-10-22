@@ -14,8 +14,12 @@ import { JOB_NUMBER_KEY, JOB_NUMBER_START_KEY, jobNumbering, setJobNumberStart }
  * Skills, job statuses and key/value settings are editable DATA, never hardcoded
  * enums — Damien adds/renames them in the app after testing without a rebuild.
  */
-/** Setting keys that never go to Office or Field crew. */
-const SENSITIVE_SETTING = /(key|token|secret|password|xero|clicksend|supabase|github|markup|margin|cost|credit|tier|formula)/i;
+/**
+ * Setting keys that never go to Office or Field crew. Hourly pay settings
+ * (vehicle allowance, benchmark, night window, break policy) are read through
+ * the hourly router with its own role checks, never through bootstrap.
+ */
+const SENSITIVE_SETTING = /(^hourly_|allowance|benchmark|key|token|secret|password|xero|clicksend|supabase|github|markup|margin|cost|credit|tier|formula)/i;
 
 export const settings = {
   /** Everything the admin UI needs to render pickers, in one round trip. */

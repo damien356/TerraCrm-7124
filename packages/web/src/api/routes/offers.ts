@@ -10,6 +10,7 @@ import { notifyOffice } from "../lib/notify";
 import { blockedReason } from "../lib/availability";
 import { bookingBlock } from "../lib/prep";
 import { lockTaskLabour } from "./costing";
+import { isHourlyContractor } from "../lib/hourly";
 import { syncJobForTask } from "../lib/job-stage";
 import { installerForStaff, taskForStaff } from "../lib/staff-view";
 
@@ -53,6 +54,8 @@ function windowDays(task: { scheduledFrom: string | null; scheduledTo: string | 
 
 /** Works out what this installer gets paid for this task, from their own rate. */
 async function derivePay(taskId: number, installerId: number): Promise<number | null> {
+  // An hourly contractor is paid on approved time, so an offer carries no job price.
+  if (await isHourlyContractor(installerId)) return null;
   const [task] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, taskId));
   if (!task) return null;
   if (task.payAmount != null) return task.payAmount;
@@ -207,7 +210,7 @@ export async function sendDirectOffer(
   // Buzz his phone. A missed offer expires, so this is not optional comms.
   void pushToInstaller(input.installerId, {
     title: "New job offer",
-    body: `${task.title}${task.scheduledDate ? ` on ${auDay(task.scheduledDate)}` : ""}${pay ? `, $${pay}` : ""}`,
+    body: `${task.title}${task.scheduledDate ? ` on ${auDay(task.scheduledDate)}` : ""}${pay && !(await isHourlyContractor(input.installerId)) ? `, $${pay}` : ""}`,
     data: { kind: "offer", taskId: input.taskId, offerId: offer!.id },
   });
 
@@ -289,9 +292,10 @@ export const offers = {
       });
 
       for (const offer of created) {
+        const showPay = offer!.payAmount && !(await isHourlyContractor(offer!.installerId));
         void pushToInstaller(offer!.installerId, {
           title: "Job up for grabs",
-          body: `${task.title}${task.scheduledDate ? ` on ${auDay(task.scheduledDate)}` : ""}${offer!.payAmount ? `, $${offer!.payAmount}` : ""}. First to accept gets it.`,
+          body: `${task.title}${task.scheduledDate ? ` on ${auDay(task.scheduledDate)}` : ""}${showPay ? `, $${offer!.payAmount}` : ""}. First to accept gets it.`,
           data: { kind: "offer", taskId: input.taskId, offerId: offer!.id },
         });
       }
@@ -481,7 +485,7 @@ async function lockTask(args: {
     );
 
   // He won it, so the labour freezes at his card as it reads today.
-  await lockTaskLabour({ taskId: args.taskId, installerId: args.installerId });
+  await lockTaskLabour({ taskId: args.taskId, installerId: args.installerId, assignment: true });
 
   const [installer] = await db.select().from(schema.installers).where(eq(schema.installers.id, args.installerId));
   await db.insert(schema.activityLog).values({

@@ -8,6 +8,7 @@ import { crewOutputPerDay } from "../lib/day-estimate";
 import { exGst } from "../lib/gst";
 import { quoteThatCounts } from "../lib/job-value";
 import { jobText, quoteRef, taskRef } from "../lib/refs";
+import { hourlySettings, jobHourlyCosting, termsOn } from "../lib/hourly";
 
 /**
  * JOB COSTING.
@@ -169,11 +170,31 @@ function estimateDays(args: {
  * number the job was costed at is the number it keeps, whatever the rate book
  * does later. Nothing measured means nothing to lock, and that is not an error.
  */
-export async function lockTaskLabour(args: { taskId: number; installerId?: number | null; on?: string }) {
+export async function lockTaskLabour(args: { taskId: number; installerId?: number | null; on?: string; assignment?: boolean }) {
   const on = args.on ?? today();
   const [task] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, args.taskId));
   if (!task) return null;
   const installerId = args.installerId ?? task.assignedInstallerId ?? null;
+
+  /*
+   * An hourly contractor on a NEW assignment is paid on approved time, not on
+   * the lines. The lines are priced at the Terra standard card instead and
+   * kept as the subcontract benchmark. Never applied retrospectively: a
+   * re-freeze, an edit that keeps the same man, a flat amount the office typed
+   * in, or finished work all stay exactly as they were.
+   */
+  const terms = installerId ? await termsOn(installerId, on) : null;
+  if (terms?.defaultForNew && args.assignment && task.payAmount == null && task.status !== "complete") {
+    return lockHourly(task, on);
+  }
+  if (task.payType === "hourly" && task.benchmarkPricedOn && !terms) {
+    // Moved from an hourly man to a normal installer: back to the agreed lines.
+    await db.update(schema.jobTasks).set({ payType: "per_job", updatedAt: new Date() }).where(eq(schema.jobTasks.id, task.id));
+  }
+  if (task.payType === "hourly" && terms) {
+    // Already hourly (an edit or a re-freeze): nothing to freeze as pay.
+    return { taskId: task.id, labourCost: null, pricedOn: task.labourPricedOn, incomplete: false, hourly: true };
+  }
 
   const [lines, itemRows, rates] = await Promise.all([
     db.select().from(schema.taskLabourLines).where(eq(schema.taskLabourLines.taskId, args.taskId)),
@@ -201,6 +222,38 @@ export async function lockTaskLabour(args: { taskId: number; installerId?: numbe
     .where(eq(schema.jobTasks.id, args.taskId));
 
   return { taskId: args.taskId, labourCost: priced.total, pricedOn: on, incomplete: priced.incomplete };
+}
+
+/** Hourly: no labour frozen as pay; the Terra standard price of the lines frozen as the benchmark. */
+async function lockHourly(task: typeof schema.jobTasks.$inferSelect, on: string) {
+  const [lines, itemRows, rates, settings] = await Promise.all([
+    db.select().from(schema.taskLabourLines).where(eq(schema.taskLabourLines.taskId, task.id)),
+    db.select().from(schema.labourRateItems),
+    loadRates(),
+    hourlySettings(),
+  ]);
+  const priced = lines.length
+    ? priceLines({ lines, items: new Map(itemRows.map((i) => [i.id, i])), rates, installerId: null, on })
+    : null;
+  await db
+    .update(schema.jobTasks)
+    .set({
+      payType: "hourly",
+      labourCost: null,
+      labourBreakdown: null,
+      labourPricedOn: on,
+      benchmarkCost: priced ? priced.total : null,
+      benchmarkBreakdown: priced ? JSON.stringify(priced.lines) : null,
+      benchmarkPricedOn: on,
+      benchmarkNote: priced
+        ? `Terra standard subcontract rates on ${on}${priced.incomplete ? `. Not priced: ${priced.unpriced.join(", ")}` : ""}`
+        : "Nothing measured on this dispatch when it was assigned",
+      // Keep an answer the office already gave on this task.
+      benchmarkVehicle: task.benchmarkVehicle !== "unknown" ? task.benchmarkVehicle : settings.benchmarkVehicleDefault,
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.jobTasks.id, task.id));
+  return { taskId: task.id, labourCost: null, pricedOn: on, incomplete: priced ? priced.incomplete : true, hourly: true, benchmark: priced?.total ?? null };
 }
 
 export const costing = {
@@ -388,9 +441,22 @@ export const costing = {
         ? await db.select().from(schema.taskLabourLines).where(inArray(schema.taskLabourLines.taskId, taskIds))
         : [];
 
+      /*
+       * Hourly tasks cost what the time costs: approved hours at the rate they
+       * were approved at, recorded hours at an estimate, and the planned hours
+       * still to go, plus the internal vehicle allowance. Never labourCost,
+       * which is empty for them. A what-if against another installer
+       * (input.installerId) still prices the lines, as before.
+       */
+      const hourly =
+        input.installerId == null && tasks.some((t) => t.task.payType === "hourly")
+          ? await jobHourlyCosting(input.jobId)
+          : null;
+
       const taskViews = tasks.map((t) => {
         const lines = allLines.filter((l) => l.taskId === t.task.id);
         const pricedAgainst = input.installerId ?? t.task.assignedInstallerId ?? null;
+        const hv = t.task.payType === "hourly" ? hourly?.tasks.find((h) => h.taskId === t.task.id) ?? null : null;
 
         // Frozen tasks read back at what they were priced at, not today's rates.
         const frozen = t.task.labourCost != null && input.installerId == null;
@@ -428,10 +494,28 @@ export const costing = {
           labour: frozen ? frozenLabour : live.labour,
           other: frozen ? frozenOther : live.other,
           total: frozen ? round2(t.task.labourCost!) : live.total,
+          ...(hv
+            ? {
+                // Vehicle allowance sits in "other": an internal cost, never pay.
+                labour: hv.projected.labour,
+                other: hv.projected.vehicle,
+                total: round2(hv.projected.labour + hv.projected.vehicle),
+              }
+            : {}),
           frozen,
           pricedOn: frozen ? t.task.labourPricedOn : on,
           unpriced: live.unpriced,
-          incomplete: lines.length === 0 || live.incomplete,
+          incomplete: hv ? !hv.final && hv.plan.hours == null : lines.length === 0 || live.incomplete,
+          hourly: hv
+            ? {
+                final: hv.final,
+                soFar: hv.soFar,
+                remaining: hv.remaining,
+                benchmark: hv.benchmark.amount,
+                benchmarkVehicle: hv.benchmark.vehicle,
+                comparison: hv.comparison,
+              }
+            : null,
           lines: live.lines,
           days: estimateDays({
             lines: live.lines,

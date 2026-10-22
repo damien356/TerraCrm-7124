@@ -25,6 +25,7 @@ export default function RateCardScreen() {
   const router = useRouter();
   const myRates = useMyRates();
   const rows = myRates.data?.rates ?? [];
+  const hourlyRates = myRates.data && "hourly" in myRates.data ? myRates.data.hourly : null;
 
   const groups = new Map<string, typeof rows>();
   for (const r of rows) {
@@ -99,7 +100,7 @@ export default function RateCardScreen() {
                       color: c.mutedForeground,
                     }}
                   >
-                    {(GROUP_LABEL[g] ?? g).toUpperCase()}
+                    {hourlyRates ? "HOURLY RATES" : (GROUP_LABEL[g] ?? g).toUpperCase()}
                   </Text>
                 </View>
                 {(groups.get(g) ?? []).map((r) => (
@@ -145,7 +146,11 @@ export default function RateCardScreen() {
               lineHeight: 17,
             }}
           >
-            These are your own rates, ex GST. Only what you're ticked for shows here.
+            {hourlyRates
+              ? hourlyRates.gstRegistered
+                ? "These are your own hourly rates, ex GST. Night replaces the weekend rate, it never adds to it."
+                : "These are your own hourly rates. You are not GST registered, so no GST is added. Night replaces the weekend rate, it never adds to it."
+              : "These are your own rates, ex GST. Only what you're ticked for shows here."}
           </Text>
         </ScrollView>
       )}

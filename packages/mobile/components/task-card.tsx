@@ -4,10 +4,19 @@ import { useRouter } from "expo-router";
 import { Colors, Fonts, tintFor } from "@/constants/theme";
 import { fmtHours, fmtMoney, fmtMoney2, fmtTime, statusLabel, unitLabel } from "@/lib/format";
 import type { useToday } from "@/queries/field";
+import { dollars, hrsMins } from "@/queries/hourly";
 
 const c = Colors.light;
 
 /** Exactly the shape the field API hands back — no customer pricing in it. */
+/** What the server adds to an hourly task for an hourly man: his own time on it, nothing else. */
+type HourlyOnCard = {
+  approvedMinutes: number;
+  approvedPay: number;
+  recordedMinutes: number;
+  open: { onBreak: boolean } | null;
+};
+
 export type FieldTask = NonNullable<ReturnType<typeof useToday>["data"]>[number];
 
 function Chip({
@@ -52,6 +61,9 @@ export function TaskCard({
   const tint = tintFor(task.skillGroup);
   const done = task.status === "complete";
   const running = task.status === "in_progress";
+  // Hourly work (build 16 on): his own time on this task, from the server. Older servers send none.
+  const hourly =
+    task.payType === "hourly" && "hourly" in task && task.hourly ? (task.hourly as HourlyOnCard) : null;
 
   return (
     <Pressable
@@ -190,7 +202,21 @@ export function TaskCard({
                 </View>
               ) : (
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                  <View />
+                  {hourly ? (
+                    <Text style={{ fontFamily: Fonts.medium, fontSize: 12.5, color: hourly.open ? c.primary : c.mutedForeground }}>
+                      {hourly.open
+                        ? hourly.open.onBreak
+                          ? "On a break"
+                          : "On the clock"
+                        : hourly.approvedMinutes > 0
+                          ? `${hrsMins(hourly.approvedMinutes)} approved, ${dollars(hourly.approvedPay)}`
+                          : hourly.recordedMinutes > 0
+                            ? `${hrsMins(hourly.recordedMinutes)} waiting for the office`
+                            : ""}
+                    </Text>
+                  ) : (
+                    <View />
+                  )}
                   <Text style={{ fontFamily: Fonts.bold, fontSize: 16, color: c.foreground }}>
                     {fmtMoney(task.payAmount)}
                     {task.payType === "hourly" ? (

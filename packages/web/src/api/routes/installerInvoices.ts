@@ -1,7 +1,7 @@
 import { jobRef } from "../lib/job-ref";
 import { taskRef } from "../lib/refs";
 import { z } from "zod";
-import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -50,7 +50,14 @@ async function taskInvoiceContext(taskId: number, installerId: number) {
     );
 
   const lineItems: InvoiceLineItem[] = [];
-  if (task.labourBreakdown) {
+  /*
+   * Hourly work: the lines are his approved, payable hours not billed before,
+   * one line per day and rate band at the rate each day was approved at.
+   * Recorded time not yet approved blocks the invoice rather than being left off.
+   */
+  const hourly = task.payType === "hourly" ? await hourlyInvoiceLines(task.id, installerId) : null;
+  if (hourly) lineItems.push(...hourly.lines);
+  if (!hourly && task.labourBreakdown) {
     try {
       const parsed = JSON.parse(task.labourBreakdown) as Array<{
         name: string;
@@ -71,17 +78,72 @@ async function taskInvoiceContext(taskId: number, installerId: number) {
     lineItems.push({ description: `Approved extra: ${v.description}`, unit: "each", qty: 1, rate: v.amount, total: v.amount });
   }
 
-  const subtotal = lineItems.reduce((sum, l) => sum + (l.total ?? 0), 0);
-  const gstAmount = installer.gstRegistered ? Math.round(subtotal * 0.1 * 100) / 100 : 0;
+  const subtotal = Math.round(lineItems.reduce((sum, l) => sum + (l.total ?? 0), 0) * 100) / 100;
+  // Hourly: GST only when every billed day was approved under GST-registered terms.
+  const gstRegistered = hourly ? hourly.gstRegistered : installer.gstRegistered;
+  const gstAmount = gstRegistered ? Math.round(subtotal * 0.1 * 100) / 100 : 0;
   const total = Math.round((subtotal + gstAmount) * 100) / 100;
 
-  return { task, job, site, installer, usableVariations, lineItems, subtotal, gstAmount, total };
+  return {
+    task,
+    job,
+    site,
+    installer: { ...installer, gstRegistered },
+    usableVariations,
+    lineItems,
+    subtotal,
+    gstAmount,
+    total,
+    hourlySessionIds: hourly?.sessionIds ?? [],
+    hourlyBlock: hourly?.block ?? null,
+  };
+}
+
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function sayDate(ymd: string) {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  return `${DOW[d.getUTCDay()]} ${d.getUTCDate()} ${MON[d.getUTCMonth()]}`;
+}
+
+async function hourlyInvoiceLines(taskId: number, installerId: number) {
+  const rows = await db
+    .select()
+    .from(schema.workSessions)
+    .where(and(eq(schema.workSessions.taskId, taskId), eq(schema.workSessions.installerId, installerId)))
+    .orderBy(asc(schema.workSessions.startedAt));
+  const live = rows.filter((r) => r.status !== "rejected");
+  const waiting = live.filter((r) => r.status === "open" || r.status === "recorded").length;
+  const billable = live.filter((r) => r.status === "approved" && r.payable === true && r.invoiceId == null);
+  const lines: InvoiceLineItem[] = [];
+  for (const s of billable) {
+    let pay: Array<{ label: string; minutes: number; rate: number; total: number }> = [];
+    try {
+      pay = s.payLines ? JSON.parse(s.payLines) : [];
+    } catch {
+      pay = [];
+    }
+    for (const l of pay) {
+      if (l.minutes <= 0) continue;
+      lines.push({ description: `${sayDate(s.workDate)}: ${l.label}`, unit: "hour", qty: Math.round((l.minutes / 60) * 100) / 100, rate: l.rate, total: l.total });
+    }
+  }
+  return {
+    lines,
+    sessionIds: billable.map((s) => s.id),
+    gstRegistered: billable.length > 0 && billable.every((s) => s.gstRegistered === true),
+    block: waiting
+      ? `${waiting} time ${waiting === 1 ? "entry is" : "entries are"} still waiting for Terra office to approve. Invoice once they are approved.`
+      : billable.length === 0
+        ? "There is no approved time on this job to invoice yet."
+        : null,
+  };
 }
 
 export const installerInvoices = {
   /** Read-only preview shown before CREATE MY INVOICE. */
   preview: installerOnly.input(z.object({ taskId: z.number() })).handler(async ({ input, context }) => {
-    const { task, job, site, installer, lineItems, subtotal, gstAmount, total } = await taskInvoiceContext(
+    const { task, job, site, installer, lineItems, subtotal, gstAmount, total, hourlyBlock } = await taskInvoiceContext(
       input.taskId,
       context.installerId,
     );
@@ -101,10 +163,12 @@ export const installerInvoices = {
       /** Submitted is not the same as received. The screen says which of the two. */
       emailedToTerra: existing ? !!existing.emailedToTerraAt : false,
       emailError: existing?.emailError ?? null,
-      canSubmit: !existing && installer.nextInvoiceNumber != null && abn.passes,
+      canSubmit: !existing && installer.nextInvoiceNumber != null && abn.passes && !hourlyBlock,
       blockedReason: existing
         ? null
-        : installer.nextInvoiceNumber == null
+        : hourlyBlock
+          ? hourlyBlock
+          : installer.nextInvoiceNumber == null
           ? "Terra office hasn't set up your invoice numbering yet. Ask them to enable invoicing before you submit."
           : !abn.passes
             ? ABN_BLOCK
@@ -147,8 +211,9 @@ export const installerInvoices = {
       .where(and(eq(schema.installerInvoices.taskId, input.taskId), eq(schema.installerInvoices.installerId, context.installerId)));
     if (existing) return existing;
 
-    const { task, job, site, installer, usableVariations, lineItems, subtotal, gstAmount, total } =
+    const { task, job, site, installer, usableVariations, lineItems, subtotal, gstAmount, total, hourlySessionIds, hourlyBlock } =
       await taskInvoiceContext(input.taskId, context.installerId);
+    if (hourlyBlock) throw new ORPCError("BAD_REQUEST", { message: hourlyBlock });
 
     if (installer.nextInvoiceNumber == null) {
       throw new ORPCError("BAD_REQUEST", { message: "Terra office hasn't set up your invoice numbering yet." });
@@ -241,6 +306,14 @@ export const installerInvoices = {
       .update(schema.installers)
       .set({ nextInvoiceNumber: invoiceNumber + 1, updatedAt: now })
       .where(eq(schema.installers.id, context.installerId));
+
+    if (hourlySessionIds.length > 0) {
+      // Billed once: this time can never land on a second invoice.
+      await db
+        .update(schema.workSessions)
+        .set({ invoiceId: row!.id, updatedAt: now })
+        .where(inArray(schema.workSessions.id, hourlySessionIds));
+    }
 
     if (usableVariations.length > 0) {
       await db

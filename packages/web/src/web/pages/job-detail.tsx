@@ -11,6 +11,7 @@ import { JobVisits } from "../components/crew-updates";
 import { SwmsJobCard } from "../components/swms";
 import { SwmsRedCards } from "../components/swms-flags";
 import { JobForecastCard, MeasureUpModal } from "../components/costing";
+import { HourlyJobCard } from "../components/hourly-job";
 import { JobCashCard } from "../components/job-cash";
 import { PurchaseOrdersCard } from "../components/purchase-orders";
 import { PaymentTermsCard } from "../components/payment-terms";
@@ -553,6 +554,9 @@ export default function JobDetailPage() {
 
           {/* what the job makes */}
           <JobForecastCard jobId={j.id} />
+
+          {/* hourly time on this job: so far, provisional until decided (costs logins only) */}
+          <HourlyJobCard jobId={j.id} />
 
           {/* what it costs Terra to carry, and when the money moves */}
           <JobCashCard jobId={j.id} />

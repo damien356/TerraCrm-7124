@@ -585,7 +585,9 @@ export const tasks = {
         .returning();
 
       // Someone is on it now, so the labour stops moving with the rate book.
-      if (input.installerId) await lockTaskLabour({ taskId: input.id, installerId: input.installerId });
+      if (input.installerId) {
+        await lockTaskLabour({ taskId: input.id, installerId: input.installerId, assignment: existing.assignedInstallerId !== input.installerId });
+      }
 
       const span =
         moved.length > 1
@@ -653,7 +655,7 @@ export const tasks = {
         );
 
       // Lock the labour at his rates, today. A rise next year is next year's job.
-      await lockTaskLabour({ taskId: input.id, installerId: input.installerId });
+      await lockTaskLabour({ taskId: input.id, installerId: input.installerId, assignment: task.assignedInstallerId !== input.installerId });
 
       await db.insert(schema.activityLog).values({
         jobId: task.jobId,
@@ -1011,7 +1013,7 @@ export const tasks = {
         );
 
       // Lock the labour at today's rates, same as any other assignment.
-      await lockTaskLabour({ taskId: input.taskId, installerId: input.installerId });
+      await lockTaskLabour({ taskId: input.taskId, installerId: input.installerId, assignment: task.assignedInstallerId !== input.installerId });
 
       const span = dates.length === 1 ? sayDate(first) : `${sayDate(first)} → ${sayDate(dates[dates.length - 1]!)}`;
       await db.insert(schema.activityLog).values({

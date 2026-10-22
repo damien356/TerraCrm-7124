@@ -4,6 +4,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, authed, installerOnly } from "../middleware/auth";
 import { sellExGstWithMarkup } from "../lib/pricing";
+import { hourlyRateCard } from "../lib/hourly-crew";
 
 /**
  * THE LABOUR RATE BOOK.
@@ -732,6 +733,9 @@ export const labour = {
    */
   myRates: installerOnly.handler(async ({ context }) => {
     const on = today();
+    // An hourly contractor's card is his three hourly rates. No per-unit schedule, ever.
+    const hourlyCard = await hourlyRateCard(context.installerId, on);
+    if (hourlyCard) return hourlyCard;
     const [items, rates, ticks, acks] = await Promise.all([
       db
         .select()

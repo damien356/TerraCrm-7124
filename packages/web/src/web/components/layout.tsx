@@ -42,6 +42,7 @@ import {
   Hammer,
   ChartColumn,
   X,
+  Clock,
 } from "lucide-react";
 import { authClient } from "../lib/auth";
 import { hasAppMenu, isPhoneApp } from "../lib/phone-app";
@@ -94,6 +95,7 @@ const NAV: NavEntry[] = [
     children: [
       { to: "/schedule", label: "Board", icon: CalendarDays },
       { to: "/crew", label: "Crew map", icon: MapPinned },
+      { to: "/hourly", label: "Hourly time", icon: Clock },
       { to: "/prep-to-fill", label: "Prep answers to fill", icon: ClipboardCheck },
       { to: "/safety", label: "SWMS and SDS", icon: ShieldCheck },
       { to: "/swms-library", label: "SWMS library", icon: BookOpen },

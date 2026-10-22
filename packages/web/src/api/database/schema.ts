@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, real, sqliteTable, text, unique, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, unique, uniqueIndex, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 
 export * from "./auth-schema";
 
@@ -813,6 +813,23 @@ export const jobTasks = sqliteTable(
      */
     damageCheckedAt: integer("damage_checked_at", { mode: "timestamp" }),
     damageNone: integer("damage_none", { mode: "boolean" }).notNull().default(false),
+    /*
+     * Hourly contractors (2026-11-08-hourly.sql). The normal subcontract
+     * allowance for this scope, priced at Terra's standard rates and frozen on
+     * the day an hourly worker is assigned. A comparator for the office, never
+     * an expense and never shown to the crew.
+     */
+    benchmarkCost: real("benchmark_cost"),
+    /** JSON array of the priced lines, same shape as labourBreakdown. */
+    benchmarkBreakdown: text("benchmark_breakdown"),
+    benchmarkPricedOn: text("benchmark_priced_on"),
+    /** Why the office set or changed the benchmark by hand. */
+    benchmarkNote: text("benchmark_note"),
+    /** Does the benchmark already cover the subbie's own vehicle? unknown · included · excluded */
+    benchmarkVehicle: text("benchmark_vehicle").notNull().default("unknown"),
+    /** Office plan for hourly work: hours and vehicle days. Null = not planned. */
+    plannedHours: real("planned_hours"),
+    plannedVehicleDays: real("planned_vehicle_days"),
     ...timestamps,
   },
   (t) => [
@@ -3330,6 +3347,191 @@ export const installerInvoices = sqliteTable(
     index("installer_invoices_job_idx").on(t.jobId),
     index("installer_invoices_status_idx").on(t.status),
   ],
+);
+
+/* ---------------------------------------------------------------------------
+ * Hourly contractors (2026-11-08-hourly.sql).
+ *
+ * Pay terms, recorded time, breaks, the edit history and the internal vehicle
+ * allowance. Recorded time is what the phone captured; approved time is what
+ * the office signed off, with the rate it was approved at copied onto the row
+ * so a later rate change never rewrites history.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * How one installer is paid by the hour. Effective dated: a change is a new
+ * row and the old row gets effective_to. GST status lives here too, verified by
+ * the office, so a change never reaches back into approved time.
+ */
+export const installerPayTerms = sqliteTable(
+  "installer_pay_terms",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    installerId: integer("installer_id").notNull().references(() => installers.id, { onDelete: "cascade" }),
+    /** hourly. Per-unit and fixed price installers have no row at all. */
+    basis: text("basis").notNull().default("hourly"),
+    baseRate: real("base_rate").notNull(),
+    weekendMultiplier: real("weekend_multiplier").notNull().default(1.5),
+    nightMultiplier: real("night_multiplier").notNull().default(2),
+    gstRegistered: integer("gst_registered", { mode: "boolean" }).notNull().default(false),
+    /** How the GST status was verified, e.g. "Damien confirmed 22 Oct 2026". */
+    gstNote: text("gst_note"),
+    /** New assignments to him default to hourly pay. Never applied to old jobs. */
+    defaultForNew: integer("default_for_new", { mode: "boolean" }).notNull().default(true),
+    /** YYYY-MM-DD. */
+    effectiveFrom: text("effective_from").notNull(),
+    effectiveTo: text("effective_to"),
+    note: text("note"),
+    createdByName: text("created_by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [index("pay_terms_installer_idx").on(t.installerId, t.effectiveFrom)],
+);
+
+/** A company vehicle, for the internal daily allowance only. Never pay. */
+export const vehicles = sqliteTable("vehicles", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  usualDriverId: integer("usual_driver_id").references(() => installers.id, { onDelete: "set null" }),
+  /** Dollars per working day. Copied onto each vehicle day when it is first used. */
+  dailyAllowance: real("daily_allowance").notNull().default(50),
+  /** Development test record. Must never exist on live. */
+  isTest: integer("is_test", { mode: "boolean" }).notNull().default(false),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  notes: text("notes"),
+  ...timestamps,
+});
+
+/**
+ * One stretch of recorded time by one worker against one task. Start work
+ * opens it, Finish work today closes it. Finishing never completes the task.
+ */
+export const workSessions = sqliteTable(
+  "work_sessions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    installerId: integer("installer_id").notNull().references(() => installers.id, { onDelete: "cascade" }),
+    taskId: integer("task_id").notNull().references(() => jobTasks.id, { onDelete: "cascade" }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    /** site · loading · collect_materials · travel_between_jobs · travel_shop_job · travel_home_work */
+    category: text("category").notNull().default("site"),
+    /** Made by the phone once per tap. A retry with the same key returns the same row. */
+    clientKey: text("client_key").notNull(),
+    /** YYYY-MM-DD, Brisbane, of the start. An overnight shift keeps its start date. */
+    workDate: text("work_date").notNull(),
+    /** What the phone recorded. Never edited after the event. */
+    startedAt: integer("started_at", { mode: "timestamp" }).notNull(),
+    endedAt: integer("ended_at", { mode: "timestamp" }),
+    /** Office corrections. Null means the recorded time stands. */
+    adjStartedAt: integer("adj_started_at", { mode: "timestamp" }),
+    adjEndedAt: integer("adj_ended_at", { mode: "timestamp" }),
+    /** app · office */
+    source: text("source").notNull().default("app"),
+    /** open · recorded · approved · rejected */
+    status: text("status").notNull().default("open"),
+    vehicleId: integer("vehicle_id").references(() => vehicles.id, { onDelete: "set null" }),
+    note: text("note"),
+    /** The worker asked the office to fix this one (missed clock out and so on). */
+    correctionRequestedAt: integer("correction_requested_at", { mode: "timestamp" }),
+    correctionNote: text("correction_note"),
+    /** JSON [{ band, minutes }], confirmed by the office. Null until classified. */
+    bandSplit: text("band_split"),
+    bandConfirmedBy: text("band_confirmed_by"),
+    bandConfirmedAt: integer("band_confirmed_at", { mode: "timestamp" }),
+    /* Snapshot taken at approval. Read back as is, never recalculated. */
+    payable: integer("payable", { mode: "boolean" }),
+    approvedMinutes: integer("approved_minutes"),
+    paidBreakMinutes: integer("paid_break_minutes"),
+    unpaidBreakMinutes: integer("unpaid_break_minutes"),
+    termsId: integer("terms_id").references(() => installerPayTerms.id, { onDelete: "set null" }),
+    rateBase: real("rate_base"),
+    weekendMultiplier: real("weekend_multiplier"),
+    nightMultiplier: real("night_multiplier"),
+    gstRegistered: integer("gst_registered", { mode: "boolean" }),
+    /** JSON [{ band, minutes, hours, rate, total }]. */
+    payLines: text("pay_lines"),
+    approvedPay: real("approved_pay"),
+    approvedAt: integer("approved_at", { mode: "timestamp" }),
+    approvedByName: text("approved_by_name"),
+    /** The contractor invoice this time was billed on, so it is never counted twice. */
+    invoiceId: integer("invoice_id").references(() => installerInvoices.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [
+    unique("work_sessions_key_unique").on(t.installerId, t.clientKey),
+    uniqueIndex("work_sessions_one_open").on(t.installerId).where(sql`status = 'open'`),
+    index("work_sessions_task_idx").on(t.taskId, t.status),
+    index("work_sessions_job_idx").on(t.jobId),
+    index("work_sessions_vehicle_idx").on(t.vehicleId, t.workDate),
+  ],
+);
+
+/** A break inside a session. Paid or unpaid is decided, never assumed. */
+export const workBreaks = sqliteTable(
+  "work_breaks",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sessionId: integer("session_id").notNull().references(() => workSessions.id, { onDelete: "cascade" }),
+    clientKey: text("client_key").notNull(),
+    startedAt: integer("started_at", { mode: "timestamp" }).notNull(),
+    endedAt: integer("ended_at", { mode: "timestamp" }),
+    /** Null = not decided yet. Blocks approval until it is. */
+    paid: integer("paid", { mode: "boolean" }),
+    decidedByName: text("decided_by_name"),
+    ...timestamps,
+  },
+  (t) => [
+    unique("work_breaks_key_unique").on(t.sessionId, t.clientKey),
+    uniqueIndex("work_breaks_one_open").on(t.sessionId).where(sql`ended_at IS NULL`),
+  ],
+);
+
+/** Every change to recorded time: who, what it was, what it became and why. */
+export const workTimeEvents = sqliteTable(
+  "work_time_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sessionId: integer("session_id").references(() => workSessions.id, { onDelete: "cascade" }),
+    installerId: integer("installer_id").references(() => installers.id, { onDelete: "set null" }),
+    taskId: integer("task_id").references(() => jobTasks.id, { onDelete: "set null" }),
+    action: text("action").notNull(),
+    actorName: text("actor_name").notNull().default(""),
+    actorRole: text("actor_role").notNull().default(""),
+    before: text("before"),
+    after: text("after"),
+    reason: text("reason"),
+    ...timestamps,
+  },
+  (t) => [index("work_time_events_session_idx").on(t.sessionId, t.createdAt)],
+);
+
+/** One vehicle on one working day. The allowance is copied here when first used. */
+export const vehicleDays = sqliteTable(
+  "vehicle_days",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    vehicleId: integer("vehicle_id").notNull().references(() => vehicles.id, { onDelete: "cascade" }),
+    useDate: text("use_date").notNull(),
+    allowance: real("allowance").notNull(),
+    note: text("note"),
+    ...timestamps,
+  },
+  (t) => [unique("vehicle_days_unique").on(t.vehicleId, t.useDate)],
+);
+
+/** An office correction to how one vehicle day splits across its jobs. */
+export const vehicleDayShares = sqliteTable(
+  "vehicle_day_shares",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    vehicleDayId: integer("vehicle_day_id").notNull().references(() => vehicleDays.id, { onDelete: "cascade" }),
+    taskId: integer("task_id").notNull().references(() => jobTasks.id, { onDelete: "cascade" }),
+    share: real("share").notNull(),
+    note: text("note"),
+    byName: text("by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [unique("vehicle_day_shares_unique").on(t.vehicleDayId, t.taskId)],
 );
 
 /* ---------------------------------------------------------------------------

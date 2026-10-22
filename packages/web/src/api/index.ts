@@ -37,6 +37,7 @@ import { productDelete } from "./routes/productDelete";
 import { review } from "./routes/review";
 import { labour } from "./routes/labour";
 import { costing } from "./routes/costing";
+import { hourly } from "./routes/hourly";
 import { conversations } from "./routes/conversations";
 import { finance } from "./routes/finance";
 import { intel } from "./routes/intel";
@@ -136,6 +137,8 @@ export const router = {
   /** Staff invites: download page and one-time set-up link (notes 18.55). */
   invites,
   alerts,
+  /** Hourly contractors: time, approval, vehicles and the hourly job card (22 Oct). */
+  hourly,
   /** Step 1 (20 Oct): the AI log and the "Waiting for you" tray. Admin only. */
   aiActions,
   field,

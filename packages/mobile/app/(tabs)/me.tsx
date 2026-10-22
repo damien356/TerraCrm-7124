@@ -9,6 +9,7 @@ import { releaseCrewPhone } from "@/lib/crew-phone";
 import { forgetSignedIn } from "@/lib/crash-guard";
 import { crewLabel, daysUntil, fmtDateTime, fmtDayLabel, fmtMoney } from "@/lib/format";
 import { useHistory, useMe, useSetLocationConsent } from "@/queries/field";
+import { dollars, hrsMins, useMyHourlySummary } from "@/queries/hourly";
 import { HandsFreeCard } from "@/components/hands-free-card";
 import { useWhoami } from "@/queries/session";
 import { currentUpdate, updatesSupported } from "@/lib/updates";
@@ -178,6 +179,8 @@ function CrewMe() {
   const [skillsOpen, setSkillsOpen] = useState(false);
   const me = useMe();
   const history = useHistory();
+  // Hourly men only. Old servers and per-unit installers answer with nothing to show.
+  const hourly = useMyHourlySummary();
   const setConsent = useSetLocationConsent();
   const sharingOn = Boolean(me.data?.locationConsentAt);
 
@@ -195,6 +198,7 @@ function CrewMe() {
             onRefresh={() => {
               void me.refetch();
               void history.refetch();
+              void hourly.refetch();
             }}
             tintColor={c.primary}
           />
@@ -238,6 +242,17 @@ function CrewMe() {
               <Tile label="BOOKED IN" value={String(me.data?.stats.upcoming ?? 0)} hint="still to do" />
               <Tile label="EARNED" value={fmtMoney(me.data?.stats.earned ?? 0)} hint="on finished work" />
             </View>
+
+            {hourly.data?.rates ? (
+              <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
+                <Tile label="HOURS APPROVED" value={hrsMins(hourly.data.approvedMinutes)} hint={`${dollars(hourly.data.approvedPay)} earned`} />
+                <Tile
+                  label="WAITING"
+                  value={hrsMins(hourly.data.recordedMinutes)}
+                  hint={hourly.data.open ? "on the clock now" : "for the office to check"}
+                />
+              </View>
+            ) : null}
 
             <View
               style={{

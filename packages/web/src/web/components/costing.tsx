@@ -403,8 +403,8 @@ export function JobForecastCard({ jobId }: { jobId: number }) {
                 value={dollars0(f.materials)}
                 hint={f.materialsUnknown ? "some costs missing" : "cost price"}
               />
-              <Figure label="Labour" value={dollars0(f.labour)} hint="rate book" />
-              <Figure label="Other" value={dollars0(f.other)} hint="surcharges, travel" />
+              <Figure label="Labour" value={dollars0(f.labour)} hint={f.tasks.some((t) => t.hourly) ? "rate book, hourly time" : "rate book"} />
+              <Figure label="Other" value={dollars0(f.other)} hint={f.tasks.some((t) => t.hourly) ? "surcharges, travel, vehicle" : "surcharges, travel"} />
               <Figure label="Total cost" value={dollars0(f.cost)} />
               <Figure
                 label="Gross profit"
@@ -446,6 +446,9 @@ export function JobForecastCard({ jobId }: { jobId: number }) {
                             <Badge>
                               <Lock className="size-3" /> locked {auDay(t.pricedOn)}
                             </Badge>
+                          ) : null}
+                          {t.hourly ? (
+                            <Badge colour={t.hourly.final ? "#3E6B4F" : "#B7791F"}>{t.hourly.final ? "hourly, final" : "hourly, so far"}</Badge>
                           ) : null}
                           {t.measured === 0 ? <Badge colour="#B4472E">not measured</Badge> : null}
                           {t.unpriced.length ? <Badge colour="#B4472E">{t.unpriced.length} unpriced</Badge> : null}

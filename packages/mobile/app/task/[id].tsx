@@ -31,6 +31,8 @@ import { JobFileSection } from "@/components/job-file";
 import { SiteVisitCard } from "@/components/site-visit";
 import { ClientPrepCard } from "@/components/client-prep";
 import { useVoiceSettings } from "@/queries/crew";
+import { HourlyTimeSection } from "@/components/hourly-time";
+import { useMyTime } from "@/queries/hourly";
 
 const c = Colors.light;
 
@@ -86,6 +88,8 @@ export default function TaskScreen() {
   const release = useReleaseTask();
   const addNote = useAddFieldNote();
   const voiceSettings = useVoiceSettings();
+  // Hourly men clock on and off inside the job. React Query shares this with the time card.
+  const myTime = useMyTime(Number(id), task.data?.payType === "hourly");
 
   // On-shift location. Off unless they switched sharing on AND this job is running.
   const sharing = useShiftLocation({
@@ -161,6 +165,8 @@ export default function TaskScreen() {
   }
 
   const swmsDue = t.swmsRequired && !t.swmsSignedToday;
+  const hourlyOn = t.payType === "hourly" && Boolean(myTime.data?.enabled);
+  const onClockHere = hourlyOn && myTime.data?.open?.taskId === t.id;
 
   /** Today's SWMS first on a SWMS job. Signing from Start goes straight on to start it. */
   function openSwms(then?: "start") {
@@ -184,8 +190,25 @@ export default function TaskScreen() {
     }
   }
 
+  /**
+   * Hourly: clocking on for site work needs today's SWMS first, the same rule
+   * as starting the job. Loading, collecting and travel clock on straight away.
+   * Clocking on never starts or finishes the job itself.
+   */
+  async function beforeClockOn(category: string): Promise<boolean> {
+    if (category === "site" && swmsDue) {
+      openSwms();
+      return false;
+    }
+    return true;
+  }
+
   async function onFinish() {
     setError(null);
+    if (onClockHere) {
+      setError("You are still on the clock. Tap Finish today first, then finish the job.");
+      return;
+    }
     if (swmsDue) return openSwms();
     try {
       await finish.mutateAsync({ taskId: t!.id });
@@ -652,6 +675,8 @@ export default function TaskScreen() {
             wrapped in a Section. Wrapping it printed JOB FILE twice. */}
         <JobFileSection taskId={t.id} jobId={t.jobId} />
 
+        {(() => {
+          const pay = (
         <Section title="YOUR PAY">
           <Card>
             {t.payBreakdown && t.payBreakdown.length > 0 ? (
@@ -728,6 +753,10 @@ export default function TaskScreen() {
             )}
           </Card>
         </Section>
+          );
+          // Hourly work: his own time controls and approved pay. Anything else, the pay card as before.
+          return t.payType === "hourly" ? <HourlyTimeSection taskId={t.id} closed={done} fallback={pay} beforeStart={beforeClockOn} /> : pay;
+        })()}
 
         <View style={{ flexDirection: "row", gap: 10, marginTop: 18 }}>
           <Pressable

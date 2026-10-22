@@ -17,6 +17,7 @@ import { crewMaterials } from "../lib/crew-materials";
 import { completionPhotosOn, minCompletionPhotos, recheckPhotoFlags } from "../lib/site-visits";
 import { assertSwmsDone, swmsNeededFor } from "../lib/swms";
 import { crewPeopleFor } from "../lib/crew-people";
+import { redactCards, redactHistory, redactMe, redactOffers } from "../lib/hourly-crew";
 
 /**
  * THE INSTALLER API. Every single query here filters by `context.installerId`.
@@ -93,7 +94,7 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
     .where(eq(schema.installers.id, installerId));
   const gstRegistered = Boolean(me?.gst);
 
-  return rows.map((r) => {
+  const cards = rows.map((r) => {
     let payBreakdown: Array<{ name: string; unit: string; qty: number; rate: number | null; total: number | null }> | null =
       null;
     if (r.labourBreakdown) {
@@ -136,6 +137,8 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
       aptChecks: parseAptChecks(r.aptChecks),
     };
   });
+  // An hourly contractor gets his own hourly rate and time, never a per-unit schedule.
+  return redactCards(installerId, cards);
 }
 
 /**
@@ -243,7 +246,7 @@ export const field = {
         .where(eq(schema.jobTasks.assignedInstallerId, context.installerId)),
     ]);
 
-    return {
+    return redactMe(context.installerId, {
       id: installer.id,
       name: installer.name,
       mobile: installer.mobile,
@@ -265,7 +268,7 @@ export const field = {
         upcoming: Number(stats[0]?.upcoming ?? 0),
         earned: Number(stats[0]?.earned ?? 0),
       },
-    };
+    });
   }),
 
   /** Today's work. */
@@ -333,7 +336,7 @@ export const field = {
       )
       .orderBy(desc(schema.jobTasks.completedAt))
       .limit(50);
-    return rows.map((r) => {
+    const out = rows.map((r) => {
       let payBreakdown: Array<{ name: string; unit: string; qty: number; rate: number | null; total: number | null }> | null =
         null;
       if (r.labourBreakdown) {
@@ -353,6 +356,7 @@ export const field = {
       const { labourBreakdown: _labourBreakdown, ...rest } = r;
       return { ...rest, payBreakdown };
     });
+    return redactHistory(context.installerId, out);
   }),
 
   /** One task card, with checklist, materials and photos. */
@@ -408,7 +412,8 @@ export const field = {
       }
     }
 
-    return {
+    const [out] = await redactCards(context.installerId, [
+      {
       ...card,
       isCallback: Boolean(parentId),
       checklist,
@@ -420,7 +425,9 @@ export const field = {
       // GST is only added for an installer who is GST registered. Someone who
       // is not registered cannot charge GST, so his screen never suggests it.
       gstRegistered: Boolean(card?.gstRegistered),
-    };
+      },
+    ]);
+    return out!;
   }),
 
   /* ----------------------------- offers ----------------------------- */
@@ -480,7 +487,7 @@ export const field = {
         ),
       )
       .orderBy(asc(schema.taskOffers.expiresAt));
-    return rows;
+    return redactOffers(context.installerId, rows);
   }),
 
   /** Accepting picks a day out of the task's window when there is one. */
@@ -552,6 +559,15 @@ export const field = {
     .handler(async ({ input, context }) => {
       const task = await ownTaskOrThrow(input.taskId, context.installerId);
       await assertSwmsDone(task.jobId, context.installerId, "finish");
+
+      // Hourly: the clock is stopped first, so no time is left running on a closed job.
+      const [onClock] = await db
+        .select({ id: schema.workSessions.id })
+        .from(schema.workSessions)
+        .where(and(eq(schema.workSessions.taskId, input.taskId), eq(schema.workSessions.status, "open")));
+      if (onClock) {
+        throw new ORPCError("BAD_REQUEST", { message: "You are still on the clock. Tap Finish today first, then finish the job." });
+      }
 
       const required = await db
         .select()
