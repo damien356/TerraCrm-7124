@@ -119,3 +119,17 @@ export function useFieldTickApt() {
   const invalidate = useInvalidateField();
   return useMutation(orpc.fieldPrep.tickApt.mutationOptions({ onSuccess: invalidate }));
 }
+
+/** My own bank details, masked. An old server has no route: the card stays hidden. */
+export function useMyBank() {
+  return useQuery(orpc.field.myBank.queryOptions({ staleTime: 60_000, retry: false }));
+}
+
+export function useSetMyBank() {
+  const qc = useQueryClient();
+  return useMutation(
+    orpc.field.setMyBank.mutationOptions({
+      onSuccess: () => void qc.invalidateQueries({ queryKey: orpc.field.myBank.key() }),
+    }),
+  );
+}

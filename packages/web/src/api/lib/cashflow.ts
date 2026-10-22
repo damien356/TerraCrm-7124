@@ -3,6 +3,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { depositDefaultOf } from "./deposits";
 import { quoteRef } from "./refs";
+import { isQaTestJob } from "./lead-codes";
 import { costCashOut, costHasGst } from "./gst";
 import { DEFAULT_SUPPLIER_TERMS, supplierTermsMap, supplierTermsText, type SupplierTerms } from "./supplier-terms";
 
@@ -369,7 +370,8 @@ export async function rebuildForecast(): Promise<RebuildResult> {
     );
 
   const live = jobRows.filter(
-    (r) => confidenceForStage(r.stage ?? "open", r.statusName ?? "") !== null,
+    // A QA test job never forecasts (lib/lead-codes.ts QA_TEST_SOURCE).
+    (r) => !isQaTestJob(r.job.source) && confidenceForStage(r.stage ?? "open", r.statusName ?? "") !== null,
   );
   const liveIds = live.map((r) => r.job.id);
 

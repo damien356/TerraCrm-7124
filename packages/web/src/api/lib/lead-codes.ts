@@ -44,6 +44,14 @@ export function sourceName(raw: string | null | undefined): string {
 /** Test jobs left in the import. Never counted in the leads report. */
 export const REPORT_EXCLUDED_JOB_NUMBERS = [4384, 4385, 4388, 4389];
 
+/**
+ * The source on a controlled QA test job (hourly phone testing, Damien 22 Oct).
+ * Such a job is never counted in the leads report, the dashboard counts and
+ * pipeline value, or the cash flow forecast, from the moment it is made.
+ */
+export const QA_TEST_SOURCE = "qa_test";
+export const isQaTestJob = (source: string | null | undefined) => (source ?? "").trim() === QA_TEST_SOURCE;
+
 export const CLIENT_TYPES = [
   ["healthcare", "Healthcare"],
   ["commercial", "Commercial"],

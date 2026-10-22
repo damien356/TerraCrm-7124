@@ -448,7 +448,9 @@ export function JobForecastCard({ jobId }: { jobId: number }) {
                             </Badge>
                           ) : null}
                           {t.hourly ? (
-                            <Badge colour={t.hourly.final ? "#3E6B4F" : "#B7791F"}>{t.hourly.final ? "hourly, final" : "hourly, so far"}</Badge>
+                            <Badge colour={t.hourly.vehicleMissing.length ? "#B42318" : t.hourly.final ? "#3E6B4F" : "#B7791F"}>
+                              {t.hourly.vehicleMissing.length ? "hourly, vehicle missing" : t.hourly.final ? "hourly, final" : "hourly, so far"}
+                            </Badge>
                           ) : null}
                           {t.measured === 0 ? <Badge colour="#B4472E">not measured</Badge> : null}
                           {t.unpriced.length ? <Badge colour="#B4472E">{t.unpriced.length} unpriced</Badge> : null}

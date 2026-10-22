@@ -20,6 +20,8 @@ import { JOB_NUMBER_KEY, JOB_NUMBER_START_KEY, jobNumbering, setJobNumberStart }
  * the hourly router with its own role checks, never through bootstrap.
  */
 const SENSITIVE_SETTING = /(^hourly_|allowance|benchmark|key|token|secret|password|xero|clicksend|supabase|github|markup|margin|cost|credit|tier|formula)/i;
+/** Office-only contact and mail rules: the price-alert SMS number and the email ignore list. Never sent to a Field login. */
+const OFFICE_ONLY_SETTING = new Set(["price_flag_sms_to", "mail_ignore_senders"]);
 
 export const settings = {
   /** Everything the admin UI needs to render pickers, in one round trip. */
@@ -39,6 +41,7 @@ export const settings = {
       settings: Object.fromEntries(
         kv
           .filter((r) => context.actor.role === "admin" || !SENSITIVE_SETTING.test(r.key))
+          .filter((r) => context.actor.role !== "field" || !OFFICE_ONLY_SETTING.has(r.key))
           .map((r) => [r.key, r.value]),
       ) as Record<string, string>,
     };

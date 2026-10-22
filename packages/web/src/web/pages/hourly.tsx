@@ -215,7 +215,7 @@ function SessionRow({ r, q, canSeeCosts }: { r: Row; q: Queue; canSeeCosts: bool
               · {hours(r.payableMinutes)} payable
               {r.unpaidBreakMinutes ? ` · ${hours(r.unpaidBreakMinutes)} unpaid break` : ""}
               {r.paidBreakMinutes ? ` · ${hours(r.paidBreakMinutes)} paid break` : ""}
-              {r.vehicleName ? ` · ${r.vehicleName}` : " · no vehicle"}
+              {r.vehicleName ? ` · ${r.vehicleName}` : " · no vehicle set"}
             </span>
           </p>
           {r.correctionRequestedAt ? (
@@ -753,7 +753,7 @@ function VehicleModal({ v, onClose }: { v: Vehicle | null; onClose: () => void }
           </Field>
         </div>
         <label htmlFor="veh-is-test" className="flex items-center gap-2 text-sm">
-          <Checkbox id="veh-is-test" checked={isTest} onChange={(e) => setIsTest(e.target.checked)} /> Test record (dev only)
+          <Checkbox id="veh-is-test" checked={isTest} onChange={(e) => setIsTest(e.target.checked)} /> QA test record only
         </label>
         <label htmlFor="veh-active" className="flex items-center gap-2 text-sm">
           <Checkbox id="veh-active" checked={active} onChange={(e) => setActive(e.target.checked)} /> In use

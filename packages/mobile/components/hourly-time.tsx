@@ -30,10 +30,10 @@ type MyTime = NonNullable<ReturnType<typeof useMyTime>["data"]>;
 type Entry = MyTime["sessions"][number];
 
 const TAP_LABEL: Record<TapKind, string> = {
-  start: "Start work",
+  start: "Start my time",
   pause: "Break",
   resume: "Resume",
-  finish: "Finish work today",
+  finish: "Finish my time today",
 };
 
 function Big({
@@ -150,7 +150,7 @@ function EntryRow({ e, first, onFix }: { e: Entry; first: boolean; onFix: (e: En
         </View>
       ) : e.status === "open" ? (
         <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: c.mutedForeground, marginTop: 3 }}>
-          Still running. Tap Finish today when you stop.
+          Still running. Tap Finish my time today when you stop.
         </Text>
       ) : e.recordedMinutes != null ? (
         <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: c.mutedForeground, marginTop: 3 }}>
@@ -350,13 +350,13 @@ export function HourlyTimeSection({
                 ) : (
                   <Big label={TAP_LABEL.pause} icon="cafe-outline" tone="plain" busy={busy} onPress={() => void send("pause")} />
                 )}
-                <Big label="Finish today" icon="stop" tone={onBreak ? "plain" : "primary"} busy={busy} onPress={() => void send("finish")} />
+                <Big label={TAP_LABEL.finish} icon="stop" tone={onBreak ? "plain" : "primary"} busy={busy} onPress={() => void send("finish")} />
               </View>
             ) : null}
             <Text style={{ fontFamily: Fonts.sans, fontSize: 11.5, color: c.mutedForeground }}>
               {here
-                ? "Finish today stops your time. It does not complete the job."
-                : "Start work starts your time. The job buttons below are separate."}
+                ? "This is your paid time only. Finish my time today stops it. It does not finish the installation."
+                : "Start my time records your paid time only, like arrival or loading. It does not start the installation. The site walk and SWMS are still needed before Start installation."}
             </Text>
           </View>
         ) : null}

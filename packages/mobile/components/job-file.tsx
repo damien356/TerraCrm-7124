@@ -62,10 +62,13 @@ export function JobFileSection({
   taskId,
   jobId,
   areaId,
+  closed = false,
 }: {
   taskId: number;
   jobId: number;
   areaId?: number | null;
+  /** Finished or cancelled task: the site walk is shown as a record, not an instruction. */
+  closed?: boolean;
 }) {
   const file = useJobFile(taskId);
   const addMedia = useAddMedia();
@@ -176,7 +179,22 @@ export function JobFileSection({
         JOB FILE
       </Text>
 
-      {gates && !gates.damageDone ? (
+      {gates && closed ? (
+        <View style={{ backgroundColor: c.secondary, borderRadius: 12, padding: 12, marginTop: 9 }}>
+          <Text style={{ fontFamily: Fonts.bold, fontSize: 13.5, color: c.foreground }}>Pre-start site walk</Text>
+          <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: c.mutedForeground, marginTop: 2, lineHeight: 17 }}>
+            {(() => {
+              const shots = media.filter((m) => m.bucket === "damage").length;
+              if (shots > 0) return `${shots} existing damage ${shots === 1 ? "photo" : "photos"} recorded before work.`;
+              if (gates.damageNone) return "Recorded: nothing damaged found before work.";
+              if (gates.damageDone) return "Site walk recorded.";
+              return "No pre-start site walk on record for this task.";
+            })()}
+          </Text>
+        </View>
+      ) : null}
+
+      {gates && !closed && !gates.damageDone ? (
         <View
           style={{
             backgroundColor: "#FBEDD8",
@@ -188,7 +206,7 @@ export function JobFileSection({
           <Text style={{ fontFamily: Fonts.bold, fontSize: 14, color: "#8A5A11" }}>Walk the site first</Text>
           <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: "#8A5A11", marginTop: 3, lineHeight: 18 }}>
             Photograph anything already damaged before you start, like scratched skirting, cracked tiles, marked walls. If
-            it's all clean, tick it off. You can't start the job until one of those is done.
+            it's all clean, tick it off. You can't start the installation until one of those is done.
           </Text>
           <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
             <Pressable

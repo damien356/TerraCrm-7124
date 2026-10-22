@@ -271,6 +271,67 @@ export const field = {
     });
   }),
 
+  /**
+   * My own bank details, for my invoices (Damien 22 Oct: the contractor enters
+   * them himself). Only my own card. The account number comes back masked.
+   */
+  myBank: installerOnly.handler(async ({ context }) => {
+    const [i] = await db
+      .select({ name: schema.installers.bankAccountName, bsb: schema.installers.bankBsb, acc: schema.installers.bankAccountNumber })
+      .from(schema.installers)
+      .where(eq(schema.installers.id, context.installerId));
+    if (!i) throw new ORPCError("NOT_FOUND", { message: "Installer record not found" });
+    const acc = (i.acc ?? "").replace(/\s/g, "");
+    return {
+      onFile: Boolean(i.name && i.bsb && acc),
+      accountName: i.name ?? null,
+      bsb: i.bsb ?? null,
+      accountEnding: acc ? acc.slice(-3) : null,
+    };
+  }),
+
+  /**
+   * Enter or change my own bank details. Nothing else on the card moves, and
+   * nobody else's card can be reached. The office sees a note that they
+   * changed (without the numbers) so it can check before the next payment.
+   */
+  setMyBank: installerOnly
+    .input(
+      z.object({
+        accountName: z.string().trim().min(2, "Add the account name.").max(80),
+        bsb: z.string().trim(),
+        accountNumber: z.string().trim(),
+      }),
+    )
+    .handler(async ({ input, context }) => {
+      const bsbDigits = input.bsb.replace(/[\s-]/g, "");
+      if (!/^\d{6}$/.test(bsbDigits)) throw new ORPCError("BAD_REQUEST", { message: "The BSB is 6 digits, like 064-000." });
+      const acc = input.accountNumber.replace(/[\s-]/g, "");
+      if (!/^\d{5,10}$/.test(acc)) throw new ORPCError("BAD_REQUEST", { message: "The account number is 5 to 10 digits." });
+      const bsb = `${bsbDigits.slice(0, 3)}-${bsbDigits.slice(3)}`;
+      const [before] = await db
+        .select({ name: schema.installers.name, a: schema.installers.bankAccountName, b: schema.installers.bankBsb, n: schema.installers.bankAccountNumber })
+        .from(schema.installers)
+        .where(eq(schema.installers.id, context.installerId));
+      if (!before) throw new ORPCError("NOT_FOUND", { message: "Installer record not found" });
+      const same = before.a === input.accountName && before.b === bsb && (before.n ?? "").replace(/[\s-]/g, "") === acc;
+      if (same) return { ok: true as const, changed: false };
+      await db
+        .update(schema.installers)
+        .set({ bankAccountName: input.accountName, bankBsb: bsb, bankAccountNumber: acc, updatedAt: new Date() })
+        .where(eq(schema.installers.id, context.installerId));
+      const had = Boolean(before.a || before.b || before.n);
+      await db.insert(schema.activityLog).values({
+        entityType: "installer",
+        entityId: context.installerId,
+        action: had ? "bank_details_changed" : "bank_details_added",
+        detail: `${before.name} ${had ? "changed" : "added"} their bank details in the app (account ending ${acc.slice(-3)}). Check them with ${before.name} before the next payment.`,
+        actorName: before.name,
+        actorRole: "installer",
+      });
+      return { ok: true as const, changed: true };
+    }),
+
   /** Today's work. */
   today: installerOnly.handler(async ({ context }) => {
     /* Gold Coast date, not UTC, or before 10 am "today" is yesterday. And a
@@ -566,7 +627,7 @@ export const field = {
         .from(schema.workSessions)
         .where(and(eq(schema.workSessions.taskId, input.taskId), eq(schema.workSessions.status, "open")));
       if (onClock) {
-        throw new ORPCError("BAD_REQUEST", { message: "You are still on the clock. Tap Finish today first, then finish the job." });
+        throw new ORPCError("BAD_REQUEST", { message: "Time is still running on this task. Tap Finish my time today first, then Finish installation." });
       }
 
       const required = await db

@@ -505,7 +505,7 @@ export const costing = {
           frozen,
           pricedOn: frozen ? t.task.labourPricedOn : on,
           unpriced: live.unpriced,
-          incomplete: hv ? !hv.final && hv.plan.hours == null : lines.length === 0 || live.incomplete,
+          incomplete: hv ? (!hv.final && hv.plan.hours == null) || hv.vehicleMissing.length > 0 : lines.length === 0 || live.incomplete,
           hourly: hv
             ? {
                 final: hv.final,
@@ -514,6 +514,7 @@ export const costing = {
                 benchmark: hv.benchmark.amount,
                 benchmarkVehicle: hv.benchmark.vehicle,
                 comparison: hv.comparison,
+                vehicleMissing: hv.vehicleMissing,
               }
             : null,
           lines: live.lines,

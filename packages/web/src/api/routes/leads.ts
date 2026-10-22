@@ -3,7 +3,7 @@ import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm"
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly } from "../middleware/auth";
-import { CLIENT_TYPES, LEAD_AUTOREPLY_KEY, LEGACY_SOURCE_NAMES, REPORT_EXCLUDED_JOB_NUMBERS, UNKNOWN_SOURCE, clientTypeLabel, sourceName } from "../lib/lead-codes";
+import { CLIENT_TYPES, LEAD_AUTOREPLY_KEY, LEGACY_SOURCE_NAMES, REPORT_EXCLUDED_JOB_NUMBERS, UNKNOWN_SOURCE, isQaTestJob, clientTypeLabel, sourceName } from "../lib/lead-codes";
 import { readLeadFields, takeLead } from "../lib/lead-intake";
 import { TERRA_TZ } from "../lib/local-date";
 import { OPS_URL } from "../lib/notify";
@@ -105,7 +105,7 @@ async function leadJobs(range: { from?: string; to?: string; clientType?: string
     .where(and(...where));
 
   const excluded = new Set(REPORT_EXCLUDED_JOB_NUMBERS);
-  const jobs = rows.filter((r) => !excluded.has(r.number));
+  const jobs = rows.filter((r) => !excluded.has(r.number) && !isQaTestJob(r.source));
   const ids = jobs.map((j) => j.id);
 
   const quotes = new Map<number, { sent: boolean; accepted: number }>();

@@ -556,6 +556,17 @@ export async function jobHourlyCosting(jobId: number) {
     ? await db.select().from(schema.installerInvoices).where(inArray(schema.installerInvoices.taskId, hourlyTasks.map((t) => t.id)))
     : [];
 
+  // Days a worker has time with no vehicle on any of his entries that day. The
+  // allowance is per actual vehicle, so a missing one makes the costing
+  // incomplete: never read as a zero vehicle cost, never a final saving.
+  const withVehicle = installerIds.length
+    ? await db
+        .selectDistinct({ installerId: schema.workSessions.installerId, workDate: schema.workSessions.workDate })
+        .from(schema.workSessions)
+        .where(and(inArray(schema.workSessions.installerId, installerIds), sql`${schema.workSessions.vehicleId} is not null`, sql`${schema.workSessions.status} != 'rejected'`))
+    : [];
+  const hasVehicle = new Set(withVehicle.map((r) => `${r.installerId}|${r.workDate}`));
+
   const taskViews = [];
   for (const t of hourlyTasks) {
     const ss = sessionsAll.filter((s) => s.taskId === t.id);
@@ -591,7 +602,12 @@ export async function jobHourlyCosting(jobId: number) {
     const vehicle = round2(vehicleRows.reduce((a, r) => a + r.share, 0));
     const vehicleDaysUsed = new Set(vehicleRows.map((r) => r.vehicleDayId)).size;
 
-    const final = t.status === "complete" && pending.length === 0 && approved.length > 0;
+    const missingKeys = [...new Set(ss.filter((s) => !hasVehicle.has(`${s.installerId}|${s.workDate}`)).map((s) => `${s.installerId}|${s.workDate}`))].sort();
+    const vehicleMissing = missingKeys.map((k) => {
+      const [id, workDate] = k.split("|");
+      return { installerId: Number(id), name: nameOf(Number(id)), workDate: workDate! };
+    });
+    const final = t.status === "complete" && pending.length === 0 && approved.length > 0 && vehicleMissing.length === 0;
     const hoursSoFar = (approved.reduce((a, s) => a + (s.approvedMinutes ?? 0), 0) + pending.reduce((a, s) => a + s.payableMinutes, 0)) / 60;
     const plannedLabour = t.plannedHours != null && leadTerms ? round2(t.plannedHours * leadTerms.baseRate) : null;
     const plannedVehicle = t.plannedVehicleDays != null ? round2(t.plannedVehicleDays * settings.vehicleAllowanceDefault) : null;
@@ -600,7 +616,9 @@ export async function jobHourlyCosting(jobId: number) {
 
     const labourBasis = final ? approvedLabour : round2(approvedLabour + recordedEstimate + (remainingLabour ?? 0));
     const vehicleBasis = final ? vehicle : round2(vehicle + (remainingVehicle ?? 0));
-    const cmp = compare({ benchmark: t.benchmarkCost, labour: labourBasis, vehicle: vehicleBasis, benchmarkVehicle: (t.benchmarkVehicle as BenchmarkVehicle) ?? "unknown" });
+    const cmp0 = compare({ benchmark: t.benchmarkCost, labour: labourBasis, vehicle: vehicleBasis, benchmarkVehicle: (t.benchmarkVehicle as BenchmarkVehicle) ?? "unknown" });
+    // Missing vehicle: the vehicle side is unknown, so no saving after vehicle and nothing final.
+    const cmp = vehicleMissing.length ? { ...cmp0, savingAfterVehicle: null, provisional: true, incomplete: true } : { ...cmp0, incomplete: false };
 
     // Contractor invoices matched to approved time, never added to it.
     const recon = [...byWorker.values()].map((w) => {
@@ -661,6 +679,9 @@ export async function jobHourlyCosting(jobId: number) {
       },
       plan: { hours: t.plannedHours, vehicleDays: t.plannedVehicleDays, labour: plannedLabour, vehicle: plannedVehicle, combined: plannedLabour != null || plannedVehicle != null ? round2((plannedLabour ?? 0) + (plannedVehicle ?? 0)) : null },
       final,
+      /** Days with time but no vehicle assigned: the costing is incomplete until the office assigns one. */
+      vehicleMissing,
+      costingComplete: vehicleMissing.length === 0,
       soFar: {
         approvedLabour,
         approvedMinutes: approved.reduce((a, s) => a + (s.approvedMinutes ?? 0), 0),
@@ -719,6 +740,8 @@ export async function jobHourlyCosting(jobId: number) {
       marginAfterAllowances: round2(revenue - totalCost),
       marginPct: revenue > 0 ? round2(((revenue - totalCost) / revenue) * 100) : null,
       final: allFinal,
+      /** A vehicle is missing on some day: the margin is not complete. */
+      incomplete: taskViews.some((t) => t.vehicleMissing.length > 0),
     },
   };
 }

@@ -163,7 +163,12 @@ export const installerInvoices = {
       /** Submitted is not the same as received. The screen says which of the two. */
       emailedToTerra: existing ? !!existing.emailedToTerraAt : false,
       emailError: existing?.emailError ?? null,
-      canSubmit: !existing && installer.nextInvoiceNumber != null && abn.passes && !hourlyBlock,
+      canSubmit:
+        !existing &&
+        installer.nextInvoiceNumber != null &&
+        abn.passes &&
+        !hourlyBlock &&
+        Boolean(installer.bankBsb && installer.bankAccountNumber && installer.bankAccountName),
       blockedReason: existing
         ? null
         : hourlyBlock
@@ -173,7 +178,7 @@ export const installerInvoices = {
           : !abn.passes
             ? ABN_BLOCK
             : !installer.bankBsb || !installer.bankAccountNumber || !installer.bankAccountName
-              ? "Add your bank details before submitting an invoice."
+              ? "Add your bank details on the Me tab (Bank details) before submitting an invoice."
               : null,
       job: { number: jobRef(job), ref: taskRef(jobRef(job), task.seq), siteAddress: site?.address ?? null, taskTitle: task.title },
       profile: {
@@ -221,7 +226,7 @@ export const installerInvoices = {
     const abn = abnView(installer);
     if (!abn.passes) throw new ORPCError("BAD_REQUEST", { message: ABN_BLOCK });
     if (!installer.bankBsb || !installer.bankAccountNumber || !installer.bankAccountName) {
-      throw new ORPCError("BAD_REQUEST", { message: "Bank details are required before submitting an invoice." });
+      throw new ORPCError("BAD_REQUEST", { message: "Add your bank details on the Me tab (Bank details) before submitting an invoice." });
     }
 
     const invoiceNumber = installer.nextInvoiceNumber;

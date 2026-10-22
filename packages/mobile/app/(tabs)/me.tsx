@@ -11,6 +11,7 @@ import { crewLabel, daysUntil, fmtDateTime, fmtDayLabel, fmtMoney } from "@/lib/
 import { useHistory, useMe, useSetLocationConsent } from "@/queries/field";
 import { dollars, hrsMins, useMyHourlySummary } from "@/queries/hourly";
 import { HandsFreeCard } from "@/components/hands-free-card";
+import { BankDetailsCard } from "@/components/bank-details";
 import { useWhoami } from "@/queries/session";
 import { currentUpdate, updatesSupported } from "@/lib/updates";
 import appJson from "@/app.json";
@@ -342,6 +343,8 @@ function CrewMe() {
                 spot. It stays your call. The office can't switch it on for you.
               </Text>
             </View>
+
+            <BankDetailsCard />
 
             <HandsFreeCard />
 

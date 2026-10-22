@@ -3395,7 +3395,7 @@ export const vehicles = sqliteTable("vehicles", {
   usualDriverId: integer("usual_driver_id").references(() => installers.id, { onDelete: "set null" }),
   /** Dollars per working day. Copied onto each vehicle day when it is first used. */
   dailyAllowance: real("daily_allowance").notNull().default(50),
-  /** Development test record. Must never exist on live. */
+  /** QA test record. On live only as the labelled QA vehicle Damien approved (22 Oct), used on the QA job only. */
   isTest: integer("is_test", { mode: "boolean" }).notNull().default(false),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   notes: text("notes"),

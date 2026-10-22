@@ -51,6 +51,7 @@ export function HourlyJobCard({ jobId }: { jobId: number }) {
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-xs font-semibold">Job margin after allowances</p>
             {m.final ? <Badge colour="#3E6B4F">final</Badge> : <Badge colour="#B7791F">so far, with the plan for what is left</Badge>}
+            {m.incomplete ? <Badge colour="#B42318">incomplete: vehicle missing</Badge> : null}
           </div>
           <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
             <Row label="Sale ex GST" value={money(m.revenue)} />
@@ -108,8 +109,18 @@ function HourlyTask({ t }: { t: TaskView }) {
         <div className="flex items-center gap-1.5">
           {t.final ? <Badge colour="#3E6B4F">final</Badge> : <Badge colour="#B7791F">so far</Badge>}
           {c.provisional ? <Badge colour="#8A8580">comparison provisional</Badge> : null}
+          {t.vehicleMissing.length ? <Badge colour="#B42318">costing incomplete</Badge> : null}
         </div>
       </div>
+
+      {t.vehicleMissing.length ? (
+        <div className="border-b border-border bg-[#B42318]/5 px-3 py-2 text-xs text-[#8f1d14]">
+          <p className="font-semibold">No vehicle assigned, so this costing is not complete and no final saving is shown.</p>
+          <p className="mt-0.5">
+            {t.vehicleMissing.map((v) => `${v.name} on ${v.workDate}`).join(", ")}. Open the time entry and set the vehicle used. Approving the hours is not affected.
+          </p>
+        </div>
+      ) : null}
 
       <div className="grid gap-3 px-3 py-2.5 text-xs md:grid-cols-3">
         <div className="space-y-1">
@@ -144,7 +155,12 @@ function HourlyTask({ t }: { t: TaskView }) {
             hint={t.benchmark.pricedOn ? `frozen ${t.benchmark.pricedOn}` : undefined}
           />
           <Row label="Saving before vehicle" value={money(c.savingBeforeVehicle)} tone={tone(c.savingBeforeVehicle)} strong={c.likeForLike === "before"} />
-          <Row label="Saving after vehicle" value={money(c.savingAfterVehicle)} tone={tone(c.savingAfterVehicle)} strong={c.likeForLike === "after"} />
+          <Row
+            label="Saving after vehicle"
+            value={c.incomplete ? "vehicle missing" : money(c.savingAfterVehicle)}
+            tone={c.incomplete ? undefined : tone(c.savingAfterVehicle)}
+            strong={c.likeForLike === "after"}
+          />
           <p className="pt-1 text-[11px] text-muted-foreground">
             {t.benchmark.vehicle === "unknown"
               ? "Not yet known if the normal price includes the subbie's vehicle. Both lines shown."

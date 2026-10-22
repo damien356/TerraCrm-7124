@@ -206,7 +206,7 @@ export default function TaskScreen() {
   async function onFinish() {
     setError(null);
     if (onClockHere) {
-      setError("You are still on the clock. Tap Finish today first, then finish the job.");
+      setError("Your time is still running. Tap Finish my time today first, then Finish installation.");
       return;
     }
     if (swmsDue) return openSwms();
@@ -266,6 +266,14 @@ export default function TaskScreen() {
           <Ionicons name="chevron-back" size={22} color={c.foreground} />
           <Text style={{ fontFamily: Fonts.medium, fontSize: 15, color: c.foreground }}>{t.ref || `Job #${t.jobNumber}`}</Text>
         </Pressable>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        {onClockHere ? (
+          <View style={{ backgroundColor: "#F7E6DC", paddingHorizontal: 10, paddingVertical: 5, borderRadius: 7 }}>
+            <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: c.primary }}>
+              {myTime.data?.open?.onBreak ? "TIME: ON A BREAK" : "TIME: RUNNING"}
+            </Text>
+          </View>
+        ) : null}
         <View
           style={{
             backgroundColor: running ? c.primary : done ? c.success : c.secondary,
@@ -281,8 +289,9 @@ export default function TaskScreen() {
               color: running || done ? "#FFFFFF" : c.mutedForeground,
             }}
           >
-            {statusLabel(t.status).toUpperCase()}
+            {hourlyOn ? `JOB: ${statusLabel(t.status).toUpperCase()}` : statusLabel(t.status).toUpperCase()}
           </Text>
+        </View>
         </View>
       </View>
 
@@ -673,7 +682,7 @@ export default function TaskScreen() {
 
         {/* JobFileSection carries its own heading and top margin, so it is not
             wrapped in a Section. Wrapping it printed JOB FILE twice. */}
-        <JobFileSection taskId={t.id} jobId={t.jobId} />
+        <JobFileSection taskId={t.id} jobId={t.jobId} closed={done || t.status === "cancelled"} />
 
         {(() => {
           const pay = (
@@ -822,6 +831,15 @@ export default function TaskScreen() {
             borderTopColor: c.border,
           }}
         >
+          {hourlyOn ? (
+            <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground, marginBottom: 8, textAlign: "center" }}>
+              {running
+                ? "Installation under way. Finish installation completes the job, not your time."
+                : onClockHere
+                  ? "Your time is running. The installation has not started yet."
+                  : "Installation not started. Your time is separate, in Your time and pay."}
+            </Text>
+          ) : null}
           <Pressable
             disabled={start.isPending || finish.isPending}
             onPress={() => void (running ? onFinish() : onStart())}
@@ -837,7 +855,17 @@ export default function TaskScreen() {
               <ActivityIndicator color="#FFFFFF" />
             ) : (
               <Text style={{ fontFamily: Fonts.bold, fontSize: 16.5, color: "#FFFFFF" }}>
-                {running ? "Finish this job" : swmsDue ? "Sign SWMS and start" : "Start this job"}
+                {hourlyOn
+                  ? running
+                    ? "Finish installation"
+                    : swmsDue
+                      ? "Sign SWMS and start installation"
+                      : "Start installation"
+                  : running
+                    ? "Finish this job"
+                    : swmsDue
+                      ? "Sign SWMS and start"
+                      : "Start this job"}
               </Text>
             )}
           </Pressable>
