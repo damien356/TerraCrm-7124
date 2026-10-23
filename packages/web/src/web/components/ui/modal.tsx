@@ -31,7 +31,7 @@ export function Modal({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-[#1C1B1A]/45 p-4 py-10">
+    <div data-slot="modal" className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-[#1C1B1A]/45 p-4 py-10">
       <div
         className={cn("w-full animate-in fade-in zoom-in-95 rounded-xl border border-border bg-card shadow-xl", width)}
       >

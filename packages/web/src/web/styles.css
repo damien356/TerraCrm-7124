@@ -138,25 +138,28 @@
 }
 
 /* Buttons and inputs sitting on the dark page chrome need to invert.
-   Unlayered on purpose so it beats Tailwind utility classes. */
-.page-chrome [data-slot="button"]:not([class*="bg-primary"]):not([class*="bg-destructive"]) {
+   Unlayered on purpose so it beats Tailwind utility classes.
+   A pop-up window opened from a header button sits inside the chrome in the
+   page, but it is a light card, so nothing in it is inverted. Without the
+   :not() the typed job number on Cancel job was white on white. */
+.page-chrome [data-slot="button"]:not([class*="bg-primary"]):not([class*="bg-destructive"]):not([data-slot="modal"] *) {
   background-color: rgb(255 255 255 / 0.07);
   border-color: rgb(255 255 255 / 0.16);
   color: rgb(255 255 255 / 0.86);
   box-shadow: none;
 }
-.page-chrome [data-slot="button"]:not([class*="bg-primary"]):not([class*="bg-destructive"]):hover {
+.page-chrome [data-slot="button"]:not([class*="bg-primary"]):not([class*="bg-destructive"]):not([data-slot="modal"] *):hover {
   background-color: rgb(188 149 88 / 0.22);
   border-color: rgb(188 149 88 / 0.45);
   color: #ffffff;
 }
-.page-chrome select,
-.page-chrome input {
+.page-chrome select:not([data-slot="modal"] *),
+.page-chrome input:not([data-slot="modal"] *) {
   background-color: rgb(255 255 255 / 0.07);
   border-color: rgb(255 255 255 / 0.16);
   color: rgb(255 255 255 / 0.86);
 }
-.page-chrome .label-xs {
+.page-chrome .label-xs:not([data-slot="modal"] *) {
   color: rgb(255 255 255 / 0.45);
 }
 

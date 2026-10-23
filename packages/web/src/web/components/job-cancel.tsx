@@ -127,7 +127,11 @@ function CancelJobModal({ jobId, onClose }: { jobId: number; onClose: () => void
             ) : (
               <>
                 <Lines title="What happens" lines={p.clear.steps} />
-                <Field label={`Type the job number ${p.jobRef} to confirm`} className="mt-4">
+                <Field
+                  label={`Type the job number ${p.jobRef} to confirm`}
+                  hint={typed.trim() && !matches ? `That does not match ${p.jobRef} yet. Clear everything turns on when it does.` : undefined}
+                  className="mt-4"
+                >
                   <Input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={p.jobRef} autoComplete="off" />
                 </Field>
                 <div className="mt-4 flex justify-end">
