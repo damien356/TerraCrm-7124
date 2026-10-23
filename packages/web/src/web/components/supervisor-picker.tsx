@@ -15,8 +15,8 @@ import { NewContactFields, blankContact, contactName, contactPayload, contactPro
  * SUPERVISOR PICKER.
  *
  * The one place the supervisor on a job gets chosen. The list is the people
- * already filed under that company at a role that could have sent the work,
- * so it never offers someone from a different builder.
+ * already filed under that company, sender roles first, so it never offers
+ * someone from a different builder.
  *
  * A supervisor is not a column on the job. It is a normal `job_contacts` row
  * at role 'supervisor', so whoever is picked here reads back through the same
@@ -28,8 +28,35 @@ import { NewContactFields, blankContact, contactName, contactPayload, contactPro
  * once and filed under the company as a supervisor in the same step.
  */
 
-/** Roles at a company that plausibly sent the work. */
+/** Roles at a company that plausibly sent the work. They sort to the top of the list. */
 const SENDER_ROLES = ["supervisor", "manager", "owner", "purchasing"];
+
+type CompanyPerson = { contactId: number; name: string; role: string; jobTitle: string | null };
+
+/**
+ * Everyone filed under the company, one line per person. People at a sender
+ * role come first. Anyone else (a builder contact made on New job is filed as
+ * 'other') is still offered below them, because the server accepts anyone
+ * linked to the company and hiding them made the list look empty.
+ */
+export function supervisorOptions(rows: CompanyPerson[]) {
+  const rank = (role: string) => {
+    const i = SENDER_ROLES.indexOf(role);
+    return i === -1 ? SENDER_ROLES.length : i;
+  };
+  const best = new Map<number, CompanyPerson>();
+  for (const p of rows) {
+    const had = best.get(p.contactId);
+    if (!had || rank(p.role) < rank(had.role)) best.set(p.contactId, p);
+  }
+  return [...best.values()]
+    .sort((a, b) => rank(a.role) - rank(b.role) || a.name.localeCompare(b.name))
+    .map((p) => ({
+      value: String(p.contactId),
+      label: p.name,
+      sublabel: p.jobTitle ?? (p.role === "other" ? "contact" : p.role.replace(/_/g, " ")),
+    }));
+}
 
 export function SupervisorPicker({
   companyId,
@@ -46,7 +73,7 @@ export function SupervisorPicker({
   /** True when the work cannot be saved without a supervisor. */
   required?: boolean;
 }) {
-  const people = useCompanyPeople(companyId, SENDER_ROLES);
+  const people = useCompanyPeople(companyId);
   const createContact = useCreateContact();
   const link = useMutation(orpc.contacts.linkCompany.mutationOptions());
 
@@ -60,11 +87,7 @@ export function SupervisorPicker({
     setError(null);
   }, [companyId]);
 
-  const options = (people.data ?? []).map((p) => ({
-    value: String(p.contactId),
-    label: p.name,
-    sublabel: p.jobTitle ?? p.role.replace(/_/g, " "),
-  }));
+  const options = supervisorOptions(people.data ?? []);
 
   const reset = () => {
     setDraft(blankContact({ source: "builder" }));
@@ -208,7 +231,7 @@ export function SupervisorDraftPicker({
   value: SupervisorChoice;
   onChange: (next: SupervisorChoice) => void;
 }) {
-  const people = useCompanyPeople(companyId, SENDER_ROLES);
+  const people = useCompanyPeople(companyId);
   const hasCompany = !!companyId || companyIsNew;
 
   if (!hasCompany) {
@@ -221,11 +244,7 @@ export function SupervisorDraftPicker({
 
   const options = companyIsNew
     ? []
-    : (people.data ?? []).map((p) => ({
-        value: String(p.contactId),
-        label: p.name,
-        sublabel: p.jobTitle ?? p.role.replace(/_/g, " "),
-      }));
+    : supervisorOptions(people.data ?? []);
 
   return (
     <Field
