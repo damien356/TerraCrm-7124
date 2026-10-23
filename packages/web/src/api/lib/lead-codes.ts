@@ -52,6 +52,30 @@ export const REPORT_EXCLUDED_JOB_NUMBERS = [4384, 4385, 4388, 4389];
 export const QA_TEST_SOURCE = "qa_test";
 export const isQaTestJob = (source: string | null | undefined) => (source ?? "").trim() === QA_TEST_SOURCE;
 
+/**
+ * A TEST enquiry sent through a real landing page form (changeover testing,
+ * Damien 23 Oct). The name starts with the word TEST in capitals. It makes a
+ * normal Lead with its real source page and tracking so the route can be
+ * checked, but carries this tag, and like a QA test job it is never counted
+ * in the leads report, the dashboard or the cash flow forecast. No office
+ * task, no Marc text and no client reply go out for it.
+ */
+export const TEST_LEAD_TAG = "TEST enquiry";
+export const isTestLeadName = (name: string) => /^\s*TEST\b/.test(name);
+export function hasTestLeadTag(tags: string | null | undefined) {
+  if (!tags) return false;
+  try {
+    const list = JSON.parse(tags) as unknown;
+    return Array.isArray(list) && list.includes(TEST_LEAD_TAG);
+  } catch {
+    return false;
+  }
+}
+/** Never counted anywhere: a QA test job or a TEST enquiry. */
+export const isTestJob = (j: { source: string | null | undefined; tags?: string | null }) => isQaTestJob(j.source) || hasTestLeadTag(j.tags);
+/** SQL twin of hasTestLeadTag, for counts done in the database. The tag is stored as JSON text. */
+export const TEST_LEAD_TAG_LIKE = `%"${TEST_LEAD_TAG}"%`;
+
 export const CLIENT_TYPES = [
   ["healthcare", "Healthcare"],
   ["commercial", "Commercial"],

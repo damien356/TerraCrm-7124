@@ -185,6 +185,8 @@ export async function startRepairRequest(args: {
   floorTypeRaw?: string;
   suburb: string;
   now?: Date;
+  /** Make the repair but do not text Marc (a TEST or recovered enquiry). Shown on the repair as the reason. */
+  hold?: string;
 }): Promise<number | null> {
   const now = args.now ?? new Date();
   const token = randomBytes(24).toString("base64url");
@@ -208,6 +210,10 @@ export async function startRepairRequest(args: {
       .onConflictDoNothing()
       .returning();
     if (!req) return null;
+    if (args.hold) {
+      await db.update(schema.repairRequests).set({ status: "not_sent", lastReply: args.hold.slice(0, 300), updatedAt: new Date() }).where(eq(schema.repairRequests.id, req.id));
+      return req.id;
+    }
 
     const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, args.jobId));
     const ref = job ? jobText(job) : String(args.jobId);

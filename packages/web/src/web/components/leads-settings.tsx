@@ -188,9 +188,10 @@ type PageRow = {
   active: boolean;
   jobs: number;
   postTo: string;
+  arrivals: PageArrivals;
 };
 
-type PageDraft = Omit<PageRow, "id" | "jobs" | "postTo" | "tags"> & { id?: number; tags: string };
+type PageDraft = Omit<PageRow, "id" | "jobs" | "postTo" | "tags" | "arrivals"> & { id?: number; tags: string };
 
 const blankPage = (): PageDraft => ({
   url: "",
@@ -289,6 +290,7 @@ function PagesCard({
                   </button>
                 </p>
                 <p className="text-xs text-muted-foreground">{p.jobs} job{p.jobs === 1 ? "" : "s"}</p>
+                <Arrivals a={p.arrivals} />
               </div>
               <Button
                 size="sm"
@@ -493,21 +495,47 @@ function SpendCard({ pages }: { pages: PageRow[] }) {
   );
 }
 
+const bne = (d: Date | string) => new Date(d).toLocaleString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+
+type PageArrivals = { lastAt: Date | string | null; lastOkAt: Date | string | null; lastJobRef: string | null; ok30: number; notThrough30: number; test30: number };
+
+/** What the page has actually sent us. A page that never posted says so in red. */
+function Arrivals({ a }: { a: PageArrivals }) {
+  if (!a.lastAt) return <p className="text-xs font-medium text-destructive">No form post has ever arrived from this page.</p>;
+  return (
+    <p className="text-xs text-muted-foreground">
+      Last post {bne(a.lastAt)}.{" "}
+      {a.lastOkAt ? `Last lead ${bne(a.lastOkAt)}${a.lastJobRef ? ` (job ${a.lastJobRef})` : ""}.` : "No lead made yet."} Last 30 days: {a.ok30} lead{a.ok30 === 1 ? "" : "s"}
+      {a.test30 ? ` (${a.test30} TEST)` : ""}
+      {a.notThrough30 ? <span className="text-destructive">, {a.notThrough30} not through</span> : null}.
+    </p>
+  );
+}
+
+const VERDICT_TEXT: Record<string, [string, string]> = {
+  spam: ["Blocked", "#B45309"],
+  failed: ["Failed", "#B91C1C"],
+  held: ["Held, possible match", "#1D4ED8"],
+};
+
 /* ------------------------------ blocked posts ------------------------------ */
 
 function BlockedCard() {
   const [open, setOpen] = React.useState(false);
-  const q = useBlockedLeads(open);
+  const q = useBlockedLeads(true);
+  const waiting = (q.data?.failed ?? 0) + (q.data?.held ?? 0);
   const release = useReleaseLead();
   const [msg, setMsg] = React.useState<Msg>(null);
   return (
     <Card>
       <CardHeader
-        title="Blocked form posts"
-        subtitle="Posts caught as spam make no job. If a real lead got caught, let it through and it becomes a job the normal way."
+        title="Form posts not through"
+        subtitle={`Blocked as spam, held as a possible match with a job keyed by hand, or failed while the job was being made. None of these made a job. If one is a real lead, let it through and it becomes a job the normal way.${
+          q.data ? ` Now: ${q.data.failed} failed, ${q.data.held} held, ${q.data.spam} blocked.` : ""
+        }`}
         action={
-          <Button size="sm" variant="outline" onClick={() => setOpen((o) => !o)}>
-            {open ? "Hide" : "Show"}
+          <Button size="sm" variant={waiting && !open ? "default" : "outline"} onClick={() => setOpen((o) => !o)}>
+            {open ? "Hide" : waiting ? `Show (${waiting} to check)` : "Show"}
           </Button>
         }
       />
@@ -525,12 +553,19 @@ function BlockedCard() {
                     {r.name || "No name"} <span className="font-normal text-muted-foreground">{[r.phone, r.email].filter(Boolean).join(", ")}</span>
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {r.formKey}, {new Date(r.createdAt).toLocaleString("en-AU", { timeZone: "Australia/Brisbane" })}. Why: {r.reason || "spam"}
+                    {r.formKey}, {new Date(r.createdAt).toLocaleString("en-AU", { timeZone: "Australia/Brisbane" })}
+                    {r.enquiryRef ? `, page ref ${r.enquiryRef}` : ""}
+                    {r.backfill ? ", recovered" : ""}. Why: {r.reason || "spam"}
                   </p>
                   {r.message ? <p className="mt-0.5 line-clamp-2 text-xs">{r.message}</p> : null}
                 </div>
+                {VERDICT_TEXT[r.verdict] ? <Badge colour={VERDICT_TEXT[r.verdict]![1]}>{VERDICT_TEXT[r.verdict]![0]}</Badge> : null}
                 {r.verdict === "released" ? (
-                  <Badge colour="#15803D">Let through{r.jobId ? `, job made` : ""}</Badge>
+                  <Badge colour="#15803D">Let through{r.jobRef ? `, job ${r.jobRef}` : r.jobId ? ", job made" : ""}</Badge>
+                ) : r.verdict === "failed" && r.jobId ? (
+                  <a className="text-xs text-[var(--gold-deep)] hover:underline" href={`/jobs/${r.jobId}`}>
+                    Open job {r.jobRef ?? ""}
+                  </a>
                 ) : (
                   <Button
                     size="sm"
@@ -546,7 +581,7 @@ function BlockedCard() {
                       }
                     }}
                   >
-                    Let through
+                    {r.verdict === "failed" ? "Try again" : r.verdict === "held" ? "Make a job anyway" : "Let through"}
                   </Button>
                 )}
               </div>

@@ -308,7 +308,7 @@ const leadCors = (origin: string | undefined): Record<string, string> =>
     ? {
         "access-control-allow-origin": origin,
         "access-control-allow-methods": "POST, OPTIONS",
-        "access-control-allow-headers": "content-type",
+        "access-control-allow-headers": "content-type, idempotency-key",
         "access-control-max-age": "86400",
         vary: "origin",
       }
@@ -339,15 +339,21 @@ app.post("/api/leads/:formKey", async (c) => {
   } catch {
     return c.json({ ok: false, reason: "unreadable" }, 400, headers);
   }
+  // A page may name the enquiry in the header instead of the body. Same meaning as enquiryRef.
+  const idem = (c.req.header("idempotency-key") ?? "").trim().slice(0, 120);
+  if (idem && !raw.enquiryRef && !raw.enquiryId) raw.enquiryRef = idem;
   const fwd = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
   const ip = (c.req.header("cf-connecting-ip") || fwd || c.req.header("x-real-ip") || "").slice(0, 64);
   try {
     const out = await takeLead(c.req.param("formKey"), raw, files, { ip, userAgent: c.req.header("user-agent"), origin: c.req.header("origin") });
     // Spam gets the same answer as a real lead, so a bot learns nothing.
-    return c.json({ ok: true, ...(out.verdict === "ok" ? { ref: out.jobNumber } : {}) }, 200, headers);
+    // ref is the Terra Ops job number; a page keeps it next to its own enquiry.
+    const ref = out.verdict === "ok" || out.verdict === "duplicate" ? out.jobRef : null;
+    return c.json({ ok: true, ...(ref ? { ref } : {}), ...(out.verdict === "duplicate" ? { already: true } : {}) }, 200, headers);
   } catch (e) {
+    // The post is kept as failed (Settings, Leads). A 500 tells the page to keep it and try again.
     console.error("[leads] intake failed", e);
-    return c.json({ ok: false }, 500, headers);
+    return c.json({ ok: false, retry: true }, 500, headers);
   }
 });
 

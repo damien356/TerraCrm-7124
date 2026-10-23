@@ -6,7 +6,7 @@ import { staffOnly } from "../middleware/auth";
 import { expireStale } from "./offers";
 import { addLocalDays, todayLocal } from "../lib/local-date";
 import { crewBoard } from "../lib/task-run";
-import { QA_TEST_SOURCE } from "../lib/lead-codes";
+import { QA_TEST_SOURCE, TEST_LEAD_TAG_LIKE } from "../lib/lead-codes";
 
 /** The office's morning screen: what's on today, what's not filled, what's at risk. */
 export const dashboard = {
@@ -79,8 +79,8 @@ export const dashboard = {
         })
         .from(sql`${schema.jobs} j`)
         .leftJoin(sql`${schema.jobStatuses} s`, sql`s.id = j.status_id`)
-        // A QA test job is never counted (lib/lead-codes.ts QA_TEST_SOURCE).
-        .where(sql`coalesce(j.source, '') != ${QA_TEST_SOURCE}`),
+        // A QA test job or TEST enquiry is never counted (lib/lead-codes.ts).
+        .where(sql`coalesce(j.source, '') != ${QA_TEST_SOURCE} and coalesce(j.tags, '') not like ${TEST_LEAD_TAG_LIKE}`),
 
       // Value of work that came in over the last 30 days. created_at cannot
       // be trusted on its own: the ServiceM8 import stamped all 4,219 history
@@ -95,7 +95,7 @@ export const dashboard = {
         })
         .from(schema.jobs)
         .where(
-          sql`${schema.jobs.source} != ${QA_TEST_SOURCE} and (case when ${schema.jobs.externalRef} is null then ${schema.jobs.createdAt}
+          sql`${schema.jobs.source} != ${QA_TEST_SOURCE} and coalesce(${schema.jobs.tags}, '') not like ${TEST_LEAD_TAG_LIKE} and (case when ${schema.jobs.externalRef} is null then ${schema.jobs.createdAt}
                 else coalesce(${schema.jobs.scheduledStart}, ${schema.jobs.completedAt}, ${schema.jobs.createdAt}) end)
               between ${Math.floor((Date.now() - 30 * 86400_000) / 1000)} and ${Math.floor(Date.now() / 1000)}`,
         ),

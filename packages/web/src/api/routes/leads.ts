@@ -3,7 +3,7 @@ import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm"
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly } from "../middleware/auth";
-import { CLIENT_TYPES, LEAD_AUTOREPLY_KEY, LEGACY_SOURCE_NAMES, REPORT_EXCLUDED_JOB_NUMBERS, UNKNOWN_SOURCE, isQaTestJob, clientTypeLabel, sourceName } from "../lib/lead-codes";
+import { CLIENT_TYPES, LEAD_AUTOREPLY_KEY, LEGACY_SOURCE_NAMES, REPORT_EXCLUDED_JOB_NUMBERS, TEST_LEAD_TAG_LIKE, UNKNOWN_SOURCE, isTestJob, clientTypeLabel, sourceName } from "../lib/lead-codes";
 import { readLeadFields, takeLead } from "../lib/lead-intake";
 import { TERRA_TZ } from "../lib/local-date";
 import { OPS_URL } from "../lib/notify";
@@ -86,6 +86,7 @@ async function leadJobs(range: { from?: string; to?: string; clientType?: string
       displayNumber: schema.jobs.displayNumber,
       title: schema.jobs.title,
       source: schema.jobs.source,
+      tags: schema.jobs.tags,
       value: schema.jobs.value,
       landingPageId: schema.jobs.landingPageId,
       createdAt: schema.jobs.createdAt,
@@ -105,7 +106,7 @@ async function leadJobs(range: { from?: string; to?: string; clientType?: string
     .where(and(...where));
 
   const excluded = new Set(REPORT_EXCLUDED_JOB_NUMBERS);
-  const jobs = rows.filter((r) => !excluded.has(r.number) && !isQaTestJob(r.source));
+  const jobs = rows.filter((r) => !excluded.has(r.number) && !isTestJob(r));
   const ids = jobs.map((j) => j.id);
 
   const quotes = new Map<number, { sent: boolean; accepted: number }>();
@@ -235,6 +236,47 @@ const rangeInput = z.object({
   clientType: clientTypeEnum.optional(),
 });
 
+const noArrivals = () => ({ lastAt: null as Date | null, lastOkAt: null as Date | null, lastJobRef: null as string | null, ok30: 0, notThrough30: 0, test30: 0 });
+
+/**
+ * What each page has sent us, from lead_submissions: the last post of any
+ * kind, the last one that made a job, and the last 30 days. A page that has
+ * never sent anything shows that plainly in Settings, Leads.
+ */
+async function pageArrivals() {
+  const since = new Date(Date.now() - 30 * 86_400_000);
+  const rows = await db
+    .select({
+      formKey: schema.leadSubmissions.formKey,
+      lastAt: sql<number | null>`max(${schema.leadSubmissions.createdAt})`,
+      lastOkAt: sql<number | null>`max(case when ${schema.leadSubmissions.verdict} in ('ok','released') then ${schema.leadSubmissions.createdAt} end)`,
+      ok30: sql<number>`sum(case when ${schema.leadSubmissions.verdict} in ('ok','released') and ${schema.leadSubmissions.createdAt} >= ${Math.floor(since.getTime() / 1000)} then 1 else 0 end)`,
+      notThrough30: sql<number>`sum(case when ${schema.leadSubmissions.verdict} in ('spam','failed','held') and ${schema.leadSubmissions.createdAt} >= ${Math.floor(since.getTime() / 1000)} then 1 else 0 end)`,
+      test30: sql<number>`sum(case when ${schema.leadSubmissions.verdict} in ('ok','released') and ${schema.leadSubmissions.createdAt} >= ${Math.floor(since.getTime() / 1000)} and coalesce(${schema.jobs.tags}, '') like ${TEST_LEAD_TAG_LIKE} then 1 else 0 end)`,
+    })
+    .from(schema.leadSubmissions)
+    .leftJoin(schema.jobs, eq(schema.jobs.id, schema.leadSubmissions.jobId))
+    .groupBy(schema.leadSubmissions.formKey);
+  const last = await db
+    .select({ formKey: schema.leadSubmissions.formKey, number: schema.jobs.number, displayNumber: schema.jobs.displayNumber })
+    .from(schema.leadSubmissions)
+    .innerJoin(schema.jobs, eq(schema.jobs.id, schema.leadSubmissions.jobId))
+    .where(inArray(schema.leadSubmissions.verdict, ["ok", "released"]))
+    .orderBy(desc(schema.leadSubmissions.id));
+  const lastRef = new Map<string, string>();
+  for (const r of last) if (!lastRef.has(r.formKey)) lastRef.set(r.formKey, r.displayNumber || String(r.number));
+  const toDate = (v: number | null) => (v == null ? null : new Date(Number(v) * 1000));
+  return new Map(
+    rows.map((r) => [
+      r.formKey,
+      { lastAt: toDate(r.lastAt), lastOkAt: toDate(r.lastOkAt), lastJobRef: lastRef.get(r.formKey) ?? null, ok30: Number(r.ok30 ?? 0), notThrough30: Number(r.notThrough30 ?? 0), test30: Number(r.test30 ?? 0) },
+    ]),
+  );
+}
+
+/** Posts that did not make a job of their own, shown in Settings, Leads with what can be done. */
+const NOT_THROUGH = ["spam", "failed", "held"] as const;
+
 /** A blocked post, read back into what a person would see. */
 function blockedView(r: typeof schema.leadSubmissions.$inferSelect) {
   let raw: Record<string, unknown> = {};
@@ -257,6 +299,8 @@ function blockedView(r: typeof schema.leadSubmissions.$inferSelect) {
     email: lead.email,
     message: lead.message.slice(0, 400),
     files: Array.isArray(raw._files) ? (raw._files as unknown[]).length : 0,
+    enquiryRef: lead.enquiryRef,
+    backfill: lead.backfill,
   };
 }
 
@@ -286,6 +330,7 @@ export const leads = {
         .groupBy(schema.jobs.landingPageId),
       db.select({ value: schema.settings.value }).from(schema.settings).where(eq(schema.settings.key, LEAD_AUTOREPLY_KEY)),
     ]);
+    const arrivals = await pageArrivals();
     const bySource = new Map<string, number>();
     for (const c of counts) {
       const name = sourceName(c.source);
@@ -297,7 +342,7 @@ export const leads = {
       sources: sources.map((s) => ({ ...s, jobs: bySource.get(s.name) ?? 0 })),
       /** Sources on jobs that are not in the list (old keys like "callback"). */
       strays: [...bySource.entries()].filter(([n]) => !known.has(n)).map(([name, jobs]) => ({ name, jobs })),
-      pages: pages.map((p) => ({ ...p, tags: tagsOf(p.tags), jobs: byPage.get(p.id) ?? 0, postTo: `/api/leads/${p.formKey}` })),
+      pages: pages.map((p) => ({ ...p, tags: tagsOf(p.tags), jobs: byPage.get(p.id) ?? 0, postTo: `/api/leads/${p.formKey}`, arrivals: arrivals.get(p.formKey) ?? noArrivals() })),
       clientTypes: CLIENT_TYPES.map(([value, label]) => ({ value, label })),
       autoReply: autoReply?.value === "1",
       siteUrl: OPS_URL,
@@ -383,28 +428,41 @@ export const leads = {
     const rows = await db
       .select()
       .from(schema.leadSubmissions)
-      .where(inArray(schema.leadSubmissions.verdict, ["spam", "released"]))
+      .where(inArray(schema.leadSubmissions.verdict, [...NOT_THROUGH, "released"]))
       .orderBy(desc(schema.leadSubmissions.createdAt), desc(schema.leadSubmissions.id))
       .limit(input.limit);
-    const [{ n } = { n: 0 }] = await db
-      .select({ n: sql<number>`count(*)` })
+    const counts = await db
+      .select({ verdict: schema.leadSubmissions.verdict, n: sql<number>`count(*)` })
       .from(schema.leadSubmissions)
-      .where(eq(schema.leadSubmissions.verdict, "spam"));
-    return { rows: rows.map(blockedView), spam: Number(n) };
+      .where(inArray(schema.leadSubmissions.verdict, [...NOT_THROUGH]))
+      .groupBy(schema.leadSubmissions.verdict);
+    const n = (v: string) => Number(counts.find((c) => c.verdict === v)?.n ?? 0);
+    const refs = new Map<number, string>();
+    const ids = [...new Set(rows.map((r) => r.jobId).filter((x): x is number => x != null))];
+    if (ids.length) {
+      for (const j of await db.select({ id: schema.jobs.id, number: schema.jobs.number, displayNumber: schema.jobs.displayNumber }).from(schema.jobs).where(inArray(schema.jobs.id, ids)))
+        refs.set(j.id, j.displayNumber || String(j.number));
+    }
+    return { rows: rows.map((r) => ({ ...blockedView(r), jobRef: r.jobId ? (refs.get(r.jobId) ?? null) : null })), spam: n("spam"), failed: n("failed"), held: n("held") };
   }),
 
-  /** Let a blocked post through: it makes its job now, the same way a good one does. Photos are not kept on spam. */
+  /**
+   * Let a post through: it makes its job now, the same way a good one does.
+   * Works on a blocked post, a held one (a possible hand keyed match) and a
+   * failed one that made no job. Photo files are not kept on these; photo links are fetched again.
+   */
   release: adminOnly.input(z.object({ id: z.number().int() })).handler(async ({ input }) => {
     const [row] = await db.select().from(schema.leadSubmissions).where(eq(schema.leadSubmissions.id, input.id));
     if (!row) throw bad("That form post is not there any more.");
-    if (row.verdict !== "spam") throw bad("Only a blocked post can be let through.");
+    if (!(NOT_THROUGH as readonly string[]).includes(row.verdict)) throw bad("Only a blocked, held or failed post can be let through.");
+    if (row.verdict === "failed" && row.jobId) throw bad("That post already made a job. Open the job instead.");
     let raw: Record<string, unknown> = {};
     try {
       raw = JSON.parse(row.raw) as Record<string, unknown>;
     } catch {
       throw bad("That post could not be read, so it cannot make a job.");
     }
-    for (const k of ["_files", "_ua", "_origin"]) delete raw[k];
+    for (const k of ["_files", "_ua", "_origin", "_connIp"]) delete raw[k];
     const out = await takeLead(row.formKey, raw, [], { ip: row.ip, releaseId: row.id });
     if (out.verdict !== "ok") throw bad("That post did not make a job.");
     return { jobId: out.jobId, jobNumber: out.jobNumber };

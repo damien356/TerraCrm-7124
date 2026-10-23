@@ -135,7 +135,7 @@ const TABS: Array<{ id: Tab; label: string; blurb: string }> = [
   {
     id: "leads",
     label: "Leads",
-    blurb: "Lead sources, landing pages, ad spend, blocked form posts, and how timber repairs are priced.",
+    blurb: "Lead sources, landing pages and what each has sent, ad spend, form posts not through, and how timber repairs are priced.",
   },
   {
     id: "notifications",

@@ -1,4 +1,4 @@
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, eq, gte, isNull, lte, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { createJob } from "../routes/jobs";
@@ -9,7 +9,8 @@ import { normaliseMobile } from "./sms";
 import { putObject, mediaKey } from "./s3";
 import { EMAIL_RE } from "./quote-email";
 import { sendAsTeam } from "./agent-mail";
-import { LEAD_AUTOREPLY_KEY, clientTypeLabel, repairTypeOf, floorTypeOf, TIMBER_TAG, repairTypeLabel, floorTypeLabel } from "./lead-codes";
+import { LEAD_AUTOREPLY_KEY, clientTypeLabel, repairTypeOf, floorTypeOf, TIMBER_TAG, TEST_LEAD_TAG, isTestLeadName, repairTypeLabel, floorTypeLabel } from "./lead-codes";
+import { jobText } from "./refs";
 import { startRepairRequest } from "./timber-repair";
 
 /* ---------------------------------------------------------------------------
@@ -63,7 +64,23 @@ const UTM_KEYS = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_c
 const HONEYPOTS = ["_hp", "hp", "honeypot", "botfield", "_gotcha", "websiteurl", "faxnumber"];
 const STARTED_KEYS = ["_t", "_started", "formstartedat", "_elapsed"];
 /** Our own bookkeeping fields, never shown as an answer. */
-const META_KEYS = new Set(["formkey", "_key", "key", "photos", "photourls", "files", "consent", "privacy", "agree", "recaptcha", "grecaptcharesponse", "role", "submit", "photokeys", "formlocation"]);
+const META_KEYS = new Set([
+  "formkey", "_key", "key", "photos", "photourls", "files", "consent", "privacy", "agree", "recaptcha", "grecaptcharesponse", "role", "submit", "photokeys", "formlocation",
+  // Delivery fields a page server sends (see LEAD_DELIVERY_FIELDS below).
+  "enquiryref", "enquiryid", "submittedat", "clientip", "clientuseragent", "backfill",
+]);
+
+/**
+ * What a page server sends besides the answers (changeover 23 Oct):
+ *   enquiryRef   the page's own id for this enquiry. The same ref sent again is
+ *                the same enquiry and returns the job already made. A new ref
+ *                is a new enquiry, even from the same person.
+ *   submittedAt  when the person pressed Send (ISO time). Used on a backfill.
+ *   clientIp     the person's address, so the hourly limit is per person and
+ *                not per page server.
+ *   backfill     "1" for an old stored enquiry being sent late: no Marc text,
+ *                no client reply, and a possible hand keyed match is held.
+ */
 
 const fold = (k: string) => k.toLowerCase().replace(/[^a-z0-9]/g, "");
 
@@ -106,6 +123,11 @@ export type ReadLead = {
   honeypot: boolean;
   startedAt: number | null;
   photoUrls: string[];
+  enquiryRef: string;
+  submittedAt: string;
+  clientIp: string;
+  backfill: boolean;
+  formLocation: string;
 };
 
 const asText = (v: unknown): string => {
@@ -191,6 +213,8 @@ export function readLeadFields(raw: Record<string, unknown>): ReadLead {
     const v = asText(value);
     if (v) add(prettyLabel(key), v);
   }
+  const formLocation = asText(byFold.get("formlocation")?.value).slice(0, 120);
+  add("Form on page", formLocation);
   add(LABELS.message!, out.message);
 
   const photoRaw = byFold.get("photourls")?.value ?? byFold.get("photos")?.value;
@@ -220,6 +244,11 @@ export function readLeadFields(raw: Record<string, unknown>): ReadLead {
     honeypot,
     startedAt,
     photoUrls,
+    enquiryRef: (asText(byFold.get("enquiryref")?.value) || asText(byFold.get("enquiryid")?.value)).slice(0, 120),
+    submittedAt: asText(byFold.get("submittedat")?.value).slice(0, 40),
+    clientIp: asText(byFold.get("clientip")?.value).slice(0, 64),
+    backfill: /^(1|true|yes|backfill)$/i.test(asText(byFold.get("backfill")?.value)),
+    formLocation,
   };
 }
 
@@ -231,9 +260,9 @@ const RATE_PER_HOUR = 8;
 const DUPLICATE_MINUTES = 15;
 
 /** Why this post is junk, or null when it reads like a person. */
-export function spamReason(lead: ReadLead, now: number): string | null {
+export function spamReason(lead: ReadLead, now: number, opts: { skipTiming?: boolean } = {}): string | null {
   if (lead.honeypot) return "Hidden trap field was filled in";
-  if (lead.startedAt != null) {
+  if (lead.startedAt != null && !opts.skipTiming) {
     const ms = lead.startedAt < 0 ? -lead.startedAt : now - lead.startedAt;
     if (ms >= 0 && ms < MIN_FILL_MS) return "Sent too fast to be a person";
   }
@@ -303,13 +332,81 @@ const COMPANY_TYPE_FOR: Record<string, (typeof schema.companies.$inferInsert)["t
 };
 
 export type LeadOutcome =
-  | { ok: true; verdict: "ok"; jobId: number; jobNumber: number; submissionId: number; flags: string[]; photos: number; repairRequestId: number | null }
-  | { ok: true; verdict: "duplicate"; jobId: number | null; submissionId: number }
+  | { ok: true; verdict: "ok"; jobId: number; jobNumber: number; jobRef: string; submissionId: number; flags: string[]; photos: number; repairRequestId: number | null; test: boolean }
+  | { ok: true; verdict: "duplicate"; jobId: number | null; jobRef: string | null; submissionId: number }
+  | { ok: true; verdict: "held"; jobId: number | null; jobRef: string | null; submissionId: number; reason: string }
   | { ok: true; verdict: "spam"; submissionId: number; reason: string };
+
+/** A backfill or a page server posting many: its own, higher, hourly limit per address. */
+const BACKFILL_PER_HOUR = 200;
+/** A post still being made this recently is in flight, so a retry waits on it. */
+const IN_FLIGHT_MS = 2 * 60_000;
+/** How far back a backfilled enquiry may be dated. Older than this keeps today's date. */
+const BACKFILL_MAX_DAYS = 180;
+
+const IP_RE = /^(\d{1,3}(\.\d{1,3}){3}|[0-9a-f:]{2,45})$/i;
+
+/** When the person pressed Send, for a backfill. Null when missing, unreadable, in the future or too old. */
+export function sentAtOf(text: string, now: Date): Date | null {
+  if (!text) return null;
+  const d = new Date(/^\d+$/.test(text) ? Number(text) : text);
+  const t = d.getTime();
+  if (!Number.isFinite(t) || t > now.getTime() + 5 * 60_000 || t < now.getTime() - BACKFILL_MAX_DAYS * 86_400_000) return null;
+  return d;
+}
+
+const bneTime = (d: Date) =>
+  d.toLocaleString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+
+/**
+ * A job for this person keyed by hand on New job (no landing page on it),
+ * made around the time of the enquiry. Used to hold a backfilled enquiry that
+ * Damien already typed in, and to flag a live one he may type in again.
+ */
+async function handKeyedJob(contactId: number, from: Date, to: Date) {
+  const [j] = await db
+    .select({ id: schema.jobs.id, number: schema.jobs.number, displayNumber: schema.jobs.displayNumber })
+    .from(schema.jobs)
+    .where(
+      and(
+        eq(schema.jobs.contactId, contactId),
+        isNull(schema.jobs.landingPageId),
+        gte(schema.jobs.createdAt, from),
+        lte(schema.jobs.createdAt, to),
+      ),
+    )
+    .orderBy(schema.jobs.createdAt)
+    .limit(1);
+  return j ? { id: j.id, ref: jobText(j) } : null;
+}
+
+async function jobRefOf(jobId: number | null) {
+  if (!jobId) return null;
+  const [j] = await db.select({ number: schema.jobs.number, displayNumber: schema.jobs.displayNumber }).from(schema.jobs).where(eq(schema.jobs.id, jobId));
+  return j ? jobText(j) : null;
+}
+
+/** An earlier post of the same enquiry (same page, same enquiryRef). Failed ones without a job do not count. */
+async function earlierOf(formKey: string, ref: string, now: Date) {
+  const rows = await db
+    .select({ id: schema.leadSubmissions.id, verdict: schema.leadSubmissions.verdict, jobId: schema.leadSubmissions.jobId, createdAt: schema.leadSubmissions.createdAt })
+    .from(schema.leadSubmissions)
+    .where(and(eq(schema.leadSubmissions.formKey, formKey), sql`json_extract(${schema.leadSubmissions.raw}, '$.enquiryRef') = ${ref}`))
+    .orderBy(schema.leadSubmissions.id);
+  for (const r of rows) {
+    if (r.verdict === "duplicate" || r.verdict === "retried") continue;
+    if (r.verdict === "failed" && !r.jobId) continue;
+    if (r.verdict === "pending" && !r.jobId && now.getTime() - r.createdAt.getTime() > IN_FLIGHT_MS) continue;
+    return r;
+  }
+  return null;
+}
 
 /**
  * Take one form post. Never throws for bad input: a page should always get a
  * thank you, and the office sees anything odd as a flag or in the blocked list.
+ * It throws only when the job could not be made; the post is then kept as
+ * failed (Settings, Leads, Form posts not through) and the page tries again.
  */
 export async function takeLead(formKey: string, raw: Record<string, unknown>, files: LeadFile[], meta: LeadMeta): Promise<LeadOutcome> {
   const now = meta.now ?? new Date();
@@ -318,275 +415,362 @@ export async function takeLead(formKey: string, raw: Record<string, unknown>, fi
     ? await db.select().from(schema.landingPages).where(and(eq(schema.landingPages.formKey, key), eq(schema.landingPages.active, true)))
     : [];
   const lead = readLeadFields(raw);
-  const ip = (meta.ip || "").slice(0, 80);
+  const connIp = (meta.ip || "").slice(0, 80);
+  // A page server passes the person's own address; the limit is per person, not per page.
+  const ip = (IP_RE.test(lead.clientIp) ? lead.clientIp : connIp).slice(0, 80);
+  const ref = lead.enquiryRef;
+  if (ref && typeof raw.enquiryRef !== "string") raw = { ...raw, enquiryRef: ref };
+  const backfill = lead.backfill;
+  const sentAt = backfill ? sentAtOf(lead.submittedAt, now) : null;
+  const test = isTestLeadName(lead.name || `${lead.firstName} ${lead.lastName}`);
 
-  const keep = async (verdict: string, reason: string, jobId: number | null = null) => {
-    if (meta.releaseId) {
-      await db
-        .update(schema.leadSubmissions)
-        .set({ verdict: "released", jobId, updatedAt: new Date() })
-        .where(eq(schema.leadSubmissions.id, meta.releaseId));
-      return meta.releaseId;
-    }
-    const stored = { ...raw };
-    for (const k of Object.keys(stored)) if (HONEYPOTS.includes(fold(k)) && !stored[k]) delete stored[k];
+  const stored = () => {
+    const out = { ...raw };
+    for (const k of Object.keys(out)) if (HONEYPOTS.includes(fold(k)) && !out[k]) delete out[k];
+    return JSON.stringify({
+      ...out,
+      _files: files.map((f) => `${f.name} (${f.type}, ${f.bytes.length} bytes)`),
+      _ua: meta.userAgent ?? "",
+      _origin: meta.origin ?? "",
+      ...(connIp !== ip ? { _connIp: connIp } : {}),
+    }).slice(0, 60000);
+  };
+  const insertRow = async (verdict: string, reason: string, jobId: number | null = null) => {
     const [row] = await db
       .insert(schema.leadSubmissions)
-      .values({
-        formKey: key,
-        landingPageId: page?.id ?? null,
-        raw: JSON.stringify({ ...stored, _files: files.map((f) => `${f.name} (${f.type}, ${f.bytes.length} bytes)`), _ua: meta.userAgent ?? "", _origin: meta.origin ?? "" }).slice(0, 60000),
-        verdict,
-        reason,
-        ip,
-        jobId,
-        createdAt: now,
-        updatedAt: now,
-      })
+      .values({ formKey: key, landingPageId: page?.id ?? null, raw: stored(), verdict, reason, ip, jobId, createdAt: now, updatedAt: now })
       .returning({ id: schema.leadSubmissions.id });
     return row!.id;
   };
 
-  let reason = meta.releaseId ? null : spamReason(lead, now.getTime());
+  /* The same enquiry sent again (the page retrying, or Send pressed twice) is one lead. */
+  if (ref && !meta.releaseId) {
+    const prev = await earlierOf(key, ref, now);
+    if (prev) {
+      const jobRef = await jobRefOf(prev.jobId);
+      const submissionId = await insertRow("duplicate", `Same enquiry (ref ${ref}) sent again`, prev.jobId);
+      if (prev.verdict === "held") return { ok: true, verdict: "held", jobId: prev.jobId, jobRef, submissionId, reason: "Held earlier" };
+      if (prev.verdict === "spam") return { ok: true, verdict: "spam", submissionId, reason: "Blocked earlier" };
+      return { ok: true, verdict: "duplicate", jobId: prev.jobId, jobRef, submissionId };
+    }
+  }
+
+  let reason = meta.releaseId ? null : spamReason(lead, now.getTime(), { skipTiming: backfill });
   if (!reason && ip && !meta.releaseId) {
     const hourAgo = new Date(now.getTime() - 3600_000);
     const [{ n } = { n: 0 }] = await db
       .select({ n: sql<number>`count(*)` })
       .from(schema.leadSubmissions)
-      .where(and(eq(schema.leadSubmissions.ip, ip), gte(schema.leadSubmissions.createdAt, hourAgo)));
-    if (Number(n) >= RATE_PER_HOUR) reason = `More than ${RATE_PER_HOUR} forms from one address in an hour`;
+      .where(and(eq(schema.leadSubmissions.ip, ip), gte(schema.leadSubmissions.createdAt, hourAgo), sql`${schema.leadSubmissions.verdict} != 'duplicate'`));
+    const cap = backfill ? BACKFILL_PER_HOUR : RATE_PER_HOUR;
+    if (Number(n) >= cap) reason = `More than ${cap} forms from one address in an hour`;
   }
-  if (reason) return { ok: true, verdict: "spam", reason, submissionId: await keep("spam", reason) };
+  if (reason) return { ok: true, verdict: "spam", reason, submissionId: await insertRow("spam", reason) };
 
-  /* The same person pressing Send twice is one lead. */
+  /* A page that sends no enquiryRef: the same person pressing Send twice in 15 minutes is one lead. */
   const pk = phoneKey(lead.phone);
   const ek = emailKey(lead.email);
-  const since = new Date(now.getTime() - DUPLICATE_MINUTES * 60_000);
-  const recent = await db
-    .select({ raw: schema.leadSubmissions.raw, jobId: schema.leadSubmissions.jobId })
-    .from(schema.leadSubmissions)
-    .where(and(eq(schema.leadSubmissions.formKey, key), eq(schema.leadSubmissions.verdict, "ok"), gte(schema.leadSubmissions.createdAt, since)));
-  for (const r of meta.releaseId ? [] : recent) {
-    let prev: ReadLead;
-    try {
-      prev = readLeadFields(JSON.parse(r.raw) as Record<string, unknown>);
-    } catch {
-      continue;
-    }
-    if ((pk && phoneKey(prev.phone) === pk) || (ek && emailKey(prev.email) === ek)) {
-      return { ok: true, verdict: "duplicate", jobId: r.jobId, submissionId: await keep("duplicate", "Sent again within 15 minutes", r.jobId) };
-    }
-  }
-
-  const flags: string[] = [];
-  if (!page) flags.push("Unknown landing page");
-
-  /* The person. A match on mobile or email is the same person, a name alone is not. */
-  const { first, last } = splitName(lead);
-  const mobile = normaliseMobile(lead.phone);
-  const landline = mobile ? null : lead.phone || null;
-  const matches = await findMatches({ mobile, phone: lead.phone, email: lead.email || null });
-  const strong = matches.find((m) => m.reasons.includes("mobile") || m.reasons.includes("email"));
-  const sourceName = page?.leadSource || "Website";
-
-  /* The business, only when one was named. An existing card with that name is used. */
-  let companyId: number | null = null;
-  let newCompany: { name: string; type: (typeof schema.companies.$inferInsert)["type"] } | null = null;
-  if (lead.business) {
-    const [co] = await db
-      .select({ id: schema.companies.id })
-      .from(schema.companies)
-      .where(sql`lower(trim(${schema.companies.name})) = ${lead.business.trim().toLowerCase()}`)
-      .limit(1);
-    if (co) companyId = co.id;
-    else newCompany = { name: lead.business.slice(0, 200), type: COMPANY_TYPE_FOR[page?.clientType ?? ""] ?? "other" };
-  }
-
-  /* The site. A street address goes through Google. A suburb alone is noted, never made into a site. */
-  let newSite: Record<string, unknown> | null = null;
-  const typed = [lead.address, lead.suburb && !lead.address.toLowerCase().includes(lead.suburb.toLowerCase()) ? lead.suburb : "", lead.postcode]
-    .filter(Boolean)
-    .join(" ");
-  let suburb = lead.suburb;
-  if (lead.address && /\d/.test(lead.address)) {
-    const place = await lookUpAddress(typed);
-    newSite = place
-      ? { address: place.address, suburb: place.suburb, state: place.state, postcode: place.postcode || null, lat: place.lat, lng: place.lng, placeId: place.placeId }
-      : { address: lead.address.slice(0, 300), suburb: lead.suburb, state: lead.state || "QLD", postcode: lead.postcode || null };
-    // Notes 18.56: a homeowner's property type is asked, not guessed. Blank reads red on the job.
-    newSite.propertyType = page?.clientType === "homeowner" || !page ? "" : "commercial";
-    if (place?.suburb) suburb = place.suburb;
-    if (!place) flags.push("Address not checked with Google");
-  } else if (STREET_RE.test(lead.message)) {
-    flags.push("Address only in the message");
-  } else if (lead.address || lead.suburb) {
-    suburb = suburb || lead.address;
-    flags.push("Suburb only, no street address");
-  } else {
-    flags.push("No address");
-  }
-  if (!first) flags.push("No name given");
-
-  const answersText = lead.answers.map(([l, v]) => `${l}: ${v}`).join("\n");
-  const where = suburb ? ` (${suburb})` : "";
-  const what = page ? page.leadSource.replace(/^Google Ads:\s*/i, "") : "Website";
-  const title = `${what} enquiry${where}`.slice(0, 200);
-  const description = [`Landing page enquiry${page ? `: ${page.url}` : ""}.`, answersText, flags.length ? `Flags: ${flags.join(", ")}.` : ""]
-    .filter(Boolean)
-    .join("\n\n");
-
-  const actor = { name: page ? `Landing page (${page.formKey})` : "Landing page", role: "admin" as const };
-  const contactKey = "lead";
-  const job = await createJob(
-    {
-      title,
-      description,
-      source: sourceName,
-      contactId: strong ? strong.contact.id : null,
-      contactKey: strong ? null : first || lead.email || lead.phone ? contactKey : null,
-      newContacts:
-        strong || !(first || lead.email || lead.phone)
-          ? []
-          : [
-              {
-                key: contactKey,
-                firstName: first || (lead.email ? lead.email.split("@")[0]! : "Enquiry"),
-                lastName: last,
-                mobile,
-                phone: landline,
-                email: EMAIL_RE.test(lead.email) ? lead.email : null,
-                suburb: suburb || null,
-                source: sourceName,
-                atCompany: !!(companyId || newCompany),
-                companyRole: "other",
-                notes: `From the ${page?.url ?? "website"} form.`,
-              },
-            ],
-      companyId,
-      newCompany: newCompany as never,
-      newSite: newSite as never,
-      billToType: companyId || newCompany ? "company" : "contact",
-    },
-    actor,
-  );
-  if (!job) throw new Error("The lead job was not made");
-
-  const tags: string[] = [];
-  try {
-    for (const t of JSON.parse(page?.tags ?? "[]") as unknown[]) if (typeof t === "string" && t.trim()) tags.push(t.trim());
-  } catch {
-    /* a bad tag list is just no tags */
-  }
-  const isTimber = !!page?.timber || tags.includes(TIMBER_TAG);
-  if (isTimber && !tags.includes(TIMBER_TAG)) tags.push(TIMBER_TAG);
-  const repairType = isTimber ? repairTypeOf(lead.repairType || lead.message) : "";
-  if (isTimber && !repairType) flags.push("Repair type not picked");
-
-  await db
-    .update(schema.jobs)
-    .set({
-      tags: JSON.stringify(tags),
-      landingPageId: page?.id ?? null,
-      gclid: lead.gclid,
-      utm: Object.keys(lead.utm).length ? JSON.stringify(lead.utm) : "",
-      leadFlags: JSON.stringify(flags),
-      updatedAt: new Date(),
-    })
-    .where(eq(schema.jobs.id, job.id));
-
-  /* Photos: sent with the form, or links the page already stored. */
-  const photoTags = repairType ? [repairTypeLabel(repairType)] : [];
-  let photos = 0;
-  const all: LeadFile[] = [...files];
-  for (const url of lead.photoUrls) {
-    if (all.length >= MAX_PHOTOS) break;
-    const f = await fetchPhoto(url);
-    if (f) all.push(f);
-  }
-  for (const f of all.slice(0, MAX_PHOTOS)) {
-    if (!/^image\//i.test(f.type) || f.bytes.length === 0 || f.bytes.length > MAX_PHOTO_BYTES) continue;
-    const storageKey = mediaKey(job.id, "damage", f.name || `photo-${photos + 1}.jpg`);
-    try {
-      await putObject(storageKey, f.bytes, f.type);
-    } catch (e) {
-      console.error("[lead-intake] photo not stored", (e as Error).message);
-      continue;
-    }
-    await db.insert(schema.jobMedia).values({
-      jobId: job.id,
-      bucket: "damage",
-      kind: "photo",
-      storageKey,
-      url: storageKey,
-      filename: f.name || null,
-      mime: f.type,
-      sizeBytes: f.bytes.length,
-      caption: photoTags[0] ? `${photoTags[0]}, from the form` : "From the form",
-      uploaderName: "Client (form)",
-      tags: JSON.stringify(photoTags),
-    });
-    photos++;
-  }
-  if (isTimber && photos === 0) {
-    flags.push("No photos came with it");
-    await db.update(schema.jobs).set({ leadFlags: JSON.stringify(flags) }).where(eq(schema.jobs.id, job.id));
-  }
-
-  const submissionId = await keep("ok", "", job.id);
-
-  /* Tell Damien: an office task, a push and the instant email. No SMS, no reply to the client. */
-  const who = [`${first} ${last}`.trim(), lead.business].filter(Boolean).join(", ") || "No name";
-  const reach = [mobile ?? lead.phone, lead.email].filter(Boolean).join(", ");
-  await db.insert(schema.officeTasks).values({
-    jobId: job.id,
-    title: `Call new lead: ${who} (${what})`.slice(0, 300),
-    detail: [reach, suburb, flags.length ? `Flags: ${flags.join(", ")}` : ""].filter(Boolean).join("\n"),
-    createdByName: actor.name,
-  });
-  const clientType = page ? clientTypeLabel(page.clientType) : "";
-  await notifyOffice("lead_new", {
-    title: `New lead: ${what}`,
-    body: [`${who}${reach ? `, ${reach}` : ""}${suburb ? `, ${suburb}` : ""}.`, clientType ? `${clientType}.` : "", flags.length ? `Flags: ${flags.join(", ")}.` : "", answersText]
-      .filter(Boolean)
-      .join(" ")
-      .slice(0, 1800),
-    jobId: job.id,
-    forceEmail: true,
-  });
-
-  /* A short thank you to the client, only when the switch in Settings, Leads is on (off by default). */
-  if (EMAIL_RE.test(lead.email)) {
-    const [on] = await db.select({ value: schema.settings.value }).from(schema.settings).where(eq(schema.settings.key, LEAD_AUTOREPLY_KEY));
-    if (on?.value === "1") {
+  if (!ref && !meta.releaseId) {
+    const since = new Date(now.getTime() - DUPLICATE_MINUTES * 60_000);
+    const recent = await db
+      .select({ raw: schema.leadSubmissions.raw, jobId: schema.leadSubmissions.jobId })
+      .from(schema.leadSubmissions)
+      .where(and(eq(schema.leadSubmissions.formKey, key), eq(schema.leadSubmissions.verdict, "ok"), gte(schema.leadSubmissions.createdAt, since)));
+    for (const r of recent) {
+      let prev: ReadLead;
       try {
-        await sendAsTeam({ to: lead.email, subject: "Thanks, we got your enquiry", text: autoReplyText(first), fromName: "Terra Flooring" });
-        await db.insert(schema.activityLog).values({
-          jobId: job.id,
-          entityType: "job",
-          entityId: job.id,
-          action: "lead_autoreply",
-          detail: `Thank you email sent to ${lead.email}`,
-        });
-      } catch (e) {
-        console.error("[lead-intake] auto reply not sent", (e as Error).message);
+        prev = readLeadFields(JSON.parse(r.raw) as Record<string, unknown>);
+      } catch {
+        continue;
+      }
+      if ((pk && phoneKey(prev.phone) === pk) || (ek && emailKey(prev.email) === ek)) {
+        return { ok: true, verdict: "duplicate", jobId: r.jobId, jobRef: await jobRefOf(r.jobId), submissionId: await insertRow("duplicate", "Sent again within 15 minutes", r.jobId) };
       }
     }
   }
 
-  let repairRequestId: number | null = null;
-  if (isTimber) {
-    repairRequestId = await startRepairRequest({
-      jobId: job.id,
-      repairType: repairType || "",
-      area: lead.size,
-      floorType: floorTypeOf(lead.floorType),
-      floorTypeRaw: lead.floorType,
-      suburb,
-      now,
-    });
+  /* From here the post is real. It is written down first, so a crash part way is never silent. */
+  let submissionId: number;
+  if (meta.releaseId) {
+    submissionId = meta.releaseId;
+    await db.update(schema.leadSubmissions).set({ verdict: "pending", updatedAt: new Date() }).where(eq(schema.leadSubmissions.id, submissionId));
+  } else {
+    submissionId = await insertRow("pending", "");
   }
+  const finish = (verdict: string, why: string, jobId: number | null) =>
+    db.update(schema.leadSubmissions).set({ verdict, reason: why.slice(0, 500), jobId, updatedAt: new Date() }).where(eq(schema.leadSubmissions.id, submissionId));
+  let madeJobId: number | null = null;
 
-  return { ok: true, verdict: "ok", jobId: job.id, jobNumber: job.number, submissionId, flags, photos, repairRequestId };
+  try {
+    const flags: string[] = [];
+    if (!page) flags.push("Unknown landing page");
+    if (test) flags.push("TEST enquiry");
+    if (backfill) flags.push(`Recovered enquiry${sentAt ? `, sent ${bneTime(sentAt)}` : ""}`);
+
+    /* The person. A match on mobile or email is the same person, a name alone is not. */
+    const { first, last } = splitName(lead);
+    const mobile = normaliseMobile(lead.phone);
+    const landline = mobile ? null : lead.phone || null;
+    const matches = await findMatches({ mobile, phone: lead.phone, email: lead.email || null });
+    const strong = matches.find((m) => m.reasons.includes("mobile") || m.reasons.includes("email"));
+    const sourceName = page?.leadSource || "Website";
+
+    /* Already keyed in by hand? A late (backfilled) enquiry is held, not made twice. A live one is flagged. */
+    if (strong && !test) {
+      const around = sentAt ?? now;
+      const hand = backfill
+        ? await handKeyedJob(strong.contact.id, new Date(around.getTime() - 86_400_000), new Date(Math.min(now.getTime(), around.getTime() + 21 * 86_400_000)))
+        : await handKeyedJob(strong.contact.id, new Date(now.getTime() - 3 * 86_400_000), now);
+      if (hand && backfill && !meta.releaseId) {
+        const why = `Possible match: job ${hand.ref} was keyed by hand for this person. No new job made. Make a job anyway if it is a separate enquiry.`;
+        await finish("held", why, hand.id);
+        return { ok: true, verdict: "held", jobId: hand.id, jobRef: hand.ref, submissionId, reason: why };
+      }
+      if (hand && !backfill) flags.push(`Possible double of job ${hand.ref} keyed by hand`);
+    }
+
+    /* The business, only when one was named. An existing card with that name is used. */
+    let companyId: number | null = null;
+    let newCompany: { name: string; type: (typeof schema.companies.$inferInsert)["type"] } | null = null;
+    if (lead.business) {
+      const [co] = await db
+        .select({ id: schema.companies.id })
+        .from(schema.companies)
+        .where(sql`lower(trim(${schema.companies.name})) = ${lead.business.trim().toLowerCase()}`)
+        .limit(1);
+      if (co) companyId = co.id;
+      else newCompany = { name: lead.business.slice(0, 200), type: COMPANY_TYPE_FOR[page?.clientType ?? ""] ?? "other" };
+    }
+
+    /* The site. A street address goes through Google. A suburb alone is noted, never made into a site. */
+    let newSite: Record<string, unknown> | null = null;
+    const typed = [lead.address, lead.suburb && !lead.address.toLowerCase().includes(lead.suburb.toLowerCase()) ? lead.suburb : "", lead.postcode]
+      .filter(Boolean)
+      .join(" ");
+    let suburb = lead.suburb;
+    if (lead.address && /\d/.test(lead.address)) {
+      const place = await lookUpAddress(typed);
+      newSite = place
+        ? { address: place.address, suburb: place.suburb, state: place.state, postcode: place.postcode || null, lat: place.lat, lng: place.lng, placeId: place.placeId }
+        : { address: lead.address.slice(0, 300), suburb: lead.suburb, state: lead.state || "QLD", postcode: lead.postcode || null };
+      // Notes 18.56: a homeowner's property type is asked, not guessed. Blank reads red on the job.
+      newSite.propertyType = page?.clientType === "homeowner" || !page ? "" : "commercial";
+      if (place?.suburb) suburb = place.suburb;
+      if (!place) flags.push("Address not checked with Google");
+    } else if (STREET_RE.test(lead.message)) {
+      flags.push("Address only in the message");
+    } else if (lead.address || lead.suburb) {
+      suburb = suburb || lead.address;
+      flags.push("Suburb only, no street address");
+    } else {
+      flags.push("No address");
+    }
+    if (!first) flags.push("No name given");
+
+    const answersText = lead.answers.map(([l, v]) => `${l}: ${v}`).join("\n");
+    const where = suburb ? ` (${suburb})` : "";
+    const what = page ? page.leadSource.replace(/^Google Ads:\s*/i, "") : "Website";
+    const title = `${test ? "TEST: " : ""}${what} enquiry${where}`.slice(0, 200);
+    const description = [
+      test ? "TEST ENQUIRY. Not a real customer. Sent to check the landing page form. Delete it when testing is done." : "",
+      `Landing page enquiry${page ? `: ${page.url}` : ""}.`,
+      backfill ? `Recovered from the page's stored enquiries${sentAt ? `. The person sent it ${bneTime(sentAt)}` : ""}. No text or email went to anyone when it was recovered.` : "",
+      ref ? `Page enquiry ref: ${ref}.` : "",
+      answersText,
+      flags.length ? `Flags: ${flags.join(", ")}.` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    const actor = { name: page ? `Landing page (${page.formKey})` : "Landing page", role: "admin" as const };
+    const contactKey = "lead";
+    const job = await createJob(
+      {
+        title,
+        description,
+        source: sourceName,
+        contactId: strong ? strong.contact.id : null,
+        contactKey: strong ? null : first || lead.email || lead.phone ? contactKey : null,
+        newContacts:
+          strong || !(first || lead.email || lead.phone)
+            ? []
+            : [
+                {
+                  key: contactKey,
+                  firstName: first || (lead.email ? lead.email.split("@")[0]! : "Enquiry"),
+                  lastName: last,
+                  mobile,
+                  phone: landline,
+                  email: EMAIL_RE.test(lead.email) ? lead.email : null,
+                  suburb: suburb || null,
+                  source: sourceName,
+                  atCompany: !!(companyId || newCompany),
+                  companyRole: "other",
+                  notes: `From the ${page?.url ?? "website"} form.${test ? " TEST contact, not a real person." : ""}`,
+                },
+              ],
+        companyId,
+        newCompany: newCompany as never,
+        newSite: newSite as never,
+        billToType: companyId || newCompany ? "company" : "contact",
+      },
+      actor,
+    );
+    if (!job) throw new Error("The lead job was not made");
+    madeJobId = job.id;
+    await finish("pending", "", job.id);
+    const jobRef = jobText(job);
+
+    const tags: string[] = [];
+    try {
+      for (const t of JSON.parse(page?.tags ?? "[]") as unknown[]) if (typeof t === "string" && t.trim()) tags.push(t.trim());
+    } catch {
+      /* a bad tag list is just no tags */
+    }
+    const isTimber = !!page?.timber || tags.includes(TIMBER_TAG);
+    if (isTimber && !tags.includes(TIMBER_TAG)) tags.push(TIMBER_TAG);
+    if (test) tags.push(TEST_LEAD_TAG);
+    const repairType = isTimber ? repairTypeOf(lead.repairType || lead.message) : "";
+    if (isTimber && !repairType) flags.push("Repair type not picked");
+
+    await db
+      .update(schema.jobs)
+      .set({
+        tags: JSON.stringify(tags),
+        landingPageId: page?.id ?? null,
+        gclid: lead.gclid,
+        utm: Object.keys(lead.utm).length ? JSON.stringify(lead.utm) : "",
+        leadFlags: JSON.stringify(flags),
+        // A recovered enquiry counts on the day the person sent it.
+        ...(sentAt ? { createdAt: sentAt } : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.jobs.id, job.id));
+
+    /* Photos: sent with the form, or links the page already stored. */
+    const photoTags = repairType ? [repairTypeLabel(repairType)] : [];
+    let photos = 0;
+    let photoMisses = 0;
+    const all: LeadFile[] = [...files];
+    for (const url of lead.photoUrls) {
+      if (all.length >= MAX_PHOTOS) break;
+      const f = await fetchPhoto(url);
+      if (f) all.push(f);
+      else photoMisses++;
+    }
+    for (const f of all.slice(0, MAX_PHOTOS)) {
+      if (!/^image\//i.test(f.type) || f.bytes.length === 0 || f.bytes.length > MAX_PHOTO_BYTES) {
+        photoMisses++;
+        continue;
+      }
+      const storageKey = mediaKey(job.id, "damage", f.name || `photo-${photos + 1}.jpg`);
+      try {
+        await putObject(storageKey, f.bytes, f.type);
+      } catch (e) {
+        console.error("[lead-intake] photo not stored", (e as Error).message);
+        photoMisses++;
+        continue;
+      }
+      await db.insert(schema.jobMedia).values({
+        jobId: job.id,
+        bucket: "damage",
+        kind: "photo",
+        storageKey,
+        url: storageKey,
+        filename: f.name || null,
+        mime: f.type,
+        sizeBytes: f.bytes.length,
+        caption: photoTags[0] ? `${photoTags[0]}, from the form` : "From the form",
+        uploaderName: "Client (form)",
+        tags: JSON.stringify(photoTags),
+      });
+      photos++;
+    }
+    if (photoMisses > 0) flags.push(`${photoMisses} photo${photoMisses === 1 ? "" : "s"} sent but not kept`);
+    if (isTimber && photos === 0) flags.push("No photos came with it");
+    if (photoMisses > 0 || (isTimber && photos === 0)) {
+      await db.update(schema.jobs).set({ leadFlags: JSON.stringify(flags) }).where(eq(schema.jobs.id, job.id));
+    }
+
+    /* Tell Damien: an office task, a push and the instant email. No SMS, no reply to the client.
+     * A TEST enquiry tells nobody. A recovered one gets its task and a push, no instant email. */
+    const who = [`${first} ${last}`.trim(), lead.business].filter(Boolean).join(", ") || "No name";
+    const reach = [mobile ?? lead.phone, lead.email].filter(Boolean).join(", ");
+    if (!test) {
+      await db.insert(schema.officeTasks).values({
+        jobId: job.id,
+        title: `${backfill ? "Call recovered lead" : "Call new lead"}: ${who} (${what})${backfill && sentAt ? `, sent ${bneTime(sentAt)}` : ""}`.slice(0, 300),
+        detail: [reach, suburb, flags.length ? `Flags: ${flags.join(", ")}` : ""].filter(Boolean).join("\n"),
+        createdByName: actor.name,
+      });
+      const clientType = page ? clientTypeLabel(page.clientType) : "";
+      await notifyOffice("lead_new", {
+        title: `${backfill ? "Recovered lead" : "New lead"}: ${what}`,
+        body: [`${who}${reach ? `, ${reach}` : ""}${suburb ? `, ${suburb}` : ""}.`, clientType ? `${clientType}.` : "", flags.length ? `Flags: ${flags.join(", ")}.` : "", answersText]
+          .filter(Boolean)
+          .join(" ")
+          .slice(0, 1800),
+        jobId: job.id,
+        forceEmail: !backfill,
+      });
+    }
+
+    /* A short thank you to the client, only when the switch in Settings, Leads is on (off by default). Never on a TEST or a recovered enquiry. */
+    if (!test && !backfill && EMAIL_RE.test(lead.email)) {
+      const [on] = await db.select({ value: schema.settings.value }).from(schema.settings).where(eq(schema.settings.key, LEAD_AUTOREPLY_KEY));
+      if (on?.value === "1") {
+        try {
+          await sendAsTeam({ to: lead.email, subject: "Thanks, we got your enquiry", text: autoReplyText(first), fromName: "Terra Flooring" });
+          await db.insert(schema.activityLog).values({
+            jobId: job.id,
+            entityType: "job",
+            entityId: job.id,
+            action: "lead_autoreply",
+            detail: `Thank you email sent to ${lead.email}`,
+          });
+        } catch (e) {
+          console.error("[lead-intake] auto reply not sent", (e as Error).message);
+        }
+      }
+    }
+
+    let repairRequestId: number | null = null;
+    if (isTimber) {
+      repairRequestId = await startRepairRequest({
+        jobId: job.id,
+        repairType: repairType || "",
+        area: lead.size,
+        floorType: floorTypeOf(lead.floorType),
+        floorTypeRaw: lead.floorType,
+        suburb,
+        now,
+        hold: test
+          ? "TEST enquiry. Marc was not texted."
+          : backfill
+            ? "Recovered enquiry. Marc was not texted. Press Text Marc when it should go."
+            : undefined,
+      });
+    }
+
+    await finish(meta.releaseId ? "released" : "ok", "", job.id);
+    // Earlier tries of this enquiry that failed before a job was made are now done.
+    if (ref) {
+      await db
+        .update(schema.leadSubmissions)
+        .set({ verdict: "retried", jobId: job.id, updatedAt: new Date() })
+        .where(and(eq(schema.leadSubmissions.formKey, key), eq(schema.leadSubmissions.verdict, "failed"), isNull(schema.leadSubmissions.jobId), sql`json_extract(${schema.leadSubmissions.raw}, '$.enquiryRef') = ${ref}`));
+    }
+
+    return { ok: true, verdict: "ok", jobId: job.id, jobNumber: job.number, jobRef, submissionId, flags, photos, repairRequestId, test };
+  } catch (e) {
+    // First line only: a failed query carries the values it was given, and those are the person's details.
+    const first = ((e as Error)?.message || String(e)).split("\n")[0]!.replace(/\bparams:.*$/i, "");
+    const q = first.match(/^Failed query:\s*(?:insert into|update|delete from|select\b.*?\bfrom)\s+"(\w+)"/i);
+    const cause = String(((e as { cause?: Error })?.cause?.message) || "").split("\n")[0]!.replace(/\bparams:.*$/i, "");
+    const msg = (q ? `could not save to ${q[1]}${cause ? ` (${cause})` : ""}` : first).slice(0, 300);
+    await finish("failed", `${madeJobId ? "The job was made but not finished" : "No job was made"}: ${msg}`, madeJobId).catch(() => {});
+    throw e;
+  }
 }
 
 /** The client thank you, when switched on. Plain, no promises on price or timing. */
