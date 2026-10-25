@@ -652,9 +652,16 @@ export async function takeLead(formKey: string, raw: Record<string, unknown>, fi
     let photos = 0;
     let photoMisses = 0;
     const all: LeadFile[] = [...files];
+    // One clock for every photo, so slow storage can never hold the enquiry open.
+    const photoDeadline = Date.now() + PHOTO_BUDGET_MS;
+    const photoTimeLeft = () => photoDeadline - Date.now();
     for (const url of lead.photoUrls) {
       if (all.length >= MAX_PHOTOS) break;
-      const f = await fetchPhoto(url);
+      if (photoTimeLeft() < 1000) {
+        photoMisses++;
+        continue;
+      }
+      const f = await fetchPhoto(url, Math.min(15000, photoTimeLeft()));
       if (f) all.push(f);
       else photoMisses++;
     }
@@ -663,9 +670,19 @@ export async function takeLead(formKey: string, raw: Record<string, unknown>, fi
         photoMisses++;
         continue;
       }
+      if (photoTimeLeft() < 1000) {
+        console.error("[lead-intake] photo not stored", "out of time for photos");
+        photoMisses++;
+        continue;
+      }
       const storageKey = mediaKey(job.id, "damage", f.name || `photo-${photos + 1}.jpg`);
       try {
-        await putObject(storageKey, f.bytes, f.type);
+        // A time limit and one retry. If storage still fails the enquiry is kept and flagged.
+        await putObject(storageKey, f.bytes, f.type, undefined, {
+          timeoutMs: PHOTO_TRY_MS,
+          retries: 1,
+          deadline: photoDeadline,
+        });
       } catch (e) {
         console.error("[lead-intake] photo not stored", (e as Error).message);
         photoMisses++;
@@ -788,11 +805,15 @@ export function autoReplyText(first: string) {
 
 export const MAX_PHOTOS = 10;
 export const MAX_PHOTO_BYTES = 15 * 1024 * 1024;
+/** Longest one storage write of a form photo may take before it is tried again. */
+export const PHOTO_TRY_MS = Number(process.env.LEAD_PHOTO_TRY_MS) || 12000;
+/** Longest all the photos on one enquiry may take together. */
+export const PHOTO_BUDGET_MS = Number(process.env.LEAD_PHOTO_BUDGET_MS) || 40000;
 
 /** A photo the page already uploaded somewhere, fetched once. https only, images only, size capped. */
-async function fetchPhoto(url: string): Promise<LeadFile | null> {
+async function fetchPhoto(url: string, ms = 15000): Promise<LeadFile | null> {
   try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(15000), redirect: "follow" });
+    const r = await fetch(url, { signal: AbortSignal.timeout(ms), redirect: "follow" });
     if (!r.ok) return null;
     const type = (r.headers.get("content-type") ?? "").split(";")[0]!.trim();
     if (!/^image\//i.test(type)) return null;

@@ -86,16 +86,58 @@ export async function getObject(key: string) {
  * presigned link, so a PDF written without this opens inline in a tab named
  * after its storage key, which is what a phone shows instead of downloading it.
  */
-export async function putObject(key: string, body: Buffer, contentType: string, downloadAs?: string) {
+export async function putObject(
+  key: string,
+  body: Buffer,
+  contentType: string,
+  downloadAs?: string,
+  opts?: { timeoutMs?: number; retries?: number; deadline?: number },
+) {
   const safeName = downloadAs?.replace(/["\\\r\n]/g, "");
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: BUCKET,
-      Key: scoped(key),
-      Body: body,
-      ContentType: contentType,
-      ...(safeName ? { ContentDisposition: `attachment; filename="${safeName}"` } : {}),
-    }),
-  );
-  return key;
+  const input = {
+    Bucket: BUCKET,
+    Key: scoped(key),
+    Body: body,
+    ContentType: contentType,
+    ...(safeName ? { ContentDisposition: `attachment; filename="${safeName}"` } : {}),
+  };
+  // No limit asked for: behave exactly as before for every other caller.
+  if (!opts?.timeoutMs) {
+    await s3.send(new PutObjectCommand(input));
+    return key;
+  }
+  const tries = 1 + Math.max(0, opts.retries ?? 0);
+  let last: unknown;
+  for (let i = 0; i < tries; i++) {
+    // `deadline` (epoch ms) caps the tries together, retry included.
+    const left = opts.deadline ? opts.deadline - Date.now() : opts.timeoutMs;
+    if (left < 1000) break;
+    try {
+      await sendWithin(new PutObjectCommand(input), Math.min(opts.timeoutMs, left));
+      return key;
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw last instanceof Error ? last : new Error(last ? String(last) : "Out of time for the storage write");
+}
+
+/**
+ * One storage write with a hard time limit. The SDK is asked to abort, and the
+ * race makes sure the caller is freed on time even if the abort is ignored.
+ */
+async function sendWithin(cmd: PutObjectCommand, ms: number) {
+  const ctrl = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      ctrl.abort();
+      reject(new Error(`Storage write took longer than ${Math.round(ms / 1000)}s`));
+    }, ms);
+  });
+  try {
+    await Promise.race([s3.send(cmd, { abortSignal: ctrl.signal }), limit]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
