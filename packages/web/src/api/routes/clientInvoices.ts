@@ -117,14 +117,17 @@ export const clientInvoices = {
       await rebuild();
       let emailedTo: string | null = null;
       let emailError: string | null = null;
+      let summaryWithheld: string | null = null;
       if (input.email) {
         try {
-          emailedTo = (await sendInvoiceEmail({ invoiceId: row.id, to: input.to ?? null, byName: context.actor.name, actorRole: context.actor.role })).to;
+          const sent = await sendInvoiceEmail({ invoiceId: row.id, to: input.to ?? null, byName: context.actor.name, actorRole: context.actor.role });
+          emailedTo = sent.to;
+          summaryWithheld = sent.summaryWithheld;
         } catch (e) {
           emailError = e instanceof Error ? e.message : String(e);
         }
       }
-      return { invoice: shapeInvoice(row), emailedTo, emailError };
+      return { invoice: shapeInvoice(row), emailedTo, emailError, summaryWithheld };
     }),
 
   /** Money landed. Paid in full unless a part amount is given. */

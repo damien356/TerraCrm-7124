@@ -390,7 +390,8 @@ async function invoiceForPayToken(token: string) {
   return inv;
 }
 
-async function payState(inv: typeof schema.invoices.$inferSelect) {
+/** What the pay page shows. Exported so a test can hold the invoice PDF to the same amount due. */
+export async function payState(inv: typeof schema.invoices.$inferSelect) {
   const [job] = inv.jobId ? await db.select().from(schema.jobs).where(eq(schema.jobs.id, inv.jobId)) : [];
   const [contact] = inv.billToContactId ? await db.select().from(schema.contacts).where(eq(schema.contacts.id, inv.billToContactId)) : [];
   const [company] = inv.billToCompanyId ? await db.select().from(schema.companies).where(eq(schema.companies.id, inv.billToCompanyId)) : [];

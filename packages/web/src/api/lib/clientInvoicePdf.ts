@@ -1,11 +1,11 @@
-import { and, asc, eq, inArray, lt, ne } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { PDFArray, PDFDocument, PDFName, PDFString, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { INVOICE_KIND_LABEL } from "./client-invoices";
 import { drawQuoteWorks, TERRA_PRINT } from "./quotePdf";
 import { quoteRefOf } from "./quote-number";
-import { COUNTED_STATUSES } from "./variations";
+import { billingSummaryFor, type BillingSummary, type SummaryLine } from "./invoice-summary";
 import { bundlesFor } from "../routes/quoteBundles";
 import { cardPaymentsOn, owingOn, payUrl } from "./stripe";
 import { TERRA_LOGO_PRINT_PNG_BASE64 } from "./terraLogoPrint";
@@ -17,10 +17,16 @@ import { TERRA_LOGO_PRINT_PNG_BASE64 } from "./terraLogoPrint";
  *
  * An invoice raised against a quote also carries that quote's works, the
  * sections and wording (or the itemised rows) exactly as the quote PDF shows
- * them, then how the job's billing gets to this invoice: the quote, accepted
- * variations, invoices already raised, this one and what is left (Damien,
- * 26 Oct). Every PDF that is emailed is stored with the message, so what a
- * client was sent is kept as sent.
+ * them, then the billing summary from lib/invoice-summary.ts: the quote,
+ * approved variations, what was previously invoiced, this invoice and what
+ * remains to invoice (Damien, 26 Oct). Amount due on this invoice is the
+ * payment figure, never a job balance.
+ *
+ * What the invoice says is saved on it at the first email (issued_snapshot),
+ * and a re-send draws from that, so revised scope or figures on the job or
+ * quote never reach an invoice already issued. Only this invoice's own
+ * payments move, the same figure the pay page shows (owingOn). Every PDF
+ * that is emailed is also stored with the message.
  *
  * Not lib/invoicePdf.ts: that one is the installer's invoice to Terra.
  */
@@ -41,8 +47,8 @@ export type ClientInvoicePdfInput = {
   payUrl: string | null;
   /** The quote this invoice bills, drawn as the quote PDF draws it. */
   works?: InvoiceWorks | null;
-  /** Inc GST. Only given when it adds up to this invoice. */
-  billing?: InvoiceBillingLine[] | null;
+  /** Inc GST. Only given when it holds together (lib/invoice-summary.ts). */
+  summary?: SummaryLine[] | null;
 };
 
 export type InvoiceWorks = {
@@ -56,7 +62,19 @@ export type InvoiceWorks = {
   total: number;
 };
 
-export type InvoiceBillingLine = { kind: "quote" | "variation" | "earlier" | "this" | "left"; label: string; amount: number };
+/** What an invoice said when it was first emailed. A re-send draws from this. */
+export type IssuedSnapshot = {
+  v: 1;
+  issuedAt: string;
+  to: ClientInvoicePdfInput["to"];
+  siteAddress: string | null;
+  jobRef: string;
+  description: string;
+  works: InvoiceWorks | null;
+  summary: BillingSummary;
+  /** Emailed before snapshots were kept: redrawn as it first went, one line, no works or summary. */
+  legacy?: true;
+};
 
 const W = 595.28;
 const H = 841.89;
@@ -135,7 +153,7 @@ export async function renderClientInvoicePdf(input: ClientInvoicePdfInput): Prom
   const r = W - M;
   textRight(page, "Tax Invoice", r, H - M - 18, bold, 22);
   textRight(page, `No. ${input.number}`, r, H - M - 34, reg, 10, MUTED);
-  textRight(page, "AMOUNT DUE (INC GST)", r, H - M - 54, bold, 7.5, LABEL);
+  textRight(page, "AMOUNT DUE ON THIS INVOICE (INC GST)", r, H - M - 54, bold, 7.5, LABEL);
   textRight(page, money(input.owing), r, H - M - 76, bold, 20);
   y = H - M - Math.max(logoH, 90) - 18;
   page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 1.2, color: GOLD });
@@ -205,25 +223,44 @@ export async function renderClientInvoicePdf(input: ClientInvoicePdfInput): Prom
     cur.y -= 10;
   }
 
-  /* How the job's billing gets to this invoice. */
-  const billing = input.billing ?? [];
-  if (billing.length) {
-    need(34 + billing.length * 14);
+  /* The billing summary: previously invoiced, this invoice, remaining. Not payments. */
+  const summary = input.summary ?? [];
+  if (summary.length) {
+    const groups = new Set(summary.map((b) => b.kind).filter((k) => k === "previous" || k === "since")).size;
+    need(60 + summary.length * 14 + groups * 13);
     cur.page.drawRectangle({ x: M, y: cur.y - 6, width: CW, height: 20, color: FILL });
-    text(cur.page, "BILLING ON THIS JOB", M + 8, cur.y, bold, 7.5, LABEL);
+    text(cur.page, "BILLING SUMMARY FOR THIS JOB", M + 8, cur.y, bold, 7.5, LABEL);
     textRight(cur.page, "INC GST", right, cur.y, bold, 7.5, LABEL);
     cur.y -= 22;
-    for (const b of billing) {
-      const strong = b.kind === "this";
-      const lines = wrap(b.label, strong ? bold : reg, 9.5, CW * 0.72);
+    let group: string | null = null;
+    for (const b of summary) {
+      const heading = b.kind === "previous" ? "Previously invoiced" : b.kind === "since" ? "Also invoiced on this job, after this invoice" : null;
+      if (heading && group !== b.kind) {
+        need(14);
+        text(cur.page, heading, M + 8, cur.y, bold, 9, MUTED);
+        cur.y -= 13;
+      }
+      group = b.kind;
+      if (b.kind === "contract" || b.kind === "remaining") {
+        cur.page.drawLine({ start: { x: M + 8, y: cur.y + 10 }, end: { x: W - M, y: cur.y + 10 }, thickness: 0.5, color: RULE });
+        cur.y -= 2;
+      }
+      const strong = b.kind === "this" || b.kind === "remaining" || b.kind === "contract";
+      const indent = b.kind === "previous" || b.kind === "since" ? 14 : 0;
+      const lines = wrap(b.label, strong ? bold : reg, 9.5, CW * 0.72 - indent);
       need(lines.length * 12 + 6);
-      const shown = b.kind === "earlier" ? `-${money(b.amount)}` : money(b.amount);
-      textRight(cur.page, shown, right, cur.y, strong ? bold : reg, 9.5, b.kind === "left" ? MUTED : INK);
+      textRight(cur.page, money(b.amount), right, cur.y, strong ? bold : reg, 9.5);
       for (const l of lines) {
-        text(cur.page, l, M + 8, cur.y, strong ? bold : reg, 9.5, b.kind === "left" ? MUTED : INK);
+        text(cur.page, l, M + 8 + indent, cur.y, strong ? bold : reg, 9.5);
         cur.y -= 12;
       }
       cur.y -= 2;
+    }
+    if (summary.some((b) => b.kind === "previous" || b.kind === "since")) {
+      need(14);
+      cur.y -= 2;
+      text(cur.page, "Previously invoiced means invoices issued, not payments received.", M + 8, cur.y, reg, 8, MUTED);
+      cur.y -= 10;
     }
     cur.page.drawLine({ start: { x: M, y: cur.y + 4 }, end: { x: W - M, y: cur.y + 4 }, thickness: 0.6, color: RULE });
     cur.y -= 16;
@@ -235,7 +272,7 @@ export async function renderClientInvoicePdf(input: ClientInvoicePdfInput): Prom
   // the payment boxes never sit alone on the last page.
   const bh = 58;
   const payH = bh + 6 + (input.payUrl ? 50 : 0) + 6;
-  need(126 + desc.length * 13 + (input.paid > 0 ? 14 : 0) + payH, 34);
+  need(142 + desc.length * 13 + (input.paid > 0 ? 14 : 0) + payH, 34);
   cur.page.drawRectangle({ x: M, y: cur.y - 6, width: CW, height: 20, color: FILL });
   text(cur.page, works ? "THIS INVOICE" : "DESCRIPTION", M + 8, cur.y, bold, 7.5, LABEL);
   textRight(cur.page, "AMOUNT (EX GST)", r - 8, cur.y, bold, 7.5, LABEL);
@@ -256,11 +293,17 @@ export async function renderClientInvoicePdf(input: ClientInvoicePdfInput): Prom
   line("Sub Total (ex GST)", money(input.subtotal));
   line("GST", money(input.gst));
   line("Total (inc GST)", money(input.total), true);
-  if (input.paid > 0) line("Paid so far", money(input.paid));
-  cur.page.drawLine({ start: { x: lx, y: cur.y + 9 }, end: { x: W - M, y: cur.y + 9 }, thickness: 0.8, color: RULE });
-  cur.y -= 2;
-  line("Amount due", money(input.owing), true);
-  cur.y -= 10;
+  if (input.paid > 0) line("Paid on this invoice", money(input.paid));
+  // The figure to pay, the same one the pay page shows. Never a job balance.
+  cur.y -= 4;
+  const dueH = 28;
+  // Wider than the totals column so the label and a six figure amount never meet.
+  const bx = M + CW * 0.4;
+  cur.page.drawRectangle({ x: bx, y: cur.y - 10, width: W - M - bx, height: dueH, color: FILL });
+  cur.page.drawRectangle({ x: bx, y: cur.y - 10, width: 3, height: dueH, color: GOLD });
+  text(cur.page, "Amount due on this invoice", bx + 13, cur.y, bold, 11);
+  textRight(cur.page, money(input.owing), r - 8, cur.y - 1, bold, 14);
+  cur.y -= dueH + 6;
 
   /* Bank transfer. */
   // The footer sits at 22, so the payment boxes can run closer to it than the works do.
@@ -315,7 +358,6 @@ export async function renderClientInvoicePdf(input: ClientInvoicePdfInput): Prom
 const fullName = (c: { firstName?: string | null; lastName?: string | null } | null | undefined) =>
   [c?.firstName, c?.lastName].filter(Boolean).join(" ").trim();
 
-const r2 = (n: number) => Math.round(n * 100) / 100;
 type InvoiceRow = typeof schema.invoices.$inferSelect;
 
 /** The quote an invoice bills, as the client reads it on the quote PDF. No cost leaves here (bundlesFor). */
@@ -336,59 +378,30 @@ async function worksFor(inv: InvoiceRow) {
   return { quote, works };
 }
 
-/**
- * The quote, variations accepted by the time this invoice was raised, the
- * invoices raised before it, this one and what is left. Inc GST. Left out
- * when it does not add up, rather than print sums that disagree.
- */
-export async function billingFor(inv: InvoiceRow, quoteTotal: number, quoteRef: string): Promise<InvoiceBillingLine[] | null> {
-  if (!inv.jobId) return null;
-  const [vars, before] = await Promise.all([
-    db
-      .select({ ref: schema.variations.ref, description: schema.variations.description, total: schema.variations.total, approvedAt: schema.variations.approvedAt })
-      .from(schema.variations)
-      .where(and(eq(schema.variations.jobId, inv.jobId), inArray(schema.variations.status, [...COUNTED_STATUSES])))
-      .orderBy(asc(schema.variations.seq)),
-    db
-      .select({ number: schema.invoices.number, label: schema.invoices.label, kind: schema.invoices.kind, total: schema.invoices.total })
-      .from(schema.invoices)
-      .where(and(eq(schema.invoices.jobId, inv.jobId), ne(schema.invoices.status, "void"), lt(schema.invoices.seq, inv.seq)))
-      .orderBy(asc(schema.invoices.seq)),
-  ]);
-  const raisedAt = inv.createdAt?.getTime() ?? Date.now();
-  const counted = vars.filter((v) => !v.approvedAt || v.approvedAt.getTime() <= raisedAt);
-  const firstLine = (t: string) => {
-    const l = (t.split(/\n/).find((x) => x.trim()) ?? "").trim();
-    return l.length > 90 ? `${l.slice(0, 87).trimEnd()}...` : l;
-  };
-  const lines: InvoiceBillingLine[] = [{ kind: "quote", label: `Quote ${quoteRef}`, amount: r2(quoteTotal) }];
-  for (const v of counted) lines.push({ kind: "variation", label: `Variation ${v.ref}${firstLine(v.description) ? `: ${firstLine(v.description)}` : ""}`, amount: r2(v.total) });
-  for (const b of before) lines.push({ kind: "earlier", label: `Less ${b.number}${b.label ? `, ${b.label}` : ` ${INVOICE_KIND_LABEL[b.kind] ?? ""}`.trimEnd()}`, amount: r2(b.total) });
-  lines.push({ kind: "this", label: `This invoice ${inv.number}`, amount: r2(inv.total) });
-  const left = r2(quoteTotal + counted.reduce((s, v) => s + v.total, 0) - before.reduce((s, b) => s + b.total, 0) - inv.total);
-  if (left < -0.005) return null;
-  // One invoice for the whole quote: the quote total already says it all.
-  if (lines.length === 2 && left <= 0.005) return null;
-  if (left > 0.005) lines.push({ kind: "left", label: "Left to bill after this invoice", amount: left });
-  return lines;
+/** The snapshot saved on an invoice, or null. One that will not read stops the send rather than redraw from today's data. */
+export function storedSnapshot(inv: InvoiceRow): IssuedSnapshot | null {
+  if (!inv.issuedSnapshot) return null;
+  try {
+    const s = JSON.parse(inv.issuedSnapshot) as IssuedSnapshot;
+    if (s?.v === 1 && s.summary && typeof s.description === "string") return s;
+  } catch {
+    /* falls through */
+  }
+  throw new Error(`The saved copy of ${inv.number} cannot be read, so it was not re-sent. Nothing was changed.`);
 }
 
-/** Everything the invoice PDF needs, read from the invoice, its job and who it is billed to. */
-export async function clientInvoicePdfFor(invoiceId: number) {
-  const [inv] = await db.select().from(schema.invoices).where(eq(schema.invoices.id, invoiceId));
-  if (!inv) throw new Error("Invoice not found");
+/** What the invoice says now, from the job, quote and billing as they stand. Only for a first send. */
+async function freshSnapshot(inv: InvoiceRow): Promise<IssuedSnapshot> {
   const [contact] = inv.billToContactId ? await db.select().from(schema.contacts).where(eq(schema.contacts.id, inv.billToContactId)) : [];
   const [company] = inv.billToCompanyId ? await db.select().from(schema.companies).where(eq(schema.companies.id, inv.billToCompanyId)) : [];
   const [job] = inv.jobId ? await db.select().from(schema.jobs).where(eq(schema.jobs.id, inv.jobId)) : [];
   const [site] = job?.siteId ? await db.select().from(schema.sites).where(eq(schema.sites.id, job.siteId)) : [];
   const siteAddress = site ? [site.address, [site.suburb, site.state, site.postcode].filter(Boolean).join(" ")].filter(Boolean).join(", ") : null;
-  const owing = owingOn(inv);
   const quoted = await worksFor(inv);
-  const billing = quoted ? await billingFor(inv, quoted.quote.total, quoted.works.quoteRef) : null;
-  const pdf = await renderClientInvoicePdf({
-    number: inv.number,
-    date: auDate(inv.createdAt),
-    dueDate: inv.dueDate ? auDate(inv.dueDate) : null,
+  const summary: BillingSummary = quoted ? await billingSummaryFor(inv) : { state: "hidden", reason: "No quote works on this invoice." };
+  return {
+    v: 1,
+    issuedAt: new Date().toISOString(),
     to: {
       name: fullName(contact) || company?.name || "Client",
       company: company?.name && fullName(contact) ? company.name : null,
@@ -398,14 +411,66 @@ export async function clientInvoicePdfFor(invoiceId: number) {
     siteAddress,
     jobRef: job ? String(job.displayNumber || job.number) : String(inv.jobNumber),
     description: inv.label || INVOICE_KIND_LABEL[inv.kind] || "Flooring",
+    works: quoted?.works ?? null,
+    summary,
+  };
+}
+
+/** The PDF input: the issued snapshot, plus this invoice's own payments as they are now. */
+export function pdfInputFrom(inv: InvoiceRow, snap: IssuedSnapshot): ClientInvoicePdfInput {
+  const owing = owingOn(inv);
+  return {
+    number: inv.number,
+    date: auDate(inv.createdAt),
+    dueDate: inv.dueDate ? auDate(inv.dueDate) : null,
+    to: snap.to,
+    siteAddress: snap.siteAddress,
+    jobRef: snap.jobRef,
+    description: snap.description,
     subtotal: inv.subtotal,
     gst: inv.gst,
     total: inv.total,
     paid: inv.amountPaid,
     owing,
     payUrl: cardPaymentsOn() && owing > 0 ? payUrl(inv.id) : null,
-    works: quoted?.works ?? null,
-    billing,
-  });
-  return { pdf, filename: `Terra Flooring Invoice ${inv.number}.pdf` };
+    works: snap.works,
+    summary: snap.summary.state === "shown" ? snap.summary.lines : null,
+  };
+}
+
+/**
+ * The invoice PDF. A first send draws it from the job now and hands back the
+ * snapshot to save once the email has gone (`fresh`). A re-send draws it from
+ * the saved snapshot.
+ */
+export async function clientInvoicePdfFor(invoiceId: number) {
+  const [inv] = await db.select().from(schema.invoices).where(eq(schema.invoices.id, invoiceId));
+  if (!inv) throw new Error("Invoice not found");
+  const stored = storedSnapshot(inv);
+  const snapshot = stored ?? (await legacySnapshot(inv)) ?? (await freshSnapshot(inv));
+  const pdf = await renderClientInvoicePdf(pdfInputFrom(inv, snapshot));
+  return { pdf, filename: `Terra Flooring Invoice ${inv.number}.pdf`, snapshot, fresh: !stored };
+}
+
+/**
+ * An invoice emailed before snapshots were kept went as one line, with no
+ * quote works and no billing summary. A re-send keeps it that way rather than
+ * add scope and figures the client never had on it.
+ */
+async function legacySnapshot(inv: InvoiceRow): Promise<IssuedSnapshot | null> {
+  const [first] = await db
+    .select({ at: schema.activityLog.createdAt })
+    .from(schema.activityLog)
+    .where(and(eq(schema.activityLog.entityType, "invoice"), eq(schema.activityLog.entityId, inv.id), eq(schema.activityLog.action, "invoice_emailed")))
+    .orderBy(asc(schema.activityLog.id))
+    .limit(1);
+  if (!first) return null;
+  const now = await freshSnapshot(inv);
+  return {
+    ...now,
+    issuedAt: new Date(first.at ?? Date.now()).toISOString(),
+    works: null,
+    summary: { state: "hidden", reason: "Emailed before the quote works and billing summary were added to invoices." },
+    legacy: true,
+  };
 }

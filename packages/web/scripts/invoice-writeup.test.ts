@@ -53,10 +53,11 @@ const works: InvoiceWorks = {
   total: 1650,
 };
 
-const billing: NonNullable<ClientInvoicePdfInput["billing"]> = [
+const summary: NonNullable<ClientInvoicePdfInput["summary"]> = [
   { kind: "quote", label: "Quote Q990001", amount: 1650 },
-  { kind: "earlier", label: "Less IQ990001-1, Deposit 50% on quote Q990001", amount: 825 },
+  { kind: "previous", label: "IQ990001-1, Deposit 50% on quote Q990001", amount: 825 },
   { kind: "this", label: "This invoice IQ990001-2", amount: 825 },
+  { kind: "remaining", label: "Remaining to invoice after this invoice", amount: 0 },
 ];
 
 describe("client invoice PDF", () => {
@@ -66,12 +67,12 @@ describe("client invoice PDF", () => {
     expect(pages[0]).toContain("DESCRIPTION");
     expect(pages[0]).toContain("Final invoice, quote Q990001");
     expect(pages[0]).not.toContain("WORKS AS QUOTED");
-    expect(pages[0]).not.toContain("BILLING ON THIS JOB");
+    expect(pages[0]).not.toContain("BILLING SUMMARY");
     expect(pages[0]).toContain("Page 1 of 1");
   });
 
   test("an invoice on a quote carries the quote's sections and wording, and how the billing adds up", async () => {
-    const [page, ...rest] = await pagesOf(await render({ ...base, works, billing }), "sections");
+    const [page, ...rest] = await pagesOf(await render({ ...base, works, summary }), "sections");
     expect(rest.length).toBe(0);
     expect(page).toContain("WORKS AS QUOTED, QUOTE Q990001");
     expect(page).toContain("Flooring supply");
@@ -80,10 +81,13 @@ describe("client invoice PDF", () => {
     expect(page).toContain("Grind and level the slab.");
     expect(page).toContain("Quote total (inc GST)");
     expect(page).toContain("$1,650.00");
-    expect(page).toContain("BILLING ON THIS JOB");
-    expect(page).toContain("-$825.00");
+    expect(page).toContain("BILLING SUMMARY FOR THIS JOB");
+    expect(page).toContain("Previously invoiced");
+    expect(page).toContain("invoices issued, not payments received");
+    expect(page).toContain("Remaining to invoice after this invoice");
+    expect(page).not.toContain("-$825.00");
     expect(page).toContain("THIS INVOICE");
-    expect(page).toContain("Amount due");
+    expect(page).toContain("Amount due on this invoice");
     expect(page).toContain("PAYMENT BY BANK TRANSFER");
   });
 
@@ -102,7 +106,7 @@ describe("client invoice PDF", () => {
 
   test("long works run onto more pages and everything after them still prints", async () => {
     const many = Array.from({ length: 30 }, (_, i) => ({ title: `Area ${i + 1}`, wording: "Supply and install carpet with underlay.\nRemove and dispose of the old floor.", total: 100 }));
-    const pages = await pagesOf(await render({ ...base, works: { ...works, bundles: many }, billing, payUrl: "https://example.invalid/pay/1-x" }), "long");
+    const pages = await pagesOf(await render({ ...base, works: { ...works, bundles: many }, summary, payUrl: "https://example.invalid/pay/1-x" }), "long");
     expect(pages.length).toBeGreaterThan(1);
     expect(pages[1]).toContain("Invoice IQ990001-2 (continued)");
     expect(pages[0]).toContain(`Page 1 of ${pages.length}`);
@@ -111,7 +115,7 @@ describe("client invoice PDF", () => {
     const last = pages[pages.length - 1]!;
     // The amount due travels with the payment boxes, never left a page behind them.
     expect(last).toContain("THIS INVOICE");
-    expect(last).toContain("Amount due");
+    expect(last).toContain("Amount due on this invoice");
     expect(last).toContain("PAYMENT BY BANK TRANSFER");
     expect(last).toContain("PAY BY CARD");
     expect(last).toContain("Thank you for your business.");

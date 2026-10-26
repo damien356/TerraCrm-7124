@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { clientInvoicePdfFor } from "./clientInvoicePdf";
@@ -89,7 +89,7 @@ export async function sendInvoiceEmail(args: {
     url,
   });
   /* The invoice itself goes as a PDF, with the pay link in the email (spec 15 Oct). */
-  const { pdf, filename } = await clientInvoicePdfFor(inv.id);
+  const { pdf, filename, snapshot, fresh } = await clientInvoicePdfFor(inv.id);
   const picked = await pickedFiles({ jobId: inv.jobId, mediaIds: args.mediaIds, uploads: args.uploads, byName: args.byName, byProfileId: args.byProfileId });
   const [contact] = await db.select().from(schema.contacts).where(eq(schema.contacts.email, to)).limit(1);
   const sent = await sendJobEmail({
@@ -106,14 +106,59 @@ export async function sendInvoiceEmail(args: {
     authorName: args.byName,
     authorProfileId: args.byProfileId ?? null,
   });
+  // The first email fixes what the invoice says. Later sends draw from this, not from the job as it is then.
+  if (fresh) {
+    await db
+      .update(schema.invoices)
+      .set({ issuedSnapshot: JSON.stringify(snapshot), updatedAt: new Date() })
+      .where(and(eq(schema.invoices.id, inv.id), isNull(schema.invoices.issuedSnapshot)));
+  }
   await db.insert(schema.activityLog).values({
     jobId: inv.jobId,
     entityType: "invoice",
     entityId: inv.id,
     action: "invoice_emailed",
-    detail: `${inv.number} emailed to ${to} with the PDF${url ? " and the Pay by card link" : ""}`,
+    detail: `${inv.number} emailed to ${to} with the PDF${url ? " and the Pay by card link" : ""}${fresh && !snapshot.legacy ? "" : `, as first issued on ${snapshot.issuedAt.slice(0, 10)}`}`,
     actorName: args.byName,
     actorRole: args.actorRole,
   });
-  return { to, via: sent.via, messageId: sent.message.id, linked: sent.linked };
+  const withheld = snapshot.summary.state === "withheld" ? snapshot.summary.reason : null;
+  if (withheld && fresh && !snapshot.legacy) await flagWithheld(inv, withheld, args.byName, args.actorRole);
+  return {
+    to,
+    via: sent.via,
+    messageId: sent.message.id,
+    linked: sent.linked,
+    /** Set when the PDF went without its billing summary because the figures did not hold together. */
+    summaryWithheld: withheld,
+  };
+}
+
+/**
+ * The billing summary did not add up, so the invoice went without it (Damien,
+ * 26 Oct). The office is told on the job and with a task, once per invoice.
+ */
+async function flagWithheld(inv: typeof schema.invoices.$inferSelect, reason: string, byName: string, actorRole: string) {
+  await db.insert(schema.activityLog).values({
+    jobId: inv.jobId,
+    entityType: "invoice",
+    entityId: inv.id,
+    action: "invoice_summary_withheld",
+    detail: `${inv.number} went without its billing summary: ${reason}`,
+    actorName: byName,
+    actorRole,
+  });
+  const title = `Check the billing on ${inv.number}`;
+  const [open] = await db
+    .select({ id: schema.officeTasks.id })
+    .from(schema.officeTasks)
+    .where(and(eq(schema.officeTasks.jobId, inv.jobId!), eq(schema.officeTasks.title, title)))
+    .limit(1);
+  if (open) return;
+  await db.insert(schema.officeTasks).values({
+    jobId: inv.jobId,
+    title,
+    detail: `${inv.number} was emailed without the billing summary, because the figures did not agree.\n${reason}\nThe invoice and its amount due are right. Check the job value, the quote, the variations and the other invoices on the job.`,
+    createdByName: byName,
+  });
 }

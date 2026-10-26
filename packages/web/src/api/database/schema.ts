@@ -1945,6 +1945,13 @@ export const invoices = sqliteTable(
     voidedAt: integer("voided_at", { mode: "timestamp" }),
     voidReason: text("void_reason"),
     createdByName: text("created_by_name").notNull().default(""),
+    /**
+     * Damien, 26 Oct: what the invoice said when it was first emailed (the
+     * quote's works, the billing summary, the line), as JSON. A re-send draws
+     * from this, never from the job or quote as they are now. Only this
+     * invoice's own payments move. Null until the first email goes.
+     */
+    issuedSnapshot: text("issued_snapshot"),
     ...timestamps,
   },
   (t) => [

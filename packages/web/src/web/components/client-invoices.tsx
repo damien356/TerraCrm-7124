@@ -65,6 +65,11 @@ function EmailInvoiceModal({ invoice, jobId, onClose }: { invoice: Invoice | nul
             {send.data.linked?.length ? ` ${send.data.linked.length} file${send.data.linked.length === 1 ? "" : "s"} went as download links, too big to attach.` : ""}
           </p>
         ) : null}
+        {send.data?.summaryWithheld ? (
+          <p className="rounded-md bg-warning/10 px-3 py-2 text-sm">
+            The billing summary was left off the PDF because the figures did not agree: {send.data.summaryWithheld} The invoice and its amount due are right. An office task is on the job to check it.
+          </p>
+        ) : null}
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose}>
             {send.data ? "Close" : "Cancel"}
@@ -335,7 +340,8 @@ function RaiseInvoiceModal({
             setMailFail(`${out.invoice.ref} is raised, but the email did not go: ${out.emailError} Use Email on the invoice to try again.`);
             return;
           }
-          onDone(out.emailedTo ? `${out.invoice.ref} raised and emailed to ${out.emailedTo}.` : `${out.invoice.ref} raised. Use Email on it when you are ready to send.`);
+          const withheld = out.summaryWithheld ? ` The billing summary was left off the PDF: ${out.summaryWithheld} An office task is on the job.` : "";
+          onDone(out.emailedTo ? `${out.invoice.ref} raised and emailed to ${out.emailedTo}.${withheld}` : `${out.invoice.ref} raised. Use Email on it when you are ready to send.`);
           onClose();
         },
         onError: (e) => setError(errorText(e)),
