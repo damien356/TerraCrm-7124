@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { ActivityIndicator, Image, Linking, Platform, Pressable, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Image, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import { Colors, Fonts } from "@/constants/theme";
 import { uploadToStorage } from "@/lib/upload";
 import { useAddMedia, useJobFile, useNoDamage } from "@/queries/field";
+import { FileViewer } from "@/components/file-viewer";
 
 const c = Colors.light;
 
@@ -77,6 +78,8 @@ export function JobFileSection({
   const [bucket, setBucket] = useState<BucketKey>("area");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The open viewer: its category and the file it opened on. */
+  const [viewing, setViewing] = useState<{ bucket: BucketKey; index: number } | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [failed, setFailed] = useState<{
     assets: ImagePicker.ImagePickerAsset[];
@@ -368,10 +371,11 @@ export function JobFileSection({
             Nothing in here yet.
           </Text>
         ) : (
-          items.map((m) => (
+          items.map((m, i) => (
             <Pressable
               key={m.id}
-              onPress={() => void Linking.openURL(m.url)}
+              accessibilityLabel={`Open ${m.caption || m.filename || "file"}, ${i + 1} of ${items.length}`}
+              onPress={() => setViewing({ bucket, index: i })}
               style={{
                 width: 96,
                 height: 96,
@@ -396,6 +400,16 @@ export function JobFileSection({
           ))
         )}
       </View>
+
+      {viewing ? (
+        <FileViewer
+          title={BUCKETS.find((b) => b.key === viewing.bucket)?.label ?? "Job file"}
+          files={media.filter((m) => m.bucket === viewing.bucket)}
+          startIndex={viewing.index}
+          onClose={() => setViewing(null)}
+          refresh={async () => (await file.refetch()).data?.media.filter((m) => m.bucket === viewing.bucket)}
+        />
+      ) : null}
     </View>
   );
 }

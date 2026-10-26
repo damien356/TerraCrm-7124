@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
-import { Archive, ArrowUpRight, Camera, FileText, Plus, RotateCcw, Trash2, Upload, Video } from "lucide-react";
+import { Archive, Camera, FileText, PlayCircle, Plus, RotateCcw, Trash2, Upload, Video } from "lucide-react";
+import { FileViewer } from "./file-viewer";
 import { Card, CardHeader, Empty, Spinner } from "./ui/card";
 import { Button } from "./ui/button";
 import { Input } from "./ui/field";
@@ -119,6 +120,8 @@ export function JobFile({ jobId, isCallback = false }: { jobId: number; isCallba
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  /** The open viewer: which category and which file it opened on. */
+  const [viewing, setViewing] = useState<{ bucket: BucketKey; id: number } | null>(null);
 
   const media = useJobMedia(jobId, showArchived);
   const attach = useAttachMedia();
@@ -227,30 +230,35 @@ export function JobFile({ jobId, isCallback = false }: { jobId: number; isCallba
               key={m.id}
               className={`overflow-hidden rounded-lg border border-border bg-card ${m.archivedAt ? "opacity-55" : ""}`}
             >
-              <div className="aspect-square bg-muted">
+              <button
+                type="button"
+                data-media-id={m.id}
+                aria-label={`Open ${m.caption || m.filename || "file"} (${meta.label})`}
+                onClick={() => setViewing({ bucket, id: m.id })}
+                className="relative block aspect-square w-full bg-muted outline-none focus-visible:ring-2 focus-visible:ring-[var(--gold)]"
+              >
                 {m.kind === "photo" ? (
-                  <img src={m.url} alt={m.caption ?? m.filename ?? "Job photo"} className="size-full object-cover" />
-                ) : m.kind === "video" ? (
-                  <video
+                  <img
                     src={m.url}
-                    controls
-                    aria-label={m.caption ?? m.filename ?? "Job video"}
+                    alt={m.caption ?? m.filename ?? "Job photo"}
+                    loading="lazy"
+                    decoding="async"
                     className="size-full object-cover"
-                  >
-                    <track kind="captions" />
-                  </video>
+                  />
+                ) : m.kind === "video" ? (
+                  <>
+                    <video src={m.url} preload="metadata" muted playsInline aria-hidden className="pointer-events-none size-full object-cover">
+                      <track kind="captions" />
+                    </video>
+                    <PlayCircle className="absolute left-1/2 top-1/2 size-9 -translate-x-1/2 -translate-y-1/2 text-white drop-shadow" />
+                  </>
                 ) : (
-                  <a
-                    href={m.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex size-full flex-col items-center justify-center gap-1.5 text-xs text-muted-foreground"
-                  >
+                  <span className="flex size-full flex-col items-center justify-center gap-1.5 text-xs text-muted-foreground">
                     <FileText className="size-7" />
-                    Open file <ArrowUpRight className="size-3" />
-                  </a>
+                    {(m.filename ?? "").toLowerCase().endsWith(".pdf") || m.mime === "application/pdf" ? "PDF" : "File"}
+                  </span>
                 )}
-              </div>
+              </button>
               <figcaption className="space-y-0.5 px-2.5 py-2">
                 <p className="truncate text-xs font-medium">{m.caption || m.filename || "Untitled"}</p>
                 <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -270,6 +278,17 @@ export function JobFile({ jobId, isCallback = false }: { jobId: number; isCallba
           ))}
         </div>
       )}
+
+      {viewing ? (
+        <FileViewer
+          key={`${viewing.bucket}-${viewing.id}`}
+          title={BUCKETS.find((b) => b.key === viewing.bucket)!.label}
+          items={groups.find((g) => g.bucket === viewing.bucket)?.items ?? []}
+          openId={viewing.id}
+          onClose={() => setViewing(null)}
+          refresh={async () => (await media.refetch()).data?.find((g) => g.bucket === viewing.bucket)?.items}
+        />
+      ) : null}
     </Card>
   );
 }
