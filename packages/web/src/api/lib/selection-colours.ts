@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { categoryLabel } from "./product-categories";
+import { categoryLabel, isAccessoryCategory } from "./product-categories";
 import { markupOf } from "./pricing";
 import { notifyOffice } from "./notify";
 import { jobText } from "./refs";
@@ -58,7 +58,7 @@ export const FLOOR_CATEGORIES = new Set([
 
 /** Floors, plus trims and scotia that come in a colour. Not underlay, adhesive or plain accessories. */
 export const isSectionProduct = (p: Pick<Product, "category" | "colour">) =>
-  FLOOR_CATEGORIES.has(p.category) || (p.category === "accessory" && !!p.colour.trim());
+  FLOOR_CATEGORIES.has(p.category) || (isAccessoryCategory(p.category) && !!p.colour.trim());
 
 /** A form made from the quote's products, rather than an old room by room one. */
 export const isProductForm = (items: Pick<SelItem, "quotedProductId">[]) => items.some((i) => i.quotedProductId != null);

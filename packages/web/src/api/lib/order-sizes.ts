@@ -18,6 +18,7 @@
  *    one that is not stocked is ordered in whole rolls.
  */
 import { boxM2Of, type ProductShape } from "./flooring-qty";
+import { isAccessoryCategory } from "./product-categories";
 
 export const UNDERLAY_CATEGORIES = ["carpet_underlay", "hard_floor_underlay", "underlay"] as const;
 export const isUnderlayCategory = (c: string | null | undefined) => (UNDERLAY_CATEGORIES as readonly string[]).includes(c ?? "");
@@ -104,7 +105,7 @@ export function wholeUnits(p: SizeShape, qtyIn: number): Rounded {
     return { qty: m2, note: `${plural(boxes, "box", "boxes")} (${fmt(m2)} m²)`, flag: null };
   }
   if (p.soldAs === "broadloom") return { qty, note: null, flag: null };
-  if (p.unit === "lm" && p.category === "accessory") {
+  if (p.unit === "lm" && isAccessoryCategory(p.category)) {
     const len = p.pieceLengthM && p.pieceLengthM > 0 ? p.pieceLengthM : null;
     if (!len) {
       // Weld rod comes on a coil (length_mm, or just named weld rod), not in lengths.
@@ -166,9 +167,10 @@ export function rollLengthOf(p: SizeShape & { rollM2?: number | null }): number 
 
 /** Whether ordering goes by the roll: underlay, plastic, Floorshield. Not carpet or sheet vinyl, which have roll and cut rates. */
 export function ordersByRoll(p: SizeShape & { rollM2?: number | null }): boolean {
-  if (p.soldAs) return false;
+  // Import fixes 26 Oct: underlay tagged Broadloom is still cut off the roll.
+  if (p.soldAs && !isUnderlayCategory(p.category)) return false;
   if (p.unit === "roll") return true;
-  return (isUnderlayCategory(p.category) || p.category === "accessory") && rollLengthOf(p) != null && (p.unit === "lm" || p.unit === "m2");
+  return (isUnderlayCategory(p.category) || isAccessoryCategory(p.category)) && rollLengthOf(p) != null && (p.unit === "lm" || p.unit === "m2");
 }
 
 export type RollOrder = {

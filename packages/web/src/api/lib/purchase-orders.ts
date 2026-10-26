@@ -137,7 +137,7 @@ function qtyInProductUnit(qty: number, lineUnit: string, productUnit: string, wi
 /** What to put on the order for `qty` of a product, in its own unit. */
 function orderSize(p: typeof schema.products.$inferSelect, qty: number): { qty: number; rolls: number; note: string | null } {
   // Underlay always comes on a roll, so a missing roll length is asked about.
-  const underlayRoll = isUnderlayCategory(p.category) && !p.soldAs && (p.unit === "lm" || p.unit === "m2");
+  const underlayRoll = isUnderlayCategory(p.category) && (p.unit === "lm" || p.unit === "m2");
   if (ordersByRoll(p) || p.unit === "roll" || underlayRoll) {
     const r = rollOrder(p, qty);
     if (r) return { qty: r.qty, rolls: r.rolls, note: `${r.note}.` };

@@ -363,18 +363,49 @@ function NewList({ items }: { items: Preview["creates"] }) {
   );
 }
 
+/**
+ * Import fixes 26 Oct, item 6. Every skipped row is listed, never cut off, with
+ * each reason on its own line so the full reason can be read.
+ */
 function ProblemList({ items, tone }: { items: Preview["errors"]; tone: "error" | "warn" }) {
   if (!items.length) return <p className="p-4 text-sm text-muted-foreground">None.</p>;
+  const shown = tone === "error" ? items : items.slice(0, SHOW);
+  const reasons = (m: string) =>
+    m
+      .replace(/\.$/, "")
+      .split("; ")
+      .map((x) => x.trim())
+      .filter(Boolean);
   return (
     <div className="divide-y divide-border">
-      {items.slice(0, SHOW).map((p, i) => (
-        <div key={`${p.row}-${i}`} className="px-3 py-2 text-sm">
-          <span className="text-[11px] text-muted-foreground">row {p.row} · </span>
-          <span className="font-medium">{p.name}</span>
-          <p className={`text-xs ${tone === "error" ? "text-destructive" : "text-amber-700"}`}>{p.message}</p>
-        </div>
-      ))}
-      <More total={items.length} />
+      {tone === "error" ? (
+        <p className="px-3 py-2 text-xs text-muted-foreground">
+          {items.length} row{items.length === 1 ? "" : "s"} will be skipped. Nothing on these rows is imported. Fix the reasons below and import again.
+        </p>
+      ) : null}
+      {shown.map((p, i) => {
+        const list = tone === "error" ? reasons(p.message) : [p.message];
+        return (
+          <div key={`${p.row}-${i}`} className="px-3 py-2 text-sm" data-testid={tone === "error" ? "import-error-row" : undefined}>
+            <span className="text-[11px] text-muted-foreground">row {p.row} · </span>
+            <span className="font-medium">{p.name}</span>
+            {list.length > 1 ? (
+              <ul className={`mt-0.5 list-disc pl-4 text-xs ${tone === "error" ? "text-destructive" : "text-amber-700"}`}>
+                {list.map((x) => (
+                  <li key={x} className="whitespace-pre-wrap break-words">
+                    {x}.
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className={`whitespace-pre-wrap break-words text-xs ${tone === "error" ? "text-destructive" : "text-amber-700"}`}>
+                {tone === "error" ? `${list[0] ?? p.message}.` : p.message}
+              </p>
+            )}
+          </div>
+        );
+      })}
+      {tone === "error" ? null : <More total={items.length} />}
     </div>
   );
 }

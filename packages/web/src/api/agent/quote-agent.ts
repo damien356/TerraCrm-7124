@@ -435,7 +435,7 @@ export async function runQuoteAgent(opts: {
           .string()
           .optional()
           .describe(
-            "Optional. Ranks this category first: carpet, outdoor_carpet, carpet_tile, hybrid, laminate, vinyl, sheet_goods, engineered_timber, solid_timber, turf, underlay, accessory. Use timber for either kind of timber.",
+            "Optional. Ranks this category first: carpet, outdoor_carpet, carpet_tile, hybrid, laminate, vinyl, sheet_goods, engineered_timber, solid_timber, turf, underlay, accessory (also finds trims, scotia, stair nosing and skirting). Use timber for either kind of timber.",
           ),
       }),
       execute: async ({ query, category }) => {

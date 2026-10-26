@@ -5,6 +5,7 @@ import * as schema from "../database/schema";
 import { markupOf } from "./pricing";
 import { liveSellFor } from "./live-sell";
 import { underlayName, isUnderlayCategory, wholeUnits } from "./order-sizes";
+import { isAccessoryCategory } from "./product-categories";
 import { standardLabour } from "./quote-labour";
 import { newToken } from "./quote-links";
 import { jobText, variationRef } from "./refs";
@@ -256,7 +257,7 @@ export async function addProductLine(args: { variationId: number; productId: num
   const sized = wholeUnits(product, args.qty);
   const qty = sized.qty;
   const isLabour = product.category === "labour";
-  const kind = isLabour ? "labour" : product.category === "accessory" ? "accessory" : "supply";
+  const kind = isLabour ? "labour" : isAccessoryCategory(product.category) ? "accessory" : "supply";
   const [row] = await db
     .insert(schema.variationItems)
     .values({

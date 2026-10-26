@@ -23,6 +23,10 @@ export const PRODUCT_CATEGORIES = [
   "turf",
   "sheet_goods",
   "accessory",
+  "trim",
+  "scotia",
+  "stair_nosing",
+  "skirting",
 ] as const;
 
 export const PRODUCT_CATEGORY_LABELS: Record<string, string> = {
@@ -40,12 +44,26 @@ export const PRODUCT_CATEGORY_LABELS: Record<string, string> = {
   /** Plywood. Not a floor covering, the substrate that goes under one. */
   sheet_goods: "Sheet goods",
   accessory: "Accessory",
+  /** Import fixes 26 Oct (Damien): trims, scotia, stair nosing and skirting get their own categories. */
+  trim: "Trims",
+  scotia: "Scotia",
+  stair_nosing: "Stair nosing",
+  skirting: "Skirting",
   /** Old names, before the splits. Nothing on file uses them now. */
   timber: "Timber",
   underlay: "Underlay",
 };
 
 export const categoryLabel = (c: string) => PRODUCT_CATEGORY_LABELS[c] ?? c;
+
+/**
+ * Accessories plus the four sold-by-the-length categories (26 Oct). Everything
+ * that treated "accessory" as "a trim" (whole lengths, rolls, colours on the
+ * selection form) treats these the same.
+ */
+export const LENGTH_CATEGORIES = ["trim", "scotia", "stair_nosing", "skirting"] as const;
+export const isAccessoryCategory = (c: string | null | undefined) =>
+  c === "accessory" || (LENGTH_CATEGORIES as readonly string[]).includes(c ?? "");
 
 export const TIMBER_CATEGORIES = ["engineered_timber", "solid_timber"] as const;
 
@@ -61,6 +79,7 @@ export const isTimberCategory = (c: string | null | undefined) =>
 export function categoriesForHint(hint: string): string[] {
   if (hint === "timber") return [...TIMBER_CATEGORIES, "timber"];
   if (hint === "underlay") return ["carpet_underlay", "hard_floor_underlay", "underlay"];
+  if (hint === "accessory") return ["accessory", ...LENGTH_CATEGORIES];
   return [hint];
 }
 

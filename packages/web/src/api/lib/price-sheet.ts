@@ -15,9 +15,9 @@
  * thickness they fill the Sizes line, "2200 x 194 x 12mm, 5 per carton".
  */
 import type { products } from "../database/schema";
-import { boxM2Of } from "./flooring-qty";
+import { boxM2Of, floorTypeOf } from "./flooring-qty";
 import { derivedBoardFields } from "./board-size";
-import { carpetWidthByRule } from "./product-categories";
+import { carpetWidthByRule, isAccessoryCategory } from "./product-categories";
 import { roundTo, sellExGst } from "./bulk-price";
 
 export type Product = typeof products.$inferSelect;
@@ -84,6 +84,20 @@ const CATEGORY_IN: Record<string, string> = {
   "synthetic turf": "turf",
   "sheet goods": "sheet_goods",
   plywood: "sheet_goods",
+  // Import fixes 26 Oct (Damien): trims, scotia, stair nosing and skirting.
+  trim: "trim",
+  trims: "trim",
+  scotia: "scotia",
+  scotias: "scotia",
+  "stair nosing": "stair_nosing",
+  "stair nosings": "stair_nosing",
+  "stair nose": "stair_nosing",
+  nosing: "stair_nosing",
+  nosings: "stair_nosing",
+  skirting: "skirting",
+  skirtings: "skirting",
+  "skirting board": "skirting",
+  "skirting boards": "skirting",
 };
 
 /** What the sheet says for a category. Damien's words where his list has one. */
@@ -99,6 +113,8 @@ export function categoryOut(p: Pick<Product, "category" | "soldAs">) {
       return "timber underlay";
     case "accessory":
       return "accessories";
+    case "trim":
+      return "trims";
     case "turf":
       return "synthetic turf";
     default:
@@ -106,6 +122,11 @@ export function categoryOut(p: Pick<Product, "category" | "soldAs">) {
   }
 }
 
+/**
+ * "length" (26 Oct): priced per length, the length in trim_length_m. It is
+ * saved per lm (cost / length), so quotes and orders take lineal metres and
+ * round up to whole lengths, "4 lengths of 3.4 m (13.6 lm)", at the same money.
+ */
 const UNIT_IN: Record<string, string> = {
   m2: "m2",
   "m²": "m2",
@@ -115,23 +136,41 @@ const UNIT_IN: Record<string, string> = {
   each: "each",
   ea: "each",
   roll: "roll",
+  length: "length",
+  lengths: "length",
+  "per length": "length",
+  len: "length",
 };
 
-const FORMAT_IN: Record<string, "box" | "broadloom" | null> = { box: "box", broadloom: "broadloom", roll: null, each: null };
-const SOLD_AS_IN = new Set(["box", "roll", "each", "broadloom"]);
+const FORMAT_IN: Record<string, "box" | "broadloom" | null> = {
+  box: "box",
+  broadloom: "broadloom",
+  roll: null,
+  each: null,
+  length: null,
+  lengths: null,
+};
+const SOLD_AS_IN = new Set(["box", "roll", "each", "broadloom", "length", "lengths"]);
 
 const isRollGood = (p: Pick<Product, "category" | "unit" | "rollLengthM">) =>
   p.unit === "roll" || (p.rollLengthM ?? 0) > 0 || p.category === "carpet_underlay" || p.category === "hard_floor_underlay";
 
-export function formatOut(p: Pick<Product, "soldAs" | "category" | "unit" | "rollLengthM">) {
+type FormatShape = Pick<Product, "soldAs" | "category" | "unit" | "rollLengthM"> & { pieceLengthM?: number | null };
+
+/** A trim, scotia, nosing or skirting priced per lm and bought in whole lengths. */
+const isLengthGood = (p: FormatShape) => !p.soldAs && p.unit === "lm" && isAccessoryCategory(p.category) && (p.pieceLengthM ?? 0) > 0;
+
+export function formatOut(p: FormatShape) {
   if (p.soldAs === "box") return "Box";
   if (p.soldAs === "broadloom") return "Broadloom";
+  if (isLengthGood(p)) return "Length";
   return isRollGood(p) ? "Roll" : "Each";
 }
 
-export function soldAsOut(p: Pick<Product, "soldAs" | "category" | "unit" | "rollLengthM">) {
+export function soldAsOut(p: FormatShape) {
   if (p.soldAs === "box") return "Box";
   if (p.soldAs === "broadloom") return "Roll";
+  if (isLengthGood(p)) return "Length";
   return isRollGood(p) ? "Roll" : "Each";
 }
 
@@ -411,10 +450,20 @@ function lookup(ix: Index, sup: SupplierLite, pick: "sku" | "key", k: string): P
   return [...a, ...b];
 }
 
-/** Sizes the quote maths needs. Spec: missing size = flag it and ask, never guess. */
+/** Weld rod comes on a coil, not in lengths. Same test as order-sizes. */
+const isCoil = (p: Partial<Product>) => (p.lengthMm ?? 0) > 0 || /weld\s*rod/i.test(`${p.brand ?? ""} ${p.range ?? ""} ${p.colour ?? ""}`);
+
+/**
+ * Sizes the quote maths needs. Spec: missing size = flag it and ask, never guess.
+ * Import fixes 26 Oct, item 5: box_m2 is only asked for on a boxed FLOOR. A trim,
+ * scotia or anything sold each never needs one.
+ */
 function sizeWarnings(p: Patch & { category?: string; unit?: string }, merged: Partial<Product>): string[] {
   const out: string[] = [];
-  if (merged.soldAs === "box" && !boxM2Of(merged as Product)) out.push("No box size (box_m2). Quotes will flag it and not round to whole boxes.");
+  if (merged.soldAs === "box" && floorTypeOf(merged as Product) && !boxM2Of(merged as Product))
+    out.push("No box size (box_m2). Quotes will flag it and not round to whole boxes.");
+  if (merged.unit === "lm" && !merged.soldAs && isAccessoryCategory(merged.category) && !(merged.pieceLengthM && merged.pieceLengthM > 0) && !isCoil(merged))
+    out.push("No length size (trim_length_m). Quotes will flag it and not round to whole lengths.");
   if (merged.soldAs === "broadloom" && !(merged.widthM && merged.widthM > 0))
     out.push("No roll width (roll_width_m). Quotes will ask for it.");
   if (merged.category === "carpet_underlay" && !(merged.widthM && merged.widthM > 0))
@@ -429,6 +478,62 @@ function boxMismatch(p: Partial<Product>): string[] {
   const box = boxM2Of(p as Product);
   if (box == null || Math.abs(box - p.packM2Printed) / box < 0.01) return [];
   return [`Box size comes from ${p.unitsPerPack} boards x ${p.unitM2} m², so box_m2 ${p.packM2Printed} is saved but quotes use ${box} m².`];
+}
+
+type UnitSizes = Partial<Pick<Product, "category" | "unit" | "soldAs" | "rollLengthM" | "widthM" | "pieceLengthM" | "unitsPerPack" | "unitM2" | "packM2Printed">>;
+
+const unitWord = (u: string) => (u === "m2" ? "m²" : u);
+const perUnit = (u: string) => (u === "each" ? "each" : `a ${unitWord(u)}`);
+
+/**
+ * How many `to` units one `from` unit holds, off the sizes on file: a 50 m x
+ * 1.1 m roll is 55 m², one 3.4 m length is 3.4 lm. Null when they do not convert.
+ */
+export function unitsIn(from: string, to: string, s: UnitSizes): { n: number; how: string } | null {
+  if (from === to) return { n: 1, how: "" };
+  const L = s.rollLengthM && s.rollLengthM > 0 ? s.rollLengthM : null;
+  const W = s.widthM && s.widthM > 0 ? s.widthM : null;
+  const piece = s.pieceLengthM && s.pieceLengthM > 0 ? s.pieceLengthM : null;
+  const box = s.soldAs === "box" ? boxM2Of(s as Product) : null;
+  const f = (a: string, b: string): { n: number; how: string } | null => {
+    if (a === "roll" && b === "m2" && L && W) return { n: L * W, how: `${L} m x ${W} m roll` };
+    if (a === "roll" && b === "lm" && L) return { n: L, how: `${L} m roll` };
+    if (a === "lm" && b === "m2" && W) return { n: W, how: `${W} m wide` };
+    if (a === "each" && b === "lm" && piece) return { n: piece, how: `one ${piece} m length` };
+    if ((a === "each" || a === "box") && b === "m2" && box) return { n: box, how: `${box} m² a box` };
+    return null;
+  };
+  const there = f(from, to);
+  if (there) return there;
+  const back = f(to, from);
+  return back ? { n: 1 / back.n, how: back.how } : null;
+}
+
+/**
+ * Import fixes 26 Oct, item 3. A cost that moves with its unit (per roll to per
+ * m²) is compared like for like, not called a 98% drop.
+ */
+function costWarnings(old: (UnitSizes & { costPrice?: number | null }) | null, merged: UnitSizes & { costPrice?: number | null; sellPrice?: number | null }): string[] {
+  const cost = merged.costPrice;
+  const unitMoved = !!old && !!old.unit && !!merged.unit && old.unit !== merged.unit;
+  if (!unitMoved) return priceWarnings(old?.costPrice, cost, merged.sellPrice);
+  const out: string[] = [];
+  const from = old!.unit!;
+  const to = merged.unit!;
+  const oldCost = old!.costPrice;
+  const conv = unitsIn(from, to, { ...old, ...merged });
+  if (oldCost == null || cost == null) out.push(`Unit changed from ${unitWord(from)} to ${unitWord(to)}.`);
+  else if (!conv) {
+    out.push(`Unit changed from ${unitWord(from)} to ${unitWord(to)}, so the cost is not compared: was ${money(oldCost)} ${perUnit(from)}, now ${money(cost)} ${perUnit(to)}.`);
+  } else {
+    const like = oldCost / conv.n;
+    const pct = like > 0 ? ((cost - like) / like) * 100 : 0;
+    const move = Math.abs(pct) < 0.5 ? "the same like for like" : `${pct > 0 ? "up" : "down"} ${Math.abs(pct).toFixed(0)}% like for like`;
+    out.push(
+      `Unit changed from ${unitWord(from)} to ${unitWord(to)}. ${money(oldCost)} ${perUnit(from)} is ${money(like)} ${perUnit(to)} (${conv.how}). Now ${money(cost)} ${perUnit(to)}, ${move}.`,
+    );
+  }
+  return [...out, ...priceWarnings(null, cost, merged.sellPrice)];
 }
 
 function priceWarnings(oldCost: number | null | undefined, cost: number | null | undefined, sell: number | null | undefined): string[] {
@@ -544,31 +649,58 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
     }
     const unitRaw = norm(cell("unit"));
     const unit = unitRaw ? UNIT_IN[unitRaw] : undefined;
-    if (unitRaw && !unit) problems.push(`unknown unit "${cell("unit")}" (use m2, lm, each or roll)`);
+    if (unitRaw && !unit) problems.push(`unknown unit "${cell("unit")}" (use m2, lm, each, roll or length)`);
     const fmtRaw = norm(cell("format"));
-    if (fmtRaw && !(fmtRaw in FORMAT_IN)) problems.push(`unknown format "${cell("format")}" (use Box, Broadloom or Roll)`);
+    if (fmtRaw && !(fmtRaw in FORMAT_IN)) problems.push(`unknown format "${cell("format")}" (use Box, Broadloom, Roll, Each or Length)`);
     const soldRaw = norm(cell("sold_as"));
-    if (soldRaw && !SOLD_AS_IN.has(soldRaw)) problems.push(`unknown sold_as "${cell("sold_as")}" (use Box, Roll or Each)`);
+    if (soldRaw && !SOLD_AS_IN.has(soldRaw)) problems.push(`unknown sold_as "${cell("sold_as")}" (use Box, Roll, Each or Length)`);
 
     // ---- which product is this row?
     const supRaw = cell("supplier");
     const sup = supRaw ? supByName.get(norm(supRaw)) : undefined;
     let match: Product | undefined;
     let matchProblem = "";
+    /** Said about the match, shown with the row's warnings. */
+    const matchNotes: string[] = [];
     const tid = nums.terra_id;
-    if (tid != null) {
-      match = ix.byId.get(Math.round(tid));
-      if (!match) matchProblem = `terra_id ${cell("terra_id")} is not in the price list`;
-    } else if (sup) {
-      const sku = norm(cell("sku"));
-      const key = keyOf(cell("brand"), cell("range"), cell("colour"));
-      let hits = sku ? lookup(ix, sup, "sku", sku) : [];
+    const sku = norm(cell("sku"));
+    const key = keyOf(cell("brand"), cell("range"), cell("colour"));
+    const byName = (s: SupplierLite) => {
+      let hits = sku ? lookup(ix, s, "sku", sku) : [];
       if (hits.length > 1) {
         const narrowed = hits.filter((p) => keyOf(p.brand, p.range, p.colour) === key);
         hits = narrowed.length ? narrowed : hits;
       }
-      if (!hits.length) hits = lookup(ix, sup, "key", key);
-      if (hits.length > 1) matchProblem = `matches ${hits.length} products (ids ${hits.slice(0, 5).map((p) => p.id).join(", ")}${hits.length > 5 ? "..." : ""}). Add terra_id to pick one`;
+      if (!hits.length && key !== "||") hits = lookup(ix, s, "key", key);
+      return hits;
+    };
+    const many = (hits: Product[]) =>
+      `matches ${hits.length} products (ids ${hits.slice(0, 5).map((p) => p.id).join(", ")}${hits.length > 5 ? "..." : ""}). Add terra_id to pick one`;
+    if (tid != null) {
+      match = ix.byId.get(Math.round(tid));
+      if (match) {
+        // A terra_id copied down from the row above points at the wrong product.
+        // Catch it when the row's own SKU or name belongs to a different one.
+        const s = sup ?? (match.supplierId != null ? { id: match.supplierId, name: match.supplier } : null);
+        const other = s ? byName(s).filter((p) => p.id !== match!.id) : [];
+        const skuDiffers = !!sku && !!match.sku && norm(match.sku) !== sku;
+        const nameDiffers = key !== "||" && keyOf(match.brand, match.range, match.colour) !== key;
+        if (other.length && (skuDiffers || nameDiffers)) {
+          matchProblem = `terra_id ${cell("terra_id")} is ${match.sku ? `${match.sku} ` : ""}${nameOf(match)}, but this row's ${skuDiffers ? `SKU ${cell("sku")}` : "name"} is id ${other[0].id} (${nameOf(other[0])}). Fix the terra_id or clear it`;
+          match = undefined;
+        }
+      } else if (sup) {
+        // Deleted since the sheet was made. Find it by SKU or name, or add it new.
+        const hits = byName(sup);
+        if (hits.length > 1) matchProblem = `terra_id ${cell("terra_id")} is not in the price list any more, and the SKU or name ${many(hits)}`;
+        else if (hits.length === 1) {
+          match = hits[0];
+          matchNotes.push(`terra_id ${cell("terra_id")} is not in the price list any more. Matched on ${sku ? "SKU" : "name"} to id ${match.id} instead.`);
+        } else matchNotes.push(`terra_id ${cell("terra_id")} is not in the price list any more (deleted), so this row adds it as a new product.`);
+      } else matchProblem = `terra_id ${cell("terra_id")} is not in the price list (deleted?), and supplier is blank so it cannot be added again. Fill in supplier or clear the terra_id`;
+    } else if (sup) {
+      const hits = byName(sup);
+      if (hits.length > 1) matchProblem = many(hits);
       else match = hits[0];
     }
     if (matchProblem) problems.push(matchProblem);
@@ -578,12 +710,27 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
     else if (supRaw && !sup && !(match && norm(match.supplier) === norm(supRaw))) problems.push(`unknown supplier "${supRaw}"`);
 
     if (!match && !matchProblem) {
-      const blank = REQUIRED.filter((c) => cell(c) === "");
+      // unit length says the format itself, so sold_as and format can be left blank
+      const blank = REQUIRED.filter((c) => cell(c) === "" && !(unit === "length" && (c === "sold_as" || c === "format")));
       if (blank.length) problems.push(`new product needs ${blank.join(", ")}`);
     }
     if (match) {
       const prev = claimed.get(match.id);
-      if (prev) problems.push(`row ${prev} already updates this product`);
+      if (prev) problems.push(`row ${prev} already updates this product (id ${match.id}, ${nameOf(match)}). Check the terra_id and SKU on both rows`);
+    }
+
+    // ---- unit and format that go together (26 Oct: "length")
+    const fmtLength = fmtRaw === "length" || fmtRaw === "lengths";
+    const pieceLen = nums.trim_length_m ?? match?.pieceLengthM ?? null;
+    const unitNow = unit ?? match?.unit;
+    // Priced per length: unit length, or format Length on a unit each row.
+    const byLength = unit === "length" || (fmtLength && unitNow === "each");
+    if (byLength) {
+      if (!(pieceLen && pieceLen > 0))
+        problems.push(`${unit === "length" ? "unit length" : "format Length with unit each"} needs trim_length_m, how long one length is (e.g. 3.4)`);
+      if (fmtRaw && !fmtLength) problems.push(`unit length goes with format Length, not "${cell("format")}"`);
+    } else if (fmtLength) {
+      if (unitNow && unitNow !== "lm") problems.push(`format Length goes with unit length, lm or each, not "${unitWord(unitNow)}"`);
     }
 
     if (problems.length) {
@@ -636,11 +783,50 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
 
     // Sell: the file's number, rounded to 10c when it is a new number.
     // The same number as now is left alone (most sells are to the cent).
-    const sellIn = nums.sell;
+    let sellIn = nums.sell;
+    /** Said about how the row was saved, shown with the row's warnings. */
+    const saveNotes: string[] = [...matchNotes];
+
+    // Priced per length (26 Oct, item 4): saved per lm, the length kept, so quotes
+    // take lineal metres and round up to whole lengths at the same money.
+    let perLm = false;
+    if (byLength && pieceLen && pieceLen > 0) {
+      const len = Math.round(pieceLen * 1e4) / 1e4;
+      const r4 = (n: number) => Math.round(n * 1e4) / 1e4;
+      said.unit = "lm";
+      said.soldAs = null;
+      said.pieceLengthM = len;
+      // a length is not a box: drop the box size a boxed row carried (box_m2 1, 1 a box)
+      if (match?.soldAs === "box") {
+        if (match.packM2Printed != null) said.packM2Printed = null;
+        if (match.unitsPerPack != null) said.unitsPerPack = null;
+      }
+      const bits: string[] = [];
+      if (nums.cost != null) {
+        said.costPrice = r4(nums.cost / len);
+        bits.push(`cost ${money(nums.cost)} a ${len} m length is ${money(said.costPrice)}/lm`);
+      }
+      if (nums.cut_price != null) said.cutCostPrice = r4(nums.cut_price / len);
+      if (sellIn != null) {
+        sellIn = r4(sellIn / len);
+        bits.push(`sell ${money(nums.sell)} a length is ${money(sellIn)}/lm`);
+      }
+      perLm = true;
+      saveNotes.push(`Saved per lm in ${len} m lengths${bits.length ? `: ${bits.join(", ")}` : ""}.`);
+    }
+    // A sell worked out per lm is kept to the cent fraction, not rounded to 10c,
+    // so a length still costs what the sheet says.
+    const sellRound = (n: number) => (perLm ? n : roundTo(n, "10c"));
 
     if (match) {
       claimed.set(match.id, rowNo);
-      if (sellIn != null && !same(sellIn, match.sellPrice)) said.sellPrice = roundTo(sellIn, "10c");
+      if (sellIn != null && !same(sellIn, match.sellPrice)) said.sellPrice = sellRound(sellIn);
+      // Item 2, 26 Oct: a roll product moved to m² or lm keeps its full roll price
+      // on file, so orders still know what a roll costs.
+      if (match.unit === "roll" && said.unit && said.unit !== "roll" && match.rollPrice == null && said.rollPrice === undefined && match.costPrice != null) {
+        said.rollPrice = match.costPrice;
+        saveNotes.push(`Roll price kept: ${money(match.costPrice)} a roll (the old cost), with the roll size on file.`);
+      }
       // Box size: compare against the size quotes actually use.
       // An exported sheet says boards x board m², which can be a hair off the printed figure.
       if (said.packM2Printed != null && (same(said.packM2Printed, boxM2Of(match)) || same(said.packM2Printed, match.packM2Printed)))
@@ -679,7 +865,8 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
       }
       const merged = { ...match, ...after } as Product;
       const warnings = [
-        ...priceWarnings(match.costPrice, merged.costPrice, merged.sellPrice),
+        ...saveNotes,
+        ...costWarnings(match, merged),
         ...(after.soldAs !== undefined ||
         after.packM2Printed !== undefined ||
         after.widthM !== undefined ||
@@ -721,15 +908,16 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
       ...said,
       supplierId: s.id,
       supplier: s.name,
-      sellPrice: sellIn != null ? roundTo(sellIn, "10c") : cost != null ? roundTo(sellExGst(cost), "10c") : null,
+      sellPrice: sellIn != null ? sellRound(sellIn) : cost != null ? roundTo(sellExGst(cost), "10c") : null,
     };
     values.widthM = values.widthM ?? carpetWidthByRule({ category: values.category ?? "", supplier: s.name, brand: values.brand, range: values.range });
     // Trims come in 2.4 m lengths (Damien, 11 Oct). Weld rod is sold by the metre off a reel.
-    if (values.pieceLengthM == null && values.category === "accessory" && values.unit === "lm" && !/weld/i.test(`${values.range} ${values.colour}`)) {
+    if (values.pieceLengthM == null && (values.category === "accessory" || values.category === "trim") && values.unit === "lm" && !/weld/i.test(`${values.range} ${values.colour}`)) {
       values.pieceLengthM = 2.4;
     }
     Object.assign(values, derivedBoardFields({}, values));
     const warnings = [
+      ...saveNotes,
       ...priceWarnings(null, cost, values.sellPrice),
       ...sizeWarnings(values, values as Partial<Product>),
       ...boxMismatch(values as Partial<Product>),

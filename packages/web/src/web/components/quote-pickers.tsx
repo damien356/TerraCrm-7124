@@ -71,6 +71,10 @@ export const PRODUCT_CATEGORIES = [
   { name: "carpet_underlay", label: "Carpet underlay" },
   { name: "hard_floor_underlay", label: "Hard floor underlay" },
   { name: "accessory", label: "Accessories" },
+  { name: "trim", label: "Trims" },
+  { name: "scotia", label: "Scotia" },
+  { name: "stair_nosing", label: "Stair nosing" },
+  { name: "skirting", label: "Skirting" },
 ];
 
 export function GroupToggles({
