@@ -127,7 +127,9 @@ function wrap(text: string, font: PDFFont, size: number, width: number): string[
   return out;
 }
 
-type Ctx = { doc: PDFDocument; reg: PDFFont; bold: PDFFont; logo: PDFImage; page: PDFPage; y: number; input: QuotePdfInput };
+/** What the page breaking and the works tables need. `running` heads a continued page, e.g. "Quote Q188000". */
+type Base = { doc: PDFDocument; reg: PDFFont; bold: PDFFont; page: PDFPage; y: number; running: string };
+type Ctx = Base & { logo: PDFImage; input: QuotePdfInput };
 
 function text(page: PDFPage, s: string, x: number, y: number, font: PDFFont, size: number, color = INK) {
   page.drawText(clean(s), { x, y, size, font, color });
@@ -137,18 +139,18 @@ function textRight(page: PDFPage, s: string, right: number, y: number, font: PDF
   page.drawText(c, { x: right - font.widthOfTextAtSize(c, size), y, size, font, color });
 }
 
-function newPage(ctx: Ctx, continued: boolean) {
+function newPage(ctx: Base, continued: boolean) {
   ctx.page = ctx.doc.addPage([W, H]);
   ctx.y = H - M;
   if (continued) {
-    text(ctx.page, `Quote ${ctx.input.ref} (continued)`, M, ctx.y - 10, ctx.bold, 10);
+    text(ctx.page, `${ctx.running} (continued)`, M, ctx.y - 10, ctx.bold, 10);
     textRight(ctx.page, TERRA_PRINT.legal, W - M, ctx.y - 10, ctx.reg, 8.5, MUTED);
     ctx.y -= 28;
   }
 }
 
 /** Make room for `h` points, starting a new page if needed. */
-function need(ctx: Ctx, h: number) {
+function need(ctx: Base, h: number) {
   if (ctx.y - h < M + 24) newPage(ctx, true);
 }
 
@@ -223,7 +225,7 @@ function quoteTo(ctx: Ctx) {
   ctx.y = Math.min(y, ry) - 12;
 }
 
-function table(ctx: Ctx) {
+function table(ctx: Base, bundles: QuotePdfInput["bundles"]) {
   const descW = CW * 0.74;
   const totalR = W - M - 8;
   const row = () => {
@@ -234,7 +236,7 @@ function table(ctx: Ctx) {
   };
   row();
 
-  for (const b of ctx.input.bundles) {
+  for (const b of bundles) {
     const titleLines = wrap(b.title, ctx.bold, 10, descW);
     const body = wrap(b.wording || "", ctx.reg, 9, descW);
     // Keep the title and the first few lines together.
@@ -262,7 +264,7 @@ const qtyOut = (n: number) => String(Math.round((n + Number.EPSILON) * 100) / 10
 const unitOut = (u: string) => (u === "m2" ? "m\u00B2" : u);
 
 /** Itemised layout: Description / Qty / Unit / Rate / Total, ex GST. */
-function itemTable(ctx: Ctx, items: NonNullable<QuotePdfInput["items"]>) {
+function itemTable(ctx: Base, items: NonNullable<QuotePdfInput["items"]>) {
   const descW = CW * 0.5;
   const qtyR = M + 8 + descW + 52;
   const unitX = qtyR + 10;
@@ -480,12 +482,12 @@ export async function renderQuotePdf(input: QuotePdfInput): Promise<Buffer> {
   const reg = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   const logo = await doc.embedPng(Buffer.from(TERRA_LOGO_PRINT_PNG_BASE64, "base64"));
-  const ctx: Ctx = { doc, reg, bold, logo, page: doc.addPage([W, H]), y: H - M, input };
+  const ctx: Ctx = { doc, reg, bold, logo, page: doc.addPage([W, H]), y: H - M, input, running: `Quote ${input.ref}` };
 
   header(ctx);
   quoteTo(ctx);
   if (input.items?.length) itemTable(ctx, input.items);
-  else table(ctx);
+  else table(ctx, input.bundles);
   totals(ctx);
   payment(ctx);
   acceptance(ctx);
@@ -493,4 +495,20 @@ export async function renderQuotePdf(input: QuotePdfInput): Promise<Buffer> {
   footers(doc, reg, input);
 
   return Buffer.from(await doc.save());
+}
+
+/**
+ * The quote's works, sections or itemised rows exactly as the quote PDF draws
+ * them, drawn into another document from `y` down on `page`. The client
+ * invoice uses it so the invoice reads like the quote it bills (Damien, 26 Oct).
+ * New pages are headed with `running`. Returns where it finished.
+ */
+export function drawQuoteWorks(
+  at: { doc: PDFDocument; reg: PDFFont; bold: PDFFont; page: PDFPage; y: number; running: string },
+  works: { bundles: QuotePdfInput["bundles"]; items?: QuotePdfInput["items"] },
+): { page: PDFPage; y: number } {
+  const ctx: Base = { ...at };
+  if (works.items?.length) itemTable(ctx, works.items);
+  else table(ctx, works.bundles);
+  return { page: ctx.page, y: ctx.y };
 }
