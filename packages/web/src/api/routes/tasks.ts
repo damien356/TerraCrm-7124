@@ -4,7 +4,8 @@ import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { adminOnly, staffOnly } from "../middleware/auth";
+import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
+import type { Client } from "@libsql/client";
 import { checkDays, nonWorkingWeekdays } from "../lib/availability";
 import { addLocalDays, weekdayOf } from "../lib/local-date";
 import { daysFromQty } from "../lib/day-estimate";
@@ -13,6 +14,10 @@ import { lockTaskLabour } from "./costing";
 import { installerForStaff, taskForStaff } from "../lib/staff-view";
 import { jobText, taskLetter, taskRef } from "../lib/refs";
 import { bookingBlock, bookingBlockNew } from "../lib/prep";
+import { bookingSafetyOn, dayProblems, needsReasonMessage } from "../lib/booking-safety";
+import { writeBooking } from "../lib/booking-write";
+import { RequestKeyError, runOnce } from "../lib/request-keys";
+import { can } from "../lib/permissions";
 
 /**
  * TASKS ARE THE DISPATCH UNIT — not jobs. One job can be five separate
@@ -64,6 +69,13 @@ function iso(d: Date) {
 }
 
 /** "Thu 1 Oct", the way the office says a date out loud. */
+/**
+ * Every write here that changes a task's booking moves its version on, so a
+ * booking saved from an older copy of the task is caught (stage 0). Invisible
+ * to anything else: nothing reads the version unless booking safety is on.
+ */
+const bump = sql`${schema.jobTasks.version} + 1`;
+
 function sayDate(date: string) {
   const d = new Date(`${date}T00:00:00Z`);
   return `${DAY_NAMES[d.getUTCDay()]} ${d.getUTCDate()} ${d.toLocaleDateString("en-AU", { month: "short", timeZone: "UTC" })}`;
@@ -147,6 +159,207 @@ async function suggestDays(taskId: number) {
     perDay: est.perDay,
     fixedDays: est.fixedDays,
   };
+}
+
+/** Input for tasks.book. Pulled out so the safe path below shares it. */
+const bookInput = z.object({
+  taskId: z.number(),
+  installerId: z.number(),
+  secondInstallerId: z.number().nullable().optional(),
+  /** The exact days, already worked out by planBooking. */
+  dates: z.array(z.string()).min(1).max(30),
+  /** Same window every day unless a day overrides it below. */
+  arrivalStart: z.string().nullable().optional(),
+  arrivalEnd: z.string().nullable().optional(),
+  /** Following days are left for the installer and the site to sort out. */
+  coordinateAfterFirst: z.boolean().default(false),
+  /** Per-day overrides: window, or a different installer for that day. */
+  perDay: z
+    .array(
+      z.object({
+        date: z.string(),
+        arrivalStart: z.string().nullable().optional(),
+        arrivalEnd: z.string().nullable().optional(),
+        coordinate: z.boolean().optional(),
+        installerId: z.number().nullable().optional(),
+      }),
+    )
+    .default([]),
+  durationHours: z.number().nullable().optional(),
+  payAmount: z.number().nullable().optional(),
+  /** Why the office booked over a clash. Stored on the affected days. */
+  overrideNote: z.string().nullable().optional(),
+  /**
+   * Day count the office put in themselves. Stored on the task so it
+   * beats the rate-based recommendation from here on, including on a
+   * later drag. Null leaves the recommendation in charge.
+   */
+  manualDays: z.number().int().min(1).max(30).nullable().optional(),
+  /**
+   * Booking safety (stage 0), read only while the setting is on.
+   * requestKey: one per open panel, so a double tap or a retry after a
+   * dropped connection books once. expectedVersion: the task version the
+   * panel was showing, so a save over someone else's change is refused.
+   */
+  requestKey: z.string().min(8).max(100).nullable().optional(),
+  expectedVersion: z.number().int().nullable().optional(),
+});
+type BookInput = z.infer<typeof bookInput>;
+
+const STALE_MESSAGE =
+  "Someone else changed this booking while you had it open. Close the panel and open it again to see their change, then book.";
+
+/**
+ * tasks.book with booking safety on (stage 0). Same checks and the same answer
+ * as the plain path, plus: one request key books once, a save from an old
+ * version is refused, a clash needs a reason, and the days, the history and
+ * the task land together or not at all.
+ */
+async function bookSafely(input: BookInput, actor: Actor) {
+  if (!can(actor, "task.book")) throw new ORPCError("FORBIDDEN", { message: "Your login can't book work." });
+  const client = db.$client as Client;
+  try {
+    return await runOnce(
+      client,
+      { key: input.requestKey, actorUserId: actor.userId || actor.email || "unknown", action: `task.book:${input.taskId}` },
+      async () => {
+        const out = await bookWork(input, actor, client);
+        return { result: out, stored: { taskId: input.taskId, dates: out.dates } };
+      },
+      async (stored: { taskId: number; dates: string[] }) => {
+        const [row] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, stored.taskId));
+        return { ...row!, dates: stored.dates };
+      },
+    );
+  } catch (e) {
+    if (e instanceof RequestKeyError) {
+      throw new ORPCError(e.code === "KEY_REUSED" ? "BAD_REQUEST" : "CONFLICT", { message: e.message });
+    }
+    throw e;
+  }
+}
+
+async function bookWork(input: BookInput, actor: Actor, client: Client) {
+  const dates = [...new Set(input.dates)].sort();
+  const block = await bookingBlock(input.taskId);
+  if (block) throw new ORPCError("BAD_REQUEST", { message: block });
+  const { task, job, installer } = await assertAssignable(input.taskId, input.installerId, 1);
+  if (input.expectedVersion != null && input.expectedVersion !== task.version) {
+    throw new ORPCError("CONFLICT", { message: STALE_MESSAGE });
+  }
+  const expectedVersion = input.expectedVersion ?? task.version;
+
+  const needsTwo = task.crewSize > 1;
+  const bringsOwn = installer.crewCapacity === "own_offsider";
+  if (needsTwo && !bringsOwn && !input.secondInstallerId && !task.secondInstallerId) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: `This is a 2-man task${job.furnitureOnSite ? " (furniture on site)" : ""} and ${installer.name} doesn't bring an offsider. Pick a second installer.`,
+    });
+  }
+  if (input.secondInstallerId) await assertAssignable(input.taskId, input.secondInstallerId, 1);
+  for (const d of input.perDay) {
+    if (d.installerId) await assertAssignable(input.taskId, d.installerId, 1);
+  }
+
+  // A clash or a day off still never blocks the office, but now it needs a reason.
+  const note = input.overrideNote?.trim() || null;
+  const problems = await dayProblems({
+    taskId: input.taskId,
+    jobId: task.jobId,
+    installerId: input.installerId,
+    dates,
+    perDayInstaller: new Map(input.perDay.map((d) => [d.date, d.installerId])),
+  });
+  if (problems.length && !note) throw new ORPCError("BAD_REQUEST", { message: needsReasonMessage(problems, sayDate) });
+  if (problems.length && !can(actor, "task.bookOverClash")) {
+    throw new ORPCError("FORBIDDEN", { message: "Your login can't book over a clash. Ask the office." });
+  }
+
+  const beforeDays = await db
+    .select()
+    .from(schema.taskDays)
+    .where(eq(schema.taskDays.taskId, input.taskId))
+    .orderBy(asc(schema.taskDays.date));
+
+  const overrides = new Map(input.perDay.map((d) => [d.date, d]));
+  const first = dates[0]!;
+  const days = dates.map((date, i) => {
+    const o = overrides.get(date);
+    const coordinate = o?.coordinate ?? (i > 0 ? input.coordinateAfterFirst : false);
+    return {
+      date,
+      seq: i + 1,
+      arrivalStart: coordinate ? null : (o?.arrivalStart ?? input.arrivalStart ?? null),
+      arrivalEnd: coordinate ? null : (o?.arrivalEnd ?? input.arrivalEnd ?? null),
+      coordinate,
+      installerId: o?.installerId ?? null,
+      overrideNote: note,
+    };
+  });
+  const span = dates.length === 1 ? sayDate(first) : `${sayDate(first)} → ${sayDate(dates[dates.length - 1]!)}`;
+  const brief = (d: { date: string; installerId: number | null; arrivalStart: string | null; arrivalEnd: string | null; coordinate: boolean }) => ({
+    date: d.date,
+    installerId: d.installerId,
+    arrivalStart: d.arrivalStart,
+    arrivalEnd: d.arrivalEnd,
+    coordinate: d.coordinate,
+  });
+
+  const res = await writeBooking(client, {
+    taskId: input.taskId,
+    jobId: task.jobId,
+    expectedVersion,
+    days,
+    patch: {
+      assignedInstallerId: input.installerId,
+      secondInstallerId: input.secondInstallerId,
+      status: "assigned",
+      scheduledDate: first,
+      scheduledFrom: first,
+      scheduledTo: dates[dates.length - 1]!,
+      startTime: input.arrivalStart ?? task.startTime,
+      durationHours: input.durationHours ?? undefined,
+      payAmount: input.payAmount ?? undefined,
+      manualDays: input.manualDays,
+    },
+    activity: {
+      action: "booked",
+      detail: `${task.title} → ${installer.name}, ${dates.length === 1 ? "1 day" : `${dates.length} days`} ${span}${note ? ` (override: ${note})` : ""}`,
+    },
+    audit: {
+      action: "task.book",
+      before: {
+        installerId: task.assignedInstallerId,
+        secondInstallerId: task.secondInstallerId,
+        status: task.status,
+        version: task.version,
+        days: beforeDays.map(brief),
+      },
+      after: {
+        installerId: input.installerId,
+        secondInstallerId: input.secondInstallerId !== undefined ? input.secondInstallerId : task.secondInstallerId,
+        status: "assigned",
+        version: expectedVersion + 1,
+        days: days.map(brief),
+        clashes: problems,
+      },
+      reason: note,
+      requestKey: input.requestKey ?? null,
+    },
+    actor: { userId: actor.userId, name: actor.name, role: actor.role },
+  });
+  if (!res.ok) throw new ORPCError("CONFLICT", { message: STALE_MESSAGE });
+
+  // After the booking has landed. Same follow ups as the plain path.
+  await db
+    .update(schema.taskOffers)
+    .set({ status: "withdrawn", provisionalUntil: null, respondedAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(schema.taskOffers.taskId, input.taskId), inArray(schema.taskOffers.status, ["pending", "provisional"])));
+  await lockTaskLabour({ taskId: input.taskId, installerId: input.installerId, assignment: task.assignedInstallerId !== input.installerId });
+  await syncJobForTask(input.taskId, actor);
+
+  const [row] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, input.taskId));
+  return { ...row!, dates };
 }
 
 export const tasks = {
@@ -426,7 +639,7 @@ export const tasks = {
 
       const [row] = await db
         .update(schema.jobTasks)
-        .set({ ...rest, updatedAt: new Date() })
+        .set({ ...rest, updatedAt: new Date(), version: bump })
         .where(eq(schema.jobTasks.id, id))
         .returning();
       return row ? taskForStaff(row, context.actor) : row;
@@ -579,7 +792,7 @@ export const tasks = {
                 ...(input.installerId ? {} : { secondInstallerId: null }),
               }
             : {}),
-          updatedAt: new Date(),
+          updatedAt: new Date(), version: bump,
         })
         .where(eq(schema.jobTasks.id, input.id))
         .returning();
@@ -641,7 +854,7 @@ export const tasks = {
           secondInstallerId: input.secondInstallerId ?? null,
           status: "assigned",
           ...(input.payAmount !== undefined && input.payAmount !== null ? { payAmount: input.payAmount } : {}),
-          updatedAt: new Date(),
+          updatedAt: new Date(), version: bump,
         })
         .where(eq(schema.jobTasks.id, input.id))
         .returning();
@@ -907,43 +1120,9 @@ export const tasks = {
    * override is recorded here rather than the booking being refused.
    */
   book: staffOnly
-    .input(
-      z.object({
-        taskId: z.number(),
-        installerId: z.number(),
-        secondInstallerId: z.number().nullable().optional(),
-        /** The exact days, already worked out by planBooking. */
-        dates: z.array(z.string()).min(1).max(30),
-        /** Same window every day unless a day overrides it below. */
-        arrivalStart: z.string().nullable().optional(),
-        arrivalEnd: z.string().nullable().optional(),
-        /** Following days are left for the installer and the site to sort out. */
-        coordinateAfterFirst: z.boolean().default(false),
-        /** Per-day overrides: window, or a different installer for that day. */
-        perDay: z
-          .array(
-            z.object({
-              date: z.string(),
-              arrivalStart: z.string().nullable().optional(),
-              arrivalEnd: z.string().nullable().optional(),
-              coordinate: z.boolean().optional(),
-              installerId: z.number().nullable().optional(),
-            }),
-          )
-          .default([]),
-        durationHours: z.number().nullable().optional(),
-        payAmount: z.number().nullable().optional(),
-        /** Why the office booked over a clash. Stored on the affected days. */
-        overrideNote: z.string().nullable().optional(),
-        /**
-         * Day count the office put in themselves. Stored on the task so it
-         * beats the rate-based recommendation from here on, including on a
-         * later drag. Null leaves the recommendation in charge.
-         */
-        manualDays: z.number().int().min(1).max(30).nullable().optional(),
-      }),
-    )
+    .input(bookInput)
     .handler(async ({ input, context }) => {
+      if (await bookingSafetyOn()) return bookSafely(input, context.actor);
       const dates = [...new Set(input.dates)].sort();
       // Client prep (notes 18.56): an install can't be booked until the property type and furniture are answered.
       const block = await bookingBlock(input.taskId);
@@ -1000,6 +1179,7 @@ export const tasks = {
           ...(input.payAmount != null ? { payAmount: input.payAmount } : {}),
           ...(input.manualDays !== undefined ? { manualDays: input.manualDays } : {}),
           updatedAt: new Date(),
+          version: bump,
         })
         .where(eq(schema.jobTasks.id, input.taskId))
         .returning();
@@ -1105,6 +1285,21 @@ export const tasks = {
           added.push(date);
         }
 
+        // Booking safety on: an added day over a clash or a day off needs a reason, same as booking.
+        if (added.length && (await bookingSafetyOn()) && !input.overrideNote?.trim()) {
+          const problems = await dayProblems({
+            taskId: input.taskId,
+            jobId: task.jobId,
+            installerId: task.assignedInstallerId,
+            dates: added,
+          });
+          if (problems.length) {
+            throw new ORPCError("BAD_REQUEST", {
+              message: needsReasonMessage(problems, sayDate, "Open Book Installer, set the extra day there and add a reason."),
+            });
+          }
+        }
+
         await db.insert(schema.taskDays).values(
           added.map((date, i) => ({
             taskId: input.taskId,
@@ -1168,7 +1363,7 @@ export const tasks = {
            * back to the number the rates reckon and undo this.
            */
           manualDays: dates.length,
-          updatedAt: new Date(),
+          updatedAt: new Date(), version: bump,
         })
         .where(eq(schema.jobTasks.id, input.taskId))
         .returning();
@@ -1217,7 +1412,7 @@ export const tasks = {
 
     const [row] = await db
       .update(schema.jobTasks)
-      .set({ assignedInstallerId: null, secondInstallerId: null, status: "unassigned", updatedAt: new Date() })
+      .set({ assignedInstallerId: null, secondInstallerId: null, status: "unassigned", updatedAt: new Date(), version: bump })
       .where(eq(schema.jobTasks.id, input.id))
       .returning();
 
@@ -1251,7 +1446,7 @@ export const tasks = {
           status: input.status,
           ...(input.status === "in_progress" && !existing.startedAt ? { startedAt: new Date() } : {}),
           ...(input.status === "complete" ? { completedAt: new Date() } : {}),
-          updatedAt: new Date(),
+          updatedAt: new Date(), version: bump,
         })
         .where(eq(schema.jobTasks.id, input.id))
         .returning();

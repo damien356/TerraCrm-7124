@@ -5,6 +5,7 @@ import { auth, NO_LOGIN } from "../auth";
 import { db, inDemo, runOnDemo, type DemoDb } from "../database";
 import * as schema from "../database/schema";
 import { demoDatabase, ensureReviewerProfile, isPlayReviewer } from "../database/demo";
+import { parseDuties, type Duty } from "../lib/permissions";
 
 export type Role = "admin" | "office" | "field";
 
@@ -16,6 +17,8 @@ export interface Actor {
   installerId: number | null;
   /** Admin always true. Office only when an Admin switched it on. Field never. */
   canSeeCosts: boolean;
+  /** Extra duties on the profile: estimator, supervisor. Read by lib/permissions.ts only. */
+  duties: Duty[];
 }
 
 /** Old databases store "installer" for field crew. Anything unknown is treated as field (least access). */
@@ -127,6 +130,7 @@ async function actorFor(session: Session): Promise<Actor> {
       role,
       installerId: null,
       canSeeCosts: true,
+      duties: [],
     };
   }
 
@@ -151,6 +155,7 @@ async function actorFor(session: Session): Promise<Actor> {
     role,
     installerId,
     canSeeCosts: role === "admin" || (role === "office" && profile.canSeeCosts),
+    duties: parseDuties(profile.duties),
   };
 }
 

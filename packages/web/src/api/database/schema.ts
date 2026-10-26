@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, real, sqliteTable, text, unique, uniqueIndex, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, real, sqliteTable, text, unique, uniqueIndex, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 
 export * from "./auth-schema";
 
@@ -26,6 +26,12 @@ export const profiles = sqliteTable("profiles", {
   /** Office only: an Admin can switch this on so the person sees cost prices and margins. */
   canSeeCosts: integer("can_see_costs", { mode: "boolean" }).notNull().default(false),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
+  /**
+   * Duties on top of the login role, comma separated: "estimator", "supervisor"
+   * (2026-11-09-booking-foundations.sql). An internal supervisor is Terra
+   * staff. A builder's site supervisor is a contact and never has a login.
+   */
+  duties: text("duties").notNull().default(""),
   ...timestamps,
 });
 
@@ -830,6 +836,8 @@ export const jobTasks = sqliteTable(
     /** Office plan for hourly work: hours and vehicle days. Null = not planned. */
     plannedHours: real("planned_hours"),
     plannedVehicleDays: real("planned_vehicle_days"),
+    /** Bumped by every guarded write, so a save made from an old screen is refused (2026-11-09). */
+    version: integer("version").notNull().default(1),
     ...timestamps,
   },
   (t) => [
@@ -2774,6 +2782,49 @@ export const activityLog = sqliteTable(
       .default(sql`(unixepoch())`),
   },
   (t) => [index("activity_job_idx").on(t.jobId)],
+);
+
+/**
+ * Structured history next to the readable activity feed: before and after
+ * values, the reason, and the request key. Written in the same batch as the
+ * activity row it belongs to. Plain ids with no foreign keys, so deleting a
+ * job never takes its audit trail with it (2026-11-09-booking-foundations.sql).
+ */
+export const auditEvents = sqliteTable(
+  "audit_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    entityType: text("entity_type").notNull(),
+    entityId: integer("entity_id"),
+    jobId: integer("job_id"),
+    taskId: integer("task_id"),
+    action: text("action").notNull(),
+    beforeJson: text("before_json"),
+    afterJson: text("after_json"),
+    reason: text("reason"),
+    requestKey: text("request_key"),
+    actorUserId: text("actor_user_id"),
+    actorName: text("actor_name").notNull().default("System"),
+    actorRole: text("actor_role").notNull().default("system"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+  },
+  (t) => [index("audit_entity_idx").on(t.entityType, t.entityId), index("audit_job_idx").on(t.jobId)],
+);
+
+/** One row per login and request key. A repeated key gets the first answer, not a second write. */
+export const requestKeys = sqliteTable(
+  "request_keys",
+  {
+    actorUserId: text("actor_user_id").notNull(),
+    key: text("key").notNull(),
+    action: text("action").notNull(),
+    /** pending · done */
+    status: text("status").notNull().default("pending"),
+    responseJson: text("response_json"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+    completedAt: integer("completed_at", { mode: "timestamp" }),
+  },
+  (t) => [primaryKey({ columns: [t.actorUserId, t.key] }), index("request_keys_created_idx").on(t.createdAt)],
 );
 
 /* ---------------------------------------------------------------------------

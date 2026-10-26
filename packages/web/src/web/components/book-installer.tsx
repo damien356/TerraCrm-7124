@@ -82,6 +82,13 @@ export function BookInstallerPanel({
 
   const eligible = useEligible(t?.skillId ?? null, startDate, t?.crewSize ?? 1);
   const book = useBookTask();
+  // One key per open panel. With booking safety on, a double click or a retry
+  // after a dropped connection books once, not twice.
+  const requestKey = React.useRef<string>(
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`,
+  );
   // True once the office has put the day count in themselves. That number then
   // sticks on the job and beats the rate-based recommendation next time, since
   // they are the ones who know about the furniture and the stairs.
@@ -168,6 +175,9 @@ export function BookInstallerPanel({
           daysByHand || t.suggested?.basis === "manual" || (t.suggested != null && dates.length !== t.suggested.days)
             ? dates.length
             : null,
+        requestKey: requestKey.current,
+        // The copy of the task this panel is showing. A save over someone else's change is refused.
+        expectedVersion: t.version ?? null,
       })
       .then(() => {
         onBooked?.();
@@ -426,7 +436,7 @@ export function BookInstallerPanel({
               )}
             </ul>
             <p className="mt-1.5 text-[11px] text-destructive/80">
-              You can still book it. Say why and it goes on the job record.
+              You can still book it with a reason. It goes on the job record.
             </p>
             <Input
               className="mt-1.5 h-8 text-xs"
