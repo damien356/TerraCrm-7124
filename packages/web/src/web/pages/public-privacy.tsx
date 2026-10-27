@@ -7,7 +7,7 @@ import { PublicCard, PublicShell } from "../components/public-shell";
  * store listings. Wording approved by Damien 17 Oct.
  */
 
-const UPDATED = "17 October 2026";
+const UPDATED = "27 October 2026";
 
 function List({ items }: { items: React.ReactNode[] }) {
   return (
@@ -86,7 +86,7 @@ export default function PublicPrivacyPage() {
                   "Your location, only if you allow it. The app uses it to mark you arrived and left at the sites you are booked on. If you switch on location sharing, the office can see where you are while a job is running. If you switch on arrive and leave by location, the app only reports crossing in or out of a circle around each site, never your route. You can turn location off at any time in your phone settings.",
                   "Voice recordings, only when you choose to record a voice quote on site. The recording is turned into a draft quote for the office to check.",
                   "A notification token, so we can send you job alerts.",
-                  "Crash and error reports: what went wrong, the app version and the type of phone. These help us fix problems. They do not include your photos or messages.",
+                  "Crash and error reports: what went wrong, the app version, the type of phone and the phone's name (for example \"Mick's iPhone\"). If you are signed in, a report also includes your name or email address. These help us fix problems. They do not include your photos or messages.",
                 ]}
               />
             </div>
