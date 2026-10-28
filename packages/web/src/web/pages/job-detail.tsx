@@ -22,6 +22,7 @@ import { STEP_ANCHOR, SupplyStepsCard } from "../components/supply-steps";
 import { useDeliveryStatus } from "../queries/delivery";
 import { VariationsCard } from "../components/variations";
 import { JobConversation } from "../components/conversation";
+import { JobQuoteFollowups } from "../components/quote-followups";
 import { BookInstallerPanel } from "../components/book-installer";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge, TASK_STATUS_COLOUR, TASK_STATUS_LABEL, tintFor } from "../components/ui/badge";
@@ -507,7 +508,12 @@ export default function JobDetailPage() {
         </Button>
       </div>
 
-      {tab === "conversation" ? <JobConversation jobId={j.id} /> : null}
+      {tab === "conversation" ? (
+        <div className="grid gap-4">
+          <JobConversation jobId={j.id} />
+          <JobQuoteFollowups jobId={j.id} />
+        </div>
+      ) : null}
 
       <div className={tab === "job" ? "grid gap-4 lg:grid-cols-[1fr_340px]" : "hidden"}>
         <div className="grid gap-4">
@@ -679,6 +685,9 @@ export default function JobDetailPage() {
 
           {/* what goes to the client before the install, and when (notes 18.56) */}
           {supplyOnly ? null : <JobPrepCard jobId={j.id} />}
+
+          {/* quote follow-up emails, days 3, 7, 14 and 28 (28 Oct) */}
+          <JobQuoteFollowups jobId={j.id} />
 
           {/* who referred it (notes 18.47). Office sees the name only. */}
           <JobReferrerCard jobId={j.id} isAdmin={isAdmin} />

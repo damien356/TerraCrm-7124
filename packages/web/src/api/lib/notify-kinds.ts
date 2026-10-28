@@ -20,6 +20,7 @@ export const ALERT_KINDS = {
   selection_done: { label: "Client filled in flooring or colours", group: "Clients", urgent: false },
   client_text: { label: "Text from a client", group: "Clients", urgent: false },
   client_email: { label: "Email from a client", group: "Clients", urgent: false },
+  quote_followup: { label: "Quote follow-ups paused (reply, failure or review)", group: "Clients", urgent: false },
   care_wool: { label: "Is this carpet wool? (care emails)", group: "Clients", urgent: false },
   lead_new: { label: "New lead from a landing page", group: "Clients", urgent: true },
   repair_price_ready: { label: "Timber repair price back from Marc", group: "Clients", urgent: false },

@@ -203,6 +203,8 @@ export type SendJobEmail = {
   supplierId?: number | null;
   authorName: string;
   authorProfileId?: number | null;
+  /** Extra mail headers, such as List-Unsubscribe on a follow-up. Never overrides the thread headers. */
+  headers?: Record<string, string>;
 };
 
 /**
@@ -257,7 +259,7 @@ export async function sendJobEmail(args: SendJobEmail) {
     text,
     fromName: args.fromName || (mailbox === DAMIEN_MAILBOX ? DAMIEN_NAME : TEAM_NAME),
     attachments: attach.map((f) => ({ filename: f.filename, content: f.content, contentType: f.contentType })),
-    headers: { ...(jobTag ? { "X-Terra-Job": jobTag } : {}), "X-Terra-Thread": String(args.conv.id) },
+    headers: { ...(args.headers ?? {}), ...(jobTag ? { "X-Terra-Job": jobTag } : {}), "X-Terra-Thread": String(args.conv.id) },
     inReplyTo: headers.inReplyTo,
     references: headers.references,
     threadId,

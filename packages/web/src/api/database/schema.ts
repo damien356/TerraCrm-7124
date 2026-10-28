@@ -4384,6 +4384,88 @@ export const prepSends = sqliteTable(
 );
 
 /**
+ * Quote follow-up emails (28 Oct). One sequence per quote number, shared by
+ * every version, so a revised quote moves the same sequence on instead of
+ * starting a second one. See api/lib/quote-followup.ts.
+ */
+export const quoteFollowups = sqliteTable(
+  "quote_followups",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    quoteNumber: integer("quote_number").notNull(),
+    /** The latest version sent. Each email links to this one. */
+    quoteId: integer("quote_id").references(() => quotes.id, { onDelete: "set null" }),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    companyId: integer("company_id").references(() => companies.id, { onDelete: "set null" }),
+    /** Who the quote email went to, and who was copied in (comma separated, lower case). Every follow-up goes to the same people. */
+    toAddress: text("to_address"),
+    ccAddresses: text("cc_addresses").notNull().default(""),
+    /** homeowner · trade (a builder or other company: different wording, no colour questions) */
+    audience: text("audience").notNull().default("homeowner"),
+    /** YYYY-MM-DD, Brisbane: the day the latest version went out. Steps count from here. */
+    anchorDate: text("anchor_date").notNull(),
+    timeZone: text("time_zone").notNull().default("Australia/Brisbane"),
+    /** active · paused · stopped · done */
+    status: text("status").notNull().default("active"),
+    reason: text("reason"),
+    /** YYYY-MM-DD. "Contact me next month": nothing goes before this day. */
+    pausedUntil: text("paused_until"),
+    /** Replies, texts and app messages after this pause the sequence. Moved on when someone resumes it. */
+    repliesSeenAt: integer("replies_seen_at", { mode: "timestamp" }).notNull(),
+    assignedProfileId: integer("assigned_profile_id").references(() => profiles.id, { onDelete: "set null" }),
+    assignedName: text("assigned_name").notNull().default(""),
+    /** quote_request · express · inferred: what allowed it, recorded when enrolled. */
+    consentBasis: text("consent_basis").notNull().default(""),
+    enrolledByName: text("enrolled_by_name").notNull().default(""),
+    /** on_send · backlog (picked by hand from the backlog report) */
+    enrolledHow: text("enrolled_how").notNull().default("on_send"),
+    ...timestamps,
+  },
+  (t) => [unique("quote_followups_number_uq").on(t.quoteNumber), index("quote_followups_contact_idx").on(t.contactId)],
+);
+
+/**
+ * One row per follow-up step (day 3, 7, 14, 25) of a sequence. Claimed
+ * (scheduled to sending) before it goes, so a retry or a second server can
+ * never send it twice.
+ */
+export const quoteFollowupSteps = sqliteTable(
+  "quote_followup_steps",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    followupId: integer("followup_id").notNull().references(() => quoteFollowups.id, { onDelete: "cascade" }),
+    quoteNumber: integer("quote_number").notNull(),
+    /** 3 · 7 · 14 · 25 */
+    step: integer("step").notNull(),
+    /** YYYY-MM-DD in the sequence's time zone, after weekends and public holidays. */
+    dueDate: text("due_date").notNull(),
+    dueAt: integer("due_at", { mode: "timestamp" }).notNull(),
+    /** A date the customer agreed. Never moved by a revision or the spacing rules. */
+    dateAgreed: integer("date_agreed", { mode: "boolean" }).notNull().default(false),
+    /** scheduled · sending · sent · failed · skipped · stopped · needs_review */
+    status: text("status").notNull().default("scheduled"),
+    reason: text("reason"),
+    /** The version it was written for, or went out with. */
+    quoteId: integer("quote_id").references(() => quotes.id, { onDelete: "set null" }),
+    toAddress: text("to_address"),
+    /** Who was copied in when it went (comma separated). */
+    ccAddress: text("cc_address"),
+    /** Only set when someone edited the wording, or once it has gone. */
+    subject: text("subject"),
+    body: text("body"),
+    edited: integer("edited", { mode: "boolean" }).notNull().default(false),
+    messageId: integer("message_id").references(() => messages.id, { onDelete: "set null" }),
+    sentAt: integer("sent_at", { mode: "timestamp" }),
+    error: text("error"),
+    attempts: integer("attempts").notNull().default(0),
+    byName: text("by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [unique("quote_followup_steps_uq").on(t.quoteNumber, t.step), index("quote_followup_steps_due_idx").on(t.status, t.dueAt)],
+);
+
+/**
  * Notes 18.55: staff invites. One row per invite sent. The link itself is never
  * stored, only its sha256, so a copy of the database can't be used to set
  * anyone's password. A link works once, for 48 hours, and a newer invite

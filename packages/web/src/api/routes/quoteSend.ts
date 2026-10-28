@@ -12,6 +12,7 @@ import { uploadInput } from "../lib/job-mail";
 import { quoteEmailDraft, sendQuoteEmail } from "../lib/quote-email";
 import { syncJobValue } from "../lib/job-value";
 import { assertReadyToGoOut, editableQuoteOrThrow, quoteOrThrow, recordPriceHistory } from "./quotes";
+import { onQuoteSent } from "../lib/quote-followup";
 
 /* ---------------------------------------------------------------------------
  * Emailing a quote from the builder (spec 2.1): the PDF attached, plus the
@@ -140,6 +141,8 @@ export const quoteSend = {
       // Notes 18.53: a sent quote always leaves its job on the right value.
       if (quote.jobId) await syncJobValue(quote.jobId);
       await leadToQuotedOnSend({ jobId: quote.jobId, quoteNumber: out.ref, actor: context.actor });
+      // Quote follow-ups: a new version moves them on, a first send enrols when the setting is on. Never throws.
+      void onQuoteSent(quote.id, context.actor.name, { to: out.to, cc: input.cc });
       return { quote: row, to: out.to, via: out.via, url: out.url, linked: out.linked };
     }),
 

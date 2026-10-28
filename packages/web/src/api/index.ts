@@ -84,6 +84,8 @@ import { bootDailySummary, wakeDailySummary } from "./lib/notify";
 import { judgeWake } from "./lib/wake-guard";
 import { bootPrep } from "./lib/prep";
 import { prep } from "./routes/prep";
+import { quoteFollowups } from "./routes/quoteFollowups";
+import { bootQuoteFollowups } from "./lib/quote-followup";
 import { invites } from "./routes/invites";
 import { fieldPrep } from "./routes/fieldPrep";
 import { handleInboundSms, inboundSecretOk } from "./lib/sms-inbound";
@@ -134,6 +136,8 @@ export const router = {
   billTo,
   /** Client prep messages: install email, day before text, On my way (notes 18.56). */
   prep,
+  /** Quote follow-up emails, days 3, 7, 14 and 28 after a quote goes (28 Oct). Off until switched on. */
+  quoteFollowups,
   /** Staff invites: download page and one-time set-up link (notes 18.55). */
   invites,
   alerts,
@@ -430,6 +434,8 @@ bootDailySummary();
 bootPrep();
 // The after job care series, every 10 minutes. Same gate, and off until switched on in Marketing, Care.
 bootCareEngine();
+// Quote follow-ups, every 5 minutes. Same gate, and off until switched on in Settings.
+bootQuoteFollowups();
 // Timber repairs: pushes the office when Marc has not priced one in 2 hours. Same gate.
 bootTimberRepair();
 // The monthly ABN recheck on installer cards (notes 18.64). Same gate.

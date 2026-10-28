@@ -47,6 +47,7 @@ import { QUOTE_STATUS_COLOUR } from "./quotes";
 import { CancelJobButton } from "../components/job-cancel";
 import { isPhoneApp } from "../lib/phone-app";
 import { ReferralFeeRows } from "../components/referrals";
+import { QuoteFollowupsCard } from "../components/quote-followups";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
 
@@ -1251,6 +1252,9 @@ export default function QuoteBuilderPage() {
               </ul>
             </Card>
           ) : null}
+
+          {/* quote follow-up emails, days 3, 7, 14 and 28 (28 Oct). Hidden on a draft. */}
+          <QuoteFollowupsCard quoteId={q.id} />
 
           <Card>
             <CardHeader title="History" />

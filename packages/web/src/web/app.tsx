@@ -37,6 +37,7 @@ import ProfitabilityPage from "./pages/finance-profitability";
 import CallbacksReportPage from "./pages/callbacks-report";
 import TemplatesPage from "./pages/templates";
 import CarePage from "./pages/care";
+import QuoteFollowupsPage from "./pages/quote-followups";
 import SegmentsPage from "./pages/segments";
 import TerraAiPage from "./pages/terra-ai";
 import ReferrersPage from "./pages/referrers";
@@ -124,6 +125,7 @@ function App() {
               <Route path="/marketing/templates" component={TemplatesPage} />
               <Route path="/marketing/segments" component={SegmentsPage} />
               <Route path="/marketing/care" component={CarePage} />
+              <Route path="/marketing/quote-followups" component={QuoteFollowupsPage} />
               <Route path="/terra-ai" component={TerraAiPage} />
               <Route path="/ai-tray" component={AiTrayPage} />
               <Route path="/review/duplicates" component={DuplicatesPage} />

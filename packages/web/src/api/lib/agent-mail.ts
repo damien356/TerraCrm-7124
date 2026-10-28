@@ -29,6 +29,8 @@ export async function sendAsTeam(mail: OutgoingMail): Promise<TeamSendResult> {
       replyTo: SEND_FROM,
       inReplyTo: mail.inReplyTo,
       references: mail.references,
+      /* A follow-up's unsubscribe goes out as List-Unsubscribe on the relay too. */
+      unsubscribeUrl: mail.headers?.["List-Unsubscribe"]?.replace(/^<|>$/g, "") || undefined,
       attachments: mail.attachments?.map((a) => ({ filename: a.filename, content: a.content.toString("base64") })),
     });
   const out = await one(mail.to);

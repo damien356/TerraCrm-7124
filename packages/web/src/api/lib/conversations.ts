@@ -320,6 +320,9 @@ export async function logMessage(args: LogArgs) {
     })
     .where(eq(schema.conversations.id, args.conversationId));
 
+  /* A customer got in touch: any quote follow-ups for them pause at once. Never blocks the log. */
+  if (row!.direction === "in") void import("./quote-followup").then((m) => m.pauseForInbound(row!)).catch(() => null);
+
   return row!;
 }
 
