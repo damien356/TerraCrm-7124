@@ -24,3 +24,22 @@ export function useSaveSiteFill() {
     }),
   );
 }
+
+/** What changing a job's address would touch: other jobs at the site, booked crew, POs, SWMS. */
+export function useJobSiteChangeInfo(jobId: number, enabled: boolean) {
+  return useQuery({ ...orpc.siteFill.changeInfo.queryOptions({ input: { jobId } }), enabled });
+}
+
+/** Corrects the site's address, or moves the job to a different site. */
+export function useChangeJobSite() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.siteFill.change.mutationOptions({
+      onSuccess: () => {
+        for (const key of [orpc.siteFill.key(), orpc.quotes.key(), orpc.jobs.key(), orpc.sites.key(), orpc.purchasing.key()]) {
+          queryClient.invalidateQueries({ queryKey: key });
+        }
+      },
+    }),
+  );
+}

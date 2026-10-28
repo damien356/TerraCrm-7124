@@ -434,10 +434,13 @@ export function NewSiteFields({
   value,
   onChange,
   onUseExisting,
+  hideSiteId,
 }: {
   value: NewSiteDraft;
   onChange: (next: NewSiteDraft) => void;
   onUseExisting: (site: { id: number; label: string }) => void;
+  /** Left out of "Already in Ops": the site being edited. */
+  hideSiteId?: number;
 }) {
   // Typing over a picked address drops its pin: the pin belongs to Google's address, not the new text.
   const set = <K extends keyof NewSiteDraft>(k: K, v: NewSiteDraft[K]) =>
@@ -447,7 +450,7 @@ export function NewSiteFields({
   // An existing site at this street address is offered before a second one is made.
   const street = useDebounced(value.address.trim().toLowerCase(), 300);
   const existing = useSites({ search: street }, street.length >= 6);
-  const sameSites = street.length >= 6 ? (existing.data ?? []).slice(0, 4) : [];
+  const sameSites = street.length >= 6 ? (existing.data ?? []).filter((s) => s.site.id !== hideSiteId).slice(0, 4) : [];
 
   return (
     <div className="grid gap-2.5 sm:grid-cols-4">
