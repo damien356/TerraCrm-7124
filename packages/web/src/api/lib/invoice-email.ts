@@ -3,6 +3,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { clientInvoicePdfFor } from "./clientInvoicePdf";
+import { autoPushAfterEmail } from "./xero-invoices";
 import { ensureForJob } from "./conversations";
 import { pickedFiles, sendJobEmail, type MailUpload } from "./job-mail";
 import { INVOICE_KIND_LABEL } from "./client-invoices";
@@ -124,6 +125,8 @@ export async function sendInvoiceEmail(args: {
   });
   const withheld = snapshot.summary.state === "withheld" ? snapshot.summary.reason : null;
   if (withheld && fresh && !snapshot.legacy) await flagWithheld(inv, withheld, args.byName, args.actorRole);
+  // Settings, Xero: the first email can also send it to Xero. Off unless switched on. Never holds up the email.
+  if (fresh) void autoPushAfterEmail(inv.id, args.byName);
   return {
     to,
     via: sent.via,

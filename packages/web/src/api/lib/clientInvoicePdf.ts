@@ -439,6 +439,16 @@ export function pdfInputFrom(inv: InvoiceRow, snap: IssuedSnapshot): ClientInvoi
 }
 
 /**
+ * What the invoice says, for anything outside the PDF (Xero, lib/xero-invoices.ts).
+ * The saved snapshot when there is one, else as first emailed, else as it stands now.
+ */
+export async function snapshotFor(inv: InvoiceRow): Promise<{ snapshot: IssuedSnapshot; fresh: boolean }> {
+  const stored = storedSnapshot(inv);
+  if (stored) return { snapshot: stored, fresh: false };
+  return { snapshot: (await legacySnapshot(inv)) ?? (await freshSnapshot(inv)), fresh: true };
+}
+
+/**
  * The invoice PDF. A first send draws it from the job now and hands back the
  * snapshot to save once the email has gone (`fresh`). A re-send draws it from
  * the saved snapshot.

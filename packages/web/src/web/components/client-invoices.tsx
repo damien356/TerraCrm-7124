@@ -20,6 +20,7 @@ import {
   useSendSelection,
   useVoidInvoice,
 } from "../queries/clientInvoices";
+import { usePushToXero, useXeroReady } from "../queries/xero";
 
 /**
  * THE MONEY-IN SIDE OF A JOB (spec section 2).
@@ -440,8 +441,33 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
   const [raising, setRaising] = React.useState(false);
   const [notice, setNotice] = React.useState<string | null>(null);
   const bill = billing.data;
+  const xeroReady = useXeroReady();
+  const pushXero = usePushToXero();
+  const [xeroMsg, setXeroMsg] = React.useState<{ id: number; text: string; bad: boolean } | null>(null);
+  const canXero = Boolean(xeroReady.data?.ready);
 
   const rows = data.data?.invoices ?? [];
+
+  const sendToXero = (r: Invoice) => {
+    setXeroMsg(null);
+    pushXero.mutate(
+      { invoiceId: r.id },
+      {
+        onSuccess: (res) =>
+          setXeroMsg({
+            id: r.id,
+            bad: false,
+            text:
+              res.how === "linked"
+                ? "Already in Xero under this number, so it is now linked. Nothing new was made."
+                : res.how === "already"
+                  ? "Already in Xero."
+                  : `Sent to Xero${xeroReady.data?.tenantName ? ` (${xeroReady.data.tenantName})` : ""}.`,
+          }),
+        onError: (e) => setXeroMsg({ id: r.id, bad: true, text: errorText(e) }),
+      },
+    );
+  };
 
   return (
     <Card>
@@ -533,9 +559,45 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
                         {r.voidReason ? `: ${r.voidReason}` : ""}
                       </p>
                     ) : null}
+                    {r.xero ? (
+                      <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                        <Badge colour="#13B5EA">Xero</Badge>
+                        <span>
+                          {[
+                            r.xero.statusLabel,
+                            typeof r.xero.amountPaid === "number" && r.xero.amountPaid > 0 ? `${moneyExact(r.xero.amountPaid)} paid there` : null,
+                            r.xero.syncedAt ? `Checked ${dateOf(r.xero.syncedAt) ?? ""}` : null,
+                          ]
+                            .filter(Boolean)
+                            .join(". ")}
+                          .
+                        </span>
+                        <a
+                          href={r.xero.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-0.5 text-foreground underline underline-offset-2"
+                        >
+                          Open in Xero
+                          <ExternalLink className="size-3" />
+                        </a>
+                      </p>
+                    ) : null}
+                    {r.xero?.issue ? <p className="mt-0.5 text-xs text-[var(--warning)]">Xero: {r.xero.issue}</p> : null}
+                    {xeroMsg?.id === r.id ? (
+                      <p className={`mt-0.5 text-xs ${xeroMsg.bad ? "text-destructive" : "text-[var(--success)]"}`}>{xeroMsg.text}</p>
+                    ) : null}
                   </div>
+                  {canXero && !r.xero && r.status !== "void" && r.status !== "draft" && !open ? (
+                    <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+                      <XeroButton busy={pushXero.isPending && pushXero.variables?.invoiceId === r.id} onClick={() => sendToXero(r)} />
+                    </div>
+                  ) : null}
                   {open ? (
                     <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+                      {canXero && !r.xero && r.status !== "draft" ? (
+                        <XeroButton busy={pushXero.isPending && pushXero.variables?.invoiceId === r.id} onClick={() => sendToXero(r)} />
+                      ) : null}
                       {r.payUrl ? (
                         <Button
                           size="sm"
@@ -578,6 +640,15 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
       <EmailInvoiceModal invoice={emailing} jobId={jobId} onClose={() => setEmailing(null)} />
       {isAdmin ? <VoidModal invoice={voiding} onClose={() => setVoiding(null)} /> : null}
     </Card>
+  );
+}
+
+function XeroButton({ busy, onClick }: { busy: boolean; onClick: () => void }) {
+  return (
+    <Button size="sm" variant="outline" onClick={onClick} disabled={busy} title="Send this invoice to Xero, with every line">
+      {busy ? <Spinner /> : <Send className="size-3.5" />}
+      Send to Xero
+    </Button>
   );
 }
 

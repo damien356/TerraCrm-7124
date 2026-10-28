@@ -14,6 +14,7 @@ import { NotifySettingsCard } from "../components/notify-settings";
 import { PrepSettingsCard } from "../components/prep-settings";
 import { AppLinksCard } from "../components/app-links-card";
 import { LeadsSettingsTab } from "../components/leads-settings";
+import { XeroCard } from "../components/xero-card";
 import { PriceListTools } from "../components/price-import";
 import { DeleteConfirmModal, ProductDeleteTools } from "../components/product-delete";
 import { QuoteEmailCard } from "../components/quote-email-settings";
@@ -116,7 +117,7 @@ const UNITS = ["m2", "lm", "each", "roll", "box", "hour"];
 /** Item 9. How a product is sold, which decides the wastage and labour sums on a quote. */
 const SOLD_AS_LABEL: Record<string, string> = { box: "Box", broadloom: "Broadloom", "": "Neither" };
 
-type Tab = "skills" | "statuses" | "products" | "labour" | "business" | "leads" | "notifications" | "prep" | "staffapp" | "email" | "backups";
+type Tab = "skills" | "statuses" | "products" | "labour" | "business" | "leads" | "notifications" | "prep" | "staffapp" | "email" | "xero" | "backups";
 
 const TABS: Array<{ id: Tab; label: string; blurb: string }> = [
   { id: "skills", label: "Skills", blurb: "What a task can be. Installers get ticked against these." },
@@ -158,6 +159,11 @@ const TABS: Array<{ id: Tab; label: string; blurb: string }> = [
     blurb: "The mailboxes the agent reads supplier invoices from, and whether it may chase missing ones by itself.",
   },
   {
+    id: "xero",
+    label: "Xero",
+    blurb: "Send client invoices to Xero and read back what has been paid. Supplier bills still go email to Hubdoc to Xero.",
+  },
+  {
     id: "backups",
     label: "Your data",
     blurb: "Pull everything out as CSV or one JSON file, any time. Your data is yours.",
@@ -169,6 +175,8 @@ function initialTab(): Tab {
   const params = new URLSearchParams(window.location.search);
   // Google's sign-in sends Damien back to /settings?mail=…#email-agent.
   if (window.location.hash === "#email-agent" || params.has("mail")) return "email";
+  // Xero's sign-in sends Damien back to /settings?xero=…#xero.
+  if (window.location.hash === "#xero" || params.has("xero")) return "xero";
   const wanted = params.get("tab");
   return TABS.some((t) => t.id === wanted) ? (wanted as Tab) : "skills";
 }
@@ -212,6 +220,7 @@ export default function SettingsPage() {
       {tab === "prep" ? <PrepSettingsCard /> : null}
       {tab === "staffapp" ? <AppLinksCard /> : null}
       {tab === "email" ? <EmailAgentCard /> : null}
+      {tab === "xero" ? <XeroCard /> : null}
       {tab === "backups" ? <BackupsTab /> : null}
     </Page>
   );

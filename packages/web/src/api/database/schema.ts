@@ -1952,6 +1952,20 @@ export const invoices = sqliteTable(
      * invoice's own payments move. Null until the first email goes.
      */
     issuedSnapshot: text("issued_snapshot"),
+    /**
+     * What Xero last said about this invoice (2026-11-12-xero.sql), read back
+     * by lib/xero-invoices.ts. DRAFT · SUBMITTED · AUTHORISED · PAID · VOIDED · DELETED.
+     */
+    xeroStatus: text("xero_status"),
+    xeroAmountPaid: real("xero_amount_paid"),
+    xeroAmountDue: real("xero_amount_due"),
+    xeroPushedAt: integer("xero_pushed_at", { mode: "timestamp" }),
+    xeroPushedByName: text("xero_pushed_by_name"),
+    xeroSyncedAt: integer("xero_synced_at", { mode: "timestamp" }),
+    /** Plain words when Ops and Xero disagree, e.g. voided in Xero but not in Ops. Null when they agree. */
+    xeroIssue: text("xero_issue"),
+    /** The Xero organisation xero_invoice_id belongs to. Links to any other are let go when the organisation changes. */
+    xeroTenantId: text("xero_tenant_id"),
     ...timestamps,
   },
   (t) => [
@@ -4529,4 +4543,65 @@ export const aiActions = sqliteTable(
     index("ai_actions_job_idx").on(t.jobId),
     index("ai_actions_po_idx").on(t.poId),
   ],
+);
+
+/* ---------------------------------------------------------------------------
+ * Xero (Damien, 28 Oct, 2026-11-12-xero.sql). Ops pushes client invoices to
+ * Xero and reads them back. Nothing else is written to Xero: no bills, no
+ * payments, no voids. Supplier bills reach Xero through Hubdoc, never Ops.
+ * ------------------------------------------------------------------------- */
+
+/** One row: the organisation Ops is connected to. The token is sealed and never leaves the server. */
+export const xeroConnection = sqliteTable("xero_connection", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  /** The organisation invoices go to. Null until one is picked. */
+  tenantId: text("tenant_id"),
+  tenantName: text("tenant_name").notNull().default(""),
+  tenantType: text("tenant_type").notNull().default(""),
+  /** Every organisation this sign-in can reach, as JSON [{tenantId, tenantName, tenantType, connectionId}]. */
+  tenantsJson: text("tenants_json").notNull().default("[]"),
+  xeroConnectionId: text("xero_connection_id"),
+  /** AES-GCM sealed with MAIL_TOKEN_KEY. Xero hands back a new one on every refresh. */
+  refreshTokenSealed: text("refresh_token_sealed"),
+  scopes: text("scopes").notNull().default(""),
+  connectedByProfileId: integer("connected_by_profile_id").references(() => profiles.id, { onDelete: "set null" }),
+  connectedAt: integer("connected_at", { mode: "timestamp" }),
+  lastSyncAt: integer("last_sync_at", { mode: "timestamp" }),
+  lastError: text("last_error"),
+  ...timestamps,
+});
+
+/** Every push, link, read back and connect. */
+export const xeroSyncLog = sqliteTable(
+  "xero_sync_log",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** connect · disconnect · push · link · pull · error */
+    kind: text("kind").notNull(),
+    ok: integer("ok", { mode: "boolean" }).notNull().default(true),
+    invoiceId: integer("invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+    xeroId: text("xero_id"),
+    detail: text("detail").notNull().default(""),
+    byName: text("by_name").notNull().default("System"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+  },
+  (t) => [index("xero_sync_log_invoice_idx").on(t.invoiceId), index("xero_sync_log_created_idx").on(t.createdAt)],
+);
+
+/** Which Xero contact a Terra contact or company bills to. `billToKey` is "contact:12" or "company:3". */
+export const xeroContactLinks = sqliteTable(
+  "xero_contact_links",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    tenantId: text("tenant_id").notNull(),
+    billToKey: text("bill_to_key").notNull(),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "cascade" }),
+    companyId: integer("company_id").references(() => companies.id, { onDelete: "cascade" }),
+    xeroContactId: text("xero_contact_id").notNull(),
+    xeroName: text("xero_name").notNull().default(""),
+    /** matched · created */
+    how: text("how").notNull().default("matched"),
+    ...timestamps,
+  },
+  (t) => [unique("xero_contact_links_uq").on(t.tenantId, t.billToKey)],
 );

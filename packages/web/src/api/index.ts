@@ -86,6 +86,9 @@ import { bootPrep } from "./lib/prep";
 import { prep } from "./routes/prep";
 import { quoteFollowups } from "./routes/quoteFollowups";
 import { bootQuoteFollowups } from "./lib/quote-followup";
+import { xero } from "./routes/xero";
+import { finishXeroConnect } from "./lib/xero";
+import { bootXeroSync } from "./lib/xero-invoices";
 import { invites } from "./routes/invites";
 import { fieldPrep } from "./routes/fieldPrep";
 import { handleInboundSms, inboundSecretOk } from "./lib/sms-inbound";
@@ -222,6 +225,8 @@ export const router = {
   swmsLib,
   /** The email agent's three mailboxes. Read only, team@ can also send. */
   mail,
+  /** Xero: the connection, invoices pushed across, and what Xero says back. */
+  xero,
   /** Job and quote people, duplicate cards, company retype, and referral value. */
   people,
   /** Address suggestions for a new site. The Google key stays on the server. */
@@ -394,6 +399,23 @@ app.get("/api/mail/oauth/callback", async (c) => {
   }
 });
 
+// Xero sends the sign-in back here. Checks happen in finishXeroConnect: fresh state, and the
+// scopes an invoice push needs with nothing beyond what was asked for.
+app.get("/api/xero/oauth/callback", async (c) => {
+  const back = (q: Record<string, string>) => c.redirect(`/settings?${new URLSearchParams(q)}#xero`, 302);
+  const err = c.req.query("error");
+  if (err) return back({ xero: "error", reason: err === "access_denied" ? "Sign-in was cancelled." : err });
+  const code = c.req.query("code");
+  const state = c.req.query("state");
+  if (!code || !state) return back({ xero: "error", reason: "Xero did not send a code back." });
+  try {
+    const r = await finishXeroConnect(code, state);
+    return back({ xero: r.choose ? "choose" : "connected", org: r.tenantName ?? "" });
+  } catch (e) {
+    return back({ xero: "error", reason: String((e as Error).message ?? e).slice(0, 300) });
+  }
+});
+
 // The unsubscribe link in every marketing email. The GET only shows a button, because mail
 // scanners open every link. The POST unsubscribes, and is also Gmail's one-click (RFC 8058).
 app.get("/api/unsubscribe/:token", (c) => {
@@ -436,6 +458,8 @@ bootPrep();
 bootCareEngine();
 // Quote follow-ups, every 5 minutes. Same gate, and off until switched on in Settings.
 bootQuoteFollowups();
+// Reads invoices back from Xero every 30 minutes. Same gate, and idle until Xero is connected.
+bootXeroSync();
 // Timber repairs: pushes the office when Marc has not priced one in 2 hours. Same gate.
 bootTimberRepair();
 // The monthly ABN recheck on installer cards (notes 18.64). Same gate.

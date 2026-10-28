@@ -154,8 +154,32 @@ export function shapeInvoice(i: InvoiceRow) {
     voidReason: i.voidReason,
     quoteId: i.quoteId,
     createdAt: i.createdAt,
+    /** What Xero last said (lib/xero-invoices.ts). Null until it is in Xero. */
+    xero: i.xeroInvoiceId
+      ? {
+          id: i.xeroInvoiceId,
+          status: i.xeroStatus,
+          statusLabel: XERO_STATUS_LABEL[i.xeroStatus ?? ""] ?? "In Xero",
+          amountPaid: i.xeroAmountPaid,
+          amountDue: i.xeroAmountDue,
+          syncedAt: i.xeroSyncedAt,
+          pushedAt: i.xeroPushedAt,
+          pushedByName: i.xeroPushedByName,
+          issue: i.xeroIssue,
+          url: `https://go.xero.com/AccountsReceivable/View.aspx?InvoiceID=${encodeURIComponent(i.xeroInvoiceId)}`,
+        }
+      : null,
   };
 }
+
+const XERO_STATUS_LABEL: Record<string, string> = {
+  DRAFT: "Draft in Xero",
+  SUBMITTED: "Awaiting approval in Xero",
+  AUTHORISED: "Awaiting payment in Xero",
+  PAID: "Paid in Xero",
+  VOIDED: "Voided in Xero",
+  DELETED: "Deleted in Xero",
+};
 
 export async function invoicesForJob(jobId: number) {
   const rows = await db.select().from(schema.invoices).where(eq(schema.invoices.jobId, jobId)).orderBy(asc(schema.invoices.seq));
