@@ -169,7 +169,11 @@ export function XeroCard() {
                     {s.connectedAt ? ` · connected ${when(s.connectedAt)}` : ""}
                   </p>
                 ) : (
-                  <p className="mt-0.5 text-xs text-muted-foreground">On Xero's screen, tick Terra Flooring, not the Demo Company.</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {s.demoOnly
+                      ? "Test copy: on Xero's screen, tick only Demo Company (AU). Any other organisation is refused."
+                      : "On Xero's screen, tick Terra Flooring, not the Demo Company."}
+                  </p>
                 )}
                 {s.lastError ? (
                   <p className="mt-1 flex items-start gap-1.5 text-xs text-destructive">
