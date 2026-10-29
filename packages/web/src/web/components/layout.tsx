@@ -350,6 +350,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // index.html carries the client-facing "Terra Flooring" title for link previews. Staff tabs say Terra Ops.
+  React.useEffect(() => {
+    document.title = "Terra Ops";
+  }, []);
+
   if (isLogin) return <>{children}</>;
 
   if (session.isPending) return <Loading label="Loading Terra Ops…" />;
