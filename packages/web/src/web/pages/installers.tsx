@@ -6,6 +6,7 @@ import { Button } from "../components/ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { InstallerRatesTab } from "../components/labour";
+import { InstallerAccountTab } from "../components/installer-account";
 import {
   useCreateInstaller,
   useInstaller,
@@ -551,7 +552,7 @@ function cardForm(installer: InstallerRow) {
 type CardForm = ReturnType<typeof cardForm>;
 
 export function InstallerPanel({ id, onClose }: { id: number; onClose: () => void }) {
-  const [panel, setPanel] = React.useState<"card" | "rates" | "invoicing">("card");
+  const [panel, setPanel] = React.useState<"card" | "rates" | "invoicing" | "account">("card");
   const detail = useInstaller(id);
   const bootstrap = useBootstrap();
   const update = useUpdateInstaller();
@@ -615,7 +616,7 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
       onClose={onClose}
       title={form?.name.trim() || installer?.name || "Installer"}
       subtitle="Skills, rates and availability. He can only ever be offered a task he's ticked for."
-      width={panel === "rates" ? "max-w-5xl" : "max-w-3xl"}
+      width={panel === "rates" ? "max-w-5xl" : panel === "account" ? "max-w-4xl" : "max-w-3xl"}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
@@ -637,6 +638,7 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
           { id: "card", label: "His card" },
           { id: "rates", label: "Rates" },
           { id: "invoicing", label: "Invoicing" },
+          { id: "account", label: "Account" },
         ] as const).map((t) => (
           <button
             key={t.id}
@@ -654,6 +656,7 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
       </div>
 
       {panel === "rates" ? <InstallerRatesTab installerId={id} /> : null}
+      {panel === "account" ? <InstallerAccountTab id={id} /> : null}
       {panel === "invoicing" ? <InstallerInvoicingTab id={id} cardNames={form ? { name: form.name, fullName: form.fullName } : null} /> : null}
 
       {panel === "card" && (detail.isLoading || !form) ? <Loading /> : null}

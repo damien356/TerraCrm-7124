@@ -379,6 +379,22 @@ function xeroMessages(json: unknown): string[] {
   return [...new Set(out)];
 }
 
+/** The only payment write: a contra, switched on for this server, to the clearing account only. */
+export function contraWriteAllowed(path: string, method: string, init: { body?: unknown; contraAccount?: string }) {
+  if (process.env.XERO_CONTRA_POSTING !== "on") return false;
+  if (path !== "Payments" || method !== "PUT" || !init.contraAccount) return false;
+  const pays = (init.body as { Payments?: Array<Record<string, any>> } | undefined)?.Payments;
+  if (!Array.isArray(pays) || pays.length !== 1) return false;
+  return pays.every(
+    (p) =>
+      p.Account?.Code === init.contraAccount &&
+      typeof p.Invoice?.InvoiceID === "string" &&
+      typeof p.Amount === "number" &&
+      p.Amount > 0 &&
+      Object.keys(p).every((k) => ["Invoice", "Account", "Date", "Amount", "Reference"].includes(k)),
+  );
+}
+
 /**
  * One Accounting API call for the picked organisation. 401 refreshes once.
  * 429 waits as long as Xero asks, up to 30 seconds, twice. Writes carry an
@@ -397,12 +413,18 @@ export async function xeroApi<T = Record<string, unknown>>(
      * left alone and only this call fails.
      */
     narrow403?: boolean;
+    /**
+     * Task H: the one payment write Ops may ever make, a contra. Only with
+     * XERO_CONTRA_POSTING=on on the server, only PUT Payments, and only when
+     * every payment goes to this clearing account against one document.
+     */
+    contraAccount?: string;
   } = {},
 ): Promise<T> {
   const row = await xeroReady();
   if (!row?.tenantId) throw new XeroNotConnected("Xero is not connected, or no organisation is picked.");
   const method = init.method ?? "GET";
-  if (method !== "GET" && !/^(Invoices|Contacts)$/.test(path)) throw new Error(`Ops does not write ${path} to Xero.`);
+  if (method !== "GET" && !/^(Invoices|Contacts)$/.test(path) && !contraWriteAllowed(path, method, init)) throw new Error(`Ops does not write ${path} to Xero.`);
   const q = init.query ? `?${new URLSearchParams(init.query)}` : "";
   const url = `${apiBase()}/api.xro/2.0/${path}${q}`;
   let tries = 0;

@@ -4616,6 +4616,116 @@ export const xeroPaymentReads = sqliteTable(
   (t) => [unique("xero_payment_reads_uq").on(t.tenantId, t.xeroPaymentId), index("xero_payment_reads_invoice_idx").on(t.invoiceId)],
 );
 
+/**
+ * Task H (29 Oct): an installer who also buys from Terra. One installer, one
+ * existing contact or company he is billed as. Made only when a person
+ * confirms they are the same legal person or business: on a matching ABN, or
+ * with a reason typed. Never made by itself, never merges anything. Being a
+ * buyer gives his own login nothing: his profile stays field.
+ */
+export const installerBuyerLinks = sqliteTable(
+  "installer_buyer_links",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    installerId: integer("installer_id")
+      .notNull()
+      .references(() => installers.id, { onDelete: "cascade" }),
+    /** contact · company */
+    billToType: text("bill_to_type").notNull(),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "cascade" }),
+    companyId: integer("company_id").references(() => companies.id, { onDelete: "cascade" }),
+    /** abn_match · confirmed · created (made from his installer card) */
+    basis: text("basis").notNull(),
+    reason: text("reason"),
+    /** What both sides said when it was confirmed. */
+    installerAbn: text("installer_abn"),
+    installerLegalName: text("installer_legal_name"),
+    buyerName: text("buyer_name").notNull().default(""),
+    buyerAbn: text("buyer_abn"),
+    confirmedByName: text("confirmed_by_name").notNull(),
+    confirmedByUserId: text("confirmed_by_user_id"),
+    confirmedAt: integer("confirmed_at", { mode: "timestamp" }).notNull(),
+    /** The one Xero contact his bills and invoices are on, picked by a person (contra workflow). */
+    xeroTenantId: text("xero_tenant_id"),
+    xeroContactId: text("xero_contact_id"),
+    xeroContactName: text("xero_contact_name"),
+    xeroPinnedByName: text("xero_pinned_by_name"),
+    xeroPinnedAt: integer("xero_pinned_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (t) => [
+    unique("installer_buyer_links_installer_uq").on(t.installerId),
+    unique("installer_buyer_links_contact_uq").on(t.contactId),
+    unique("installer_buyer_links_company_uq").on(t.companyId),
+  ],
+);
+
+/**
+ * Task H: a contra. Part of one client invoice (they owe us) is settled
+ * against one contractor bill in Xero (we owe them). Both stay in Xero in
+ * full with their own tax. Two payments go to the contra clearing account,
+ * one on each. Never a bank payment. Behind CONTRA_WORKFLOW=on; posting also
+ * needs XERO_CONTRA_POSTING=on.
+ * status: draft · approved · posting · incomplete · posted · confirmed · cancelled
+ */
+export const xeroContras = sqliteTable(
+  "xero_contras",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** From the form that made it. A second click or retry finds this row. */
+    requestKey: text("request_key").notNull(),
+    tenantId: text("tenant_id").notNull(),
+    installerId: integer("installer_id")
+      .notNull()
+      .references(() => installers.id, { onDelete: "restrict" }),
+    invoiceId: integer("invoice_id")
+      .notNull()
+      .references(() => invoices.id, { onDelete: "restrict" }),
+    invoiceNumber: text("invoice_number").notNull(),
+    xeroInvoiceId: text("xero_invoice_id").notNull(),
+    billXeroId: text("bill_xero_id").notNull(),
+    billNumber: text("bill_number").notNull().default(""),
+    installerInvoiceId: integer("installer_invoice_id").references(() => installerInvoices.id, { onDelete: "set null" }),
+    amount: real("amount").notNull(),
+    contraAccount: text("contra_account").notNull(),
+    /** YYYY-MM-DD, Brisbane. The date both Xero payments carry. */
+    paidOn: text("paid_on").notNull(),
+    status: text("status").notNull().default("draft"),
+    /** What Xero said when it was prepared. */
+    invoiceDueBefore: real("invoice_due_before").notNull(),
+    billDueBefore: real("bill_due_before").notNull(),
+    billTotal: real("bill_total").notNull().default(0),
+    invoiceTotal: real("invoice_total").notNull().default(0),
+    agreementHow: text("agreement_how").notNull(),
+    agreementNote: text("agreement_note").notNull(),
+    agreementOn: text("agreement_on").notNull(),
+    sameEntityBasis: text("same_entity_basis").notNull(),
+    preparedByName: text("prepared_by_name").notNull(),
+    preparedAt: integer("prepared_at", { mode: "timestamp" }).notNull(),
+    approvedByName: text("approved_by_name"),
+    approvedAt: integer("approved_at", { mode: "timestamp" }),
+    approvalText: text("approval_text"),
+    invPaymentId: text("inv_payment_id"),
+    invPostedAt: integer("inv_posted_at", { mode: "timestamp" }),
+    billPaymentId: text("bill_payment_id"),
+    billPostedAt: integer("bill_posted_at", { mode: "timestamp" }),
+    confirmedAt: integer("confirmed_at", { mode: "timestamp" }),
+    cancelledByName: text("cancelled_by_name"),
+    lastError: text("last_error"),
+    ...timestamps,
+  },
+  (t) => [
+    unique("xero_contras_request_uq").on(t.requestKey),
+    index("xero_contras_installer_idx").on(t.installerId),
+    uniqueIndex("xero_contras_open_invoice_uq")
+      .on(t.invoiceId)
+      .where(sql`status in ('draft','approved','posting','incomplete','posted')`),
+    uniqueIndex("xero_contras_open_bill_uq")
+      .on(t.billXeroId)
+      .where(sql`status in ('draft','approved','posting','incomplete','posted')`),
+  ],
+);
+
 /** Which Xero contact a Terra contact or company bills to. `billToKey` is "contact:12" or "company:3". */
 export const xeroContactLinks = sqliteTable(
   "xero_contact_links",

@@ -11,6 +11,7 @@ import { settings } from "./routes/settings";
 import { contacts } from "./routes/contacts";
 import { companies, sites } from "./routes/companies";
 import { installers } from "./routes/installers";
+import { installerAccount } from "./routes/installerAccount";
 import { availability } from "./routes/availability";
 import { jobs } from "./routes/jobs";
 import { tasks } from "./routes/tasks";
@@ -113,6 +114,7 @@ export const router = {
   companies,
   sites,
   installers,
+  installerAccount,
   /** Notes 18.64: ABN Lookup on installer cards, Admin only. */
   abnCheck,
   /** Blackout dates — typed in plain English, enforced server-side. */
