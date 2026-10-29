@@ -750,7 +750,7 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
                 <span className="ml-2 text-xs text-muted-foreground">{form.starRating} of 5</span>
               </div>
             </Field>
-            <Field label="Materials credit limit" hint="Dollar ceiling on account. Blocked once he hits it. 0 = no account.">
+            <Field label="Materials credit limit" hint="For your reference only. Ops does not check or block anything against this limit yet. 0 = no account.">
               <Input
                 type="number"
                 min="0"
