@@ -54,6 +54,15 @@ export async function salesByCategory(range: { from?: string | null; to?: string
   const pays = ids.length ? await db.select().from(schema.invoicePayments).where(inArray(schema.invoicePayments.invoiceId, ids)) : [];
   const byInvoice = new Map<number, typeof pays>();
   for (const p of pays) byInvoice.set(p.invoiceId, [...(byInvoice.get(p.invoiceId) ?? []), p]);
+  // Contras settled in Xero. Used for the part paid before payments were kept one by one.
+  const contras = ids.length
+    ? await db
+        .select({ invoiceId: schema.xeroContras.invoiceId, amount: schema.xeroContras.amount })
+        .from(schema.xeroContras)
+        .where(and(inArray(schema.xeroContras.invoiceId, ids), eq(schema.xeroContras.status, "confirmed")))
+    : [];
+  const contraByInvoice = new Map<number, number>();
+  for (const c of contras) contraByInvoice.set(c.invoiceId, r2((contraByInvoice.get(c.invoiceId) ?? 0) + c.amount));
 
   const blank = () => ({ count: 0, total: 0, gst: 0, exGst: 0, paid: zeroSplit(), received: 0, owing: 0 });
   const categories: Record<SalesCategory, ReturnType<typeof blank>> = { customer: blank(), installer_materials: blank() };
@@ -79,8 +88,17 @@ export async function salesByCategory(range: { from?: string | null; to?: string
     const mine = byInvoice.get(inv.id) ?? [];
     for (const p of mine) addTo(split, p.method, p.amount);
     // Paid before payments were kept one by one.
-    const earlier = r2(inv.amountPaid - mine.reduce((a, p) => a + p.amount, 0));
-    if (earlier > 0.005) addTo(split, inv.paymentMethod === "part_contra" ? null : inv.paymentMethod, earlier);
+    let earlier = r2(inv.amountPaid - mine.reduce((a, p) => a + p.amount, 0));
+    if (earlier > 0.005) {
+      // A contra confirmed in Xero but not in the payment rows is known to be contra.
+      const contraInRows = mine.filter((p) => p.method === "contra").reduce((a, p) => a + p.amount, 0);
+      const contraEarlier = r2(Math.min(earlier, Math.max(0, (contraByInvoice.get(inv.id) ?? 0) - contraInRows)));
+      if (contraEarlier > 0.005) {
+        addTo(split, "contra", contraEarlier);
+        earlier = r2(earlier - contraEarlier);
+      }
+      if (earlier > 0.005) addTo(split, inv.paymentMethod === "part_contra" ? null : inv.paymentMethod, earlier);
+    }
     const owing = r2(Math.max(0, inv.total - inv.amountPaid));
 
     const c = categories[cat];
