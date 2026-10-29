@@ -49,6 +49,24 @@ export const approvalPhrase = (amount: number) => `CONTRA ${r2(amount).toFixed(2
 
 /* ------------------------------ Xero reads -------------------------------- */
 
+/**
+ * Why this code can not be the contra clearing account in the connected
+ * organisation, or null when it can. Xero's own system accounts (Historical
+ * Adjustment, Rounding, GST and so on) and bank accounts are refused, and the
+ * account must take payments.
+ */
+export async function contraAccountProblem(code: string): Promise<string | null> {
+  const r = await xeroApi<{ Accounts?: Array<{ Code?: string; Name?: string; Type?: string; Status?: string; EnablePaymentsToAccount?: boolean; SystemAccount?: string | null }> }>("Accounts", {
+    query: { where: `Code=="${code.replace(/[^A-Za-z0-9.-]/g, "")}"` },
+  });
+  const a = (r.Accounts ?? []).find((x) => x.Code === code && x.Status !== "ARCHIVED");
+  if (!a) return `Xero has no active account ${code} for contras. Check the code in Xero's chart of accounts.`;
+  if (a.Type === "BANK") return `Account ${code} (${a.Name}) is a bank account. A contra goes through a clearing account, not a bank account.`;
+  if (a.SystemAccount) return `Account ${code} (${a.Name}) is one of Xero's own system accounts. Use a clearing account your bookkeeper sets up.`;
+  if (!a.EnablePaymentsToAccount) return `Account ${code} (${a.Name}) does not take payments. Tick "Enable payments to this account" on it in Xero first.`;
+  return null;
+}
+
 type XContact = { ContactID: string; Name: string; EmailAddress?: string; TaxNumber?: string; ContactStatus?: string; IsSupplier?: boolean; IsCustomer?: boolean };
 export type XDoc = {
   InvoiceID: string;
@@ -240,6 +258,8 @@ export async function previewContra(input: { installerId: number; invoiceId: num
   const { link, contactId } = await pinned(input.installerId);
   const { contraAccount } = await xeroSettings();
   if (!contraAccount) throw bad("Set the contra clearing account in Settings, Xero first. Your bookkeeper confirms the code.");
+  const accountProblem = await contraAccountProblem(contraAccount);
+  if (accountProblem) throw bad(accountProblem);
   const mine = await invoicesForLink(link);
   const inv = mine.find((r) => r.id === input.invoiceId);
   if (!inv) throw bad("That invoice is not billed to him.");
@@ -305,7 +325,12 @@ export async function prepareContra(
   if (input.agreement.note.trim().length < 8) throw bad("Say how he agreed, for example the email or text he sent.");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.agreement.on)) throw bad("Give the date he agreed.");
   const p = await previewContra(input);
-  if (!p.ok) throw bad(p.problems.join(" "));
+  if (!p.ok) {
+    // A second click that lands after the first one saved sees its own contra as "still open". Hand that one back.
+    const [first] = await db.select().from(schema.xeroContras).where(eq(schema.xeroContras.requestKey, input.requestKey));
+    if (first) return first;
+    throw bad(p.problems.join(" "));
+  }
   if (p.fingerprint !== input.fingerprint) throw bad("Something changed in Xero since the preview. Check the preview again.");
   if (Math.abs(p.amount - r2(input.amount)) > 0.001) throw bad("The amount changed. Check the preview again.");
   const tenantId = await tenant();

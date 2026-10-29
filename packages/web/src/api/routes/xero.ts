@@ -29,6 +29,7 @@ import {
   XERO_STATUS_KEY,
   xeroSettings,
 } from "../lib/xero-invoices";
+import { contraAccountProblem } from "../lib/contras";
 
 /**
  * Settings, Xero. Connect the Terra Ops Xero app, pick the organisation, and
@@ -146,15 +147,11 @@ export const xero = {
           if (!a) throw new Error(`Xero has no active account ${input.accountCode}. Check the code in Xero's chart of accounts.`);
           if (!["REVENUE", "SALES", "OTHERINCOME"].includes(a.Type ?? "")) throw new Error(`Account ${input.accountCode} (${a.Name}) is not an income account in Xero.`);
           accountName = `${a.Code} ${a.Name}`;
-          if (contra && contra !== before.contraAccount) {
-            const c = await xeroApi<{ Accounts?: Array<{ Code?: string; Name?: string; Type?: string; Status?: string; EnablePaymentsToAccount?: boolean }> }>("Accounts", {
-              query: { where: `Code=="${contra}"` },
-            });
-            const ca = (c.Accounts ?? []).find((x) => x.Code === contra && x.Status !== "ARCHIVED");
-            if (!ca) throw new Error(`Xero has no active account ${contra} for contras. Check the code in Xero's chart of accounts.`);
-            if (ca.Type === "BANK") throw new Error(`Account ${contra} (${ca.Name}) is a bank account. A contra goes through a clearing account, not a bank account.`);
-            if (!ca.EnablePaymentsToAccount) throw new Error(`Account ${contra} (${ca.Name}) does not take payments. Tick "Enable payments to this account" on it in Xero first.`);
+          // Checked on every save, not only when it changes: a code saved before Xero was connected was never checked.
+          if (contra) {
             if (contra === input.accountCode) throw new Error("The contra account can not be the sales account.");
+            const problem = await contraAccountProblem(contra);
+            if (problem) throw new Error(problem);
           }
         } catch (e) {
           throw fail(e);
