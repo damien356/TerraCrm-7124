@@ -249,7 +249,7 @@ export async function finishXeroConnect(code: string, state: string) {
   const all = await listConnections(tok.access_token);
   if (!all.length) {
     await revoke(tok.refresh_token);
-    throw new Error("No Xero organisation was picked. Connect again and choose Terra Flooring.");
+    throw new Error(testPaymentsScope() ? "No Xero organisation was picked. Connect again and tick Demo Company (AU)." : "No Xero organisation was picked. Connect again and choose Terra Flooring.");
   }
   if (all.some((t) => notDemo(t.tenantName))) {
     await revoke(tok.refresh_token);

@@ -147,11 +147,23 @@ export function XeroCard() {
 
             {!s.configured ? (
               <div className="rounded-md border border-[var(--warning)]/35 bg-[var(--warning)]/[0.06] px-3 py-3 text-[13px] text-muted-foreground">
-                <p className="font-semibold text-foreground">The Terra Ops Xero app isn't added yet.</p>
-                <p className="mt-1">
-                  At developer.xero.com, make a Web app called Terra Ops, on the free Starter plan, with this redirect URI. Then its Client ID and
-                  secret are added to Ops through the secure form, never in chat.
-                </p>
+                {s.demoOnly ? (
+                  <>
+                    <p className="font-semibold text-foreground">Test copy. The Terra Ops Test Xero app isn't added yet.</p>
+                    <p className="mt-1">
+                      At developer.xero.com, make a separate Web app called Terra Ops Test with this redirect URI. Don't use the live Terra OPS app
+                      or any old app. Its Client ID and secret are added through the secure form, never in chat.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-semibold text-foreground">The Terra Ops Xero app isn't added yet.</p>
+                    <p className="mt-1">
+                      At developer.xero.com, make a Web app called Terra Ops, on the free Starter plan, with this redirect URI. Then its Client ID and
+                      secret are added to Ops through the secure form, never in chat.
+                    </p>
+                  </>
+                )}
                 <RedirectUri uri={s.redirectUri} copied={copied} onCopy={() => setCopied(true)} />
               </div>
             ) : null}
@@ -214,7 +226,7 @@ export function XeroCard() {
             </div>
 
             {s.connected && s.tenants.length > 1 ? (
-              <Field label="Invoices go to" hint="Xero lets this sign-in reach more than one organisation. Pick Terra Flooring.">
+              <Field label="Invoices go to" hint={s.demoOnly ? "Test copy: pick Demo Company (AU). Any other organisation is refused." : "Xero lets this sign-in reach more than one organisation. Pick Terra Flooring."}>
                 <Select
                   value={s.tenant?.id ?? ""}
                   disabled={choose.isPending}
