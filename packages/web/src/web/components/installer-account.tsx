@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link, useLocation } from "wouter";
+import { Link } from "wouter";
 import { Check } from "lucide-react";
 import { Loading, Spinner } from "./ui/card";
 import { Badge } from "./ui/badge";
@@ -18,7 +18,7 @@ import {
   useInstallerAccount,
   useLinkBuyer,
   usePinXero,
-  useStartMaterials,
+  useMaterialsInvoice,
   useUnlinkBuyer,
   useXeroBills,
   useXeroContactsForInstaller,
@@ -32,7 +32,7 @@ import {
  *
  * 1. Billed as: the one contact or company he is billed as. Ops suggests
  *    records, the office ticks that it is the same legal person or business.
- * 2. Bill him for materials: a supply quote to that record, deposit 0.
+ * 2. Bill him for materials: one step, on an internal supply only job.
  * 3. He owes us, we owe him.
  * 4. Contras (Admin, and only when the server switches them on).
  * ------------------------------------------------------------------------- */
@@ -325,37 +325,146 @@ function BilledAs({ installerId, data }: { installerId: number; data: Overview }
 
 /* ---------------------------- materials ------------------------------ */
 
+type Line = { description: string; qty: string; unit: string; price: string };
+const blankLine = (): Line => ({ description: "", qty: "1", unit: "each", price: "" });
+const num = (v: string) => {
+  const n = Number(v.replace(/[$,\s]/g, ""));
+  return Number.isFinite(n) ? n : NaN;
+};
+
 function Materials({ installerId, data }: { installerId: number; data: Overview }) {
-  const start = useStartMaterials();
-  const [, navigate] = useLocation();
+  const raise = useMaterialsInvoice();
+  const [open, setOpen] = React.useState(false);
+  const [lines, setLines] = React.useState<Line[]>([blankLine()]);
+  const [note, setNote] = React.useState("");
+  const [key, setKey] = React.useState(newKey);
   const [error, setError] = React.useState<string | null>(null);
+  const [done, setDone] = React.useState<{ number: string; jobId: number; total: number; reused: boolean } | null>(null);
+
+  const filled = lines.filter((l) => l.description.trim());
+  const ex = filled.reduce((s, l) => s + (num(l.qty) || 0) * (num(l.price) || 0), 0);
+  const exR = Math.round(ex * 100) / 100;
+  const gst = Math.round(exR * 0.1 * 100) / 100;
+  const ok = filled.length > 0 && filled.every((l) => num(l.qty) > 0 && num(l.price) > 0);
+  const set = (i: number, patch: Partial<Line>) => setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  const reset = () => {
+    setLines([blankLine()]);
+    setNote("");
+    setKey(newKey());
+    setError(null);
+  };
+
   return (
     <Section
       title="Bill him for materials"
-      hint="Opens a supply quote to the record he is billed as, deposit 0. Add the lines, mark it Accepted, then raise the invoice on its job."
+      hint="For a product sale already agreed with him. Ops raises the invoice in one step on an internal supply only job. No quote is sent, nothing to accept, and no crew or installation messages."
     >
-      <div className="flex flex-col gap-2">
-        <div>
-          <Button
-            disabled={!data.link || start.isPending}
-            onClick={async () => {
-              setError(null);
-              try {
-                const r = await start.mutateAsync({ installerId });
-                navigate(`/quotes/${r.quoteId}`);
-              } catch (e) {
-                setError(errText(e));
-              }
-            }}
-          >
-            {start.isPending ? <Spinner className="border-white/40 border-t-white" /> : null}
-            New materials invoice
-          </Button>
-        </div>
-        {!data.link ? <p className="text-xs text-muted-foreground">Set Billed as first.</p> : null}
+      <div className="flex flex-col gap-3" data-testid="materials">
+        {!open ? (
+          <div>
+            <Button
+              disabled={!data.link}
+              onClick={() => {
+                reset();
+                setDone(null);
+                setOpen(true);
+              }}
+            >
+              New materials invoice
+            </Button>
+            {!data.link ? <p className="mt-1 text-xs text-muted-foreground">Set Billed as first.</p> : null}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2 rounded-md border border-border p-3" data-testid="materials-form">
+            <p className="text-xs text-muted-foreground">
+              Billed to <span className="font-medium text-foreground">{data.link?.name}</span>. Prices each, ex GST.
+            </p>
+            <div className="hidden grid-cols-[1fr_5rem_5rem_7rem_2rem] gap-2 text-xs font-medium text-muted-foreground sm:grid">
+              <span>Item</span>
+              <span>Qty</span>
+              <span>Unit</span>
+              <span>Price ex GST</span>
+              <span />
+            </div>
+            {lines.map((l, i) => (
+              <div key={i} className="grid grid-cols-2 gap-2 sm:grid-cols-[1fr_5rem_5rem_7rem_2rem]">
+                <Input
+                  className="col-span-2 sm:col-span-1"
+                  placeholder="Product and colour"
+                  value={l.description}
+                  onChange={(e) => set(i, { description: e.target.value })}
+                  aria-label={`Line ${i + 1} item`}
+                />
+                <Input inputMode="decimal" value={l.qty} onChange={(e) => set(i, { qty: e.target.value })} aria-label={`Line ${i + 1} quantity`} />
+                <Input value={l.unit} onChange={(e) => set(i, { unit: e.target.value })} aria-label={`Line ${i + 1} unit`} />
+                <Input inputMode="decimal" placeholder="0.00" value={l.price} onChange={(e) => set(i, { price: e.target.value })} aria-label={`Line ${i + 1} price ex GST`} />
+                <button
+                  type="button"
+                  className="text-sm text-muted-foreground hover:text-foreground disabled:opacity-30"
+                  disabled={lines.length === 1}
+                  onClick={() => setLines((ls) => ls.filter((_, j) => j !== i))}
+                  aria-label={`Remove line ${i + 1}`}
+                >
+                  x
+                </button>
+              </div>
+            ))}
+            <div>
+              <Button variant="outline" size="sm" onClick={() => setLines((ls) => [...ls, blankLine()])} disabled={lines.length >= 40}>
+                Add a line
+              </Button>
+            </div>
+            <Field label="Note on the job (optional, not on the invoice)">
+              <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
+            </Field>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2 text-sm">
+              <span data-testid="materials-total">
+                {money(exR)} ex GST + {money(gst)} GST = <span className="font-semibold">{money(exR + gst)}</span>
+              </span>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setOpen(false)} disabled={raise.isPending}>
+                  Cancel
+                </Button>
+                <Button
+                  disabled={!ok || raise.isPending}
+                  onClick={async () => {
+                    setError(null);
+                    try {
+                      const r = await raise.mutateAsync({
+                        installerId,
+                        requestKey: key,
+                        note: note.trim() || null,
+                        lines: filled.map((l) => ({ description: l.description.trim(), qty: num(l.qty), unit: l.unit.trim() || "each", unitPrice: num(l.price) })),
+                      });
+                      setDone(r);
+                      setOpen(false);
+                      reset();
+                    } catch (e) {
+                      setError(errText(e));
+                    }
+                  }}
+                >
+                  {raise.isPending ? <Spinner className="border-white/40 border-t-white" /> : null}
+                  Raise invoice
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+        {done ? (
+          <Note tone="ok">
+            <span data-testid="materials-done">
+              {done.number} raised for {money(done.total)}{done.reused ? " (already raised by the first click)" : ""}. It has not been emailed.{" "}
+              <Link href={`/jobs/${done.jobId}`} className="font-medium underline">
+                Open the job
+              </Link>{" "}
+              to email it to him or send it to Xero.
+            </span>
+          </Note>
+        ) : null}
         {data.materialsQuotes.length ? (
           <div className="text-sm">
-            <p className="mb-1 text-xs font-medium text-muted-foreground">Open quotes to him</p>
+            <p className="mb-1 text-xs font-medium text-muted-foreground">Older materials quotes still open</p>
             <ul className="flex flex-col gap-1">
               {data.materialsQuotes.map((m) => (
                 <li key={m.id} className="flex items-center gap-2">
@@ -364,11 +473,6 @@ function Materials({ installerId, data }: { installerId: number; data: Overview 
                   </Link>
                   <Badge>{m.status}</Badge>
                   <span className="text-muted-foreground">{money(m.total)}</span>
-                  {m.jobId ? (
-                    <Link href={`/jobs/${m.jobId}`} className="text-xs text-muted-foreground hover:underline">
-                      job {m.jobId}
-                    </Link>
-                  ) : null}
                 </li>
               ))}
             </ul>

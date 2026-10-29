@@ -48,9 +48,18 @@ export function useUnlinkBuyer() {
   return useMutation(orpc.installerAccount.unlink.mutationOptions({ onSuccess: refresh }));
 }
 
-export function useStartMaterials() {
+/** New materials invoice, one step. Jobs refresh too, the internal job is new. */
+export function useMaterialsInvoice() {
   const refresh = useRefresh();
-  return useMutation(orpc.installerAccount.startMaterials.mutationOptions({ onSuccess: refresh }));
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.installerAccount.materialsInvoice.mutationOptions({
+      onSuccess: () => {
+        refresh();
+        queryClient.invalidateQueries({ queryKey: orpc.jobs.key() });
+      },
+    }),
+  );
 }
 
 export function usePinXero() {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, desc, eq, gte, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -22,7 +22,7 @@ import {
 } from "../lib/contras";
 import { quoteRefOf } from "../lib/quote-number";
 import { xeroSettings } from "../lib/xero-invoices";
-import { createQuoteRecord } from "./quotes";
+import { raiseMaterialsInvoice } from "../lib/materials-sale";
 
 /* ---------------------------------------------------------------------------
  * Installer Account tab (Task H, Damien 29 Oct).
@@ -35,7 +35,6 @@ import { createQuoteRecord } from "./quotes";
  * off unless CONTRA_WORKFLOW=on. Posting also needs XERO_CONTRA_POSTING=on.
  * ------------------------------------------------------------------------- */
 
-const MATERIALS_SOURCE = "Installer (materials)";
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 const buyerInput = z.object({ type: z.enum(["contact", "company"]), id: z.number().int().positive() });
@@ -115,62 +114,33 @@ export const installerAccount = {
     .handler(({ input, context }) => unlinkBuyer(input, context.actor)),
 
   /**
-   * Bill him for materials: a supply quote to his linked record, deposit 0,
-   * with its job. The quote page does the lines. Accept it, then raise the
-   * invoice on the job. A second click within 5 minutes opens the same one.
+   * New materials invoice: an agreed product sale, raised in one step on an
+   * internal supply only job (lib/materials-sale.ts). No quote is sent and
+   * nothing is accepted by hand. The same request key twice gets the same
+   * invoice back. Office or Admin.
    */
-  startMaterials: staffOnly.input(z.object({ installerId: z.number() })).handler(async ({ input, context }) => {
-    const link = await buyerLinkOf(input.installerId);
-    if (!link) throw new ORPCError("BAD_REQUEST", { message: "Link him to the record he is billed as first." });
-    const ref = billToOfLink(link);
-    const since = new Date(Date.now() - 5 * 60_000);
-    const [recent] = await db
-      .select()
-      .from(schema.quotes)
-      .where(
-        and(
-          eq(schema.quotes.status, "draft"),
-          eq(schema.quotes.billToType, ref.type),
-          ref.type === "company" ? eq(schema.quotes.billToCompanyId, ref.id) : eq(schema.quotes.billToContactId, ref.id),
-          gte(schema.quotes.createdAt, since),
-        ),
-      )
-      .orderBy(desc(schema.quotes.id))
-      .limit(1);
-    if (recent) {
-      const n = await db.select({ id: schema.quoteItems.id }).from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, recent.id)).limit(1);
-      if (!n.length) return { quoteId: recent.id, jobId: recent.jobId, reused: true };
-    }
-    const q = await createQuoteRecord(
-      {
-        jobId: null,
-        contactId: ref.type === "contact" ? ref.id : null,
-        companyId: ref.type === "company" ? ref.id : null,
-        supervisorContactId: null,
-        people: [],
-        makeJob: true,
-        source: MATERIALS_SOURCE,
-        siteId: null,
-        billTo: ref,
-        depositPercent: 0,
-        validDays: 30,
-        notes: null,
-        terms: null,
-        items: [],
-      },
-      context.actor,
-    );
-    await db.insert(schema.activityLog).values({
-      jobId: q.jobId,
-      entityType: "installer",
-      entityId: input.installerId,
-      action: "materials_quote_started",
-      detail: `Materials quote started for ${link.buyerName}, deposit 0%.`,
-      actorName: context.actor.name,
-      actorRole: context.actor.role,
-    });
-    return { quoteId: q.id, jobId: q.jobId, reused: false };
-  }),
+  materialsInvoice: staffOnly
+    .input(
+      z.object({
+        installerId: z.number().int(),
+        requestKey: z.string().trim().min(8).max(80),
+        lines: z
+          .array(
+            z.object({
+              productId: z.number().int().nullish(),
+              description: z.string().trim().min(1).max(500),
+              qty: z.number().positive().max(100000),
+              unit: z.string().trim().max(20).default("each"),
+              /** Ex GST, as quote lines are. */
+              unitPrice: z.number().positive().max(1000000),
+            }),
+          )
+          .min(1)
+          .max(40),
+        note: z.string().trim().max(1000).nullish(),
+      }),
+    )
+    .handler(({ input, context }) => raiseMaterialsInvoice(input, context.actor)),
 
   /* ------------------------------ contras ------------------------------- */
 

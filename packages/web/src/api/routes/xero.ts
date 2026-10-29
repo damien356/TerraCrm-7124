@@ -9,7 +9,7 @@ import {
   isDemoCompany,
   logXero,
   tenantsOf,
-  XERO_SCOPES,
+  askedScopes,
   xeroApi,
   xeroConfigured,
   xeroConnectUrl,
@@ -74,7 +74,7 @@ export const xero = {
     return {
       configured: xeroConfigured(),
       redirectUri: xeroRedirectUri(),
-      scopes: [...XERO_SCOPES],
+      scopes: askedScopes(),
       connected,
       tenant: connected && row?.tenantId ? { id: row.tenantId, name: row.tenantName, demo: isDemoCompany(row.tenantName) } : null,
       tenants: connected ? tenantsOf(row).map((t) => ({ id: t.tenantId, name: t.tenantName, demo: isDemoCompany(t.tenantName) })) : [],

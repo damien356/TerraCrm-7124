@@ -1,6 +1,7 @@
 import { and, asc, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { db, inDemo } from "../database";
 import * as schema from "../database/schema";
+import { isLiveServer } from "./runtime";
 import { readState, seal, sealConfigured, signState, unseal } from "./secret-box";
 
 /* ---------------------------------------------------------------------------
@@ -52,6 +53,38 @@ export function xeroRedirectUri() {
 }
 
 export const isDemoCompany = (name: string | null | undefined) => /^demo company/i.test((name ?? "").trim());
+
+/* ---------------------------------------------------------------------------
+ * Test only (Damien, 29 Oct): checking contra posting against Xero's Demo
+ * Company from a scratch copy. XERO_TEST_PAYMENTS_SCOPE=on adds the one
+ * payments write scope to what Ops asks for. It refuses to run on the live
+ * site or with the live redirect address, and with it on Ops connects to,
+ * picks and calls only an organisation named Demo Company. The live server
+ * never sets it, so live Ops keeps asking for read only payments and Xero
+ * itself refuses any payment write there.
+ * ------------------------------------------------------------------------- */
+const LIVE_HOST = "ops.terraflooring.com.au";
+export const testPaymentsScope = () => process.env.XERO_TEST_PAYMENTS_SCOPE === "on";
+
+function assertTestScopeSafe() {
+  if (!testPaymentsScope()) return;
+  let host = "";
+  try {
+    host = new URL(xeroRedirectUri()).host.toLowerCase();
+  } catch {
+    host = "";
+  }
+  if (isLiveServer() || !host || host === LIVE_HOST) {
+    throw new Error("XERO_TEST_PAYMENTS_SCOPE is for a scratch copy against the Demo Company only. It is refused on the live site.");
+  }
+}
+
+/** What Ops asks Xero for: the fixed list, plus the payments write on a Demo Company test copy. */
+export function askedScopes(): string[] {
+  return testPaymentsScope() ? [...XERO_SCOPES, "accounting.payments"] : [...XERO_SCOPES];
+}
+
+const notDemo = (name: string | null | undefined) => testPaymentsScope() && !isDemoCompany(name);
 
 export class XeroNotConnected extends Error {}
 export class XeroError extends Error {
@@ -123,12 +156,13 @@ type OAuthState = { p: number | null; e: number; n: string };
 
 export function xeroConnectUrl(profileId: number | null) {
   if (inDemo()) throw new Error("Xero can't be connected in the demo.");
+  assertTestScopeSafe();
   const state = signState({ p: profileId, e: Date.now() + 10 * 60_000, n: Math.random().toString(36).slice(2) } satisfies OAuthState);
   const q = new URLSearchParams({
     response_type: "code",
     client_id: process.env.XERO_CLIENT_ID ?? "",
     redirect_uri: xeroRedirectUri(),
-    scope: XERO_SCOPES.join(" "),
+    scope: askedScopes().join(" "),
     state,
   });
   return `${loginBase()}/identity/connect/authorize?${q}`;
@@ -195,10 +229,11 @@ export async function finishXeroConnect(code: string, state: string) {
   if (inDemo()) throw new Error("Xero can't be connected in the demo.");
   const s = readState<OAuthState>(state);
   if (!s || s.e < Date.now()) throw new Error("That sign-in link has expired. Start again from Settings.");
+  assertTestScopeSafe();
 
   const tok = await tokenCall({ grant_type: "authorization_code", code, redirect_uri: xeroRedirectUri() });
   const granted = grantedScopes(tok);
-  const asked = new Set<string>(XERO_SCOPES);
+  const asked = new Set<string>(askedScopes());
   const extra = granted.filter((g) => !asked.has(g));
   const missing = MUST_HAVE.filter((m) => !granted.includes(m));
   if (extra.length || missing.length) {
@@ -215,6 +250,10 @@ export async function finishXeroConnect(code: string, state: string) {
   if (!all.length) {
     await revoke(tok.refresh_token);
     throw new Error("No Xero organisation was picked. Connect again and choose Terra Flooring.");
+  }
+  if (all.some((t) => notDemo(t.tenantName))) {
+    await revoke(tok.refresh_token);
+    throw new Error("This test copy may only connect to the Demo Company. Another organisation was ticked, so nothing was saved and the sign-in was revoked.");
   }
   const event = String(claimsOf(tok.access_token).authentication_event_id ?? "");
   const justNow = event ? all.filter((t) => t.authEventId === event) : [];
@@ -276,6 +315,7 @@ export async function chooseTenant(tenantId: string, byName: string) {
   const row = await xeroRow();
   const t = tenantsOf(row).find((x) => x.tenantId === tenantId);
   if (!row?.refreshTokenSealed || !t) throw new Error("That organisation is not connected. Connect to Xero again and tick it.");
+  if (notDemo(t.tenantName)) throw new Error("This test copy may only use the Demo Company.");
   if (row.tenantId === t.tenantId) return t;
   // Contacts matched in one organisation mean nothing in another.
   await saveRow({ tenantId: t.tenantId, tenantName: t.tenantName, tenantType: t.tenantType, xeroConnectionId: t.connectionId, lastError: null });
@@ -423,6 +463,8 @@ export async function xeroApi<T = Record<string, unknown>>(
 ): Promise<T> {
   const row = await xeroReady();
   if (!row?.tenantId) throw new XeroNotConnected("Xero is not connected, or no organisation is picked.");
+  assertTestScopeSafe();
+  if (notDemo(row.tenantName)) throw new Error("This test copy only talks to the Demo Company.");
   const method = init.method ?? "GET";
   if (method !== "GET" && !/^(Invoices|Contacts)$/.test(path) && !contraWriteAllowed(path, method, init)) throw new Error(`Ops does not write ${path} to Xero.`);
   const q = init.query ? `?${new URLSearchParams(init.query)}` : "";

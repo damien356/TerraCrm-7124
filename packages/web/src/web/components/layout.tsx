@@ -44,6 +44,7 @@ import {
   ChartColumn,
   X,
   Clock,
+  Package,
 } from "lucide-react";
 import { authClient } from "../lib/auth";
 import { hasAppMenu, isPhoneApp } from "../lib/phone-app";
@@ -121,6 +122,7 @@ const NAV: NavEntry[] = [
       { to: "/finance/forecasting", label: "Forecasting", icon: TrendingUp },
       { to: "/finance/invoices", label: "Invoices", icon: Receipt },
       { to: "/finance/subcontractor-invoices", label: "Installer invoices", icon: HardHat },
+      { to: "/finance/installer-accounts", label: "Installer accounts", icon: Package },
       { to: "/finance/expenses", label: "Expenses", icon: BanknoteArrowDown },
       { to: "/finance/suppliers-owed", label: "Suppliers owed", icon: HandCoins },
       { to: "/finance/referrers-owed", label: "Referrers owed", icon: Handshake },
