@@ -35,6 +35,11 @@ export function useReceipts(days = 60) {
   return useQuery(orpc.finance.receipts.queryOptions({ input: { days }, staleTime: 30_000 }));
 }
 
+/** Task H: customer sales (200) and installer materials (204) apart, with how each was paid. */
+export function useSalesByCategory(input: { from: string | null; to: string | null }) {
+  return useQuery(orpc.finance.salesByCategory.queryOptions({ input, staleTime: 30_000 }));
+}
+
 export function useInvoiceList(input: { status: "all" | "unpaid" | "overdue" | "paid"; limit?: number }) {
   return useQuery(
     orpc.finance.invoiceList.queryOptions({

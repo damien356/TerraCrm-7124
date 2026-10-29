@@ -31,6 +31,12 @@ export function useMarkInvoicePaid() {
   return useMutation(orpc.clientInvoices.markPaid.mutationOptions({ onSuccess }));
 }
 
+/** Task H: Customer sales (200) or Installer materials (204). Only before the invoice is in Xero. */
+export function useSetSalesCategory() {
+  const onSuccess = useRefresh();
+  return useMutation(orpc.clientInvoices.setSalesCategory.mutationOptions({ onSuccess }));
+}
+
 export function useVoidInvoice() {
   const onSuccess = useRefresh();
   return useMutation(orpc.clientInvoices.void.mutationOptions({ onSuccess }));

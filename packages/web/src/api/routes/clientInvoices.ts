@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly } from "../middleware/auth";
@@ -14,6 +14,8 @@ import { sendInvoiceEmail } from "../lib/invoice-email";
 import { uploadInput } from "../lib/job-mail";
 import { cardPaymentsOn, payUrl } from "../lib/stripe";
 import { billingOnJob, RAISE_KINDS, raiseJobInvoice } from "../lib/final-invoice";
+import { pushingToXero, SALES_CATEGORIES, SALES_CATEGORY_LABEL, salesAccountFor, salesAccountsView, xeroSettings } from "../lib/xero-invoices";
+
 
 /* ---------------------------------------------------------------------------
  * The job page's money-in card and material selection card (spec section 2).
@@ -78,6 +80,7 @@ export const clientInvoices = {
     return {
       invoices: rows.map((r) => ({ ...r, emailedAt: emailedAt.get(r.id) ?? null, payUrl: card && r.outstanding > 0 ? payUrl(r.id) : null })),
       cardPayments: card,
+      salesAccounts: await salesAccountsView(),
       billed: round2(live.reduce((s, r) => s + r.total, 0)),
       received: round2(live.reduce((s, r) => s + r.amountPaid, 0)),
       owing: round2(live.reduce((s, r) => s + r.outstanding, 0)),
@@ -179,6 +182,41 @@ export const clientInvoices = {
         byName: context.actor.name,
         actorRole: context.actor.role,
       });
+    }),
+
+  /**
+   * Task H (Damien, 29 Oct): which sales account this invoice goes to in
+   * Xero. A person chooses it. Ops never sets it from an installer link: an
+   * installer buying a floor for his own home stays Customer sales. Fixed
+   * once the invoice is in Xero.
+   */
+  setSalesCategory: staffOnly
+    .input(z.object({ id: z.number().int(), category: z.enum(SALES_CATEGORIES) }))
+    .handler(async ({ input, context }) => {
+      const [inv] = await db.select().from(schema.invoices).where(eq(schema.invoices.id, input.id));
+      if (!inv) throw new ORPCError("NOT_FOUND", { message: "Invoice not found" });
+      if (inv.status === "void") throw new ORPCError("BAD_REQUEST", { message: "This invoice is void." });
+      if (inv.xeroInvoiceId || pushingToXero(inv.id)) {
+        throw new ORPCError("BAD_REQUEST", { message: "This invoice is already in Xero, so its sales account can not change here. Ask the bookkeeper to change it in Xero." });
+      }
+      if (inv.salesCategory === input.category) return shapeInvoice(inv);
+      const [row] = await db
+        .update(schema.invoices)
+        .set({ salesCategory: input.category, updatedAt: new Date() })
+        .where(and(eq(schema.invoices.id, inv.id), eq(schema.invoices.salesCategory, inv.salesCategory), isNull(schema.invoices.xeroInvoiceId)))
+        .returning();
+      if (!row) throw new ORPCError("CONFLICT", { message: "Someone else just changed this invoice. Refresh and try again." });
+      const s = await xeroSettings();
+      await db.insert(schema.activityLog).values({
+        jobId: inv.jobId,
+        entityType: "invoice",
+        entityId: inv.id,
+        action: "invoice_sales_category",
+        detail: `${inv.number}: sales category set to ${SALES_CATEGORY_LABEL[input.category]} (account ${salesAccountFor(input.category, s)}), was ${SALES_CATEGORY_LABEL[inv.salesCategory === "installer_materials" ? "installer_materials" : "customer"]}`,
+        actorName: context.actor.name,
+        actorRole: context.actor.role,
+      });
+      return shapeInvoice(row);
     }),
 
   void: adminOnly

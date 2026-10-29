@@ -1,4 +1,5 @@
 import { jobNumberSql } from "../lib/job-ref";
+import { salesByCategory } from "../lib/sales-report";
 import { quoteRef } from "../lib/refs";
 import { z } from "zod";
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
@@ -812,6 +813,7 @@ export const finance = {
           jobId: r.i.jobId,
           jobNumber: r.jobNumber,
           jobTitle: r.jobTitle,
+          salesCategory: r.i.salesCategory === "installer_materials" ? ("installer_materials" as const) : ("customer" as const),
           who: r.companyName ?? [r.contactFirst, r.contactLast].filter(Boolean).join(" "),
           settled,
           daysOverdue,
@@ -854,6 +856,22 @@ export const finance = {
         },
       };
     }),
+
+  /**
+   * Task H: customer sales (200) and installer materials sales (204) apart,
+   * by each invoice's sales category, with how each was paid (bank, card,
+   * cash, contra). Invoices raised in the range. Both dates Brisbane, inclusive.
+   */
+  salesByCategory: adminOnly
+    .input(
+      z
+        .object({
+          from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+          to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+        })
+        .default({}),
+    )
+    .handler(({ input }) => salesByCategory({ from: input.from ?? null, to: input.to ?? null })),
 
   /** Company payment terms list, for the Finance area. */
   termsList: adminOnly.handler(async () => {

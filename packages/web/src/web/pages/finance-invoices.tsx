@@ -8,6 +8,7 @@ import { money, shortDate } from "../lib/money";
 import { useInvoiceList } from "../queries/finance";
 import { PhoneCardList } from "../components/phone-card-list";
 import { isPhoneApp } from "../lib/phone-app";
+import { SalesByCategoryCard } from "../components/sales-by-category";
 
 /**
  * INVOICES.
@@ -106,6 +107,8 @@ export default function InvoicesPage() {
           </Card>
           ) : null}
 
+          <SalesByCategoryCard />
+
           <Card>
             <CardHeader
               title={FILTERS.find((f) => f.key === status)?.label ?? "Invoices"}
@@ -160,6 +163,7 @@ export default function InvoicesPage() {
                           <p className="text-xs text-muted-foreground">
                             {r.label || r.kind} · {r.status.replace("_", " ")}
                           </p>
+                          <p className="text-xs text-muted-foreground">{r.salesCategory === "installer_materials" ? "Installer materials" : "Customer sales"}</p>
                         </td>
                         <td className="px-4 py-2.5">{r.who || "-"}</td>
                         <td className="px-4 py-2.5 text-xs text-muted-foreground">

@@ -21,7 +21,7 @@ import {
   xeroContactCandidates,
 } from "../lib/contras";
 import { quoteRefOf } from "../lib/quote-number";
-import { xeroSettings } from "../lib/xero-invoices";
+import { salesAccountsView, xeroSettings } from "../lib/xero-invoices";
 import { raiseMaterialsInvoice } from "../lib/materials-sale";
 
 /* ---------------------------------------------------------------------------
@@ -64,13 +64,14 @@ export const installerAccount = {
     const link = await buyerLinkOf(i.id);
     const flags = contraFlags();
     const isAdmin = context.actor.role === "admin";
-    const [cands, invoices, bills, quotes, contras, settings] = await Promise.all([
+    const [cands, invoices, bills, quotes, contras, settings, salesAccounts] = await Promise.all([
       link ? Promise.resolve(null) : buyerCandidates(i.id),
       link ? invoicesForLink(link) : Promise.resolve([]),
       openInstallerBills(i.id),
       link ? materialsQuotes(link) : Promise.resolve([]),
       flags.workflow && isAdmin ? contrasFor(i.id) : Promise.resolve([]),
       flags.workflow && isAdmin ? xeroSettings() : Promise.resolve(null),
+      salesAccountsView(),
     ]);
     return {
       installer: { id: i.id, name: i.name, abn: i.abn, legalName: i.abnLegalName ?? null, tradingName: i.tradingName ?? null, email: i.invoiceEmail ?? i.email ?? null, mobile: i.mobile ?? null },
@@ -90,12 +91,14 @@ export const installerAccount = {
       candidates: cands?.candidates ?? [],
       owesUs: invoices
         .filter((r) => r.status !== "void")
-        .map((r) => ({ id: r.id, number: r.number, jobId: r.jobId, label: r.label, status: r.status, total: r2(r.total), paid: r2(r.amountPaid), due: r2(r.total - r.amountPaid), inXero: !!r.xeroInvoiceId, dueDate: r.dueDate })),
+        .map((r) => ({ id: r.id, number: r.number, jobId: r.jobId, label: r.label, status: r.status, total: r2(r.total), paid: r2(r.amountPaid), due: r2(r.total - r.amountPaid), inXero: !!r.xeroInvoiceId, dueDate: r.dueDate, salesCategory: r.salesCategory === "installer_materials" ? ("installer_materials" as const) : ("customer" as const) })),
       weOweHim: bills.map((b) => ({ id: b.id, number: b.invoiceNumber, jobId: b.jobId, status: b.status, total: r2(b.total), submittedAt: b.submittedAt })),
       materialsQuotes: quotes,
       contras: contras.map((c) => ({ ...c, phrase: approvalPhrase(c.amount) })),
       flags: { workflow: flags.workflow && isAdmin, posting: flags.posting && isAdmin },
       contraAccount: settings?.contraAccount ?? null,
+      /** Task H: where a materials invoice goes in Xero (204), shown on the form before it is raised. */
+      salesAccounts,
     };
   }),
 

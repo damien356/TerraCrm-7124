@@ -18,6 +18,7 @@ import {
   useRaiseInvoice,
   useMaterialSelection,
   useSendSelection,
+  useSetSalesCategory,
   useVoidInvoice,
 } from "../queries/clientInvoices";
 import { usePushToXero, useXeroReady } from "../queries/xero";
@@ -429,6 +430,105 @@ function RaiseInvoiceModal({
   );
 }
 
+/* ---------------------------- sales category ----------------------------- */
+
+type Accounts = NonNullable<ReturnType<typeof useClientInvoices>["data"]>["salesAccounts"];
+type Category = Invoice["salesCategory"];
+const CATEGORIES: Category[] = ["customer", "installer_materials"];
+
+/** "Customer sales (200 Sales)". */
+const categoryText = (c: Category, a: Accounts | undefined) => {
+  const acc = a?.[c];
+  return `${acc?.label ?? (c === "installer_materials" ? "Installer materials" : "Customer sales")}${acc ? ` (${acc.name})` : ""}`;
+};
+
+/**
+ * Task H (Damien, 29 Oct). Shown before an invoice goes to Xero, and where the
+ * sales category is changed. Never set from an installer link: a person picks it.
+ */
+function SalesCategoryModal({
+  invoice,
+  accounts,
+  sending,
+  tenantName,
+  onClose,
+  onSend,
+}: {
+  invoice: Invoice | null;
+  accounts: Accounts | undefined;
+  /** Send to Xero: the button sends after saving the category. Otherwise only the category changes. */
+  sending: boolean;
+  tenantName: string | null;
+  onClose: () => void;
+  onSend: (inv: Invoice) => void;
+}) {
+  const setCat = useSetSalesCategory();
+  const [cat, setCatValue] = React.useState<Category>("customer");
+  const [error, setError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (!invoice) return;
+    setCatValue(invoice.salesCategory);
+    setError(null);
+  }, [invoice]);
+  if (!invoice) return null;
+  const changed = cat !== invoice.salesCategory;
+
+  async function go() {
+    if (!invoice) return;
+    setError(null);
+    try {
+      if (changed) await setCat.mutateAsync({ id: invoice.id, category: cat });
+      if (sending) onSend({ ...invoice, salesCategory: cat });
+      onClose();
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={sending ? `Send ${invoice.ref} to Xero` : `Sales category for ${invoice.ref}`}
+      subtitle={`${invoice.label || invoice.kindLabel}. ${moneyExact(invoice.total)} inc GST.`}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={go} disabled={setCat.isPending || (!sending && !changed)} data-testid="sales-category-go">
+            {setCat.isPending ? <Spinner /> : sending ? <Send className="size-4" /> : <CheckCircle2 className="size-4" />}
+            {sending ? "Send to Xero" : "Save"}
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-3">
+        <Field label="Sales category">
+          <Select value={cat} onChange={(e) => setCatValue(e.target.value as Category)} data-testid="sales-category-select">
+            {CATEGORIES.map((c) => (
+              <option key={c} value={c}>
+                {categoryText(c, accounts)}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <p className="text-xs text-muted-foreground">
+          Installer materials is only for products and materials sold to an installer or subcontractor. Anything else is Customer sales, even when the
+          client is also one of our installers, for example a floor installed in his own home.
+        </p>
+        {sending ? (
+          <p className="text-sm" data-testid="sales-category-summary">
+            Goes to Xero{tenantName ? ` (${tenantName})` : ""} as <span className="font-medium">{categoryText(cat, accounts)}</span>, with GST. Xero does
+            not email the client. Once it is in Xero this can only be changed in Xero.
+          </p>
+        ) : null}
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      </div>
+    </Modal>
+  );
+}
+
 export function ClientInvoicesCard({ jobId }: { jobId: number }) {
   const bootstrap = useBootstrap();
   const isAdmin = bootstrap.data?.actor.role === "admin";
@@ -445,6 +545,8 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
   const pushXero = usePushToXero();
   const [xeroMsg, setXeroMsg] = React.useState<{ id: number; text: string; bad: boolean } | null>(null);
   const canXero = Boolean(xeroReady.data?.ready);
+  const [categoryFor, setCategoryFor] = React.useState<{ inv: Invoice; sending: boolean } | null>(null);
+  const accounts = data.data?.salesAccounts;
 
   const rows = data.data?.invoices ?? [];
 
@@ -541,6 +643,27 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
                       {r.amountPaid > 0 && r.status !== "void" ? `. ${moneyExact(r.amountPaid)} received` : ""}
                       {r.outstanding > 0 ? `, ${moneyExact(r.outstanding)} owing` : ""}
                     </p>
+                    {r.status !== "void" ? (
+                      <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground" data-testid={`sales-category-${r.id}`}>
+                        <span>
+                          Sales category:{" "}
+                          <span className="font-medium text-foreground">
+                            {r.xero
+                              ? `${r.salesCategory === "installer_materials" ? "Installer materials" : "Customer sales"}${r.xeroSalesAccount ? `, sent to account ${r.xeroSalesAccount}` : ""}`
+                              : categoryText(r.salesCategory, accounts)}
+                          </span>
+                        </span>
+                        {!r.xero ? (
+                          <button
+                            type="button"
+                            className="underline underline-offset-2 hover:text-foreground"
+                            onClick={() => setCategoryFor({ inv: r, sending: false })}
+                          >
+                            Change
+                          </button>
+                        ) : null}
+                      </p>
+                    ) : null}
                     {open ? (
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         {r.emailedAt ? `Emailed ${dateOf(r.emailedAt) ?? ""}` : "Not emailed yet"}
@@ -596,13 +719,13 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
                   </div>
                   {canXero && !r.xero && r.status !== "void" && r.status !== "draft" && !open ? (
                     <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
-                      <XeroButton busy={pushXero.isPending && pushXero.variables?.invoiceId === r.id} onClick={() => sendToXero(r)} />
+                      <XeroButton busy={pushXero.isPending && pushXero.variables?.invoiceId === r.id} onClick={() => setCategoryFor({ inv: r, sending: true })} />
                     </div>
                   ) : null}
                   {open ? (
                     <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
                       {canXero && !r.xero && r.status !== "draft" ? (
-                        <XeroButton busy={pushXero.isPending && pushXero.variables?.invoiceId === r.id} onClick={() => sendToXero(r)} />
+                        <XeroButton busy={pushXero.isPending && pushXero.variables?.invoiceId === r.id} onClick={() => setCategoryFor({ inv: r, sending: true })} />
                       ) : null}
                       {r.payUrl ? (
                         <Button
@@ -643,6 +766,14 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
       )}
       {bill ? <RaiseInvoiceModal jobId={jobId} billing={bill} open={raising} onClose={() => setRaising(false)} onDone={setNotice} /> : null}
       <MarkPaidModal invoice={paying} onClose={() => setPaying(null)} />
+      <SalesCategoryModal
+        invoice={categoryFor?.inv ?? null}
+        sending={categoryFor?.sending ?? false}
+        accounts={accounts}
+        tenantName={xeroReady.data?.tenantName ?? null}
+        onClose={() => setCategoryFor(null)}
+        onSend={sendToXero}
+      />
       <EmailInvoiceModal invoice={emailing} jobId={jobId} onClose={() => setEmailing(null)} />
       {isAdmin ? <VoidModal invoice={voiding} onClose={() => setVoiding(null)} /> : null}
     </Card>

@@ -160,6 +160,10 @@ export function shapeInvoice(i: InvoiceRow) {
     voidReason: i.voidReason,
     quoteId: i.quoteId,
     createdAt: i.createdAt,
+    /** Task H: customer (200) or installer_materials (204). Set by New materials invoice or by hand, never from an installer link. */
+    salesCategory: i.salesCategory === "installer_materials" ? ("installer_materials" as const) : ("customer" as const),
+    /** The account the sale line went to in Xero. Null until sent, or when it was linked to one already there. */
+    xeroSalesAccount: i.xeroSalesAccount,
     /** What Xero last said (lib/xero-invoices.ts). Null until it is in Xero. */
     xero: i.xeroInvoiceId
       ? {
@@ -250,6 +254,8 @@ export async function markInvoicePaid(args: {
     .where(and(eq(schema.invoices.id, inv.id), eq(schema.invoices.amountPaid, inv.amountPaid)))
     .returning();
   if (!row) throw bad("Someone else just changed this invoice. Refresh and try again.");
+  // Each payment kept on its own, so reports can split bank, card and contra.
+  await db.insert(schema.invoicePayments).values({ invoiceId: inv.id, amount, method: args.method, paidOn: when, byName: args.byName });
   // The job card's deposit flag follows the deposit invoice, so the forecast and the job agree.
   if (full && inv.kind === "deposit" && inv.jobId) {
     await db.update(schema.jobs).set({ depositPaid: true, updatedAt: new Date() }).where(eq(schema.jobs.id, inv.jobId));

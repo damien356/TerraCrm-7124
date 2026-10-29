@@ -92,7 +92,7 @@ export async function raiseMaterialsInvoice(
     if (seen) {
       const inv = seen.entityId ? await invoiceOnJob(seen.entityId) : null;
       if (!inv) throw bad("This invoice is still being raised, or the first try stopped part way. Refresh the page before trying again.");
-      return { invoiceId: inv.id, number: inv.number, jobId: inv.jobId!, total: r2(inv.total), reused: true };
+      return { invoiceId: inv.id, number: inv.number, jobId: inv.jobId!, total: r2(inv.total), reused: true, salesCategory: inv.salesCategory === "installer_materials" ? ("installer_materials" as const) : ("customer" as const) };
     }
 
     const link = await buyerLinkOf(input.installerId);
@@ -167,12 +167,14 @@ export async function raiseMaterialsInvoice(
       actor: { name: actor.name, role: actor.role },
     });
 
+    // Task H (Damien, 29 Oct): this workflow is what makes it an installer materials sale (Xero 204). Nothing else does.
+    await db.update(schema.invoices).set({ salesCategory: "installer_materials", updatedAt: new Date() }).where(eq(schema.invoices.id, inv.id));
     await db.update(schema.activityLog).set({ entityId: jobId }).where(eq(schema.activityLog.id, claim!.id));
     const summary = `${inv.number} raised for materials, ${money(inv.total)}, ${lines.length} line${lines.length === 1 ? "" : "s"}, billed to ${link.buyerName}. No quote sent, no crew work.`;
     await db.insert(schema.activityLog).values([
       { jobId, entityType: "job", entityId: jobId, action: "materials_sale", detail: summary, actorName: actor.name, actorRole: actor.role },
       { entityType: "installer", entityId: input.installerId, action: "materials_invoice_raised", detail: summary, actorName: actor.name, actorRole: actor.role },
     ]);
-    return { invoiceId: inv.id, number: inv.number, jobId, total: r2(inv.total), reused: false };
+    return { invoiceId: inv.id, number: inv.number, jobId, total: r2(inv.total), reused: false, salesCategory: "installer_materials" as const };
   });
 }

@@ -26,7 +26,11 @@ import {
   XERO_ACCOUNT_KEY,
   XERO_AUTO_KEY,
   XERO_CONTRA_KEY,
+  XERO_MATERIALS_KEY,
   XERO_STATUS_KEY,
+  asSalesCategory,
+  SALES_CATEGORY_LABEL,
+  salesAccountFor,
   xeroSettings,
 } from "../lib/xero-invoices";
 import { contraAccountProblem } from "../lib/contras";
@@ -37,6 +41,26 @@ import { contraAccountProblem } from "../lib/contras";
  */
 
 const ACCOUNT_NAME_KEY = "xero_sales_account_name";
+const MATERIALS_NAME_KEY = "xero_materials_account_name";
+const CONTRA_NAME_KEY = "xero_contra_account_name";
+const NAME_KEYS = [ACCOUNT_NAME_KEY, MATERIALS_NAME_KEY, CONTRA_NAME_KEY];
+
+type XAccount = { Code?: string; Name?: string; Type?: string; Status?: string };
+
+/** One active income account in the connected organisation, as "200 Sales". Read only: Ops never creates or changes an account. */
+async function incomeAccount(code: string, what: string) {
+  const r = await xeroApi<{ Accounts?: XAccount[] }>("Accounts", { query: { where: `Code=="${code}"` } });
+  const a = (r.Accounts ?? []).find((x) => x.Code === code && x.Status !== "ARCHIVED");
+  if (!a) throw new Error(`Xero has no active account ${code} for ${what}. Check the code in Xero's chart of accounts.`);
+  if (!["REVENUE", "SALES", "OTHERINCOME"].includes(a.Type ?? "")) throw new Error(`Account ${code} (${a.Name}) is not an income account in Xero, so it can not take ${what}.`);
+  return `${a.Code} ${a.Name}`;
+}
+
+async function accountName(code: string) {
+  const r = await xeroApi<{ Accounts?: XAccount[] }>("Accounts", { query: { where: `Code=="${code}"` } });
+  const a = (r.Accounts ?? []).find((x) => x.Code === code);
+  return a ? `${a.Code} ${a.Name}` : null;
+}
 
 async function putSetting(key: string, value: string) {
   await db
@@ -56,7 +80,7 @@ export const xero = {
   status: adminOnly.handler(async () => {
     const row = await xeroRow();
     const s = await xeroSettings();
-    const [acct] = await db.select().from(schema.settings).where(eq(schema.settings.key, ACCOUNT_NAME_KEY));
+    const names = new Map((await db.select().from(schema.settings).where(inArray(schema.settings.key, NAME_KEYS))).map((r) => [r.key, r.value]));
     const connected = Boolean(row?.refreshTokenSealed);
     const invs = await db
       .select({
@@ -67,6 +91,7 @@ export const xero = {
         jobId: schema.invoices.jobId,
         xeroInvoiceId: schema.invoices.xeroInvoiceId,
         xeroIssue: schema.invoices.xeroIssue,
+        salesCategory: schema.invoices.salesCategory,
       })
       .from(schema.invoices);
     const pushable = new Set<string>(PUSHABLE_STATUSES);
@@ -85,13 +110,24 @@ export const xero = {
       lastSyncAt: row?.lastSyncAt ?? null,
       // Kept after Xero drops the sign-in, so Settings can say why.
       lastError: row?.lastError ?? null,
-      settings: { ...s, accountName: acct?.value ?? null },
+      settings: {
+        ...s,
+        accountName: names.get(ACCOUNT_NAME_KEY) ?? null,
+        materialsAccountName: names.get(MATERIALS_NAME_KEY) ?? null,
+        contraAccountName: names.get(CONTRA_NAME_KEY) ?? null,
+        /** Both sales accounts were found in the connected organisation at the last save. False: Save checks them. */
+        checked: names.has(ACCOUNT_NAME_KEY) && names.has(MATERIALS_NAME_KEY),
+      },
       counts: {
         inXero: invs.filter((i) => i.xeroInvoiceId).length,
         notYet: notYet.length,
         issues: invs.filter((i) => i.xeroIssue).length,
       },
-      notYet: notYet.slice(0, 50).map((i) => ({ id: i.id, number: i.number, status: i.status, total: i.total, jobId: i.jobId })),
+      notYet: notYet.slice(0, 50).map((i) => {
+        const category = asSalesCategory(i.salesCategory);
+        // Task H: the list shows where each one will land before it is sent.
+        return { id: i.id, number: i.number, status: i.status, total: i.total, jobId: i.jobId, salesCategory: category, categoryLabel: SALES_CATEGORY_LABEL[category], salesAccount: salesAccountFor(category, s) };
+      }),
       issues: invs.filter((i) => i.xeroIssue).map((i) => ({ id: i.id, number: i.number, jobId: i.jobId, issue: i.xeroIssue })),
       log: log.map((l) => ({ id: l.id, kind: l.kind, ok: l.ok, detail: l.detail, byName: l.byName, invoiceId: l.invoiceId, at: l.createdAt })),
     };
@@ -117,11 +153,19 @@ export const xero = {
     return { ok: true };
   }),
 
-  /** Sales account, Draft or Awaiting payment, and whether the first email sends it to Xero. */
+  /**
+   * The two sales accounts (customer 200, installer materials 204), the
+   * contra clearing account (810), Draft or Awaiting payment, and whether the
+   * first email sends it to Xero. Every account is checked against the
+   * connected organisation on every save. Read only: nothing is created or
+   * changed in Xero.
+   */
   saveSettings: adminOnly
     .input(
       z.object({
         accountCode: z.string().trim().min(1).max(10).regex(/^[A-Za-z0-9.-]+$/, "Account codes are letters and numbers only."),
+        /** Task H: installer materials sales. Left out: unchanged. */
+        materialsAccount: z.string().trim().min(1).max(10).regex(/^[A-Za-z0-9.-]+$/, "Account codes are letters and numbers only.").optional(),
         pushStatus: z.enum(["DRAFT", "AUTHORISED"]),
         autoPush: z.boolean(),
         /** Task G: the contra clearing account. Empty: none. */
@@ -136,40 +180,41 @@ export const xero = {
     .handler(async ({ input, context }) => {
       const before = await xeroSettings();
       const contra = input.contraAccount === undefined ? before.contraAccount : input.contraAccount;
-      let accountName: string | null = null;
-      // Check the account is a real one in the organisation, when there is one to ask.
+      const materials = input.materialsAccount ?? before.materialsAccount;
+      const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+      if (same(materials, input.accountCode)) throw fail(new Error("Installer materials need their own account, not the customer sales account."));
+      if (contra && (same(contra, input.accountCode) || same(contra, materials))) throw fail(new Error("The contra account can not be a sales account."));
+      const found: Record<string, string | null> = { [ACCOUNT_NAME_KEY]: null, [MATERIALS_NAME_KEY]: null, [CONTRA_NAME_KEY]: null };
+      // Checked on every save, not only when it changes: a code saved before Xero was connected was never checked.
       if (await xeroReady()) {
         try {
-          const r = await xeroApi<{ Accounts?: Array<{ Code?: string; Name?: string; Type?: string; Status?: string }> }>("Accounts", {
-            query: { where: `Code=="${input.accountCode}"` },
-          });
-          const a = (r.Accounts ?? []).find((x) => x.Code === input.accountCode && x.Status !== "ARCHIVED");
-          if (!a) throw new Error(`Xero has no active account ${input.accountCode}. Check the code in Xero's chart of accounts.`);
-          if (!["REVENUE", "SALES", "OTHERINCOME"].includes(a.Type ?? "")) throw new Error(`Account ${input.accountCode} (${a.Name}) is not an income account in Xero.`);
-          accountName = `${a.Code} ${a.Name}`;
-          // Checked on every save, not only when it changes: a code saved before Xero was connected was never checked.
+          found[ACCOUNT_NAME_KEY] = await incomeAccount(input.accountCode, "customer sales");
+          found[MATERIALS_NAME_KEY] = await incomeAccount(materials, "installer materials sales");
           if (contra) {
-            if (contra === input.accountCode) throw new Error("The contra account can not be the sales account.");
             const problem = await contraAccountProblem(contra);
             if (problem) throw new Error(problem);
+            found[CONTRA_NAME_KEY] = await accountName(contra);
           }
         } catch (e) {
           throw fail(e);
         }
       }
       await putSetting(XERO_ACCOUNT_KEY, input.accountCode);
+      await putSetting(XERO_MATERIALS_KEY, materials);
       await putSetting(XERO_STATUS_KEY, input.pushStatus);
       await putSetting(XERO_AUTO_KEY, input.autoPush ? "1" : "0");
       await putSetting(XERO_CONTRA_KEY, contra);
-      if (accountName) await putSetting(ACCOUNT_NAME_KEY, accountName);
-      else if (before.accountCode !== input.accountCode) await db.delete(schema.settings).where(eq(schema.settings.key, ACCOUNT_NAME_KEY));
+      for (const [key, name] of Object.entries(found)) {
+        if (name) await putSetting(key, name);
+        else await db.delete(schema.settings).where(eq(schema.settings.key, key));
+      }
       await logXero(
         "settings",
         true,
-        `Sales account ${input.accountCode}, new invoices go in as ${input.pushStatus === "DRAFT" ? "drafts" : "awaiting payment"}, ${input.autoPush ? "sent to Xero at the first email" : "sent to Xero by hand"}, ${contra ? `contras read from account ${contra}` : "no contra account"}.`,
+        `Customer sales account ${input.accountCode}, installer materials account ${materials}, new invoices go in as ${input.pushStatus === "DRAFT" ? "drafts" : "awaiting payment"}, ${input.autoPush ? "sent to Xero at the first email" : "sent to Xero by hand"}, ${contra ? `contras read from account ${contra}` : "no contra account"}.${found[ACCOUNT_NAME_KEY] ? " Checked in Xero." : " Not checked, Xero is not connected."}`,
         { byName: context.actor.name || "Admin" },
       );
-      return { ok: true, accountName };
+      return { ok: true, accountName: found[ACCOUNT_NAME_KEY], materialsAccountName: found[MATERIALS_NAME_KEY], contraAccountName: found[CONTRA_NAME_KEY] };
     }),
 
   /** Send one invoice to Xero now. Admin or Office. */

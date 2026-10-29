@@ -1966,6 +1966,17 @@ export const invoices = sqliteTable(
     xeroIssue: text("xero_issue"),
     /** The Xero organisation xero_invoice_id belongs to. Links to any other are let go when the organisation changes. */
     xeroTenantId: text("xero_tenant_id"),
+    /**
+     * Task H (Damien, 29 Oct): which Xero sales account the sale goes to.
+     * customer: ordinary customer sales (200). installer_materials: products
+     * and materials sold to installers and subcontractors (204). Set only by
+     * New materials invoice or by a person choosing it, never from an
+     * installer link. Fixed once the invoice is in Xero
+     * (2026-11-15-invoice-sales-category.sql).
+     */
+    salesCategory: text("sales_category").notNull().default("customer"),
+    /** The Xero account code the sale line went to when it was sent. Null until then. */
+    xeroSalesAccount: text("xero_sales_account"),
     ...timestamps,
   },
   (t) => [
@@ -4614,6 +4625,29 @@ export const xeroPaymentReads = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
   },
   (t) => [unique("xero_payment_reads_uq").on(t.tenantId, t.xeroPaymentId), index("xero_payment_reads_invoice_idx").on(t.invoiceId)],
+);
+
+/**
+ * One row per payment Ops records on a client invoice (Task H, 29 Oct), so
+ * reports can split what came in by bank, card, cash or contra. Written by
+ * markInvoicePaid. Payments recorded before this table only show on the
+ * invoice (amount_paid and payment_method).
+ */
+export const invoicePayments = sqliteTable(
+  "invoice_payments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    invoiceId: integer("invoice_id")
+      .notNull()
+      .references(() => invoices.id, { onDelete: "cascade" }),
+    amount: real("amount").notNull(),
+    /** bank · card · cash · other · contra */
+    method: text("method").notNull(),
+    paidOn: integer("paid_on", { mode: "timestamp" }).notNull(),
+    byName: text("by_name").notNull().default(""),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+  },
+  (t) => [index("invoice_payments_invoice_idx").on(t.invoiceId)],
 );
 
 /**

@@ -339,7 +339,7 @@ function Materials({ installerId, data }: { installerId: number; data: Overview 
   const [note, setNote] = React.useState("");
   const [key, setKey] = React.useState(newKey);
   const [error, setError] = React.useState<string | null>(null);
-  const [done, setDone] = React.useState<{ number: string; jobId: number; total: number; reused: boolean } | null>(null);
+  const [done, setDone] = React.useState<{ number: string; jobId: number; total: number; reused: boolean; salesCategory: "customer" | "installer_materials" } | null>(null);
 
   const filled = lines.filter((l) => l.description.trim());
   const ex = filled.reduce((s, l) => s + (num(l.qty) || 0) * (num(l.price) || 0), 0);
@@ -378,6 +378,13 @@ function Materials({ installerId, data }: { installerId: number; data: Overview 
           <div className="flex flex-col gap-2 rounded-md border border-border p-3" data-testid="materials-form">
             <p className="text-xs text-muted-foreground">
               Billed to <span className="font-medium text-foreground">{data.link?.name}</span>. Prices each, ex GST.
+            </p>
+            <p className="text-xs text-muted-foreground" data-testid="materials-category">
+              Sales category:{" "}
+              <span className="font-medium text-foreground">
+                Installer materials ({data.salesAccounts.installer_materials.name})
+              </span>
+              . This is only for products and materials sold to him. Work on his own home is a normal job, billed as Customer sales.
             </p>
             <div className="hidden grid-cols-[1fr_5rem_5rem_7rem_2rem] gap-2 text-xs font-medium text-muted-foreground sm:grid">
               <span>Item</span>
@@ -454,7 +461,10 @@ function Materials({ installerId, data }: { installerId: number; data: Overview 
         {done ? (
           <Note tone="ok">
             <span data-testid="materials-done">
-              {done.number} raised for {money(done.total)}{done.reused ? " (already raised by the first click)" : ""}. It has not been emailed.{" "}
+              {done.number} raised for {money(done.total)}
+              {done.reused ? " (already raised by the first click)" : ""}, sales category{" "}
+              {done.salesCategory === "installer_materials" ? `Installer materials (${data.salesAccounts.installer_materials.name})` : `Customer sales (${data.salesAccounts.customer.name})`}. It
+              has not been emailed.{" "}
               <Link href={`/jobs/${done.jobId}`} className="font-medium underline">
                 Open the job
               </Link>{" "}
@@ -503,7 +513,10 @@ function Balances({ data }: { data: Overview }) {
                       {r.number}
                     </Link>
                   </td>
-                  <td className="py-1 text-muted-foreground">{r.status.replace(/_/g, " ")}</td>
+                  <td className="py-1 text-muted-foreground">
+                    {r.status.replace(/_/g, " ")}
+                    <span className="block text-xs">{r.salesCategory === "installer_materials" ? "Installer materials" : "Customer sales"}</span>
+                  </td>
                   <td className="py-1 text-right">{money(r.due)} due</td>
                   <td className="py-1 text-right text-xs text-muted-foreground">of {money(r.total)}</td>
                 </tr>

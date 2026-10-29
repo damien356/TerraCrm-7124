@@ -39,23 +39,68 @@ export const XERO_STATUS_KEY = "xero_push_status";
 export const XERO_AUTO_KEY = "xero_auto_push";
 /** Task G: the clearing account a contra is paid through in Xero. Empty: no account is read as a contra. */
 export const XERO_CONTRA_KEY = "xero_contra_account";
+/** Task H: the sales account for installer materials sales. */
+export const XERO_MATERIALS_KEY = "xero_materials_account";
 
-export type XeroSettings = { accountCode: string; taxType: string; pushStatus: "DRAFT" | "AUTHORISED"; autoPush: boolean; contraAccount: string };
+/**
+ * Task H (Damien, 29 Oct). Two sales accounts, chosen per invoice by its
+ * sales category, never by who it is billed to.
+ */
+export const SALES_CATEGORIES = ["customer", "installer_materials"] as const;
+export type SalesCategory = (typeof SALES_CATEGORIES)[number];
+export const SALES_CATEGORY_LABEL: Record<SalesCategory, string> = {
+  customer: "Customer sales",
+  installer_materials: "Installer materials",
+};
+export const asSalesCategory = (v: string | null | undefined): SalesCategory => (v === "installer_materials" ? "installer_materials" : "customer");
+
+export type XeroSettings = {
+  /** Customer sales (200). */
+  accountCode: string;
+  /** Installer materials sales (204). */
+  materialsAccount: string;
+  taxType: string;
+  pushStatus: "DRAFT" | "AUTHORISED";
+  autoPush: boolean;
+  contraAccount: string;
+};
+
+/** The Xero account a sale of this category goes to. */
+export function salesAccountFor(category: string | null | undefined, s: Pick<XeroSettings, "accountCode" | "materialsAccount">) {
+  return asSalesCategory(category) === "installer_materials" ? s.materialsAccount : s.accountCode;
+}
 
 export async function xeroSettings(): Promise<XeroSettings> {
   const rows = await db
     .select()
     .from(schema.settings)
-    .where(inArray(schema.settings.key, [XERO_ACCOUNT_KEY, XERO_TAX_KEY, XERO_STATUS_KEY, XERO_AUTO_KEY, XERO_CONTRA_KEY]));
+    .where(inArray(schema.settings.key, [XERO_ACCOUNT_KEY, XERO_MATERIALS_KEY, XERO_TAX_KEY, XERO_STATUS_KEY, XERO_AUTO_KEY, XERO_CONTRA_KEY]));
   const v = new Map(rows.map((r) => [r.key, r.value]));
   return {
-    // 6 Oct notes: sales go to 204 with GST, the same as Terra Stock.
-    accountCode: (v.get(XERO_ACCOUNT_KEY) ?? "").trim() || "204",
+    // Damien, 29 Oct: customer sales go to 200. 204 is only for installer materials, never the default for everything.
+    accountCode: (v.get(XERO_ACCOUNT_KEY) ?? "").trim() || "200",
+    materialsAccount: (v.get(XERO_MATERIALS_KEY) ?? "").trim() || "204",
     taxType: (v.get(XERO_TAX_KEY) ?? "").trim() || "OUTPUT",
     // Damien, 29 Oct: invoices go in approved (awaiting payment). Draft only if the setting says so.
     pushStatus: v.get(XERO_STATUS_KEY) === "DRAFT" ? "DRAFT" : "AUTHORISED",
     autoPush: v.get(XERO_AUTO_KEY) === "1",
     contraAccount: (v.get(XERO_CONTRA_KEY) ?? "").trim(),
+  };
+}
+
+/** Each sales category with the Xero account it goes to now, e.g. Installer materials, 204 Installer Material Sales. */
+export async function salesAccountsView() {
+  const s = await xeroSettings();
+  const names = new Map(
+    (await db.select().from(schema.settings).where(inArray(schema.settings.key, ["xero_sales_account_name", "xero_materials_account_name"]))).map((r) => [r.key, r.value]),
+  );
+  const nameOf = (code: string, key: string) => {
+    const n = names.get(key);
+    return n && n.split(" ")[0] === code ? n : code;
+  };
+  return {
+    customer: { label: SALES_CATEGORY_LABEL.customer, code: s.accountCode, name: nameOf(s.accountCode, "xero_sales_account_name") },
+    installer_materials: { label: SALES_CATEGORY_LABEL.installer_materials, code: s.materialsAccount, name: nameOf(s.materialsAccount, "xero_materials_account_name") },
   };
 }
 
@@ -87,10 +132,10 @@ function chunks(text: string): string[] {
 export type XeroLine = { Description: string; Quantity?: number; UnitAmount?: number; AccountCode?: string; TaxType?: string };
 
 export type XeroInvoiceInput = {
-  inv: Pick<typeof schema.invoices.$inferSelect, "number" | "total" | "createdAt" | "dueDate">;
+  inv: Pick<typeof schema.invoices.$inferSelect, "number" | "total" | "createdAt" | "dueDate" | "salesCategory">;
   snap: IssuedSnapshot;
   contactId: string;
-  settings: Pick<XeroSettings, "accountCode" | "taxType" | "pushStatus">;
+  settings: Pick<XeroSettings, "accountCode" | "materialsAccount" | "taxType" | "pushStatus">;
 };
 
 /** The lines, in the order the PDF reads. Pure, so it can be checked without Xero. */
@@ -141,7 +186,7 @@ export function buildXeroInvoice({ inv, snap, contactId, settings }: XeroInvoice
     Status: settings.pushStatus,
     CurrencyCode: "AUD",
     SentToContact: false,
-    LineItems: xeroLines(snap, inv.total, settings),
+    LineItems: xeroLines(snap, inv.total, { accountCode: salesAccountFor(inv.salesCategory, settings), taxType: settings.taxType }),
   };
 }
 
@@ -250,6 +295,8 @@ const OPEN = new Set(["DRAFT", "SUBMITTED", "AUTHORISED", "PAID"]);
 export const PUSHABLE_STATUSES = ["sent", "part_paid", "paid", "overdue"] as const;
 const PUSHABLE = new Set<string>(PUSHABLE_STATUSES);
 const inFlight = new Set<number>();
+/** Being sent to Xero this moment. Its sales category can not change until it is done. */
+export const pushingToXero = (invoiceId: number) => inFlight.has(invoiceId);
 
 /** Why this invoice can not go to Xero yet, or null. */
 export function pushBlocker(inv: typeof schema.invoices.$inferSelect) {
@@ -329,14 +376,16 @@ export async function pushInvoiceToXero(invoiceId: number, byName: string, actor
         .where(and(eq(schema.invoices.id, inv.id), isNull(schema.invoices.issuedSnapshot)));
     }
     const issue = typeof made.Total === "number" && Math.abs(made.Total - inv.total) > 0.005 ? `Xero worked it out at ${money(made.Total)}, Ops has ${money(inv.total)}.` : null;
-    await saveXeroState(inv.id, conn.tenantId, made, { xeroPushedAt: new Date(), xeroPushedByName: byName, xeroIssue: issue });
+    const account = salesAccountFor(inv.salesCategory, settings);
+    await saveXeroState(inv.id, conn.tenantId, made, { xeroPushedAt: new Date(), xeroPushedByName: byName, xeroIssue: issue, xeroSalesAccount: account });
+    const cat = SALES_CATEGORY_LABEL[asSalesCategory(inv.salesCategory)];
     await logXero(
       "push",
       true,
-      `${inv.number} created in Xero as ${statusWords(made.Status)}, ${money(made.Total ?? inv.total)}, billed to ${contact.name} (${contact.how}), ${body.LineItems.length} lines.${issue ? ` ${issue}` : ""}`,
+      `${inv.number} created in Xero as ${statusWords(made.Status)}, ${money(made.Total ?? inv.total)}, billed to ${contact.name} (${contact.how}), ${body.LineItems.length} lines, ${cat} on account ${account}.${issue ? ` ${issue}` : ""}`,
       { invoiceId: inv.id, xeroId: made.InvoiceID, byName },
     );
-    await activity(inv, "invoice_xero_pushed", `${inv.number} sent to Xero as ${statusWords(made.Status)}, billed to ${contact.name}`, byName, actorRole);
+    await activity(inv, "invoice_xero_pushed", `${inv.number} sent to Xero as ${statusWords(made.Status)}, billed to ${contact.name}, ${cat} (account ${account})`, byName, actorRole);
     return { ok: true, how: "created", xeroInvoiceId: made.InvoiceID, status: made.Status ?? null, contact: contact.name, issue };
   } catch (e) {
     const reason = errorWords(e);

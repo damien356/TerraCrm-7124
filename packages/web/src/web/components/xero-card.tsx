@@ -61,7 +61,9 @@ export function XeroCard() {
   const [error, setError] = React.useState("");
   const [msg, setMsg] = React.useState("");
   const [copied, setCopied] = React.useState(false);
-  const [form, setForm] = React.useState<{ accountCode: string; pushStatus: "DRAFT" | "AUTHORISED"; autoPush: boolean; contraAccount: string } | null>(null);
+  const [form, setForm] = React.useState<{ accountCode: string; materialsAccount: string; pushStatus: "DRAFT" | "AUTHORISED"; autoPush: boolean; contraAccount: string } | null>(
+    null,
+  );
   const ref = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -70,7 +72,15 @@ export function XeroCard() {
 
   const s = q.data;
   React.useEffect(() => {
-    if (s && !form) setForm({ accountCode: s.settings.accountCode, pushStatus: s.settings.pushStatus, autoPush: s.settings.autoPush, contraAccount: s.settings.contraAccount });
+    // Task H: until the accounts are checked in Xero the form starts on 200, 204 and 810 (Damien, 29 Oct).
+    if (s && !form)
+      setForm({
+        accountCode: s.settings.accountCode,
+        materialsAccount: s.settings.materialsAccount,
+        pushStatus: s.settings.pushStatus,
+        autoPush: s.settings.autoPush,
+        contraAccount: s.settings.contraAccount || (s.settings.checked ? "" : "810"),
+      });
   }, [s, form]);
 
   async function go() {
@@ -86,7 +96,9 @@ export function XeroCard() {
   const dirty =
     !!s &&
     !!form &&
-    (form.accountCode !== s.settings.accountCode ||
+    (!s.settings.checked ||
+      form.accountCode !== s.settings.accountCode ||
+      form.materialsAccount !== s.settings.materialsAccount ||
       form.pushStatus !== s.settings.pushStatus ||
       form.autoPush !== s.settings.autoPush ||
       form.contraAccount.trim() !== s.settings.contraAccount);
@@ -253,8 +265,31 @@ export function XeroCard() {
             {form ? (
               <div className="space-y-3 border-t border-border pt-4">
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="Sales account" hint={s.settings.accountName ? `In Xero: ${s.settings.accountName}` : "Checked against Xero when you save."}>
-                    <Input value={form.accountCode} onChange={(e) => setForm({ ...form, accountCode: e.target.value })} maxLength={10} />
+                  <Field
+                    label="Customer sales account"
+                    hint={s.settings.accountName ? `In Xero: ${s.settings.accountName}. Every invoice unless it is marked Installer materials.` : "Checked against Xero when you save."}
+                  >
+                    <Input
+                      value={form.accountCode}
+                      onChange={(e) => setForm({ ...form, accountCode: e.target.value })}
+                      maxLength={10}
+                      data-testid="xero-sales-account"
+                    />
+                  </Field>
+                  <Field
+                    label="Installer materials account"
+                    hint={
+                      s.settings.materialsAccountName
+                        ? `In Xero: ${s.settings.materialsAccountName}. New materials invoice, or an invoice marked Installer materials.`
+                        : "Products and materials sold to installers. Checked against Xero when you save."
+                    }
+                  >
+                    <Input
+                      value={form.materialsAccount}
+                      onChange={(e) => setForm({ ...form, materialsAccount: e.target.value })}
+                      maxLength={10}
+                      data-testid="xero-materials-account"
+                    />
                   </Field>
                   <Field label="New invoices go into Xero as" hint="GST on Income, amounts include GST.">
                     <Select value={form.pushStatus} onChange={(e) => setForm({ ...form, pushStatus: e.target.value as "DRAFT" | "AUTHORISED" })}>
@@ -264,10 +299,11 @@ export function XeroCard() {
                   </Field>
                 </div>
                 <Field
-                  label="Contra clearing account (optional)"
-                  hint="A payment Xero puts through this account is read as a contra against a bill, never as money received. Payments to other non-bank accounts are flagged, not recorded."
+                  label="Contra clearing account"
+                  hint={`${s.settings.contraAccountName ? `In Xero: ${s.settings.contraAccountName}. ` : ""}A payment Xero puts through this account is read as a contra against a bill, never as money received. The sale keeps its own sales account and GST. Payments to other non-bank accounts are flagged, not recorded.`}
                 >
                   <Input
+                    data-testid="xero-contra-account"
                     value={form.contraAccount}
                     onChange={(e) => setForm({ ...form, contraAccount: e.target.value })}
                     maxLength={10}
@@ -281,6 +317,9 @@ export function XeroCard() {
                     <span className="block text-xs text-muted-foreground">Off: press Send to Xero on the job's invoice. Xero never emails the client.</span>
                   </span>
                 </label>
+                {!s.settings.checked && s.connected ? (
+                  <p className="text-xs text-muted-foreground">Not checked in Xero yet. Press Save to check these accounts in the connected organisation. Nothing is created or changed in Xero.</p>
+                ) : null}
                 {dirty ? (
                   <Button
                     size="sm"
@@ -289,8 +328,17 @@ export function XeroCard() {
                       setError("");
                       setMsg("");
                       try {
-                        const r = await save.mutateAsync({ ...form, accountCode: form.accountCode.trim(), contraAccount: form.contraAccount.trim() });
-                        setMsg(r.accountName ? `Saved. Sales account ${r.accountName}.` : "Saved.");
+                        const r = await save.mutateAsync({
+                          ...form,
+                          accountCode: form.accountCode.trim(),
+                          materialsAccount: form.materialsAccount.trim(),
+                          contraAccount: form.contraAccount.trim(),
+                        });
+                        setMsg(
+                          r.accountName
+                            ? `Saved and checked in Xero. Customer sales ${r.accountName}. Installer materials ${r.materialsAccountName}.${r.contraAccountName ? ` Contra ${r.contraAccountName}.` : ""}`
+                            : "Saved. Not checked yet, Xero is not connected.",
+                        );
                         setForm(null);
                       } catch (e) {
                         setError(errText(e));
@@ -347,7 +395,7 @@ export function XeroCard() {
                           <span className="font-medium">{i.number}</span>
                         )}{" "}
                         <span className="text-muted-foreground">
-                          {moneyExact(i.total)}, {i.status.replace("_", " ")}
+                          {moneyExact(i.total)}, {i.status.replace("_", " ")}. {i.categoryLabel}, account {i.salesAccount}
                         </span>
                       </span>
                       <Button
@@ -357,7 +405,12 @@ export function XeroCard() {
                         onClick={async () => {
                           setError("");
                           setMsg("");
-                          if (!window.confirm(`Send ${i.number} to ${s.tenant?.name} as ${s.settings.pushStatus === "DRAFT" ? "a draft" : "awaiting payment"}?`)) return;
+                          if (
+                            !window.confirm(
+                              `Send ${i.number} to ${s.tenant?.name} as ${s.settings.pushStatus === "DRAFT" ? "a draft" : "awaiting payment"}?\n\nSales category: ${i.categoryLabel}, account ${i.salesAccount}.\nTo change it, press Cancel and use Change on the job's invoice.`,
+                            )
+                          )
+                            return;
                           try {
                             const r = await push.mutateAsync({ invoiceId: i.id });
                             setMsg(r.how === "linked" ? `${i.number} was already in Xero. Linked to it.` : `${i.number} is in Xero.`);
