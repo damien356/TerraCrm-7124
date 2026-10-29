@@ -4588,6 +4588,34 @@ export const xeroSyncLog = sqliteTable(
   (t) => [index("xero_sync_log_invoice_idx").on(t.invoiceId), index("xero_sync_log_created_idx").on(t.createdAt)],
 );
 
+/**
+ * Each Xero payment Ops has read on a client invoice, once (Task G, 29 Oct).
+ * The account it went to says what it was: a BANK account is a bank payment,
+ * any other account (a contra clearing account) is an offset, never money in.
+ */
+export const xeroPaymentReads = sqliteTable(
+  "xero_payment_reads",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    tenantId: text("tenant_id").notNull(),
+    xeroPaymentId: text("xero_payment_id").notNull(),
+    invoiceId: integer("invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+    xeroInvoiceId: text("xero_invoice_id"),
+    /** What Xero says the payment was for. */
+    amount: real("amount").notNull().default(0),
+    /** What Ops recorded from it. Less than amount when Ops already had part of it. */
+    recorded: real("recorded").notNull().default(0),
+    accountCode: text("account_code"),
+    accountName: text("account_name"),
+    accountType: text("account_type"),
+    /** bank · contra */
+    kind: text("kind").notNull(),
+    paidOn: integer("paid_on", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+  },
+  (t) => [unique("xero_payment_reads_uq").on(t.tenantId, t.xeroPaymentId), index("xero_payment_reads_invoice_idx").on(t.invoiceId)],
+);
+
 /** Which Xero contact a Terra contact or company bills to. `billToKey` is "contact:12" or "company:3". */
 export const xeroContactLinks = sqliteTable(
   "xero_contact_links",

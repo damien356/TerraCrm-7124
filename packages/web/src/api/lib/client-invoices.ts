@@ -33,6 +33,12 @@ export const INVOICE_KIND_LABEL: Record<string, string> = {
 };
 
 export const PAYMENT_METHODS = ["bank", "card", "cash", "other"] as const;
+/**
+ * What Ops can record. "contra" is only ever set by the Xero read back, for a
+ * Xero payment to the contra clearing account (an offset against a bill). It is
+ * never money received, and the office can not pick it by hand.
+ */
+export const RECORD_METHODS = [...PAYMENT_METHODS, "contra"] as const;
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -197,16 +203,28 @@ export async function depositInvoiceFor(quoteId: number) {
 }
 
 /**
+ * The method shown on an invoice after one more payment. A contra mixed with
+ * money received shows as part_contra, so neither hides the other.
+ */
+export function methodAfter(before: string | null, method: string) {
+  if (!before || before === method) return method;
+  if (before === "contra" || method === "contra" || before === "part_contra") return "part_contra";
+  return method;
+}
+
+/**
  * Record a payment. Paid in full by default. A part payment leaves it
  * part_paid. Only moves an invoice that is not void.
  */
 export async function markInvoicePaid(args: {
   id: number;
   amount?: number | null;
-  method: (typeof PAYMENT_METHODS)[number];
+  method: (typeof RECORD_METHODS)[number];
   paidOn?: Date | null;
   byName: string;
   actorRole: string;
+  /** Replaces "received by <method>" in the log, e.g. how a contra was settled. */
+  how?: string | null;
 }) {
   const [inv] = await db.select().from(schema.invoices).where(eq(schema.invoices.id, args.id));
   if (!inv) throw bad("Invoice not found");
@@ -225,7 +243,7 @@ export async function markInvoicePaid(args: {
       amountPaid: paid,
       status: full ? "paid" : "part_paid",
       paidAt: full ? when : inv.paidAt,
-      paymentMethod: args.method,
+      paymentMethod: methodAfter(inv.amountPaid > 0.005 ? inv.paymentMethod : null, args.method),
       markedPaidByName: args.byName,
       updatedAt: new Date(),
     })
@@ -241,7 +259,7 @@ export async function markInvoicePaid(args: {
     entityType: "invoice",
     entityId: inv.id,
     action: full ? "invoice_paid" : "invoice_part_paid",
-    detail: `${inv.number}: ${money(amount)} received by ${args.method}${full ? ", paid in full" : `, ${money(round2(inv.total - paid))} still owing`}`,
+    detail: `${inv.number}: ${money(amount)} ${args.how?.trim() || (args.method === "contra" ? "settled by contra, not a bank payment" : `received by ${args.method}`)}${full ? ", paid in full" : `, ${money(round2(inv.total - paid))} still owing`}`,
     actorName: args.byName,
     actorRole: args.actorRole,
   });

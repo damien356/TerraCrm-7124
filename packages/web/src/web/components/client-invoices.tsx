@@ -549,7 +549,13 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
                     {r.status === "paid" ? (
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         Paid {dateOf(r.paidAt) ?? ""}
-                        {r.paymentMethod ? ` by ${METHOD_LABEL[r.paymentMethod]?.toLowerCase() ?? r.paymentMethod}` : ""}
+                        {r.paymentMethod === "contra"
+                          ? " by contra in Xero, not a bank payment"
+                          : r.paymentMethod === "part_contra"
+                            ? " partly by contra in Xero and partly by payment. The job activity has each amount"
+                            : r.paymentMethod
+                            ? ` by ${METHOD_LABEL[r.paymentMethod]?.toLowerCase() ?? r.paymentMethod}`
+                            : ""}
                         {r.markedPaidByName ? `. Marked by ${r.markedPaidByName}` : ""}
                       </p>
                     ) : null}

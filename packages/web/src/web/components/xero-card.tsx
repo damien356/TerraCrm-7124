@@ -61,7 +61,7 @@ export function XeroCard() {
   const [error, setError] = React.useState("");
   const [msg, setMsg] = React.useState("");
   const [copied, setCopied] = React.useState(false);
-  const [form, setForm] = React.useState<{ accountCode: string; pushStatus: "DRAFT" | "AUTHORISED"; autoPush: boolean } | null>(null);
+  const [form, setForm] = React.useState<{ accountCode: string; pushStatus: "DRAFT" | "AUTHORISED"; autoPush: boolean; contraAccount: string } | null>(null);
   const ref = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -70,7 +70,7 @@ export function XeroCard() {
 
   const s = q.data;
   React.useEffect(() => {
-    if (s && !form) setForm({ accountCode: s.settings.accountCode, pushStatus: s.settings.pushStatus, autoPush: s.settings.autoPush });
+    if (s && !form) setForm({ accountCode: s.settings.accountCode, pushStatus: s.settings.pushStatus, autoPush: s.settings.autoPush, contraAccount: s.settings.contraAccount });
   }, [s, form]);
 
   async function go() {
@@ -84,7 +84,12 @@ export function XeroCard() {
   }
 
   const dirty =
-    !!s && !!form && (form.accountCode !== s.settings.accountCode || form.pushStatus !== s.settings.pushStatus || form.autoPush !== s.settings.autoPush);
+    !!s &&
+    !!form &&
+    (form.accountCode !== s.settings.accountCode ||
+      form.pushStatus !== s.settings.pushStatus ||
+      form.autoPush !== s.settings.autoPush ||
+      form.contraAccount.trim() !== s.settings.contraAccount);
 
   return (
     <div id="xero" ref={ref} className="scroll-mt-4">
@@ -242,6 +247,17 @@ export function XeroCard() {
                     </Select>
                   </Field>
                 </div>
+                <Field
+                  label="Contra clearing account (optional)"
+                  hint="A payment Xero puts through this account is read as a contra against a bill, never as money received. Payments to other non-bank accounts are flagged, not recorded."
+                >
+                  <Input
+                    value={form.contraAccount}
+                    onChange={(e) => setForm({ ...form, contraAccount: e.target.value })}
+                    maxLength={10}
+                    placeholder="None set"
+                  />
+                </Field>
                 <label htmlFor="xero_auto" className="flex cursor-pointer items-start gap-2.5">
                   <Checkbox id="xero_auto" className="mt-0.5" checked={form.autoPush} onChange={(e) => setForm({ ...form, autoPush: e.target.checked })} />
                   <span>
@@ -257,7 +273,7 @@ export function XeroCard() {
                       setError("");
                       setMsg("");
                       try {
-                        const r = await save.mutateAsync({ ...form, accountCode: form.accountCode.trim() });
+                        const r = await save.mutateAsync({ ...form, accountCode: form.accountCode.trim(), contraAccount: form.contraAccount.trim() });
                         setMsg(r.accountName ? `Saved. Sales account ${r.accountName}.` : "Saved.");
                         setForm(null);
                       } catch (e) {

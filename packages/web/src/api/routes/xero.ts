@@ -25,6 +25,7 @@ import {
   syncFromXero,
   XERO_ACCOUNT_KEY,
   XERO_AUTO_KEY,
+  XERO_CONTRA_KEY,
   XERO_STATUS_KEY,
   xeroSettings,
 } from "../lib/xero-invoices";
@@ -120,10 +121,18 @@ export const xero = {
         accountCode: z.string().trim().min(1).max(10).regex(/^[A-Za-z0-9.-]+$/, "Account codes are letters and numbers only."),
         pushStatus: z.enum(["DRAFT", "AUTHORISED"]),
         autoPush: z.boolean(),
+        /** Task G: the contra clearing account. Empty: none. */
+        contraAccount: z
+          .string()
+          .trim()
+          .max(10)
+          .regex(/^[A-Za-z0-9.-]*$/, "Account codes are letters and numbers only.")
+          .optional(),
       }),
     )
     .handler(async ({ input, context }) => {
       const before = await xeroSettings();
+      const contra = input.contraAccount === undefined ? before.contraAccount : input.contraAccount;
       let accountName: string | null = null;
       // Check the account is a real one in the organisation, when there is one to ask.
       if (await xeroReady()) {
@@ -135,6 +144,16 @@ export const xero = {
           if (!a) throw new Error(`Xero has no active account ${input.accountCode}. Check the code in Xero's chart of accounts.`);
           if (!["REVENUE", "SALES", "OTHERINCOME"].includes(a.Type ?? "")) throw new Error(`Account ${input.accountCode} (${a.Name}) is not an income account in Xero.`);
           accountName = `${a.Code} ${a.Name}`;
+          if (contra && contra !== before.contraAccount) {
+            const c = await xeroApi<{ Accounts?: Array<{ Code?: string; Name?: string; Type?: string; Status?: string; EnablePaymentsToAccount?: boolean }> }>("Accounts", {
+              query: { where: `Code=="${contra}"` },
+            });
+            const ca = (c.Accounts ?? []).find((x) => x.Code === contra && x.Status !== "ARCHIVED");
+            if (!ca) throw new Error(`Xero has no active account ${contra} for contras. Check the code in Xero's chart of accounts.`);
+            if (ca.Type === "BANK") throw new Error(`Account ${contra} (${ca.Name}) is a bank account. A contra goes through a clearing account, not a bank account.`);
+            if (!ca.EnablePaymentsToAccount) throw new Error(`Account ${contra} (${ca.Name}) does not take payments. Tick "Enable payments to this account" on it in Xero first.`);
+            if (contra === input.accountCode) throw new Error("The contra account can not be the sales account.");
+          }
         } catch (e) {
           throw fail(e);
         }
@@ -142,12 +161,13 @@ export const xero = {
       await putSetting(XERO_ACCOUNT_KEY, input.accountCode);
       await putSetting(XERO_STATUS_KEY, input.pushStatus);
       await putSetting(XERO_AUTO_KEY, input.autoPush ? "1" : "0");
+      await putSetting(XERO_CONTRA_KEY, contra);
       if (accountName) await putSetting(ACCOUNT_NAME_KEY, accountName);
       else if (before.accountCode !== input.accountCode) await db.delete(schema.settings).where(eq(schema.settings.key, ACCOUNT_NAME_KEY));
       await logXero(
         "settings",
         true,
-        `Sales account ${input.accountCode}, new invoices go in as ${input.pushStatus === "DRAFT" ? "drafts" : "awaiting payment"}, ${input.autoPush ? "sent to Xero at the first email" : "sent to Xero by hand"}.`,
+        `Sales account ${input.accountCode}, new invoices go in as ${input.pushStatus === "DRAFT" ? "drafts" : "awaiting payment"}, ${input.autoPush ? "sent to Xero at the first email" : "sent to Xero by hand"}, ${contra ? `contras read from account ${contra}` : "no contra account"}.`,
         { byName: context.actor.name || "Admin" },
       );
       return { ok: true, accountName };

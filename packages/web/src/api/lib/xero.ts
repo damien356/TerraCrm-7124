@@ -386,7 +386,18 @@ function xeroMessages(json: unknown): string[] {
  */
 export async function xeroApi<T = Record<string, unknown>>(
   path: string,
-  init: { method?: "GET" | "PUT" | "POST"; body?: unknown; idempotencyKey?: string; query?: Record<string, string> } = {},
+  init: {
+    method?: "GET" | "PUT" | "POST";
+    body?: unknown;
+    idempotencyKey?: string;
+    query?: Record<string, string>;
+    /**
+     * A 403 here means this one read is not allowed (for example a missing
+     * scope), not that the organisation was disconnected. The connection is
+     * left alone and only this call fails.
+     */
+    narrow403?: boolean;
+  } = {},
 ): Promise<T> {
   const row = await xeroReady();
   if (!row?.tenantId) throw new XeroNotConnected("Xero is not connected, or no organisation is picked.");
@@ -426,6 +437,9 @@ export async function xeroApi<T = Record<string, unknown>>(
       json = text ? JSON.parse(text) : {};
     } catch {
       json = {};
+    }
+    if (res.status === 403 && init.narrow403) {
+      throw new XeroError(`Xero did not allow Ops to read ${path.split("/")[0]}. Check the Xero connection scopes.`, 403);
     }
     if (res.status === 403) {
       await saveRow({ lastError: "Xero refused access to the organisation. It may have been disconnected in Xero. Connect again." });

@@ -24,7 +24,10 @@ import { logXero, XeroError, XeroNotConnected, xeroApi, xeroDate, xeroReady, xer
  * Idempotency-Key.
  *
  * Read back: Xero's status, paid and due. When Xero has more paid than Ops,
- * the difference is recorded in Ops as received. Ops is never lowered from
+ * each new Xero payment is read for the account it went to (Task G): a bank
+ * account is recorded as received by bank, the contra clearing account as a
+ * contra (never as money in), and any other account is flagged, not
+ * recorded. Each Xero payment is recorded once. Ops is never lowered from
  * Xero and nothing is added twice: a card payment Ops already has simply
  * shows in Xero once the bookkeeper reconciles it. Voids, credits and totals
  * that disagree are flagged on the invoice, never changed by themselves.
@@ -34,14 +37,16 @@ export const XERO_ACCOUNT_KEY = "xero_sales_account";
 export const XERO_TAX_KEY = "xero_tax_type";
 export const XERO_STATUS_KEY = "xero_push_status";
 export const XERO_AUTO_KEY = "xero_auto_push";
+/** Task G: the clearing account a contra is paid through in Xero. Empty: no account is read as a contra. */
+export const XERO_CONTRA_KEY = "xero_contra_account";
 
-export type XeroSettings = { accountCode: string; taxType: string; pushStatus: "DRAFT" | "AUTHORISED"; autoPush: boolean };
+export type XeroSettings = { accountCode: string; taxType: string; pushStatus: "DRAFT" | "AUTHORISED"; autoPush: boolean; contraAccount: string };
 
 export async function xeroSettings(): Promise<XeroSettings> {
   const rows = await db
     .select()
     .from(schema.settings)
-    .where(inArray(schema.settings.key, [XERO_ACCOUNT_KEY, XERO_TAX_KEY, XERO_STATUS_KEY, XERO_AUTO_KEY]));
+    .where(inArray(schema.settings.key, [XERO_ACCOUNT_KEY, XERO_TAX_KEY, XERO_STATUS_KEY, XERO_AUTO_KEY, XERO_CONTRA_KEY]));
   const v = new Map(rows.map((r) => [r.key, r.value]));
   return {
     // 6 Oct notes: sales go to 204 with GST, the same as Terra Stock.
@@ -50,6 +55,7 @@ export async function xeroSettings(): Promise<XeroSettings> {
     // Damien, 29 Oct: invoices go in approved (awaiting payment). Draft only if the setting says so.
     pushStatus: v.get(XERO_STATUS_KEY) === "DRAFT" ? "DRAFT" : "AUTHORISED",
     autoPush: v.get(XERO_AUTO_KEY) === "1",
+    contraAccount: (v.get(XERO_CONTRA_KEY) ?? "").trim(),
   };
 }
 
@@ -235,7 +241,7 @@ type XInvoice = {
   AmountPaid?: number;
   AmountCredited?: number;
   FullyPaidOnDate?: string;
-  Payments?: Array<{ Date?: string; Amount?: number }>;
+  Payments?: Array<{ PaymentID?: string; Date?: string; Amount?: number }>;
   HasErrors?: boolean;
   ValidationErrors?: Array<{ Message?: string }>;
 };
@@ -420,6 +426,175 @@ export function reconcile(
   return { record: record > 0.005 ? record : 0, issues };
 }
 
+/* ------------------------- how each payment was made ---------------------- */
+
+/** One Xero payment as Ops reads it, with the account it went to. */
+export type ReadPayment = {
+  paymentId: string;
+  amount: number;
+  date: Date | null;
+  status: string;
+  accountCode: string | null;
+  accountName: string | null;
+  accountType: string | null;
+};
+
+export type PaymentKind = "bank" | "contra" | "other";
+export type PaymentPlan = { paymentId: string; kind: PaymentKind; amount: number; recorded: number; read: ReadPayment };
+
+/** What a Xero payment was, from the account it went to. */
+export function paymentKind(p: Pick<ReadPayment, "accountType" | "accountCode">, contraAccount: string): PaymentKind {
+  if (p.accountType === "BANK") return "bank";
+  if (contraAccount && p.accountCode && p.accountCode.toLowerCase() === contraAccount.toLowerCase()) return "contra";
+  return "other";
+}
+
+/**
+ * Split what Ops is about to record across the Xero payments it has not read
+ * yet (Task G). Pure.
+ *   A payment to a BANK account is a bank payment.
+ *   A payment to the contra clearing account (Settings, Xero) is an offset
+ *   against a bill. It is recorded as contra, never as money received.
+ *   A payment to any other account is not recorded. A person checks it.
+ * Offsets go first, because a bank payment Ops does not have yet is far more
+ * likely to be one the office already marked by hand. Whatever no payment
+ * explains is left for a person too.
+ */
+export function planPayments(record: number, unseen: ReadPayment[], contraAccount: string) {
+  const live = unseen.filter((p) => p.status !== "DELETED" && p.amount > 0.005);
+  const kind = (p: ReadPayment) => paymentKind(p, contraAccount);
+  const ordered = [...live.filter((p) => kind(p) === "contra"), ...live.filter((p) => kind(p) === "bank")];
+  let left = r2(record);
+  const out: PaymentPlan[] = [];
+  for (const p of ordered) {
+    const take = r2(Math.max(0, Math.min(p.amount, left)));
+    left = r2(left - take);
+    out.push({ paymentId: p.paymentId, kind: kind(p), amount: r2(p.amount), recorded: take, read: p });
+  }
+  const other = live.filter((p) => kind(p) === "other");
+  return { lines: out, other, unexplained: left > 0.005 ? left : 0 };
+}
+
+type XAccount = { AccountID?: string; Code?: string; Name?: string; Type?: string; Status?: string; EnablePaymentsToAccount?: boolean };
+type XPayment = {
+  PaymentID?: string;
+  Date?: string;
+  Amount?: number;
+  Status?: string;
+  PaymentType?: string;
+  Account?: { AccountID?: string; Code?: string };
+  Invoice?: { InvoiceID?: string };
+};
+
+/** Xero's chart of accounts, once per read. Code and id both look up. */
+async function accountsByKey() {
+  const r = await xeroApi<{ Accounts?: XAccount[] }>("Accounts", { narrow403: true });
+  const m = new Map<string, XAccount>();
+  for (const a of r.Accounts ?? []) {
+    if (a.Code) m.set(`code:${a.Code}`, a);
+    if (a.AccountID) m.set(`id:${a.AccountID}`, a);
+  }
+  return m;
+}
+
+/** Read each new payment on one invoice: amount, date and the account it went to. Read only. */
+async function readNewPayments(tenantId: string, x: XInvoice, accounts: () => Promise<Map<string, XAccount>>) {
+  const ids = [...new Set((x.Payments ?? []).map((p) => p.PaymentID).filter((v): v is string => !!v))];
+  if (!ids.length) return [];
+  const seen = await db
+    .select({ id: schema.xeroPaymentReads.xeroPaymentId })
+    .from(schema.xeroPaymentReads)
+    .where(and(eq(schema.xeroPaymentReads.tenantId, tenantId), inArray(schema.xeroPaymentReads.xeroPaymentId, ids)));
+  const done = new Set(seen.map((s) => s.id));
+  const out: ReadPayment[] = [];
+  for (const id of ids) {
+    if (done.has(id)) continue;
+    const r = await xeroApi<{ Payments?: XPayment[] }>(`Payments/${encodeURIComponent(id)}`, { narrow403: true });
+    const p = r.Payments?.[0];
+    if (!p) throw new XeroError(`Xero did not return payment ${id}.`);
+    const map = await accounts();
+    const acct = (p.Account?.AccountID && map.get(`id:${p.Account.AccountID}`)) || (p.Account?.Code && map.get(`code:${p.Account.Code}`)) || null;
+    out.push({
+      paymentId: id,
+      amount: r2(p.Amount ?? 0),
+      date: xeroDate(p.Date),
+      status: p.Status ?? "AUTHORISED",
+      accountCode: acct?.Code ?? p.Account?.Code ?? null,
+      accountName: acct?.Name ?? null,
+      // Unknown account: treated as not a bank, so it is never shown as money in.
+      accountType: acct?.Type ?? null,
+    });
+  }
+  return out;
+}
+
+/**
+ * Record what Xero has paid on one invoice, payment by payment, each once.
+ * Returns what it could not explain, which is flagged and not recorded.
+ */
+async function recordFromXero(
+  inv: typeof schema.invoices.$inferSelect,
+  x: XInvoice,
+  record: number,
+  tenantId: string,
+  accounts: () => Promise<Map<string, XAccount>>,
+  contraAccount: string,
+) {
+  const plan = planPayments(record, await readNewPayments(tenantId, x, accounts), contraAccount);
+  let recorded = 0;
+  for (const l of plan.lines) {
+    if (l.kind === "other") continue;
+    // Claim the payment first, so two reads at once never record it twice.
+    const claimed = await db
+      .insert(schema.xeroPaymentReads)
+      .values({
+        tenantId,
+        xeroPaymentId: l.paymentId,
+        invoiceId: inv.id,
+        xeroInvoiceId: x.InvoiceID,
+        amount: l.amount,
+        recorded: 0,
+        accountCode: l.read.accountCode,
+        accountName: l.read.accountName,
+        accountType: l.read.accountType,
+        kind: l.kind,
+        paidOn: l.read.date,
+      })
+      .onConflictDoNothing()
+      .returning({ id: schema.xeroPaymentReads.id });
+    if (!claimed.length || l.recorded <= 0) continue;
+    const acct = [l.read.accountCode, l.read.accountName].filter(Boolean).join(" ") || "an account that is not a bank account";
+    try {
+      await markInvoicePaid({
+        id: inv.id,
+        amount: l.recorded,
+        method: l.kind === "contra" ? "contra" : "bank",
+        paidOn: l.read.date ?? new Date(),
+        byName: "Xero",
+        actorRole: "system",
+        how: l.kind === "contra" ? `settled by contra in Xero (${acct}), not a bank payment` : `received by bank (${acct} in Xero)`,
+      });
+    } catch (e) {
+      // Not recorded, so let the next read try this payment again.
+      await db.delete(schema.xeroPaymentReads).where(eq(schema.xeroPaymentReads.id, claimed[0]!.id));
+      throw e;
+    }
+    await db.update(schema.xeroPaymentReads).set({ recorded: l.recorded }).where(eq(schema.xeroPaymentReads.id, claimed[0]!.id));
+    recorded = r2(recorded + l.recorded);
+    await logXero(
+      "pull",
+      true,
+      `${inv.number}: ${money(l.recorded)} ${l.kind === "contra" ? `settled by contra in Xero (${acct}), recorded in Ops as contra, not as a bank payment` : "paid in Xero, now recorded in Ops"}.`,
+      { invoiceId: inv.id, xeroId: x.InvoiceID, byName: "Xero" },
+    );
+  }
+  // Paid to an account that is neither a bank nor the contra account: not recorded, never read as a bank payment.
+  // Left unclaimed, so it is read again next time (and recorded as contra if that account is then set as the contra account).
+  const other = plan.other.map((p) => `${money(p.amount)} to ${[p.accountCode, p.accountName].filter(Boolean).join(" ") || "an unknown account"}`);
+  const otherSum = r2(plan.other.reduce((a, p) => a + p.amount, 0));
+  return { recorded, other, unexplained: r2(Math.max(0, plan.unexplained - otherSum)) };
+}
+
 let syncing = false;
 
 /** Read every invoice Ops has put in Xero, and bring paid across. */
@@ -439,6 +614,9 @@ export async function syncFromXero(byName = "Xero") {
     const todo = rows.filter((r) => !(r.xeroIssue == null && ((r.status === "paid" && r.xeroStatus === "PAID") || (r.status === "void" && (r.xeroStatus === "VOIDED" || r.xeroStatus === "DELETED")))));
     let checked = 0;
     let recorded = 0;
+    let accts: Promise<Map<string, XAccount>> | null = null;
+    const accounts = () => (accts ??= accountsByKey());
+    const { contraAccount } = await xeroSettings();
     let flagged = 0;
     const errors: string[] = [];
     for (let i = 0; i < todo.length; i += 40) {
@@ -451,14 +629,21 @@ export async function syncFromXero(byName = "Xero") {
         checked++;
         const plan = reconcile(inv, x);
         if (plan.record > 0) {
-          const when = xeroDate(x.FullyPaidOnDate) ?? xeroDate([...(x.Payments ?? [])].pop()?.Date) ?? new Date();
+          // Task G: each payment is read for the account it went to, so a contra is never shown as a bank payment.
           try {
-            await markInvoicePaid({ id: inv.id, amount: plan.record, method: "bank", paidOn: when, byName: "Xero", actorRole: "system" });
-            recorded++;
-            await logXero("pull", true, `${inv.number}: ${money(plan.record)} paid in Xero, now recorded in Ops.`, { invoiceId: inv.id, xeroId: x.InvoiceID, byName });
+            const got = await recordFromXero(inv, x, plan.record, tenantId, accounts, contraAccount);
+            if (got.recorded > 0) recorded++;
+            if (got.other.length)
+              plan.issues.push(
+                `Xero shows ${got.other.join(", ")}, which is not a bank account${contraAccount ? ` or the contra account ${contraAccount}` : ", and no contra account is set in Settings, Xero"}. Not recorded. Check it in Xero.`,
+              );
+            if (got.unexplained > 0.005)
+              plan.issues.push(
+                `Xero shows ${money(got.unexplained)} more paid that Ops could not match to a Xero payment (it may be a prepayment or overpayment). Not recorded. Check it in Xero.`,
+              );
           } catch (e) {
             const m = errorWords(e);
-            plan.issues.push(`Paid in Xero but Ops could not record it: ${m}`);
+            plan.issues.push(`Paid in Xero but Ops could not read how it was paid, so nothing was recorded yet: ${m}`);
             errors.push(`${inv.number}: ${m}`);
           }
         }
