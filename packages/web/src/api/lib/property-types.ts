@@ -35,8 +35,11 @@ export const propertyTypeShort = (v: string | null | undefined) => (propertyType
 /** Unit or apartment: the body corporate section and the apartment checklist apply. */
 export const isUnitType = (v: string | null | undefined) => v === "unit_low" || v === "apartment_high";
 
-/** Measures are not installs: they never need the answers and never get prep messages. */
-export const isMeasureSkill = (name: string | null | undefined) => /measure/i.test(name ?? "");
+/**
+ * Measures and site visits are not installs: they never need the answers and
+ * never get prep messages. "Site visit / inspection" (30 Oct) counts the same.
+ */
+export const isMeasureSkill = (name: string | null | undefined) => /measure|site visit|inspection/i.test(name ?? "");
 
 export const APT_CHECKS = [
   ["fire", "Fire alarm isolated"],

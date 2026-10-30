@@ -35,6 +35,7 @@ import {
   useUnassignTask,
 } from "../queries/tasks";
 import { useInstallers, useEligible } from "../queries/installers";
+import { useCalendarBoard } from "../queries/calendar";
 import { useBroadcast, useOffersForTask, useSendDirect, useWithdrawOffers } from "../queries/offers";
 import { isPhoneApp } from "../lib/phone-app";
 import { localYmd } from "@/lib/utils";
@@ -144,6 +145,63 @@ function TaskBlock({
 /** One booked day in the lane: 46px of bar, 4px of air under it. */
 const LANE_H = 46;
 const LANE_GAP = 4;
+
+/** One busy block under a person's bars: 38px tall, 3px of air. */
+const BUSY_H = 38;
+const BUSY_GAP = 3;
+
+type CalPerson = {
+  installerId: number;
+  name: string;
+  state: string;
+  problem: string | null;
+  blocks: Array<{ date: string; from: string; to: string; label: string }>;
+};
+
+/** "8:45am", from Brisbane HH:MM. */
+function sayHM(hhmm: string) {
+  if (hhmm === "24:00") return "midnight";
+  const [h, m] = hhmm.split(":").map(Number) as [number, number];
+  const ap = h >= 12 ? "pm" : "am";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return m ? `${h12}:${String(m).padStart(2, "0")}${ap}` : `${h12}${ap}`;
+}
+
+/**
+ * Personal commitments from a calendar-linked person's Google calendar,
+ * buffers included. Times only. Never the event title, place or guests.
+ */
+function BusyBlocks({ person, dates, cols, top }: { person: CalPerson; dates: string[]; cols: number; top: number }) {
+  return (
+    <>
+      {dates.map((date, i) => {
+        const day = person.blocks.filter((b) => b.date === date);
+        return day.map((b, j) => {
+          const allDay = b.from === "00:00" && b.to === "24:00";
+          const when = allDay ? "All day" : `${sayHM(b.from)} to ${sayHM(b.to)}`;
+          return (
+            <div
+              key={`${date}-${j}`}
+              data-testid="calendar-busy"
+              title={`${b.label}. ${when}, buffers included.`}
+              className="absolute overflow-hidden rounded-[5px] border border-[#7A6A58]/40 px-1.5 py-0.5 text-[#4A3F33]"
+              style={{
+                left: `calc(${(i / cols) * 100}% + 3px)`,
+                width: `calc(${100 / cols}% - 6px)`,
+                top: top + j * (BUSY_H + BUSY_GAP),
+                height: BUSY_H,
+                background: "repeating-linear-gradient(135deg, #EDE6DD 0 6px, #E2D8CC 6px 12px)",
+              }}
+            >
+              <span className="block truncate text-[11px] font-semibold tabular">{when}</span>
+              <span className="block truncate text-[10px] leading-tight">{b.label}</span>
+            </div>
+          );
+        });
+      })}
+    </>
+  );
+}
 
 /** "Thu 1 Oct", the way the office says a date out loud. */
 function sayDate(date: string) {
@@ -945,6 +1003,9 @@ function PhoneDay({
 export default function SchedulePage() {
   const week = useWeek();
   const board = useBoard(week.from, week.to);
+  const calBoard = useCalendarBoard(week.from, week.to);
+  const calBy = React.useMemo(() => new Map((calBoard.data ?? []).map((p) => [p.installerId, p as CalPerson])), [calBoard.data]);
+  const calUnchecked = (calBoard.data ?? []).filter((p) => p.state !== "ok");
   const installers = useInstallers();
   const reschedule = useRescheduleTask();
   const extend = useExtendRun();
@@ -1178,6 +1239,25 @@ export default function SchedulePage() {
             </div>
           ) : null}
 
+          {!isPhoneApp && calUnchecked.length ? (
+            <div
+              className="mb-3 flex items-start gap-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/[0.08] px-3 py-2 text-sm"
+              data-testid="calendar-unchecked-banner"
+            >
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[var(--warning)]" />
+              <span className="min-w-0">
+                {calUnchecked.map((p) => (
+                  <span key={p.installerId} className="block">
+                    <span className="font-semibold">{p.name}'s calendar can't be checked.</span>{" "}
+                    <span className="text-muted-foreground">
+                      {p.problem} {p.name} is not shown as free. Bookings with {p.name} are blocked unless {p.name} approves them.
+                    </span>
+                  </span>
+                ))}
+              </span>
+            </div>
+          ) : null}
+
           {extError ? (
             <div className="mb-3 flex items-start justify-between gap-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
               <span>{extError}</span>
@@ -1283,7 +1363,10 @@ export default function SchedulePage() {
               {(installers.data ?? []).map((inst) => {
                 const runs = runsFor(tasks, inst.id, dates);
                 const lanes = Math.max(1, ...runs.map((r) => r.lane + 1));
-                const height = lanes * (LANE_H + LANE_GAP) + LANE_GAP;
+                const cal = calBy.get(inst.id);
+                const busyRows = cal ? Math.max(0, ...dates.map((d) => cal.blocks.filter((b) => b.date === d).length)) : 0;
+                const barsH = lanes * (LANE_H + LANE_GAP) + LANE_GAP;
+                const height = barsH + (busyRows ? busyRows * (BUSY_H + BUSY_GAP) + BUSY_GAP : 0);
                 const clashDays = [...new Set(runs.flatMap((r) => r.clashDates))].sort();
                 return (
                   <div key={inst.id} className="flex border-b border-border">
@@ -1310,6 +1393,16 @@ export default function SchedulePage() {
                               {clashDays.length === 1
                                 ? `Double booked ${sayDate(clashDays[0]!).replace(/ \w+$/, "")}`
                                 : `Double booked, ${clashDays.length} days`}
+                            </span>
+                          ) : null}
+                          {cal && cal.state !== "ok" ? (
+                            <span
+                              className="mt-0.5 flex items-center gap-1 text-[11px] font-semibold text-[#C0362C]"
+                              title={cal.problem ?? undefined}
+                              data-testid="calendar-unchecked-lane"
+                            >
+                              <AlertTriangle className="size-3 shrink-0" />
+                              Calendar not checked
                             </span>
                           ) : null}
                         </span>
@@ -1345,6 +1438,8 @@ export default function SchedulePage() {
                           />
                         ))}
                       </div>
+
+                      {cal ? <BusyBlocks person={cal} dates={dates} cols={cols} top={barsH} /> : null}
 
                       {runs.map((r) => (
                         <RunBar

@@ -4,6 +4,7 @@ import {
   BanknoteArrowDown,
   Building2,
   CalendarDays,
+  CalendarClock,
   ChevronDown,
   ChevronRight,
   ClipboardCheck,
@@ -96,6 +97,7 @@ const NAV: NavEntry[] = [
     icon: CalendarDays,
     children: [
       { to: "/schedule", label: "Board", icon: CalendarDays },
+      { to: "/my-calendar", label: "My calendar", icon: CalendarClock },
       { to: "/crew", label: "Crew map", icon: MapPinned },
       { to: "/hourly", label: "Hourly time", icon: Clock },
       { to: "/prep-to-fill", label: "Prep answers to fill", icon: ClipboardCheck },

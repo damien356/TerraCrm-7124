@@ -80,6 +80,10 @@ import { PIXEL_GIF, recordOpen, unsubscribeContact, unsubscribePage } from "./li
 import { readUnsubscribeToken } from "./lib/marketing";
 import { bootMailAgent } from "./lib/mail-agent";
 import { finishConnect } from "./lib/gmail";
+import { finishCalendarConnect, isCalendarState } from "./lib/google-calendar";
+import { bootCalendarSync } from "./lib/calendar-boot";
+import { refreshLinkById } from "./lib/calendar-availability";
+import { calendar } from "./routes/calendar";
 import { bootReminders } from "./lib/reminders";
 import { bootDailySummary, wakeDailySummary } from "./lib/notify";
 import { judgeWake } from "./lib/wake-guard";
@@ -119,6 +123,8 @@ export const router = {
   abnCheck,
   /** Blackout dates — typed in plain English, enforced server-side. */
   availability,
+  /** Bookable staff and their Google calendar busy times (busy only, never event details). */
+  calendar,
   jobs,
   tasks,
   /** Split by trade and Merge on the job page. */
@@ -389,9 +395,23 @@ app.post("/api/webhooks/stripe", async (c) => {
 app.get("/api/mail/oauth/callback", async (c) => {
   const back = (q: Record<string, string>) => c.redirect(`/settings?${new URLSearchParams(q)}#email-agent`, 302);
   const err = c.req.query("error");
-  if (err) return back({ mail: "error", reason: err === "access_denied" ? "Sign-in was cancelled." : err });
   const code = c.req.query("code");
   const state = c.req.query("state");
+  if (state && isCalendarState(state)) {
+    // A calendar sign-in shares this registered callback. Busy times only, see lib/google-calendar.
+    const cal = (q: Record<string, string>) => c.redirect(`/my-calendar?${new URLSearchParams(q)}`, 302);
+    if (err) return cal({ cal: "error", reason: err === "access_denied" ? "Sign-in was cancelled." : err });
+    if (!code) return cal({ cal: "error", reason: "Google did not send a code back." });
+    try {
+      const r = await finishCalendarConnect(code, state);
+      // A failed first read is recorded on the link and shows as "not checked".
+      await refreshLinkById(r.linkId).catch(() => undefined);
+      return cal({ cal: "connected", address: r.email });
+    } catch (e) {
+      return cal({ cal: "error", reason: String((e as Error).message ?? e).slice(0, 300) });
+    }
+  }
+  if (err) return back({ mail: "error", reason: err === "access_denied" ? "Sign-in was cancelled." : err });
   if (!code || !state) return back({ mail: "error", reason: "Google did not send a code back." });
   try {
     const r = await finishConnect(code, state);
@@ -450,6 +470,8 @@ bootReminders();
 bootMailAgent();
 // Copies the database and every stored file to Supabase every 6 hours. Same gate.
 bootOffsiteBackup();
+// Busy times for calendar-checked people, every 10 minutes, for the board shading. Same gate.
+bootCalendarSync();
 // Expires offers and locks lapsed 2-hour holds once a minute. Same gate.
 bootOfferTimer();
 // The 7am summary email to the office (item 15). Same gate.

@@ -20,6 +20,7 @@ import TeamPage from "./pages/team";
 import SuppliersPage from "./pages/suppliers";
 import ProductsPage from "./pages/products";
 import SettingsPage from "./pages/settings";
+import MyCalendarPage from "./pages/my-calendar";
 import SafetyPage from "./pages/safety";
 import SwmsLibraryPage from "./pages/swms-library";
 import ReviewPage from "./pages/review";
@@ -137,6 +138,7 @@ function App() {
               <Route path="/suppliers" component={SuppliersPage} />
               <Route path="/products" component={ProductsPage} />
               <Route path="/settings" component={SettingsPage} />
+              <Route path="/my-calendar" component={MyCalendarPage} />
               <Route path="/swms-library" component={SwmsLibraryPage} />
               <Route path="/safety" component={SafetyPage} />
               <Route component={NotFound} />

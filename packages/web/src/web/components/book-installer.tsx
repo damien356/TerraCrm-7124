@@ -1,11 +1,12 @@
 import * as React from "react";
 import { auDay } from "@/lib/utils";
-import { AlertTriangle, Ban, Calendar, Check, Clock, Minus, Plus, TriangleAlert, X } from "lucide-react";
+import { AlertTriangle, Ban, Calendar, CalendarX2, Check, Clock, Minus, Plus, ShieldAlert, TriangleAlert, X } from "lucide-react";
 import { Loading, Spinner } from "./ui/card";
 import { Button } from "./ui/button";
 import { Checkbox, Field, Input, Select } from "./ui/field";
 import { useBookTask, usePlanBooking, useTask } from "../queries/tasks";
 import { useEligible } from "../queries/installers";
+import { useCalendarCheck } from "../queries/calendar";
 
 /**
  * BOOK INSTALLER. The whole booking in one panel, not a wizard.
@@ -29,7 +30,28 @@ const WINDOWS = [
   { label: "All day, 7:00am to 5:00pm", start: "07:00", end: "17:00" },
 ];
 
+/** "Set a time": an exact start and finish, for measures, site visits and anyone whose calendar is checked. */
+const CUSTOM = -1;
+
+const toMin = (hhmm: string) => {
+  const m = /^(\d{1,2}):(\d{2})/.exec(hhmm);
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+};
+const sayHM = (hhmm: string | null) => {
+  const m = hhmm ? toMin(hhmm) : null;
+  if (m == null) return hhmm ?? "";
+  const h = Math.floor(m / 60);
+  return `${h % 12 === 0 ? 12 : h % 12}:${String(m % 60).padStart(2, "0")}${h < 12 || h === 24 ? "am" : "pm"}`;
+};
+const shortDay = (date: string) =>
+  new Date(`${date}T12:00:00`).toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" });
+
 const DURATIONS = [
+  { label: "30 minutes", hours: 0.5 },
+  { label: "1 hour", hours: 1 },
+  { label: "1.5 hours", hours: 1.5 },
+  { label: "2 hours", hours: 2 },
+  { label: "3 hours", hours: 3 },
   { label: "Half day", hours: 4 },
   { label: "Full day", hours: 8 },
   { label: "Long day", hours: 10 },
@@ -77,6 +99,9 @@ export function BookInstallerPanel({
   const [durationHours, setDurationHours] = React.useState(8);
   const [payOverride, setPayOverride] = React.useState("");
   const [overrideNote, setOverrideNote] = React.useState("");
+  const [startAt, setStartAt] = React.useState("09:00");
+  const [finishAt, setFinishAt] = React.useState("10:00");
+  const [calReason, setCalReason] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [seeded, setSeeded] = React.useState(false);
 
@@ -102,8 +127,17 @@ export function BookInstallerPanel({
     if (t.days?.length) {
       setDayCount(t.days.length);
       setMode(t.days.length > 1 ? "multi" : "one");
-      const w = WINDOWS.findIndex((x) => x.start === t.days[0]!.arrivalStart && x.end === t.days[0]!.arrivalEnd);
+      const d0 = t.days[0]!;
+      const w = WINDOWS.findIndex((x) => x.start === d0.arrivalStart && x.end === d0.arrivalEnd);
       if (w >= 0) setWindowIdx(w);
+      else if (d0.arrivalStart) {
+        // Booked at an exact time before: open it the same way.
+        const s0 = toMin(d0.arrivalStart) ?? 540;
+        const e0 = Math.max(toMin(d0.arrivalEnd ?? "") ?? 0, s0 + Math.round((t.durationHours || 1) * 60));
+        setWindowIdx(CUSTOM);
+        setStartAt(d0.arrivalStart.slice(0, 5));
+        setFinishAt(`${String(Math.floor(Math.min(e0, 1439) / 60)).padStart(2, "0")}:${String(Math.min(e0, 1439) % 60).padStart(2, "0")}`);
+      }
     }
     setSeeded(true);
   }, [t, seeded]);
@@ -137,8 +171,36 @@ export function BookInstallerPanel({
   const offDays = (planned?.days ?? []).filter((d) => d.status !== "available");
   const loud = clashes.length > 0 || offDays.length > 0;
 
-  const win = WINDOWS[windowIdx]!;
+  const custom = windowIdx === CUSTOM;
+  const customMins = custom ? (toMin(finishAt) ?? 0) - (toMin(startAt) ?? 0) : null;
+  const customBad = custom && (toMin(startAt) == null || toMin(finishAt) == null || (customMins ?? 0) < 15);
+  const win: { label: string; start: string; end: string | null } = custom
+    ? { label: `${sayHM(startAt)} to ${sayHM(finishAt)}`, start: startAt, end: null }
+    : WINDOWS[windowIdx]!;
+  /** How long it holds them each day: the exact times, or the duration picked. */
+  const hours = custom ? Math.round(((customMins ?? 0) / 60) * 100) / 100 : durationHours;
   const pay = payOverride ? Number(payOverride) : (t?.labourCost ?? t?.payAmount ?? null);
+
+  /** The day rows the booking would leave, the same shape the server checks. */
+  const dayRows = dates.map((date, i) => {
+    const coordinate = mode === "multi" && i > 0 && following === "coordinate";
+    const w = mode === "multi" && i > 0 && following === "each" && perDay[date] != null ? WINDOWS[perDay[date]!]! : win;
+    return { date, arrivalStart: coordinate ? null : w.start, arrivalEnd: coordinate ? null : w.end, coordinate };
+  });
+
+  // A calendar-checked person (Damien, 30 Oct): the server reads their Google
+  // calendar live and says clear, busy, or not checked. Nobody else is looked at.
+  const crew = [installerId ? Number(installerId) : null, t?.secondInstallerId ?? null].filter((x): x is number => Boolean(x));
+  const cal = useCalendarCheck(
+    { taskId, durationHours: hours, days: dayRows.map((d) => ({ ...d, people: crew })) },
+    Boolean(t && crew.length && !customBad),
+  );
+  const calLines = cal.data ?? [];
+  const calProblems = calLines.filter((c) => c.status !== "clear");
+  const calNoTime = calProblems.some((c) => c.status === "no_time");
+  const calMine = calProblems.length > 0 && calProblems.every((c) => c.canOverride);
+  const calWho = [...new Set(calProblems.map((c) => c.name))].join(" and ");
+  const calBlocked = calProblems.length > 0 && (calNoTime || !calMine || calReason.trim().length < 3);
 
   function submit() {
     if (!t || !installerId) return;
@@ -153,12 +215,10 @@ export function BookInstallerPanel({
         coordinateAfterFirst: mode === "multi" && following === "coordinate",
         perDay:
           mode === "multi" && following === "each"
-            ? dates.slice(1).map((date) => {
-                const w = WINDOWS[perDay[date] ?? windowIdx]!;
-                return { date, arrivalStart: w.start, arrivalEnd: w.end };
-              })
+            ? dayRows.slice(1).map((d) => ({ date: d.date, arrivalStart: d.arrivalStart, arrivalEnd: d.arrivalEnd }))
             : [],
-        durationHours,
+        durationHours: hours,
+        calendarOverride: calProblems.length && calMine && !calNoTime && calReason.trim().length >= 3 ? { reason: calReason.trim() } : null,
         payAmount: payOverride ? Number(payOverride) : null,
         overrideNote: loud && overrideNote ? overrideNote : null,
         // Whatever gets booked is what the note says next time, so the days box
@@ -210,9 +270,9 @@ export function BookInstallerPanel({
 
       <div className="board-scroll flex-1 overflow-y-auto px-4 py-3">
         {/* ------------------------------ installer ------------------------------ */}
-        <Field label="Installer">
+        <Field label="Who's going">
           <Select value={installerId} onChange={(e) => setInstallerId(e.target.value)}>
-            <option value="">Pick an installer…</option>
+            <option value="">Pick someone…</option>
             {(eligible.data ?? []).map((i) => (
               <option key={i.id} value={i.id}>
                 {i.name}
@@ -386,7 +446,7 @@ export function BookInstallerPanel({
                   {mode === "multi" && following === "each" && d.date !== dates[0] ? (
                     <Select
                       className="mt-1 h-7 text-xs"
-                      value={String(perDay[d.date] ?? windowIdx)}
+                      value={String(perDay[d.date] ?? (custom ? 0 : windowIdx))}
                       onChange={(e) => setPerDay((p) => ({ ...p, [d.date]: Number(e.target.value) }))}
                     >
                       {WINDOWS.map((w, i) => (
@@ -448,8 +508,22 @@ export function BookInstallerPanel({
                 {w.label}
               </option>
             ))}
+            <option value={CUSTOM}>Set an exact start and finish time</option>
           </Select>
         </Field>
+        {custom ? (
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <Field label="Start time">
+              <Input type="time" step={300} value={startAt} onChange={(e) => setStartAt(e.target.value)} />
+            </Field>
+            <Field label="Finish time">
+              <Input type="time" step={300} value={finishAt} onChange={(e) => setFinishAt(e.target.value)} />
+            </Field>
+            {customBad ? (
+              <p className="col-span-2 text-[11px] font-medium text-destructive">The finish has to be at least 15 minutes after the start.</p>
+            ) : null}
+          </div>
+        ) : null}
 
         {/* ---------------------------- following days ---------------------------- */}
         {mode === "multi" && dates.length > 1 ? (
@@ -480,15 +554,77 @@ export function BookInstallerPanel({
         ) : null}
 
         {/* ------------------------------- duration ------------------------------- */}
-        <Field label={mode === "one" ? "Estimated duration" : "Hours a day"} className="mt-3">
-          <Select value={String(durationHours)} onChange={(e) => setDurationHours(Number(e.target.value))}>
-            {DURATIONS.map((d) => (
-              <option key={d.hours} value={d.hours}>
-                {d.label}, {d.hours}h
-              </option>
-            ))}
-          </Select>
-        </Field>
+        {!custom ? (
+          <Field label={mode === "one" ? "Estimated duration" : "Hours a day"} className="mt-3">
+            <Select value={String(durationHours)} onChange={(e) => setDurationHours(Number(e.target.value))}>
+              {DURATIONS.some((d) => d.hours === durationHours) ? null : (
+                <option value={durationHours}>{durationHours}h</option>
+              )}
+              {DURATIONS.map((d) => (
+                <option key={d.hours} value={d.hours}>
+                  {d.label}
+                  {d.hours >= 4 ? `, ${d.hours}h` : ""}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        ) : null}
+
+        {/* ------------------------ personal calendar check ------------------------ */}
+        {calLines.length > 0 ? (
+          calProblems.length === 0 ? (
+            <p className="mt-3 flex items-center gap-1.5 rounded-md border border-[var(--success)]/40 bg-[var(--success)]/10 px-3 py-2 text-xs font-medium text-[var(--success)]">
+              <Check className="size-3.5" />
+              {[...new Set(calLines.map((c) => c.name))].join(" and ")}'s calendar is clear then.
+            </p>
+          ) : (
+            <div className="mt-3 rounded-md border-2 border-destructive bg-destructive/10 px-3 py-2" data-testid="calendar-clash">
+              <p className="flex items-center gap-1.5 text-xs font-semibold text-destructive">
+                <CalendarX2 className="size-4" />
+                {calNoTime
+                  ? `${calWho}'s calendar is checked. Pick an exact start and finish.`
+                  : calProblems.some((c) => c.status !== "unchecked")
+                    ? `${calWho} is not available then`
+                    : `${calWho}'s Google calendar could not be checked`}
+              </p>
+              <ul className="mt-1 space-y-1">
+                {calProblems.map((c) => (
+                  <li key={`${c.installerId}-${c.date}`} className="text-xs text-destructive">
+                    <span className="font-semibold">
+                      {shortDay(c.date)}
+                      {c.from && c.to ? `, ${sayHM(c.from)} to ${sayHM(c.to)}` : ""}
+                    </span>
+                    {c.status === "unchecked" ? <span className="block">{c.problem}</span> : null}
+                    {c.status === "no_time" ? <span className="block">No time set, so it can't be checked.</span> : null}
+                    {c.clashes.map((x, i) => (
+                      <span key={i} className="block">
+                        {x.kind === "personal" ? `${x.label}, ${x.when}` : x.kind === "booking" ? `Already booked: ${x.label}, ${x.when}` : `Already booked: ${x.label}`}
+                      </span>
+                    ))}
+                  </li>
+                ))}
+              </ul>
+              {calNoTime ? null : calMine ? (
+                <div className="mt-2 rounded-md border border-destructive/50 bg-card px-2.5 py-2">
+                  <p className="flex items-start gap-1.5 text-[11px] font-semibold text-destructive">
+                    <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
+                    This is your own time. Booking over it is recorded with your name, the time and your reason.
+                  </p>
+                  <Input
+                    className="mt-1.5 h-8 text-xs"
+                    placeholder="Why book over it, e.g. moved my physio"
+                    value={calReason}
+                    onChange={(e) => setCalReason(e.target.value)}
+                  />
+                </div>
+              ) : (
+                <p className="mt-1.5 text-[11px] font-medium text-destructive">
+                  Only {calWho} can approve booking over this, signed in as themselves. Pick another time or person.
+                </p>
+              )}
+            </div>
+          )
+        ) : null}
 
         {/* --------------------------------- pay --------------------------------- */}
         <Field
@@ -518,17 +654,17 @@ export function BookInstallerPanel({
       <div className="border-t border-border px-4 py-3">
         <Button
           className="h-11 w-full text-sm font-semibold"
-          disabled={!installerId || dates.length === 0 || book.isPending}
+          disabled={!installerId || dates.length === 0 || book.isPending || customBad || calBlocked || (cal.isLoading && crew.length > 0)}
           onClick={submit}
         >
           {book.isPending ? (
             <Spinner className="border-white/40 border-t-white" />
-          ) : loud ? (
+          ) : loud || calProblems.length ? (
             <TriangleAlert className="size-4" />
           ) : (
             <Calendar className="size-4" />
           )}
-          {dates.length > 1 ? `Book ${dates.length} days` : "Book installer"}
+          {calProblems.length && calMine && !calNoTime ? "Book over my own time" : dates.length > 1 ? `Book ${dates.length} days` : "Book"}
         </Button>
         {dates.length > 0 && installerId ? (
           <p className="mt-1.5 flex items-center justify-center gap-1 text-[11px] text-muted-foreground">

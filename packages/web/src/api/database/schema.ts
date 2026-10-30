@@ -4822,3 +4822,95 @@ export const xeroContactLinks = sqliteTable(
   },
   (t) => [unique("xero_contact_links_uq").on(t.tenantId, t.billToKey)],
 );
+
+/* ---------------------------------------------------------------------------
+ * Bookable staff and Google Calendar availability (Damien, 30 Oct).
+ *
+ * Office and Admin people can be booked for measures, site visits and jobs.
+ * Each gets a staff card: a normal installer row, so the board, the skill
+ * ticks and every booking path work unchanged, but it belongs to an office
+ * login and is never archived when that login's access changes.
+ *
+ * Anyone with a card can link their own Google calendars. Only busy times are
+ * ever read (freeBusy), never titles, places or attendees. Only the person
+ * themselves, signed in as their own login, can book over their own clash.
+ * ------------------------------------------------------------------------- */
+
+export const staffCards = sqliteTable(
+  "staff_cards",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    profileId: integer("profile_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+    installerId: integer("installer_id").notNull().references(() => installers.id, { onDelete: "cascade" }),
+    ...timestamps,
+  },
+  (t) => [unique("staff_cards_profile_uq").on(t.profileId), unique("staff_cards_installer_uq").on(t.installerId)],
+);
+
+export const calendarLinks = sqliteTable(
+  "calendar_links",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** The bookable person whose time this is. */
+    installerId: integer("installer_id").notNull().references(() => installers.id, { onDelete: "cascade" }),
+    /** Their own login. The only account that may approve booking over a clash. */
+    ownerProfileId: integer("owner_profile_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+    googleEmail: text("google_email"),
+    /** AES-GCM sealed with MAIL_TOKEN_KEY. Never returned by any route. */
+    refreshTokenSealed: text("refresh_token_sealed"),
+    scopes: text("scopes").notNull().default(""),
+    /** JSON array of Google calendar ids that count as busy. */
+    calendarIds: text("calendar_ids").notNull().default("[]"),
+    /** JSON array of { id, name, primary } from the last calendar list. Names only. */
+    calendarsJson: text("calendars_json").notNull().default("[]"),
+    bufferBeforeMin: integer("buffer_before_min").notNull().default(15),
+    bufferAfterMin: integer("buffer_after_min").notNull().default(15),
+    /** Epoch ms. The span the busy cache covers, and when it was last read in full. */
+    cacheFrom: integer("cache_from"),
+    cacheTo: integer("cache_to"),
+    lastSyncOkAt: integer("last_sync_ok_at"),
+    lastSyncTryAt: integer("last_sync_try_at"),
+    lastError: text("last_error"),
+    connectedAt: integer("connected_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (t) => [unique("calendar_links_installer_uq").on(t.installerId)],
+);
+
+/** Busy times only, straight from Google freeBusy. Epoch ms. No titles, ever. */
+export const calendarBusy = sqliteTable(
+  "calendar_busy",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    linkId: integer("link_id").notNull().references(() => calendarLinks.id, { onDelete: "cascade" }),
+    calendarId: text("calendar_id").notNull(),
+    startAt: integer("start_at").notNull(),
+    endAt: integer("end_at").notNull(),
+    fetchedAt: integer("fetched_at").notNull(),
+  },
+  (t) => [index("calendar_busy_link_idx").on(t.linkId, t.startAt)],
+);
+
+/** Every booking made over a personal commitment, and who approved it. */
+export const calendarOverrides = sqliteTable(
+  "calendar_overrides",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    taskId: integer("task_id").references(() => jobTasks.id, { onDelete: "set null" }),
+    installerId: integer("installer_id").notNull().references(() => installers.id, { onDelete: "cascade" }),
+    date: text("date").notNull(),
+    slotStart: text("slot_start"),
+    slotEnd: text("slot_end"),
+    /** JSON array of { kind, from, to } in Brisbane HH:MM. Times only, no event details. */
+    clashesJson: text("clashes_json").notNull().default("[]"),
+    /** clash · unchecked · no_time */
+    kind: text("kind").notNull().default("clash"),
+    reason: text("reason").notNull(),
+    approvedByProfileId: integer("approved_by_profile_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+    approvedByName: text("approved_by_name").notNull().default(""),
+    /** Which booking path: book, reschedule, assign, extend, update. */
+    source: text("source").notNull().default("book"),
+    ...timestamps,
+  },
+  (t) => [index("calendar_overrides_task_idx").on(t.taskId), index("calendar_overrides_installer_idx").on(t.installerId, t.date)],
+);

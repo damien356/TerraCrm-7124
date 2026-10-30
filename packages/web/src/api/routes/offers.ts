@@ -15,6 +15,20 @@ import { syncJobForTask } from "../lib/job-stage";
 import { installerForStaff, taskForStaff } from "../lib/staff-view";
 
 /**
+ * Staff cards (Office and Admin people) and anyone whose Google calendar is
+ * checked are never sent offers. An offer can be accepted onto a day with no
+ * time, which can't be checked, so they are booked directly with a time.
+ */
+async function offerOff(installerIds: number[]) {
+  if (!installerIds.length) return new Set<number>();
+  const [cards, links] = await Promise.all([
+    db.select({ id: schema.staffCards.installerId }).from(schema.staffCards).where(inArray(schema.staffCards.installerId, installerIds)),
+    db.select({ id: schema.calendarLinks.installerId }).from(schema.calendarLinks).where(inArray(schema.calendarLinks.installerId, installerIds)),
+  ]);
+  return new Set([...cards, ...links].map((r) => r.id));
+}
+
+/**
  * Dispatch is DIRECT or BROADCAST.
  *  - direct    → one installer, take it or leave it
  *  - broadcast → every installer ticked for the skill; FIRST TO ACCEPT WINS and
@@ -161,6 +175,9 @@ export async function sendDirectOffer(
   // Client prep (notes 18.56): an install isn't offered until the property type and furniture are answered.
   const block = await bookingBlock(input.taskId);
   if (block) throw new ORPCError("BAD_REQUEST", { message: block });
+  if ((await offerOff([input.installerId])).size) {
+    throw new ORPCError("BAD_REQUEST", { message: "This person is booked directly with a start time, not sent an offer. Use Book instead." });
+  }
 
   if (task.skillId) {
     const [tick] = await db
@@ -244,8 +261,12 @@ export const offers = {
         .where(and(eq(schema.installerSkills.skillId, task.skillId), eq(schema.installers.active, true)));
 
       // A 2-man task can only be broadcast to people who can actually cover it.
+      // Staff and calendar-checked people are left out, see offerOff.
+      const off = await offerOff(candidates.map((c) => c.installer.id));
       const eligible = candidates.filter(
-        (c) => task.crewSize < 2 || c.installer.crewCapacity === "own_offsider" || task.secondInstallerId != null,
+        (c) =>
+          !off.has(c.installer.id) &&
+          (task.crewSize < 2 || c.installer.crewCapacity === "own_offsider" || task.secondInstallerId != null),
       );
 
       if (eligible.length === 0) {
@@ -597,6 +618,10 @@ export async function acceptOffer(offerId: number, installerId: number, chosenDa
             ? ALREADY_TAKEN
             : "This offer is no longer open.",
     });
+  }
+  // An offer sent before this person's calendar was linked can't be taken on a day with no time.
+  if ((await offerOff([installerId])).size) {
+    throw new ORPCError("BAD_REQUEST", { message: "This one has to be booked by the office with a start time. Ask them to book it." });
   }
   if (row.task.assignedInstallerId && row.task.assignedInstallerId !== installerId) {
     await db

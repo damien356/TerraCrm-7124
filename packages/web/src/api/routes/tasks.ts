@@ -13,6 +13,8 @@ import { lockTaskLabour } from "./costing";
 import { installerForStaff, taskForStaff } from "../lib/staff-view";
 import { jobText, taskLetter, taskRef } from "../lib/refs";
 import { bookingBlock, bookingBlockNew } from "../lib/prep";
+import { currentDays, guardAttendance, proposedDays } from "../lib/calendar-availability";
+import type { Actor } from "../middleware/auth";
 
 /**
  * TASKS ARE THE DISPATCH UNIT — not jobs. One job can be five separate
@@ -53,6 +55,39 @@ async function assertAssignable(taskId: number, installerId: number, _crewSize: 
   if (!installer) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
 
   return { task: task.task, job: task.job, installer };
+}
+
+/**
+ * Booking over a calendar-checked person's own time (Damien, 30 Oct). Only
+ * that person, signed in as themselves, can send this, and it needs a reason.
+ */
+const calendarOverride = z.object({ reason: z.string().trim().max(500) }).nullable().optional();
+
+type DayRow = Parameters<typeof proposedDays>[0][number];
+
+/**
+ * Runs the personal calendar check on the days a write is about to leave.
+ * Throws CONFLICT before anything is written when a checked person is busy,
+ * can't be checked, or has no time set. People without a linked calendar are
+ * never looked at, so ordinary crew bookings are unchanged.
+ */
+async function calGuard(args: {
+  taskId: number;
+  rows: DayRow[];
+  crew: Array<number | null | undefined>;
+  durationHours: number | null | undefined;
+  actor: Actor;
+  override?: { reason: string } | null;
+  source: string;
+}) {
+  return guardAttendance({
+    taskId: args.taskId,
+    durationHours: args.durationHours,
+    days: proposedDays(args.rows, args.crew),
+    actor: args.actor,
+    override: args.override ?? null,
+    source: args.source,
+  });
 }
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
@@ -407,10 +442,11 @@ export const tasks = {
         payType: z.enum(["per_m2", "hourly", "per_job", "day_rate"]).optional(),
         payAmount: z.number().nullable().optional(),
         seq: z.number().int().optional(),
+        calendarOverride,
       }),
     )
     .handler(async ({ input, context }) => {
-      const { id, ...rest } = input;
+      const { id, calendarOverride: calOk, ...rest } = input;
       const [existing] = await db
         .select({ task: schema.jobTasks, job: schema.jobs })
         .from(schema.jobTasks)
@@ -421,6 +457,27 @@ export const tasks = {
       if (rest.crewSize === 1 && existing.job.furnitureOnSite) {
         throw new ORPCError("BAD_REQUEST", {
           message: "This job has furniture on site, so it needs a 2-man crew.",
+        });
+      }
+
+      // A longer booking can run into a checked person's own time.
+      const t = existing.task;
+      const lengthChanged = rest.durationHours !== undefined && rest.durationHours !== t.durationHours;
+      const windowChanged = rest.scheduledFrom !== undefined || rest.scheduledTo !== undefined;
+      if (t.assignedInstallerId && (lengthChanged || windowChanged)) {
+        // Day rows hold their own dates. An older run with none reads its dates from the new window.
+        const { rows } = await currentDays(id, {
+          ...(rest.scheduledFrom !== undefined ? { scheduledFrom: rest.scheduledFrom } : {}),
+          ...(rest.scheduledTo !== undefined ? { scheduledTo: rest.scheduledTo } : {}),
+        });
+        await calGuard({
+          taskId: id,
+          rows,
+          crew: [t.assignedInstallerId, t.secondInstallerId],
+          durationHours: rest.durationHours ?? t.durationHours,
+          actor: context.actor,
+          override: calOk,
+          source: "update",
         });
       }
 
@@ -444,6 +501,7 @@ export const tasks = {
         scheduledDate: z.string().nullable(),
         startTime: z.string().nullable().optional(),
         installerId: z.number().nullable().optional(),
+        calendarOverride,
       }),
     )
     .handler(async ({ input, context }) => {
@@ -478,6 +536,19 @@ export const tasks = {
       /** How many days the drag booked when it booked more than the one dropped on. */
       let bookedDays = 0;
       const runInstaller = input.installerId ?? existing.assignedInstallerId;
+      // Who attends after this move, for the personal calendar check.
+      const crewAfter = input.installerId === null ? [] : [runInstaller, existing.secondInstallerId];
+      const guardRows = async (rows: DayRow[]) => {
+        await calGuard({
+          taskId: input.id,
+          rows,
+          crew: crewAfter,
+          durationHours: existing.durationHours,
+          actor: context.actor,
+          override: input.calendarOverride,
+          source: "reschedule",
+        });
+      };
       if (existingDays.length && input.scheduledDate) {
         // Keep the run's shape, but never land a day on one he doesn't work:
         // a Tue to Tue run over a weekend dragged a day later still skips
@@ -510,25 +581,25 @@ export const tasks = {
           if (prev && date <= prev) date = nextWorking(addDays(prev, 1));
           moved.push(date);
         }
+        const newRows = existingDays.map((d, i) => ({
+          taskId: input.id,
+          date: moved[i]!,
+          seq: i + 1,
+          arrivalStart: i === 0 && input.startTime !== undefined ? input.startTime : d.arrivalStart,
+          arrivalEnd: d.arrivalEnd,
+          coordinate: d.coordinate,
+          // A day handed to someone else stays theirs. Only dropping the run
+          // on a different installer pulls those hand-offs back.
+          installerId:
+            input.installerId && input.installerId !== existing.assignedInstallerId ? null : d.installerId,
+          status: d.status,
+          overrideNote: d.overrideNote,
+        }));
+        await guardRows(newRows);
         // Rewrite the run rather than nudge each row, so the one-day-per-task
         // unique index can't trip over a date the run already holds.
         await db.delete(schema.taskDays).where(eq(schema.taskDays.taskId, input.id));
-        await db.insert(schema.taskDays).values(
-          existingDays.map((d, i) => ({
-            taskId: input.id,
-            date: moved[i]!,
-            seq: i + 1,
-            arrivalStart: i === 0 && input.startTime !== undefined ? input.startTime : d.arrivalStart,
-            arrivalEnd: d.arrivalEnd,
-            coordinate: d.coordinate,
-            // A day handed to someone else stays theirs. Only dropping the run
-            // on a different installer pulls those hand-offs back.
-            installerId:
-              input.installerId && input.installerId !== existing.assignedInstallerId ? null : d.installerId,
-            status: d.status,
-            overrideNote: d.overrideNote,
-          })),
-        );
+        await db.insert(schema.taskDays).values(newRows);
       } else if (existingDays.length && !input.scheduledDate) {
         // Dragged off the board: the run is gone, not silently left behind.
         await db.delete(schema.taskDays).where(eq(schema.taskDays.taskId, input.id));
@@ -541,22 +612,23 @@ export const tasks = {
         const off = await nonWorkingWeekdays(runInstaller);
         moved = runDates(input.scheduledDate, Math.max(1, suggested?.days ?? 1), off);
         bookedDays = moved.length;
+        const newRows = moved.map((date, i) => ({
+          taskId: input.id,
+          date,
+          seq: i + 1,
+          arrivalStart: (input.startTime !== undefined ? input.startTime : existing.startTime) ?? null,
+          arrivalEnd: null,
+          coordinate: false,
+          installerId: null,
+          status: "booked",
+        }));
+        await guardRows(newRows);
         // Clears any cancelled day rows left on the task, so the one-day-per-task
         // index can't trip over a date this run wants.
         await db.delete(schema.taskDays).where(eq(schema.taskDays.taskId, input.id));
-        await db.insert(schema.taskDays).values(
-          moved.map((date, i) => ({
-            taskId: input.id,
-            date,
-            seq: i + 1,
-            arrivalStart: (input.startTime !== undefined ? input.startTime : existing.startTime) ?? null,
-            arrivalEnd: null,
-            coordinate: false,
-            installerId: null,
-            status: "booked",
-          })),
-        );
+        await db.insert(schema.taskDays).values(newRows);
       }
+
 
       const [row] = await db
         .update(schema.jobTasks)
@@ -618,6 +690,7 @@ export const tasks = {
         installerId: z.number(),
         secondInstallerId: z.number().nullable().optional(),
         payAmount: z.number().nullable().optional(),
+        calendarOverride,
       }),
     )
     .handler(async ({ input, context }) => {
@@ -633,6 +706,16 @@ export const tasks = {
       if (input.secondInstallerId) {
         await assertAssignable(input.id, input.secondInstallerId, 1);
       }
+      // The days stay where they are. Only who attends changes, so check the new crew on them.
+      await calGuard({
+        taskId: input.id,
+        rows: (await currentDays(input.id)).rows,
+        crew: [input.installerId, input.secondInstallerId ?? null],
+        durationHours: task.durationHours,
+        actor: context.actor,
+        override: input.calendarOverride,
+        source: "assign",
+      });
 
       const [row] = await db
         .update(schema.jobTasks)
@@ -941,6 +1024,7 @@ export const tasks = {
          * later drag. Null leaves the recommendation in charge.
          */
         manualDays: z.number().int().min(1).max(30).nullable().optional(),
+        calendarOverride,
       }),
     )
     .handler(async ({ input, context }) => {
@@ -966,25 +1050,37 @@ export const tasks = {
       const overrides = new Map(input.perDay.map((d) => [d.date, d]));
       const first = dates[0]!;
 
+      const newRows = dates.map((date, i) => {
+        const o = overrides.get(date);
+        const coordinate = o?.coordinate ?? (i > 0 ? input.coordinateAfterFirst : false);
+        return {
+          taskId: input.taskId,
+          date,
+          seq: i + 1,
+          arrivalStart: coordinate ? null : (o?.arrivalStart ?? input.arrivalStart ?? null),
+          arrivalEnd: coordinate ? null : (o?.arrivalEnd ?? input.arrivalEnd ?? null),
+          coordinate,
+          installerId: o?.installerId ?? null,
+          status: "booked",
+          overrideNote: input.overrideNote ?? null,
+        };
+      });
+      // A calendar-checked person's own time. Refused before anything is written.
+      await calGuard({
+        taskId: input.taskId,
+        rows: newRows,
+        crew: [input.installerId, input.secondInstallerId !== undefined ? input.secondInstallerId : task.secondInstallerId],
+        // The length has to be given with the booking for a checked person, not
+        // left at the task's default, so a missing one reads as "no time".
+        durationHours: input.durationHours ?? null,
+        actor: context.actor,
+        override: input.calendarOverride,
+        source: "book",
+      });
+
       // Replace the run rather than add to it, so re-booking is idempotent.
       await db.delete(schema.taskDays).where(eq(schema.taskDays.taskId, input.taskId));
-      await db.insert(schema.taskDays).values(
-        dates.map((date, i) => {
-          const o = overrides.get(date);
-          const coordinate = o?.coordinate ?? (i > 0 ? input.coordinateAfterFirst : false);
-          return {
-            taskId: input.taskId,
-            date,
-            seq: i + 1,
-            arrivalStart: coordinate ? null : (o?.arrivalStart ?? input.arrivalStart ?? null),
-            arrivalEnd: coordinate ? null : (o?.arrivalEnd ?? input.arrivalEnd ?? null),
-            coordinate,
-            installerId: o?.installerId ?? null,
-            status: "booked",
-            overrideNote: input.overrideNote ?? null,
-          };
-        }),
-      );
+      await db.insert(schema.taskDays).values(newRows);
 
       const [row] = await db
         .update(schema.jobTasks)
@@ -1060,6 +1156,7 @@ export const tasks = {
         skipNonWorking: z.boolean().default(true),
         /** Why the office added a day over a clash. Stored on the new days. */
         overrideNote: z.string().nullable().optional(),
+        calendarOverride,
       }),
     )
     .handler(async ({ input, context }) => {
@@ -1104,6 +1201,24 @@ export const tasks = {
           if (taken.has(date)) continue;
           added.push(date);
         }
+
+        const newRows = added.map((date) => ({
+          date,
+          arrivalStart: last.coordinate ? null : last.arrivalStart,
+          arrivalEnd: last.coordinate ? null : last.arrivalEnd,
+          coordinate: last.coordinate,
+          installerId: null,
+          status: "booked",
+        }));
+        await calGuard({
+          taskId: input.taskId,
+          rows: newRows,
+          crew: [task.assignedInstallerId, task.secondInstallerId],
+          durationHours: task.durationHours,
+          actor: context.actor,
+          override: input.calendarOverride,
+          source: "extend",
+        });
 
         await db.insert(schema.taskDays).values(
           added.map((date, i) => ({

@@ -48,6 +48,8 @@ async function unlinkedCards() {
     .where(isNull(schema.installers.archivedAt));
   const taken = await db.select({ installerId: schema.profiles.installerId }).from(schema.profiles);
   const used = new Set(taken.map((t) => t.installerId).filter((v): v is number => v != null));
+  // A staff card belongs to an Office or Admin login already. Never offered to a new crew login.
+  for (const s of await db.select({ installerId: schema.staffCards.installerId }).from(schema.staffCards)) used.add(s.installerId);
   return cards.filter((c) => !used.has(c.id));
 }
 
@@ -153,8 +155,17 @@ export const team = {
       if (!changed.length) throw new ORPCError("BAD_REQUEST", { message: "There must always be at least one active Admin." });
 
       if (input.role === "field") {
+        // Someone who was bookable as staff keeps the same card, so their bookings and calendar stay put.
+        const [staff] = await db.select().from(schema.staffCards).where(eq(schema.staffCards.profileId, profile.id));
+        if (staff && !profile.installerId) {
+          await db.update(schema.profiles).set({ installerId: staff.installerId, updatedAt: new Date() }).where(eq(schema.profiles.id, profile.id));
+          await db.update(schema.installers).set({ userId: profile.userId, updatedAt: new Date() }).where(eq(schema.installers.id, staff.installerId));
+          await db.delete(schema.staffCards).where(eq(schema.staffCards.id, staff.id));
+        }
         await ensureInstallerCard(profile.userId);
       } else if (profile.installerId) {
+        // Field to Office or Admin: the crew card is archived. A staff card (staff_cards) is a
+        // different card and is never touched here, so Office and Admin people stay bookable.
         await db
           .update(schema.installers)
           .set({ active: false, archivedAt: new Date(), updatedAt: new Date() })
