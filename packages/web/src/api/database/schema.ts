@@ -26,8 +26,18 @@ export const profiles = sqliteTable("profiles", {
   /** Office only: an Admin can switch this on so the person sees cost prices and margins. */
   canSeeCosts: integer("can_see_costs", { mode: "boolean" }).notNull().default(false),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
+  /**
+   * The main admin (Damien). Only this login can archive or delete people, and
+   * it can never be archived, deleted, switched off or moved off Admin. One at most.
+   */
+  isMainAdmin: integer("is_main_admin", { mode: "boolean" }).notNull().default(false),
+  /** Office (or another Admin) the main admin ticked to bring archived people back. */
+  canRestorePeople: integer("can_restore_people", { mode: "boolean" }).notNull().default(false),
+  /** Archived: login off, out of booking, everything kept so they can be restored. */
+  archivedAt: integer("archived_at", { mode: "timestamp" }),
+  archivedByName: text("archived_by_name"),
   ...timestamps,
-});
+}, (t) => [uniqueIndex("profiles_one_main_admin").on(t.isMainAdmin).where(sql`is_main_admin = 1`)]);
 
 /** Key/value app settings, e.g. business_phone or site_circle_m. */
 export const settings = sqliteTable("settings", {
@@ -277,8 +287,14 @@ export const installers = sqliteTable("installers", {
   colour: text("colour").notNull().default("#4A7FA5"),
   notes: text("notes"),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
-  /** Set when the person moves to Admin or Office. Card leaves dispatch, history stays. */
+  /**
+   * Set when the person moves to Admin or Office (card leaves dispatch, history
+   * stays), or when the main admin archives them. A card with no login and this
+   * set is an archived person.
+   */
   archivedAt: integer("archived_at", { mode: "timestamp" }),
+  /** Who archived this person, when it was an archive rather than a level change. */
+  archivedByName: text("archived_by_name"),
   /**
    * Location sharing. ON-SHIFT ONLY: the app reports a position while a task is
    * in progress and stops the second it's marked complete. Never outside that.

@@ -24,7 +24,7 @@ import type { Actor } from "../middleware/auth";
  */
 
 /** Enforces the furniture rule and the skill-tick rule in one place. */
-async function assertAssignable(taskId: number, installerId: number, _crewSize: number) {
+async function assertAssignable(taskId: number, installerId: number, _crewSize: number, keep = false) {
   const [task] = await db
     .select({ task: schema.jobTasks, job: schema.jobs })
     .from(schema.jobTasks)
@@ -53,6 +53,16 @@ async function assertAssignable(taskId: number, installerId: number, _crewSize: 
 
   const [installer] = await db.select().from(schema.installers).where(eq(schema.installers.id, installerId));
   if (!installer) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
+  // Archived or switched off: never booked again. A plain edit of a task they are
+  // already on (keep) is let through, so the office can still move it while they reassign.
+  const already = task.task.assignedInstallerId === installerId || task.task.secondInstallerId === installerId;
+  if ((installer.archivedAt || !installer.active) && !(keep && already)) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: installer.archivedAt
+        ? `${installer.name} is archived, so they can't be booked. Pick someone else.`
+        : `${installer.name} is switched off, so they can't be booked. Pick someone else.`,
+    });
+  }
 
   return { task: task.task, job: task.job, installer };
 }
@@ -515,7 +525,7 @@ export const tasks = {
       }
 
       if (input.installerId) {
-        const { task, job } = await assertAssignable(input.id, input.installerId, existing.crewSize);
+        const { task, job } = await assertAssignable(input.id, input.installerId, existing.crewSize, true);
         const [installer] = await db.select().from(schema.installers).where(eq(schema.installers.id, input.installerId));
         // A 2-man task can't be covered by one person unless they bring their own offsider.
         if (task.crewSize > 1 && installer!.crewCapacity !== "own_offsider" && !task.secondInstallerId) {

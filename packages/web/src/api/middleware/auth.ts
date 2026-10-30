@@ -16,6 +16,12 @@ export interface Actor {
   installerId: number | null;
   /** Admin always true. Office only when an Admin switched it on. Field never. */
   canSeeCosts: boolean;
+  /** The signed-in profile. Null only for the built-in system actor. */
+  profileId: number | null;
+  /** Damien. The only login that can archive or delete people. */
+  isMainAdmin: boolean;
+  /** Main admin always. Others only when the main admin ticked "Can restore people". */
+  canRestorePeople: boolean;
 }
 
 /** Old databases store "installer" for field crew. Anything unknown is treated as field (least access). */
@@ -37,6 +43,8 @@ export function ensureInstallerCard(userId: string): Promise<number> {
   const p = (async () => {
     const [profile] = await db.select().from(schema.profiles).where(eq(schema.profiles.userId, userId));
     if (!profile) throw new ORPCError("NOT_FOUND", { message: "Login not found" });
+    // An archived person's card stays archived until someone restores them.
+    if (profile.archivedAt) throw new ORPCError("BAD_REQUEST", { message: "This person is archived. Restore them first." });
     if (profile.installerId) {
       const [card] = await db.select().from(schema.installers).where(eq(schema.installers.id, profile.installerId));
       if (card) {
@@ -118,6 +126,8 @@ async function actorFor(session: Session): Promise<Actor> {
         name: session.user.name ?? "",
         email: session.user.email ?? "",
         role,
+        // The very first login is the business owner, so it is the main admin too.
+        isMainAdmin: true,
       })
       .returning();
     return {
@@ -127,6 +137,9 @@ async function actorFor(session: Session): Promise<Actor> {
       role,
       installerId: null,
       canSeeCosts: true,
+      profileId: created!.id,
+      isMainAdmin: true,
+      canRestorePeople: true,
     };
   }
 
@@ -151,6 +164,9 @@ async function actorFor(session: Session): Promise<Actor> {
     role,
     installerId,
     canSeeCosts: role === "admin" || (role === "office" && profile.canSeeCosts),
+    profileId: profile.id,
+    isMainAdmin: role === "admin" && profile.isMainAdmin,
+    canRestorePeople: (role === "admin" && profile.isMainAdmin) || (role !== "field" && profile.canRestorePeople),
   };
 }
 
@@ -174,6 +190,22 @@ export const adminOnly = base.use(async ({ context, next }) => {
   if (actor.role !== "admin") {
     throw new ORPCError("FORBIDDEN", { message: "Admin access required" });
   }
+  return onActorDb(actor, () => next({ context: { actor } }));
+});
+
+/** The main admin only: archiving and deleting people. */
+export const mainAdminOnly = base.use(async ({ context, next }) => {
+  const actor = await resolveActor(context.headers);
+  if (!actor) throw new ORPCError("UNAUTHORIZED");
+  if (!actor.isMainAdmin) throw new ORPCError("FORBIDDEN", { message: "Only the main admin can do this." });
+  return onActorDb(actor, () => next({ context: { actor } }));
+});
+
+/** The main admin, or Office and Admin people the main admin ticked "Can restore people". */
+export const restorerOnly = base.use(async ({ context, next }) => {
+  const actor = await resolveActor(context.headers);
+  if (!actor) throw new ORPCError("UNAUTHORIZED");
+  if (!actor.canRestorePeople) throw new ORPCError("FORBIDDEN", { message: "You need \"Can restore people\" for this. Ask the main admin." });
   return onActorDb(actor, () => next({ context: { actor } }));
 });
 

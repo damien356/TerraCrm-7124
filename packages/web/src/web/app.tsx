@@ -17,6 +17,7 @@ import ContactDetailPage from "./pages/contact-detail";
 import CompaniesPage from "./pages/companies";
 import CompanyDetailPage from "./pages/company-detail";
 import TeamPage from "./pages/team";
+import ArchivedPeoplePage from "./pages/archived-people";
 import SuppliersPage from "./pages/suppliers";
 import ProductsPage from "./pages/products";
 import SettingsPage from "./pages/settings";
@@ -135,6 +136,7 @@ function App() {
               <Route path="/review" component={ReviewPage} />
               <Route path="/installers">{() => <Redirect to="/team" />}</Route>
               <Route path="/team" component={TeamPage} />
+              <Route path="/archived-people" component={ArchivedPeoplePage} />
               <Route path="/suppliers" component={SuppliersPage} />
               <Route path="/products" component={ProductsPage} />
               <Route path="/settings" component={SettingsPage} />

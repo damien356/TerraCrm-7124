@@ -12,6 +12,8 @@ import {
   usePhoneProblems,
   useSetAccess,
   useSetCostAccess,
+  useCardsWithoutLogin,
+  useSetCanRestore,
   useSetLoginActive,
   useUnlinkedCards,
   useUpdatePerson,
@@ -23,6 +25,8 @@ import { EmailInput } from "../components/email-input";
 import { useSendInvite, useSetPassword } from "../queries/invites";
 import { SetPasswordModal } from "../components/set-password-modal";
 import { ReviewerLoginCard } from "../components/reviewer-login-card";
+import { PersonActions, useIsMainAdmin } from "../components/person-archive";
+import { Link } from "wouter";
 
 function when(iso: string | null) {
   if (!iso) return "-";
@@ -48,6 +52,8 @@ export default function TeamPage() {
   const setCosts = useSetCostAccess();
   const setActive = useSetLoginActive();
   const updatePerson = useUpdatePerson();
+  const setCanRestore = useSetCanRestore();
+  const mainAdmin = useIsMainAdmin();
   const [error, setError] = React.useState<string | null>(null);
   const [openId, setOpenId] = React.useState<number | null>(null);
   const [adding, setAdding] = React.useState(false);
@@ -59,7 +65,10 @@ export default function TeamPage() {
     if (m) setOpenId(Number(m[1]));
   }, []);
 
-  const busy = setAccess.isPending || setCosts.isPending || setActive.isPending || updatePerson.isPending;
+  const busy = setAccess.isPending || setCosts.isPending || setActive.isPending || updatePerson.isPending || setCanRestore.isPending;
+  // Archived people live on their own page. This list is everyone still working here.
+  const current = (people.data ?? []).filter((r) => !r.archivedAt);
+  const archivedCount = (people.data ?? []).length - current.length;
 
   async function run(fn: () => Promise<unknown>) {
     setError(null);
@@ -124,6 +133,14 @@ export default function TeamPage() {
             anything.
           </li>
           <li>
+            <strong className="text-foreground">Archive</strong> is for someone who has left. Their login stops
+            working, they come off every booking list, and open offers to them are pulled back. Their name stays on
+            past jobs, pay and safety records, and they can be restored from Archived people.{" "}
+            <strong className="text-foreground">Delete</strong> is only for someone added by mistake who has no past
+            work at all. Only the main admin can archive or delete, and the main admin can never be archived or
+            deleted.
+          </li>
+          <li>
             Set password is for when an invite can't get through. You type the password, so tell them it in person.
             The invite is still the better way.
           </li>
@@ -138,7 +155,7 @@ export default function TeamPage() {
 
       {people.isPending ? (
         <Loading label="Loading people…" />
-      ) : !people.data || people.data.length === 0 ? (
+      ) : current.length === 0 ? (
         <Empty>No one yet. The first person to create an account becomes the Admin.</Empty>
       ) : (
         <Card className="overflow-x-auto">
@@ -154,7 +171,7 @@ export default function TeamPage() {
               </tr>
             </thead>
             <tbody>
-              {people.data.map((row) => (
+              {current.map((row) => (
                 <tr key={row.id} className="border-b border-border/40 align-top last:border-0">
                   <td className="px-4 py-3">
                     {editing === row.id ? (
@@ -192,6 +209,7 @@ export default function TeamPage() {
                         >
                           Edit name, mobile, email
                         </button>
+                        {row.isMainAdmin ? <Badge className="ml-2" colour="#8A6D3B">Main admin</Badge> : null}
                         {!row.active ? <Badge className="ml-2 bg-destructive/10 text-destructive">Switched off</Badge> : null}
                       </>
                     )}
@@ -199,7 +217,8 @@ export default function TeamPage() {
                   <td className="px-4 py-3">
                     <Select
                       value={row.role}
-                      disabled={busy}
+                      disabled={busy || row.isMainAdmin}
+                      title={row.isMainAdmin ? "The main admin always stays Admin." : undefined}
                       onChange={(e) => changeLevel(row, e.target.value as Level)}
                       className="w-[150px]"
                     >
@@ -230,6 +249,18 @@ export default function TeamPage() {
                         Can see cost prices and margins
                       </label>
                     ) : null}
+                    {row.role !== "field" && !row.isMainAdmin && (mainAdmin || row.canRestorePeople) ? (
+                      <label className="mt-1 flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          aria-label="Can restore people"
+                          checked={row.canRestorePeople}
+                          disabled={busy || !mainAdmin}
+                          onChange={(e) => run(() => setCanRestore.mutateAsync({ profileId: row.id, canRestorePeople: e.target.checked }))}
+                        />
+                        Can restore people
+                      </label>
+                    ) : null}
                     {row.role === "field" && row.installerId ? (
                       <div className="space-y-1">
                         <Button variant="ghost" onClick={() => setOpenId(row.installerId)}>
@@ -248,14 +279,22 @@ export default function TeamPage() {
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">{when(row.lastSeenAt)}</td>
                   <td className="px-4 py-3 text-right">
-                    <Button
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => run(() => setActive.mutateAsync({ profileId: row.id, active: !row.active }))}
-                    >
-                      {busy ? <Spinner className="border-foreground/20 border-t-foreground" /> : null}
-                      {row.active ? "Switch off" : "Switch on"}
-                    </Button>
+                    {row.isMainAdmin ? (
+                      <span className="text-xs text-muted-foreground">Always on</span>
+                    ) : (
+                      <div className="flex flex-col items-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() => run(() => setActive.mutateAsync({ profileId: row.id, active: !row.active }))}
+                        >
+                          {busy ? <Spinner className="border-foreground/20 border-t-foreground" /> : null}
+                          {row.active ? "Switch off" : "Switch on"}
+                        </Button>
+                        <PersonActions person={{ profileId: row.id }} name={row.name || row.email} compact />
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -263,6 +302,17 @@ export default function TeamPage() {
           </table>
         </Card>
       )}
+
+      {archivedCount > 0 ? (
+        <p className="mt-2 text-sm text-muted-foreground">
+          {archivedCount} archived {archivedCount === 1 ? "login is" : "logins are"} not shown here.{" "}
+          <Link to="/archived-people" className="text-primary hover:underline">
+            Open Archived people
+          </Link>
+        </p>
+      ) : null}
+
+      <CardsWithoutLogin onOpen={setOpenId} />
 
       <ReviewerLoginCard />
 
@@ -273,6 +323,49 @@ export default function TeamPage() {
       <PhoneProblems />
       {openId !== null ? <InstallerPanel id={openId} onClose={() => setOpenId(null)} /> : null}
     </Page>
+  );
+}
+
+/**
+ * Installer cards nobody signs in with: subbies who never got a login, or a
+ * card made by hand. They can be archived or deleted the same way.
+ */
+function CardsWithoutLogin({ onOpen }: { onOpen: (id: number) => void }) {
+  const cards = useCardsWithoutLogin();
+  const rows = cards.data ?? [];
+  return (
+    <Card className="mt-4">
+      <CardHeader
+        title="Installer cards with no login"
+        subtitle="People booked on a card who don't sign in to the app. Open a card to change skills and rates."
+        action={<HardHat className="size-4 text-muted-foreground" />}
+      />
+      {cards.isPending ? (
+        <Loading label="Loading cards…" />
+      ) : rows.length === 0 ? (
+        <Empty>Every installer card has a login.</Empty>
+      ) : (
+        <div className="divide-y divide-border">
+          {rows.map((c) => (
+            <div key={c.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 text-sm">
+              <div className="min-w-[180px] flex-1">
+                <div className="font-medium">
+                  {c.name}
+                  {!c.active ? <Badge className="ml-2 bg-destructive/10 text-destructive">Switched off</Badge> : null}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {[c.mobile, c.email].filter(Boolean).join(" · ") || "No mobile or email"}
+                </div>
+              </div>
+              <Button variant="ghost" size="sm" onClick={() => onOpen(c.id)}>
+                Open card
+              </Button>
+              <PersonActions person={{ installerId: c.id }} name={c.name} compact />
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
 

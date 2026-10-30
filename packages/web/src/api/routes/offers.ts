@@ -175,6 +175,13 @@ export async function sendDirectOffer(
   // Client prep (notes 18.56): an install isn't offered until the property type and furniture are answered.
   const block = await bookingBlock(input.taskId);
   if (block) throw new ORPCError("BAD_REQUEST", { message: block });
+  const [who] = await db.select().from(schema.installers).where(eq(schema.installers.id, input.installerId));
+  if (!who) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
+  if (who.archivedAt || !who.active) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: `${who.name} is ${who.archivedAt ? "archived" : "switched off"}, so they can't be sent an offer. Pick someone else.`,
+    });
+  }
   if ((await offerOff([input.installerId])).size) {
     throw new ORPCError("BAD_REQUEST", { message: "This person is booked directly with a start time, not sent an offer. Use Book instead." });
   }

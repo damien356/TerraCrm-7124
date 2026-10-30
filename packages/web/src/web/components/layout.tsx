@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Link, useLocation, useRoute } from "wouter";
 import {
+  Archive,
   BanknoteArrowDown,
   Building2,
   CalendarDays,
@@ -53,6 +54,7 @@ import { useBootstrap } from "../queries/settings";
 import { Loading } from "./ui/card";
 import { GlobalMemoButton, MemoProvider } from "./voice-memo";
 import { DueReminders } from "./office-tasks";
+import { PersonActionHost } from "./person-archive";
 import { cn } from "@/lib/utils";
 
 type NavIcon = typeof Users;
@@ -153,6 +155,7 @@ const NAV: NavEntry[] = [
       { to: "/settings", label: "Settings", icon: SettingsIcon },
       { to: "/products", label: "Price book", icon: Tags },
       { to: "/team", label: "People", icon: KeyRound },
+      { to: "/archived-people", label: "Archived people", icon: Archive },
       { to: "/review", label: "Import review", icon: ListChecks },
       { to: "/review/duplicates", label: "Duplicate cards", icon: CopyCheck },
     ],
@@ -231,9 +234,19 @@ function phoneNav(entries: NavEntry[]): NavEntry[] {
   return out;
 }
 
-function navFor(role: string | undefined): NavEntry[] {
-  const full = officeNavFor(role);
+/** Archived people: the main admin, and Office or Admin people ticked "Can restore people". */
+const RESTORER_PATHS = ["/archived-people"];
+
+function navFor(role: string | undefined, canRestore: boolean): NavEntry[] {
+  const full = withoutRestore(officeNavFor(role), canRestore);
   return isPhoneApp ? phoneNav(full) : full;
+}
+
+function withoutRestore(entries: NavEntry[], canRestore: boolean): NavEntry[] {
+  if (canRestore) return entries;
+  return entries
+    .map((e) => (isSection(e) ? { ...e, children: e.children.filter((c) => !RESTORER_PATHS.includes(c.to)) } : e))
+    .filter((e) => !isSection(e) || e.children.length > 0);
 }
 
 function officeNavFor(role: string | undefined): NavEntry[] {
@@ -367,6 +380,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   }
 
   const role = bootstrap.data?.actor.role;
+  const canRestore = Boolean(bootstrap.data?.actor.canRestorePeople);
 
   // A login with no Terra Ops profile (there is no public sign-up) gets this, not the board.
   if (bootstrap.isError && (bootstrap.error as { code?: string } | null)?.code === "FORBIDDEN") {
@@ -424,7 +438,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </div>
       <div className="gold-rule mb-3.5" />
       <nav className="board-scroll flex flex-1 flex-col gap-0.5 overflow-y-auto">
-        {navFor(role).map((entry) =>
+        {navFor(role, canRestore).map((entry) =>
           isSection(entry) ? (
             <NavGroup key={entry.label} section={entry} onNavigate={() => setDrawerOpen(false)} />
           ) : (
@@ -511,6 +525,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 Back to the dashboard
               </Link>
             </div>
+          ) : bootstrap.data && !canRestore && RESTORER_PATHS.some((p) => matches(location, p)) ? (
+            <div className="mx-auto mt-24 max-w-md px-6 text-center">
+              <h1 className="text-lg font-semibold">Not ticked for this</h1>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Only people ticked "Can restore people" can open Archived people. Ask Damien if you need someone restored.
+              </p>
+            </div>
           ) : role === "office" && !officeCanOpen(location) ? (
             <div className="mx-auto mt-24 max-w-md px-6 text-center">
               <h1 className="text-lg font-semibold">Admin only</h1>
@@ -525,6 +546,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </div>
       {/* Voice memo from anywhere: say who and what, it works out the rest. */}
       <GlobalMemoButton />
+      <PersonActionHost />
       <DueReminders />
     </div>
     </MemoProvider>

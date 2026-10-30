@@ -24,6 +24,7 @@ import { dayOf } from "@/lib/utils";
 import { AbnField, abnDay, abnShort } from "../components/abn-check";
 import { abnVerdict } from "../../api/lib/abn-names";
 import { useSyncedForm } from "../hooks/use-synced-form";
+import { PersonActions } from "../components/person-archive";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -619,6 +620,11 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
       width={panel === "rates" ? "max-w-5xl" : panel === "account" ? "max-w-4xl" : "max-w-3xl"}
       footer={
         <>
+          {installer && !installer.archivedAt ? (
+            <div className="mr-auto">
+              <PersonActions person={{ installerId: id }} name={installer.name} compact onDone={(what) => what === "deleted" && onClose()} />
+            </div>
+          ) : null}
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>

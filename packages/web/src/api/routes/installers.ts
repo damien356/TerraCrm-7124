@@ -208,6 +208,9 @@ export const installers = {
       const { id, unavailableDays, worksWeekendDays, gstRegistered, ...rest } = input;
       const [current] = await db.select().from(schema.installers).where(eq(schema.installers.id, id));
       if (!current) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
+      if (rest.active === true && current.archivedByName) {
+        throw new ORPCError("BAD_REQUEST", { message: `${current.name} is archived. Use Restore on the Archived people page to bring them back.` });
+      }
       if (gstRegistered !== undefined && gstRegistered !== current.gstRegistered) {
         throw new ORPCError("BAD_REQUEST", { message: "GST is set by the ABN lookup only. It can't be changed by hand." });
       }

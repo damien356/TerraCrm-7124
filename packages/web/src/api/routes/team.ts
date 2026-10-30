@@ -8,6 +8,7 @@ import { hasPasswordFor, inviteLog, sendInvite } from "../lib/invites";
 import { normaliseMobile, smsConfigured } from "../lib/sms";
 import * as schema from "../database/schema";
 import { adminOnly, ensureInstallerCard, normaliseRole } from "../middleware/auth";
+import { teamArchive } from "./teamArchive";
 
 /** There must always be at least one active Admin besides this person. */
 async function assertAnotherAdmin(exceptProfileId: number) {
@@ -104,6 +105,10 @@ export const team = {
       role: normaliseRole(r.profile.role),
       phone: r.profile.phone ?? null,
       canSeeCosts: r.profile.canSeeCosts,
+      isMainAdmin: r.profile.isMainAdmin,
+      canRestorePeople: r.profile.canRestorePeople,
+      archivedAt: r.profile.archivedAt ? new Date(r.profile.archivedAt).toISOString() : null,
+      archivedByName: r.profile.archivedByName ?? null,
       installerArchived: r.installerArchivedAt ? true : false,
       active: r.profile.active,
       installerId: r.profile.installerId,
@@ -130,6 +135,11 @@ export const team = {
     .handler(async ({ input, context }) => {
       const [profile] = await db.select().from(schema.profiles).where(eq(schema.profiles.id, input.profileId));
       if (!profile) throw new ORPCError("NOT_FOUND", { message: "Person not found" });
+      if (profile.isMainAdmin && input.role !== "admin") {
+        throw new ORPCError("BAD_REQUEST", { message: "The main admin always stays Admin." });
+      }
+      // Changing level would bring an archived card back to life. Restore first.
+      if (profile.archivedAt) throw new ORPCError("BAD_REQUEST", { message: "This person is archived. Restore them first." });
 
       const wasAdmin = normaliseRole(profile.role) === "admin";
       if (wasAdmin && input.role !== "admin") {
@@ -148,7 +158,7 @@ export const team = {
         })
         .where(
           wasAdmin && input.role !== "admin"
-            ? and(eq(schema.profiles.id, profile.id), anotherActiveAdmin(profile.id))
+            ? and(eq(schema.profiles.id, profile.id), anotherActiveAdmin(profile.id), eq(schema.profiles.isMainAdmin, false))
             : eq(schema.profiles.id, profile.id),
         )
         .returning({ id: schema.profiles.id });
@@ -347,6 +357,10 @@ export const team = {
         .from(schema.profiles)
         .where(eq(schema.profiles.id, input.profileId));
       if (!profile) throw new ORPCError("NOT_FOUND", { message: "Login not found" });
+      if (!input.active && profile.isMainAdmin) throw new ORPCError("BAD_REQUEST", { message: "The main admin's login can't be switched off." });
+      if (input.active && profile.archivedAt) {
+        throw new ORPCError("BAD_REQUEST", { message: "This person is archived. Use Restore on the Archived people page to bring them back." });
+      }
       if (!input.active && normaliseRole(profile.role) === "admin") await assertAnotherAdmin(profile.id);
       if (profile.userId === context.actor.userId && !input.active) {
         throw new ORPCError("BAD_REQUEST", {
@@ -359,9 +373,13 @@ export const team = {
         .update(schema.profiles)
         .set({ active: input.active })
         .where(
-          guardAdmin
-            ? and(eq(schema.profiles.id, input.profileId), anotherActiveAdmin(input.profileId))
-            : eq(schema.profiles.id, input.profileId),
+          and(
+            guardAdmin
+              ? and(eq(schema.profiles.id, input.profileId), anotherActiveAdmin(input.profileId))
+              : eq(schema.profiles.id, input.profileId),
+            // In the write too: never the main admin off, never an archived person on.
+            input.active ? isNull(schema.profiles.archivedAt) : eq(schema.profiles.isMainAdmin, false),
+          ),
         )
         .returning();
       if (!updated) throw new ORPCError("BAD_REQUEST", { message: "There must always be at least one active Admin." });
@@ -371,4 +389,6 @@ export const team = {
       // rows are left alone so Last seen still shows (notes 18.63).
       return updated;
     }),
+
+  ...teamArchive,
 };

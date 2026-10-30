@@ -130,6 +130,7 @@ export const calendar = {
     if (targetId !== me.id && context.actor.role !== "admin") throw new ORPCError("FORBIDDEN", { message: "Only an Admin can make someone else bookable." });
     const [target] = await db.select().from(schema.profiles).where(eq(schema.profiles.id, targetId));
     if (!target) throw new ORPCError("NOT_FOUND", { message: "Person not found" });
+    if (target.archivedAt || !target.active) throw new ORPCError("BAD_REQUEST", { message: "This person is archived or switched off, so they can't be made bookable." });
     return { installerId: await makeCard(target) };
   }),
 

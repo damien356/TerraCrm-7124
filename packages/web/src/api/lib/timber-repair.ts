@@ -68,6 +68,9 @@ const SYSTEM: Actor = {
   role: "admin",
   installerId: null,
   canSeeCosts: true,
+  profileId: null,
+  isMainAdmin: false,
+  canRestorePeople: false,
 };
 
 const money0 = (n: number) => `$${Math.round(n).toLocaleString("en-AU")}`;
