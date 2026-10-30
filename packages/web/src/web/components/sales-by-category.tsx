@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { Card, CardHeader, Empty, Loading } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { moneyExact as money } from "../lib/money";
+import { invoiceStatusText } from "../lib/invoice-status";
 import { useSalesByCategory } from "../queries/finance";
 
 /**
@@ -129,7 +130,7 @@ export function SalesByCategoryCard() {
                             <span className="font-medium">{m.number}</span>
                           )}
                           <p className="text-xs text-muted-foreground">
-                            {m.date} · {m.status.replace("_", " ")}
+                            {m.date} · {invoiceStatusText({ status: m.status, total: m.total, amountPaid: m.total - m.owing, emailedAt: m.emailedAt, inXero: m.inXero })}
                             {m.inXero ? (
                               <>
                                 {" "}

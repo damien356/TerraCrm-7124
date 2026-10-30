@@ -21,6 +21,7 @@ import {
   xeroContactCandidates,
 } from "../lib/contras";
 import { quoteRefOf } from "../lib/quote-number";
+import { emailedAtFor } from "../lib/invoice-emailed";
 import { salesAccountsView, xeroSettings } from "../lib/xero-invoices";
 import { raiseMaterialsInvoice } from "../lib/materials-sale";
 
@@ -73,6 +74,7 @@ export const installerAccount = {
       flags.workflow && isAdmin ? xeroSettings() : Promise.resolve(null),
       salesAccountsView(),
     ]);
+    const emailed = await emailedAtFor(invoices.map((r) => r.id));
     return {
       installer: { id: i.id, name: i.name, abn: i.abn, legalName: i.abnLegalName ?? null, tradingName: i.tradingName ?? null, email: i.invoiceEmail ?? i.email ?? null, mobile: i.mobile ?? null },
       link: link
@@ -91,7 +93,7 @@ export const installerAccount = {
       candidates: cands?.candidates ?? [],
       owesUs: invoices
         .filter((r) => r.status !== "void")
-        .map((r) => ({ id: r.id, number: r.number, jobId: r.jobId, label: r.label, status: r.status, total: r2(r.total), paid: r2(r.amountPaid), due: r2(r.total - r.amountPaid), inXero: !!r.xeroInvoiceId, dueDate: r.dueDate, salesCategory: r.salesCategory === "installer_materials" ? ("installer_materials" as const) : ("customer" as const) })),
+        .map((r) => ({ id: r.id, number: r.number, jobId: r.jobId, label: r.label, status: r.status, emailedAt: emailed.get(r.id) ?? null, total: r2(r.total), paid: r2(r.amountPaid), due: r2(r.total - r.amountPaid), inXero: !!r.xeroInvoiceId, dueDate: r.dueDate, salesCategory: r.salesCategory === "installer_materials" ? ("installer_materials" as const) : ("customer" as const) })),
       weOweHim: bills.map((b) => ({ id: b.id, number: b.invoiceNumber, jobId: b.jobId, status: b.status, total: r2(b.total), submittedAt: b.submittedAt })),
       materialsQuotes: quotes,
       contras: contras.map((c) => ({ ...c, phrase: approvalPhrase(c.amount) })),

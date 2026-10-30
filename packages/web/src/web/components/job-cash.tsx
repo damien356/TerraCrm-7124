@@ -116,6 +116,8 @@ export function JobCashCard({ jobId }: { jobId: number }) {
   const d = q.data;
   const s = d?.summary;
   const costs = (d?.costs ?? []) as CostRow[];
+  // Sell products: GP off Cost by line, shown only once every line has a cost.
+  const gpShown = s ? (s.saleCosted ? !s.costIncomplete : s.hasCosts) : false;
 
   function commit() {
     if (!draft) return;
@@ -161,20 +163,28 @@ export function JobCashCard({ jobId }: { jobId: number }) {
             {/* the six figures Damien reads in this order */}
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
               <Fig label="Contract" value={money(s.valueExGst)} hint={`ex GST, ${money(s.valueIncGst)} inc GST`} />
-              <Fig label="Material" value={s.materials ? money(s.materials) : "-"} hint={s.materials ? "ex GST" : undefined} />
+              {s.saleCosted ? (
+                <Fig
+                  label="Material"
+                  value={s.costIncomplete || s.saleMaterials == null ? "-" : money(s.saleMaterials)}
+                  hint={`ex GST, off Cost by line${s.materials ? `, ${money(s.materials)} recorded below` : ""}`}
+                />
+              ) : (
+                <Fig label="Material" value={s.materials ? money(s.materials) : "-"} hint={s.materials ? "ex GST" : undefined} />
+              )}
               <Fig label="Installer" value={s.installer ? money(s.installer) : "-"} hint={s.installer ? "ex GST" : undefined} />
               <Fig label="Other" value={s.other ? money(s.other) : "-"} hint={s.other ? "ex GST" : undefined} />
               <Fig
                 label="Expected GP"
-                value={s.hasCosts ? money(s.grossProfit) : "-"}
+                value={gpShown ? money(s.grossProfit) : "-"}
                 hint={
-                  s.hasCosts
-                    ? s.marginPercent == null
-                      ? "ex GST"
-                      : `ex GST, ${s.marginPercent.toFixed(1)}% margin`
-                    : "no costs entered"
+                  s.costIncomplete
+                    ? `cost incomplete, no cost on ${s.missingCosts.join(", ")}`
+                    : gpShown
+                      ? `ex GST${s.saleCosted ? ", off Cost by line" : ""}${s.marginPercent == null ? "" : `, ${s.marginPercent.toFixed(1)}% margin`}`
+                      : "no costs entered"
                 }
-                tone={s.hasCosts ? (s.grossProfit > 0 ? "good" : "bad") : undefined}
+                tone={gpShown ? (s.grossProfit > 0 ? "good" : "bad") : undefined}
               />
               <Fig
                 label="Cash requirement"

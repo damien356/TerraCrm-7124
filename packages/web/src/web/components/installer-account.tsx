@@ -23,6 +23,7 @@ import {
   useXeroContactsForInstaller,
 } from "../queries/installerAccount";
 import { SalesList, SellProductsButton } from "./sell-products";
+import { invoiceStatusText } from "../lib/invoice-status";
 
 /* ---------------------------------------------------------------------------
  * Installer Account tab (Task H, Damien 29 Oct).
@@ -395,7 +396,7 @@ function Balances({ data }: { data: Overview }) {
                     </Link>
                   </td>
                   <td className="py-1 text-muted-foreground">
-                    {r.status.replace(/_/g, " ")}
+                    {invoiceStatusText({ status: r.status, total: r.total, amountPaid: r.paid, emailedAt: r.emailedAt, inXero: r.inXero })}
                     <span className="block text-xs">{r.salesCategory === "installer_materials" ? "Installer materials" : "Customer sales"}</span>
                   </td>
                   <td className="py-1 text-right">{money(r.due)} due</td>

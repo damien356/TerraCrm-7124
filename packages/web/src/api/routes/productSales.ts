@@ -10,6 +10,7 @@ import { rebuildForecast } from "../lib/cashflow";
 import { deliveryStatus } from "../lib/delivery";
 import { orderPlan, previewSale, raiseSale, saleOfJob, setStockAndOrder } from "../lib/product-sale";
 import { quoteRefOf } from "../lib/quote-number";
+import { emailedAtFor } from "../lib/invoice-emailed";
 import { jobText } from "../lib/refs";
 
 /* ---------------------------------------------------------------------------
@@ -74,6 +75,7 @@ async function salesList(where: { installerId?: number; contactId?: number; comp
           .where(and(inArray(schema.invoices.jobId, jobIds), ne(schema.invoices.status, "void")))
       : [],
   ]);
+  const emailed = await emailedAtFor(invoices.map((i) => i.id));
   const out = [];
   for (const s of sales) {
     const job = jobs.find((j) => j.id === s.jobId);
@@ -92,7 +94,7 @@ async function salesList(where: { installerId?: number; contactId?: number; comp
       quoteRef: quote ? await quoteRefOf(quote) : null,
       quoteStatus: quote?.status ?? null,
       total: r2(quote?.total ?? 0),
-      invoices: invs.map((i) => ({ id: i.id, number: i.number, total: r2(i.total), paid: r2(i.amountPaid), status: i.status, inXero: !!i.xeroInvoiceId })),
+      invoices: invs.map((i) => ({ id: i.id, number: i.number, total: r2(i.total), paid: r2(i.amountPaid), status: i.status, inXero: !!i.xeroInvoiceId, emailedAt: emailed.get(i.id) ?? null })),
       /** Handover is its own thing. Paid comes only from the invoices. */
       handover: handover
         ? {
@@ -128,12 +130,31 @@ export const productSales = {
     const sale = await saleOfJob(input.jobId);
     if (!sale) return null;
     const [quote] = sale.quoteId ? await db.select().from(schema.quotes).where(eq(schema.quotes.id, sale.quoteId)) : [];
+    /*
+     * Raise invoice now (Damien, 31 Oct, job 188054): raiseSale saves the
+     * lines as a quote and marks it accepted so the invoice has something to
+     * bill from. Nobody sent it and the customer never accepted it. Every
+     * screen that shows that quote says so.
+     */
+    const internal = sale.mode === "invoice" && quote?.status === "accepted";
+    const invs = internal
+      ? await db
+          .select({ number: schema.invoices.number })
+          .from(schema.invoices)
+          .where(and(eq(schema.invoices.jobId, input.jobId), ne(schema.invoices.status, "void")))
+          .orderBy(schema.invoices.id)
+      : [];
     return {
       saleId: sale.id,
       mode: sale.mode,
       salesCategory: sale.salesCategory,
       orderNeeded: sale.orderNeeded,
       quoteAccepted: quote?.status === "accepted",
+      quoteId: sale.quoteId ?? null,
+      quoteRef: quote ? await quoteRefOf(quote) : null,
+      /** The quote is only the price record behind a direct invoice, not a customer acceptance. */
+      internalPriceRecord: internal,
+      invoiceNumber: invs[0]?.number ?? null,
       plan: await orderPlan(sale.id),
     };
   }),

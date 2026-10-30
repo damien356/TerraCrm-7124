@@ -6,6 +6,7 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox, Field, Input, Select } from "./ui/field";
 import { moneyExact } from "../lib/money";
+import { emailState, paymentState } from "../lib/invoice-status";
 import {
   useCheckXeroNow,
   useChooseXeroTenant,
@@ -395,7 +396,7 @@ export function XeroCard() {
                           <span className="font-medium">{i.number}</span>
                         )}{" "}
                         <span className="text-muted-foreground">
-                          {moneyExact(i.total)}, {i.status.replace("_", " ")}. {i.categoryLabel}, account {i.salesAccount}
+                          {moneyExact(i.total)}, {paymentState(i).label}, {emailState(i).label}. {i.categoryLabel}, account {i.salesAccount}
                         </span>
                       </span>
                       <Button

@@ -11,6 +11,7 @@ import {
   useForecast,
   useFreezeLabour,
   useRemoveLine,
+  useSaleLineCost,
   useSetLine,
   useTaskLines,
   useUnfreezeLabour,
@@ -341,7 +342,121 @@ function Figure({
   );
 }
 
-export function JobForecastCard({ jobId }: { jobId: number }) {
+type SaleCostsView = NonNullable<NonNullable<ReturnType<typeof useForecast>["data"]>["sale"]>;
+
+/** A cost price box on one sale line. Blank takes it off. */
+function LineCostInput({ jobId, quoteItemId, value }: { jobId: number; quoteItemId: number; value: number | null }) {
+  const save = useSaleLineCost();
+  const [text, setText] = React.useState(value == null ? "" : String(value));
+  React.useEffect(() => setText(value == null ? "" : String(value)), [value]);
+  function commit() {
+    const t = text.replace(/[$,\s]/g, "");
+    const n = t === "" ? null : Number(t);
+    if (n != null && (!Number.isFinite(n) || n < 0)) return;
+    if (n === value) return;
+    save.mutate({ jobId, quoteItemId, unitCost: n });
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      <Input
+        aria-label="Cost price ex GST per unit"
+        data-testid={`sale-line-cost-${quoteItemId}`}
+        className="h-7 w-24 text-right"
+        inputMode="decimal"
+        placeholder="cost ex GST"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        }}
+      />
+      {save.isPending ? <Spinner /> : null}
+    </span>
+  );
+}
+
+/**
+ * Sell products, Cost by line (Damien, 31 Oct): expected off the PO or the
+ * line's cost price, actual off the supplier bills matched to the PO, and
+ * every line still missing a cost named. Nothing here marks anything
+ * delivered or collected.
+ */
+function SaleCostLines({ jobId, sale }: { jobId: number; sale: SaleCostsView }) {
+  return (
+    <div data-testid="sale-cost-lines">
+      <p className="label-xs mb-1">Cost by line</p>
+      <div className="overflow-x-auto rounded-lg border border-border">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border bg-secondary/40 text-left">
+              <th className="px-3 py-2 label-xs font-normal">Line</th>
+              <th className="px-3 py-2 label-xs font-normal text-right">Qty</th>
+              <th className="px-3 py-2 label-xs font-normal text-right">On a PO</th>
+              <th className="px-3 py-2 label-xs font-normal text-right">Not on a PO</th>
+              <th className="px-3 py-2 label-xs font-normal text-right">Expected</th>
+              <th className="px-3 py-2 label-xs font-normal">Where the cost comes from</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {sale.lines.map((l) => (
+              <tr key={l.quoteItemId} data-testid={`sale-cost-line-${l.quoteItemId}`}>
+                <td className="px-3 py-2 font-medium">{l.description}</td>
+                <td className="tabular px-3 py-2 text-right">
+                  {l.qty} {unit(l.unit)}
+                </td>
+                <td className="tabular px-3 py-2 text-right">{l.poQty ? `${l.poQty}, ${dollars(l.poExpected)}` : "-"}</td>
+                <td className="tabular px-3 py-2 text-right">{l.restQty || "-"}</td>
+                <td className="tabular px-3 py-2 text-right">{l.expected == null ? "-" : dollars(l.expected)}</td>
+                <td className="px-3 py-2 text-xs">
+                  {l.missingQty > 0 ? (
+                    <span className="font-medium text-[#B4472E]">No cost for {l.missingQty}. </span>
+                  ) : null}
+                  {l.poQty ? <span className="text-muted-foreground">PO for {l.poQty}. </span> : null}
+                  {l.restQty > 0 && l.restBasis === "price book" ? (
+                    <span className="text-muted-foreground">Price book cost {dollars(l.restUnitCost)} each for {l.restQty}, expected. </span>
+                  ) : null}
+                  {l.restQty > 0 && l.restBasis !== "price book" ? (
+                    <span className="text-muted-foreground">
+                      Cost price for {l.restQty}: <LineCostInput jobId={jobId} quoteItemId={l.quoteItemId} value={l.restBasis === "cost price" ? l.restUnitCost : null} />
+                    </span>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {sale.pos.length ? (
+        <ul className="mt-2 grid gap-1 text-xs" data-testid="sale-cost-pos">
+          {sale.pos.map((p) => (
+            <li key={p.id}>
+              <span className="font-medium">{p.number}</span> ({p.status}): expected {dollars(p.expected)} ex GST with charges and freight.{" "}
+              {p.bills
+                ? `Supplier bills ${dollars(p.billed)} matched to it. ${p.countsAs === "bills" ? "The bills count, not the PO." : "Less than the PO, so the PO still counts. A part delivery, or a better price."}`
+                : "No supplier bill matched yet, so it counts as expected."}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {sale.hand.count || sale.unmatchedBills.count ? (
+        <p className="mt-2 rounded-md bg-[#B7791F]/10 px-3 py-2 text-xs text-[#8a5a12]" data-testid="sale-cost-unlinked">
+          {sale.hand.count
+            ? `${dollars(sale.hand.total)} of material typed by hand in Money out (${sale.hand.count}). Not counted here: it is not tied to a line, and it may be the same bill as a PO. `
+            : ""}
+          {sale.unmatchedBills.count
+            ? `${dollars(sale.unmatchedBills.total)} of supplier bills on this job not matched to a PO (${sale.unmatchedBills.count}). Not counted until matched to its PO in Supplier invoices.`
+            : ""}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Damien's wording, 31 Oct. Shown instead of a cost, GP or margin while a cost price is missing. */
+export const COST_INCOMPLETE = "Cost incomplete — margin unavailable";
+
+export function JobForecastCard({ jobId, productSale = false }: { jobId: number; productSale?: boolean }) {
   const [against, setAgainst] = React.useState("");
   const [on, setOn] = React.useState(today());
   const [measuring, setMeasuring] = React.useState<{ id: number; title: string } | null>(null);
@@ -352,7 +467,7 @@ export function JobForecastCard({ jobId }: { jobId: number }) {
   const gaps: string[] = [];
   if (f) {
     if (f.revenue === 0) gaps.push("no sell price yet, quote it or put a value on the job");
-    if (f.materialsUnknown) gaps.push("some quote lines have no cost price");
+    // A missing cost price has its own line below: Cost incomplete.
     const nothingMeasured = f.tasks.filter((t) => t.measured === 0);
     if (nothingMeasured.length) gaps.push(`${nothingMeasured.length} dispatch(es) not measured up`);
     const short = Array.from(new Set(f.tasks.flatMap((t) => t.unpriced)));
@@ -364,7 +479,11 @@ export function JobForecastCard({ jobId }: { jobId: number }) {
       <Card>
         <CardHeader
           title="What this job makes"
-          subtitle="Sale off the quote, materials off its cost prices, labour off the rate book."
+          subtitle={
+            productSale
+              ? "Sale off the invoice. Cost line by line: what is on a PO, or the line's cost price. Supplier bills replace their PO, never added on top."
+              : "Sale off the quote, materials off its cost prices, labour off the rate book."
+          }
           action={
             <div className="flex flex-wrap items-end gap-2">
               {f?.comparison.length ? (
@@ -379,9 +498,11 @@ export function JobForecastCard({ jobId }: { jobId: number }) {
                   </Select>
                 </Field>
               ) : null}
-              <Field label="Rates as at" className="w-[140px]">
-                <Input id="forecast_on" type="date" value={on} onChange={(e) => setOn(e.target.value)} className="h-8" />
-              </Field>
+              {productSale ? null : (
+                <Field label="Rates as at" className="w-[140px]">
+                  <Input id="forecast_on" type="date" value={on} onChange={(e) => setOn(e.target.value)} className="h-8" />
+                </Field>
+              )}
             </div>
           }
         />
@@ -396,29 +517,67 @@ export function JobForecastCard({ jobId }: { jobId: number }) {
               <Figure
                 label="Sale ex GST"
                 value={dollars0(f.revenue)}
-                hint={f.quote ? `quote ${f.quote.ref}, ${f.quote.status}` : "off the job value"}
+                hint={
+                  f.priceRecord && f.quote
+                    ? `quote ${f.quote.ref}, internal price record, not a customer acceptance`
+                    : f.quote
+                      ? `quote ${f.quote.ref}, ${f.quote.status}`
+                      : "off the job value"
+                }
               />
               <Figure
-                label="Materials"
-                value={dollars0(f.materials)}
-                hint={f.materialsUnknown ? "some costs missing" : "cost price"}
+                label={productSale ? "Product cost" : "Materials"}
+                value={f.materialsUnknown ? "-" : dollars0(f.materials)}
+                hint={
+                  f.materialsUnknown
+                    ? f.sale
+                      ? `no cost yet on ${f.sale.missing.length} line${f.sale.missing.length === 1 ? "" : "s"}`
+                      : "cost price missing"
+                    : f.sale
+                      ? f.sale.actual
+                        ? "supplier bills, the rest expected"
+                        : "expected, nothing billed yet"
+                      : "cost price"
+                }
               />
-              <Figure label="Labour" value={dollars0(f.labour)} hint={f.tasks.some((t) => t.hourly) ? "rate book, hourly time" : "rate book"} />
-              <Figure label="Other" value={dollars0(f.other)} hint={f.tasks.some((t) => t.hourly) ? "surcharges, travel, vehicle" : "surcharges, travel"} />
-              <Figure label="Total cost" value={dollars0(f.cost)} />
+              {f.sale ? (
+                <Figure
+                  label="Supplier bills"
+                  value={f.sale.pos.some((p) => p.bills) ? dollars0(f.sale.actual) : "-"}
+                  hint={f.sale.pos.some((p) => p.bills) ? "actual, matched to the PO" : "none matched yet"}
+                />
+              ) : null}
+              {productSale ? null : (
+                <Figure label="Labour" value={dollars0(f.labour)} hint={f.tasks.some((t) => t.hourly) ? "rate book, hourly time" : "rate book"} />
+              )}
+              {productSale ? null : (
+                <Figure label="Other" value={dollars0(f.other)} hint={f.tasks.some((t) => t.hourly) ? "surcharges, travel, vehicle" : "surcharges, travel"} />
+              )}
+              <Figure label="Total cost" value={f.materialsUnknown ? "-" : dollars0(f.cost)} hint={f.materialsUnknown ? "cost incomplete" : undefined} />
               <Figure
                 label="Gross profit"
-                value={dollars0(f.gp)}
-                tone={f.gp > 0 ? "good" : "bad"}
-                hint={f.incomplete ? "not the real number yet" : undefined}
+                value={f.materialsUnknown ? "-" : dollars0(f.gp)}
+                tone={f.materialsUnknown ? undefined : f.gp > 0 ? "good" : "bad"}
+                hint={f.materialsUnknown ? "unavailable" : f.incomplete ? "not the real number yet" : undefined}
               />
               <Figure
                 label="Margin"
-                value={f.margin == null ? "-" : `${f.margin}%`}
-                tone={f.margin != null && f.margin >= 30 ? "good" : f.margin != null ? "bad" : undefined}
-                hint={f.days != null ? `about ${f.days} day${f.days === 1 ? "" : "s"} of work` : undefined}
+                value={f.materialsUnknown || f.margin == null ? "-" : `${f.margin}%`}
+                tone={f.materialsUnknown ? undefined : f.margin != null && f.margin >= 30 ? "good" : f.margin != null ? "bad" : undefined}
+                hint={f.materialsUnknown ? "unavailable" : f.days != null ? `about ${f.days} day${f.days === 1 ? "" : "s"} of work` : undefined}
               />
             </div>
+
+            {f.materialsUnknown ? (
+              <p className="rounded-md border border-[#B4472E]/40 bg-[#B4472E]/10 px-3 py-2 text-sm font-medium text-[#B4472E]" data-testid="cost-incomplete">
+                {COST_INCOMPLETE}
+                <span className="block text-xs font-normal">
+                  {f.sale
+                    ? `No cost yet on: ${f.sale.missing.join(", ")}. Put it on a PO, or type its cost price in Cost by line below. A cost typed in Money out does not fill a line.`
+                    : "A line on the quote has no cost price. Add it on the quote and the margin shows here."}
+                </span>
+              </p>
+            ) : null}
 
             {gaps.length ? (
               <p className="flex items-start gap-2 rounded-md bg-[#B4472E]/10 px-3 py-2 text-xs text-[#B4472E]">
@@ -429,7 +588,10 @@ export function JobForecastCard({ jobId }: { jobId: number }) {
               </p>
             ) : null}
 
-            {/* per dispatch */}
+            {f.sale ? <SaleCostLines jobId={jobId} sale={f.sale} /> : null}
+
+            {/* per dispatch (a product sale has no labour) */}
+            {productSale ? null : (
             <div>
               <p className="label-xs mb-1">Labour, dispatch by dispatch</p>
               {f.tasks.length === 0 ? (
@@ -472,6 +634,7 @@ export function JobForecastCard({ jobId }: { jobId: number }) {
                 </ul>
               )}
             </div>
+            )}
 
             {/* swap the installer. Item 8: only once a dispatch has labour lines. */}
             {f.hasLabourLines && f.comparison.length ? (
@@ -493,8 +656,8 @@ export function JobForecastCard({ jobId }: { jobId: number }) {
                         <tr key={c.installerId} className={c.canDoAll ? "" : "opacity-60"}>
                           <td className="px-3 py-2 font-medium">{c.name}</td>
                           <td className="tabular px-3 py-2 text-right">{dollars0(c.labour)}</td>
-                          <td className="tabular px-3 py-2 text-right">{dollars0(c.gp)}</td>
-                          <td className="tabular px-3 py-2 text-right">{c.margin == null ? "-" : `${c.margin}%`}</td>
+                          <td className="tabular px-3 py-2 text-right">{f.materialsUnknown ? "-" : dollars0(c.gp)}</td>
+                          <td className="tabular px-3 py-2 text-right">{f.materialsUnknown || c.margin == null ? "-" : `${c.margin}%`}</td>
                           <td className="px-3 py-2 text-xs text-muted-foreground">
                             {!c.canDoAll ? `not ticked for ${c.missingSkills} skill on this job` : null}
                             {c.canDoAll && c.incomplete ? "some work has no rate on his card" : null}

@@ -49,6 +49,8 @@ import { CancelJobButton } from "../components/job-cancel";
 import { isPhoneApp } from "../lib/phone-app";
 import { ReferralFeeRows } from "../components/referrals";
 import { QuoteFollowupsCard } from "../components/quote-followups";
+import { useSaleForJob } from "../queries/productSales";
+import { priceRecordText } from "../components/sale-job";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
 
@@ -694,6 +696,8 @@ export default function QuoteBuilderPage() {
     },
     cost.show,
   );
+  // Raise invoice now: this quote may only be the price record behind the invoice (Damien, 31 Oct).
+  const saleQ = useSaleForJob(quote.data?.job?.id ?? 0);
   const lineItems = quote.data?.items;
   const places = React.useMemo(() => columnPlaces(lineItems ?? []), [lineItems]);
 
@@ -729,6 +733,8 @@ export default function QuoteBuilderPage() {
   const locked = q.status === "accepted" || q.status === "declined" || q.status === "expired" || q.status === "replaced" || q.status === "cancelled";
   // 188001 list item 7: on an accepted quote the words can still be fixed and re-sent.
   const wordingOpen = q.status === "accepted";
+  // Accepted inside Ops by Sell products, not by the customer. Never shown as a customer acceptance.
+  const priceRecord = !!saleQ.data?.internalPriceRecord && saleQ.data.quoteId === q.id;
   const checksLeft = q.items.filter((i: Item) => i.checkRequired).length;
   const customer = q.contact ? `${q.contact.firstName} ${q.contact.lastName}` : q.company ? "" : "No customer yet";
   // A delivery line and no site on the quote or its job.
@@ -763,7 +769,7 @@ export default function QuoteBuilderPage() {
             Quotes
           </Link>
           <span className="text-muted-foreground">·</span>
-          <Badge colour={QUOTE_STATUS_COLOUR[q.status]}>{q.status}</Badge>
+          <Badge colour={priceRecord ? undefined : QUOTE_STATUS_COLOUR[q.status]}>{priceRecord ? "price record" : q.status}</Badge>
           <span className="text-muted-foreground">
             {customer}
             {q.company ? `${customer ? " · " : ""}billed to ${q.company.name}` : ""}
@@ -896,7 +902,7 @@ export default function QuoteBuilderPage() {
             </>
           ) : null}
           {/* Item 12: once accepted, changes are a variation on the job, never a new version. */}
-          {wordingOpen ? (
+          {wordingOpen && !priceRecord ? (
             <EmailQuoteButton
               quoteId={q.id}
               resend
@@ -952,7 +958,12 @@ export default function QuoteBuilderPage() {
           </button>
         </div>
       ) : null}
-      {wordingOpen ? (
+      {priceRecord ? (
+        <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="price-record-banner">
+          {priceRecordText(saleQ.data?.invoiceNumber)} Sell products saved these lines as a quote so the invoice has something to bill from. It was never sent to the
+          customer and the customer has not signed or accepted it. Prices, qty and lines are locked.
+        </div>
+      ) : wordingOpen ? (
         <div className="mb-3 rounded-md border border-border bg-secondary/60 px-3 py-2 text-sm">
           Accepted. You can still fix the wording: section titles, section wording and line descriptions. Then use Save and re-send to email the client the updated copy.
           Prices, qty, lines and the deposit are locked. Change those with a variation on the job.
@@ -992,7 +1003,9 @@ export default function QuoteBuilderPage() {
           <CardHeader
             title="Lines"
             subtitle={
-              wordingOpen
+              priceRecord
+                ? "Price record behind the invoice. Line descriptions can still be fixed. Not sent to the customer."
+                : wordingOpen
                 ? "Accepted. Line descriptions can still be fixed. Price changes go through a variation on the job."
                 : locked
                   ? "Locked. Make a new version to change the price."

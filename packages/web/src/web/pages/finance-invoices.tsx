@@ -8,6 +8,7 @@ import { money, shortDate } from "../lib/money";
 import { useInvoiceList } from "../queries/finance";
 import { PhoneCardList } from "../components/phone-card-list";
 import { isPhoneApp } from "../lib/phone-app";
+import { invoiceStatusText, paymentState } from "../lib/invoice-status";
 import { SalesByCategoryCard } from "../components/sales-by-category";
 
 /**
@@ -128,7 +129,7 @@ export default function InvoicesPage() {
                   title: r.jobId ? `${r.number} · job #${r.jobNumber}` : r.number,
                   badges: (
                     <Badge colour={r.daysOverdue > 0 ? "#A33A2A" : r.settled ? "#3F7D58" : undefined}>
-                      {r.daysOverdue > 0 ? `${r.daysOverdue} days overdue` : r.status.replace("_", " ")}
+                      {r.daysOverdue > 0 ? `${r.daysOverdue} days overdue` : paymentState(r).label}
                     </Badge>
                   ),
                   line1: r.who || "No customer",
@@ -161,7 +162,7 @@ export default function InvoicesPage() {
                         <td className="px-4 py-2.5">
                           <span className="font-medium">{r.number}</span>
                           <p className="text-xs text-muted-foreground">
-                            {r.label || r.kind} · {r.status.replace("_", " ")}
+                            {r.label || r.kind} · {invoiceStatusText(r)}
                           </p>
                           <p className="text-xs text-muted-foreground">{r.salesCategory === "installer_materials" ? "Installer materials" : "Customer sales"}</p>
                         </td>

@@ -273,7 +273,7 @@ export default function QuotesPage() {
               key: q.id,
               href: `/quotes/${q.id}`,
               title: q.job ? `${q.ref} · job #${q.job.number}` : q.ref,
-              badges: <Badge colour={QUOTE_STATUS_COLOUR[q.status]}>{q.status}</Badge>,
+              badges: <Badge colour={q.priceRecord ? undefined : QUOTE_STATUS_COLOUR[q.status]}>{q.priceRecord ? "price record" : q.status}</Badge>,
               line1: q.contact
                 ? `${q.contact.firstName} ${q.contact.lastName}${q.company ? `, ${q.company.name}` : ""}`
                 : (q.company?.name ?? "No customer"),
@@ -314,7 +314,7 @@ export default function QuotesPage() {
                     </td>
                     <td className="px-4 py-2.5">{q.site?.address ?? "-"}</td>
                     <td className="px-4 py-2.5">
-                      <Badge colour={QUOTE_STATUS_COLOUR[q.status]}>{q.status}</Badge>
+                      <Badge colour={q.priceRecord ? undefined : QUOTE_STATUS_COLOUR[q.status]}>{q.priceRecord ? "price record" : q.status}</Badge>
                     </td>
                     <td className="px-4 py-2.5">
                       {q.job ? (

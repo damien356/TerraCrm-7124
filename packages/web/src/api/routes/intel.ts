@@ -551,8 +551,8 @@ export const intel = {
              where i.paid_at is not null
                and i.job_id in (select jc4.job_id from job_contacts jc4
                                   where jc4.contact_id = c.id and exists (select 1 from json_each(jc4.tags) where json_each.value = 'supervisor'))) as avg_days_to_pay,
-          (select count(*) from quotes q where q.contact_id = c.id) as quotes_total,
-          (select count(*) from quotes q where q.contact_id = c.id and q.status = 'accepted') as quotes_won,
+          (select count(*) from quotes q where q.contact_id = c.id and not exists(select 1 from product_sales ps where ps.quote_id = q.id and ps.mode = 'invoice')) as quotes_total,
+          (select count(*) from quotes q where q.contact_id = c.id and q.status = 'accepted' and not exists(select 1 from product_sales ps where ps.quote_id = q.id and ps.mode = 'invoice')) as quotes_won,
           ${AGG}
         from contacts c
         join job_contacts jcs on jcs.contact_id = c.id and exists (select 1 from json_each(jcs.tags) where json_each.value = 'supervisor')
@@ -582,8 +582,8 @@ export const intel = {
                  where i.bill_to_company_id = co.id and i.status not in ('paid','void')) as outstanding,
               (select avg(julianday(i.paid_at, 'unixepoch') - julianday(i.created_at, 'unixepoch'))
                  from invoices i where i.bill_to_company_id = co.id and i.paid_at is not null) as avg_days_to_pay,
-              (select count(*) from quotes q where q.company_id = co.id) as quotes_total,
-              (select count(*) from quotes q where q.company_id = co.id and q.status = 'accepted') as quotes_won,
+              (select count(*) from quotes q where q.company_id = co.id and not exists(select 1 from product_sales ps where ps.quote_id = q.id and ps.mode = 'invoice')) as quotes_total,
+              (select count(*) from quotes q where q.company_id = co.id and q.status = 'accepted' and not exists(select 1 from product_sales ps where ps.quote_id = q.id and ps.mode = 'invoice')) as quotes_won,
               ${AGG}
             from companies co
             join jobs j on j.company_id = co.id
@@ -597,8 +597,8 @@ export const intel = {
                  where i.bill_to_contact_id = c.id and i.status not in ('paid','void')) as outstanding,
               (select avg(julianday(i.paid_at, 'unixepoch') - julianday(i.created_at, 'unixepoch'))
                  from invoices i where i.bill_to_contact_id = c.id and i.paid_at is not null) as avg_days_to_pay,
-              (select count(*) from quotes q where q.contact_id = c.id) as quotes_total,
-              (select count(*) from quotes q where q.contact_id = c.id and q.status = 'accepted') as quotes_won,
+              (select count(*) from quotes q where q.contact_id = c.id and not exists(select 1 from product_sales ps where ps.quote_id = q.id and ps.mode = 'invoice')) as quotes_total,
+              (select count(*) from quotes q where q.contact_id = c.id and q.status = 'accepted' and not exists(select 1 from product_sales ps where ps.quote_id = q.id and ps.mode = 'invoice')) as quotes_won,
               ${AGG}
             from contacts c
             join jobs j on j.contact_id = c.id

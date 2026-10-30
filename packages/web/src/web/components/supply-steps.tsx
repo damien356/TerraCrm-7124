@@ -62,9 +62,12 @@ interface Step {
 export function SupplyStepsCard({
   jobId,
   isAdmin,
+  productSale = false,
 }: {
   jobId: number;
   isAdmin: boolean;
+  /** A Sell products sale: no colour form step, it is a sale not a job (Damien, 31 Oct). */
+  productSale?: boolean;
 }) {
   const status = useDeliveryStatus(jobId);
   const sel = useMaterialSelection(jobId);
@@ -153,7 +156,7 @@ export function SupplyStepsCard({
       order = {
         key: "order",
         title: "Ordered",
-        state: "Nothing to order.",
+        state: productSale ? "Nothing to order. It is coming from stock." : "Nothing to order.",
         done: true,
       };
   }
@@ -221,14 +224,14 @@ export function SupplyStepsCard({
               : undefined,
         };
 
-  const steps = [colours, order, delivered, invoice, paid];
+  const steps = productSale ? [order, delivered, invoice, paid] : [colours, order, delivered, invoice, paid];
   // The next step is the first one still open that can be done from here.
   const next = steps.find((x) => !x.done && !x.optional && x.go) ?? null;
 
   return (
     <Card>
       <CardHeader
-        title="Supply job steps"
+        title={productSale ? "Sale steps" : "Supply job steps"}
         subtitle={
           next
             ? `Next: ${NEXT[next.key] ?? next.title.toLowerCase()}. Everything is done from the cards on this page.`

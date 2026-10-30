@@ -20,6 +20,14 @@ import { useCareGuideDraft, useCareGuides, useSaleForJob, useSetStockAndOrder, t
 
 const qtyText = (n: number, unit: string) => `${Number(n.toFixed(4))} ${unitLabel(unit)}`;
 
+/**
+ * Raise invoice now saves the lines as a quote and marks it accepted inside Ops
+ * so the invoice has something to bill from. It was never sent and the customer
+ * never accepted it (Damien, 31 Oct, job 188054).
+ */
+export const priceRecordText = (invoiceNumber: string | null | undefined) =>
+  `Internal price record for invoice ${invoiceNumber ?? "raised with Sell products"}, not a customer acceptance.`;
+
 export function SaleOrderCard({ jobId }: { jobId: number }) {
   const q = useSaleForJob(jobId);
   const order = useSetStockAndOrder();

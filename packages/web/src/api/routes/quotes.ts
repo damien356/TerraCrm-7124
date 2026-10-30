@@ -614,6 +614,8 @@ export const quotes = {
           site: schema.sites,
           job: { id: schema.jobs.id, number: jobNumberSql },
           itemCount: sql<number>`(select count(*) from quote_items qi where qi.quote_id = quotes.id)`,
+          // Sell products, Raise invoice now: accepted inside Ops, not by the customer (Damien, 31 Oct).
+          priceRecord: sql<number>`exists(select 1 from product_sales ps where ps.quote_id = quotes.id and ps.mode = 'invoice')`,
         })
         .from(schema.quotes)
         .leftJoin(schema.contacts, eq(schema.contacts.id, schema.quotes.contactId))
@@ -632,6 +634,8 @@ export const quotes = {
         site: r.site,
         job: r.job?.id ? r.job : null,
         itemCount: Number(r.itemCount ?? 0),
+        /** The price record behind a direct invoice. Not a customer acceptance. */
+        priceRecord: r.quote.status === "accepted" && Number(r.priceRecord ?? 0) === 1,
       }));
     }),
 
@@ -1852,6 +1856,8 @@ export const quotes = {
         value: sql<number>`coalesce(sum(${schema.quotes.total}), 0)`,
       })
       .from(schema.quotes)
+      // Price records behind Sell products invoices were never sent or accepted by a customer (Damien, 31 Oct).
+      .where(sql`not exists(select 1 from product_sales ps where ps.quote_id = ${schema.quotes.id} and ps.mode = 'invoice')`)
       .groupBy(schema.quotes.status);
 
     const byStatus = Object.fromEntries(

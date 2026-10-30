@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ORPCError } from "@orpc/server";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -9,6 +10,7 @@ import { exGst } from "../lib/gst";
 import { quoteThatCounts } from "../lib/job-value";
 import { jobText, quoteRef, taskRef } from "../lib/refs";
 import { hourlySettings, jobHourlyCosting, termsOn } from "../lib/hourly";
+import { saleCosts } from "../lib/sale-costs";
 
 /**
  * JOB COSTING.
@@ -426,14 +428,27 @@ export const costing = {
       const revenue = exGst(job.value);
       // Delivery (fix list item 11) is a cost of the goods too, so it stays in here.
       const goods = (k: string) => k === "supply" || k === "accessory" || k === "delivery" || k === "supplier_charge";
-      const materials = round2(
+      let materials = round2(
         quoteItems
           .filter((i) => goods(i.kind))
           .reduce((sum, i) => sum + (i.unitCost ?? 0) * (i.qty ?? 0), 0),
       );
-      const materialsUnknown = quoteItems.some(
+      let materialsUnknown = quoteItems.some(
         (i) => goods(i.kind) && i.unitCost == null,
       );
+      /*
+       * Cost incomplete (Damien, 31 Oct, job 188054): a quote line with no
+       * cost price used to count as $0, so a product sale read 100% margin.
+       * A Sell products job is costed line by line (lib/sale-costs.ts): PO
+       * costs as expected, matched supplier bills as actual, never both, and
+       * any line with no cost keeps the margin unavailable. A cost typed in
+       * Money out never fills a missing line.
+       */
+      const sale = await saleCosts(input.jobId);
+      if (sale) {
+        materials = sale.materials;
+        materialsUnknown = sale.unknown;
+      }
 
       const items = new Map(itemRows.map((i) => [i.id, i]));
       const taskIds = tasks.map((t) => t.task.id);
@@ -589,6 +604,10 @@ export const costing = {
         revenue,
         materials,
         materialsUnknown,
+        /** Sell products jobs only: expected, actual and missing, line by line. */
+        sale,
+        /** Sell products: the quote was accepted by Raise invoice now, not by the customer. */
+        priceRecord: !!sale && quote?.status === "accepted" && sale.mode === "invoice",
         labour,
         other,
         cost,
@@ -613,6 +632,40 @@ export const costing = {
       const locked = await lockTaskLabour(input);
       if (!locked) throw new Error("Nothing measured on this dispatch yet, so there is no labour to lock in.");
       return locked;
+    }),
+
+  /**
+   * Sell products: type the cost price, ex GST per unit, on one sale line
+   * (Damien, 31 Oct). For a line with no PO and no price book cost, e.g. a
+   * charge with no product. Only that line's missing quantity is filled.
+   * Null takes it off again.
+   */
+  saleLineCost: adminOnly
+    .input(z.object({ jobId: z.number(), quoteItemId: z.number(), unitCost: z.number().min(0).nullable() }))
+    .handler(async ({ input, context }) => {
+      const [line] = await db
+        .select({ id: schema.productSaleLines.id })
+        .from(schema.productSaleLines)
+        .innerJoin(schema.productSales, eq(schema.productSales.id, schema.productSaleLines.saleId))
+        .where(and(eq(schema.productSales.jobId, input.jobId), eq(schema.productSaleLines.quoteItemId, input.quoteItemId)));
+      if (!line) throw new ORPCError("BAD_REQUEST", { message: "That line is not on this sale." });
+      const [item] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, input.quoteItemId));
+      if (!item) throw new ORPCError("BAD_REQUEST", { message: "That line has gone." });
+      const unitCost = input.unitCost == null ? null : round2(input.unitCost);
+      await db.update(schema.quoteItems).set({ unitCost, updatedAt: new Date() }).where(eq(schema.quoteItems.id, item.id));
+      await db.insert(schema.activityLog).values({
+        jobId: input.jobId,
+        entityType: "job",
+        entityId: input.jobId,
+        action: "sale_line_cost",
+        detail:
+          unitCost == null
+            ? `Cost price taken off "${item.description}".`
+            : `Cost price $${unitCost.toFixed(2)} ex GST per ${item.unit} typed on "${item.description}".`,
+        actorName: context.actor.name,
+        actorRole: context.actor.role,
+      });
+      return { ok: true, unitCost };
     }),
 
   /** Put a task back on live rates, e.g. the measure was wrong. */

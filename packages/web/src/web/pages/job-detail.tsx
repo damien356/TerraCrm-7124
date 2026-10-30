@@ -17,10 +17,11 @@ import { PurchaseOrdersCard } from "../components/purchase-orders";
 import { PaymentTermsCard } from "../components/payment-terms";
 import { ClientInvoicesCard, MaterialSelectionCard } from "../components/client-invoices";
 import { DeliveryCard } from "../components/delivery";
-import { SaleOrderCard } from "../components/sale-job";
+import { SaleOrderCard, priceRecordText } from "../components/sale-job";
 import { JobSiteFact } from "../components/site-fill";
 import { STEP_ANCHOR, SupplyStepsCard } from "../components/supply-steps";
 import { useDeliveryStatus } from "../queries/delivery";
+import { useSaleForJob } from "../queries/productSales";
 import { VariationsCard } from "../components/variations";
 import { JobConversation } from "../components/conversation";
 import { JobQuoteFollowups } from "../components/quote-followups";
@@ -329,6 +330,7 @@ export default function JobDetailPage() {
   const removeTask = useRemoveTask();
   const work = useJobDispatchLines(Number.isFinite(id) ? id : 0);
   const delivery = useDeliveryStatus(Number.isFinite(id) ? id : 0);
+  const saleQ = useSaleForJob(Number.isFinite(id) ? id : 0);
 
   // The inbox deep-links straight at the thread: /jobs/12?tab=conversation.
   const searchString = useSearch();
@@ -366,9 +368,19 @@ export default function JobDetailPage() {
   const isAdmin = bootstrap.data?.actor.role === "admin";
   // Supply only (item 14): the order, delivery and billing cards sit together in step order.
   const supplyOnly = delivery.data?.supplyOnly === true;
+  /*
+   * Product sale (Damien, 31 Oct, job 188054): one sale made from Sell products.
+   * Internally a supply only job, on screen a simple sales page. No property
+   * type, furniture, site requirements, callbacks, dispatches or crew cards.
+   */
+  const sale = saleQ.data ?? null;
+  const productSale = sale != null;
+  // Purchase orders only when ordering is on or something is already on order.
+  const showPos = sale == null || sale.orderNeeded || sale.plan.some((l) => l.onOrder > 0);
   const orderCards = (
     <>
-          {/* materials */}
+          {/* materials (a product sale has Stock and ordering instead) */}
+          {productSale ? null : (
           <Card>
             <CardHeader title="Materials" subtitle="What has to be on site before anyone turns up." />
             {j.materials.length > 0 ? (
@@ -444,18 +456,21 @@ export default function JobDetailPage() {
               </Button>
             </div>
           </Card>
+          )}
 
           {/* ordering the materials, and the supplier invoices that come back */}
+          {showPos ? (
           <div id={STEP_ANCHOR.order} className="scroll-mt-4 transition-shadow">
             <PurchaseOrdersCard jobId={j.id} />
           </div>
+          ) : null}
     </>
   );
   const customer = j.company?.name ?? [j.contact?.firstName, j.contact?.lastName].filter(Boolean).join(" ") ?? "-";
 
   return (
     <Page
-      title={`${isCallback ? "Callback" : "Job"} ${jobLabel(j)}`}
+      title={`${productSale ? "Product sale" : isCallback ? "Callback" : "Job"} ${jobLabel(j)}`}
       subtitle={
         <span className="flex flex-wrap items-center gap-2">
           <Link to="/jobs" className="inline-flex items-center gap-1 text-primary hover:underline">
@@ -479,18 +494,24 @@ export default function JobDetailPage() {
               </option>
             ))}
           </Select>
-          <MemoButton jobId={j.id} />
-          <CreateQuoteButton jobId={j.id} />
-          <Button variant="outline" onClick={() => setCallbackModal(true)}>
-            <LifeBuoy className="size-4" />
-            Create callback
-          </Button>
+          {productSale ? null : (
+            <>
+              <MemoButton jobId={j.id} />
+              <CreateQuoteButton jobId={j.id} />
+              <Button variant="outline" onClick={() => setCallbackModal(true)}>
+                <LifeBuoy className="size-4" />
+                Create callback
+              </Button>
+            </>
+          )}
           <CancelJobButton jobId={j.id} />
-          {isAdmin && !isCallback ? <MergeJobButton jobId={j.id} /> : null}
-          <Button onClick={() => setTaskModal(true)}>
-            <Plus className="size-4" />
-            Add dispatch
-          </Button>
+          {isAdmin && !isCallback && !productSale ? <MergeJobButton jobId={j.id} /> : null}
+          {productSale ? null : (
+            <Button onClick={() => setTaskModal(true)}>
+              <Plus className="size-4" />
+              Add dispatch
+            </Button>
+          )}
         </>
       }
     >
@@ -519,24 +540,39 @@ export default function JobDetailPage() {
       <div className={tab === "job" ? "grid gap-4 lg:grid-cols-[1fr_340px]" : "hidden"}>
         <div className="grid gap-4">
           {isCallback ? <CallbackBanner job={j} /> : null}
-          <SwmsRedCards jobId={j.id} />
+          {productSale ? null : <SwmsRedCards jobId={j.id} />}
 
           {/* header facts */}
           <Card className="px-4 py-3">
             <div className="grid gap-3 sm:grid-cols-4">
               <div>
-                <p className="label-xs">Customer</p>
-                <p className="mt-0.5 text-sm font-medium">{customer}</p>
-                <p className="label-xs mt-2">Bill to</p>
+                {productSale ? null : (
+                  <>
+                    <p className="label-xs">Customer</p>
+                    <p className="mt-0.5 text-sm font-medium">{customer}</p>
+                  </>
+                )}
+                <p className={productSale ? "label-xs" : "label-xs mt-2"}>{productSale ? "Sold to, billed to" : "Bill to"}</p>
                 <div className="mt-0.5">
                   <JobBillTo jobId={j.id} />
                 </div>
               </div>
+              {productSale ? (
+                // A sale has no site to fill in. A delivery address shows if one is on the job.
+                j.site ? (
+                  <div>
+                    <p className="label-xs">Delivery address</p>
+                    <p className="mt-0.5 text-sm">{j.site.address}</p>
+                    <p className="text-xs text-muted-foreground">{j.site.suburb ?? ""}</p>
+                  </div>
+                ) : null
+              ) : (
               <div>
                 <p className="label-xs">Site</p>
                 {/* 188001 list item 12: no site offers the form, filled in from the delivery line. */}
                 <JobSiteFact jobId={j.id} site={j.site} />
               </div>
+              )}
               <div>
                 <p className="label-xs">Value</p>
                 <p className="tabular mt-0.5 text-sm font-medium">{money(Math.round((j.value / 1.1) * 100) / 100)} ex GST</p>
@@ -546,7 +582,7 @@ export default function JobDetailPage() {
                 ) : null}
               </div>
               {/* property type and furniture moving, red until answered (notes 18.56) */}
-              <JobPrepFacts job={j} />
+              {productSale ? null : <JobPrepFacts job={j} />}
             </div>
             {j.accessNotes ? (
               <p className="mt-3 rounded-md bg-secondary px-3 py-2 text-xs text-muted-foreground">
@@ -557,13 +593,13 @@ export default function JobDetailPage() {
           </Card>
 
           {/* supply only: where the job is up to, with a jump to each card (item 14) */}
-          {supplyOnly ? <SupplyStepsCard jobId={j.id} isAdmin={isAdmin} /> : null}
+          {supplyOnly ? <SupplyStepsCard jobId={j.id} isAdmin={isAdmin} productSale={productSale} /> : null}
 
           {/* what the job makes */}
-          <JobForecastCard jobId={j.id} />
+          <JobForecastCard jobId={j.id} productSale={productSale} />
 
           {/* hourly time on this job: so far, provisional until decided (costs logins only) */}
-          <HourlyJobCard jobId={j.id} />
+          {productSale ? null : <HourlyJobCard jobId={j.id} />}
 
           {/* what it costs Terra to carry, and when the money moves */}
           <JobCashCard jobId={j.id} />
@@ -573,9 +609,11 @@ export default function JobDetailPage() {
 
           {supplyOnly ? (
             <>
-              <div id={STEP_ANCHOR.colours} className="scroll-mt-4 transition-shadow">
-                <MaterialSelectionCard jobId={j.id} />
-              </div>
+              {productSale ? null : (
+                <div id={STEP_ANCHOR.colours} className="scroll-mt-4 transition-shadow">
+                  <MaterialSelectionCard jobId={j.id} />
+                </div>
+              )}
               {/* product sale: from stock now, and what is still to order */}
               <SaleOrderCard jobId={j.id} />
               {orderCards}
@@ -593,7 +631,7 @@ export default function JobDetailPage() {
           </div>
 
           {/* extra work the client approves after the quote is accepted */}
-          {isCallback && j.callbackChargeable === false ? null : <VariationsCard jobId={j.id} />}
+          {productSale || (isCallback && j.callbackChargeable === false) ? null : <VariationsCard jobId={j.id} />}
 
           {/* product and colour per room, from the client */}
           {supplyOnly ? null : <MaterialSelectionCard jobId={j.id} />}
@@ -689,9 +727,11 @@ export default function JobDetailPage() {
           {/* what goes to the client before the install, and when (notes 18.56) */}
           {supplyOnly ? null : <JobPrepCard jobId={j.id} />}
 
-          {/* quote follow-up emails, days 3, 7, 14 and 28 (28 Oct) */}
-          <JobQuoteFollowups jobId={j.id} />
+          {/* quote follow-up emails, days 3, 7, 14 and 28 (28 Oct). A sale only while its quote is open. */}
+          {sale?.quoteAccepted ? null : <JobQuoteFollowups jobId={j.id} />}
 
+          {productSale ? null : (
+          <>
           {/* who referred it (notes 18.47). Office sees the name only. */}
           <JobReferrerCard jobId={j.id} isAdmin={isAdmin} />
 
@@ -719,31 +759,41 @@ export default function JobDetailPage() {
             canRemove={bootstrap.data?.actor.role === "admin"}
             company={j.company ? { id: j.company.id, name: j.company.name } : null}
           />
+          </>
+          )}
 
           {supplyOnly ? null : orderCards}
         </div>
 
         {/* right rail */}
         <div className="grid gap-4">
-          {isCallback ? null : <CallbacksListCard jobId={j.id} />}
+          {isCallback || productSale ? null : <CallbacksListCard jobId={j.id} />}
           {isCallback && isAdmin ? <ReworkCostCard jobId={j.id} /> : null}
-          {isCallback ? null : <CareCard jobId={j.id} isAdmin={isAdmin} />}
+          {isCallback || productSale ? null : <CareCard jobId={j.id} isAdmin={isAdmin} />}
 
           <Card>
-            <CardHeader title="Quotes" action={<CreateQuoteButton jobId={j.id} size="sm" />} />
+            <CardHeader title="Quotes" action={productSale ? undefined : <CreateQuoteButton jobId={j.id} size="sm" />} />
             {j.quotes.length === 0 ? (
               <Empty>No quote on this job yet. Create quote makes {quoteRef(j.number, 1, jobText(j))}.</Empty>
             ) : (
               <ul className="divide-y divide-border">
                 {j.quotes.map((q) => (
-                  <li key={q.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
-                    <Link to={`/quotes/${q.id}`} className="font-medium text-primary hover:underline">
-                      {quoteRef(q.number, q.version, jobText(j))}
-                    </Link>
+                  <li key={q.id} className="flex flex-wrap items-center justify-between gap-x-2 px-4 py-2.5 text-sm">
+                    <span className="min-w-0">
+                      <Link to={`/quotes/${q.id}`} className="font-medium text-primary hover:underline">
+                        {quoteRef(q.number, q.version, jobText(j))}
+                      </Link>
+                      {sale?.internalPriceRecord && sale.quoteId === q.id ? (
+                        // Raise invoice now: never imply the customer accepted (Damien, 31 Oct).
+                        <span className="block text-xs text-muted-foreground" data-testid="price-record-note">
+                          {priceRecordText(sale.invoiceNumber)}
+                        </span>
+                      ) : null}
+                    </span>
                     <span className="flex items-center gap-2">
-                      <Badge>{q.status}</Badge>
+                      <Badge>{sale?.internalPriceRecord && sale.quoteId === q.id ? "price record" : q.status}</Badge>
                       <span className="tabular">{money(q.total)}</span>
-                      <DuplicateQuoteButton quoteId={q.id} />
+                      {productSale ? null : <DuplicateQuoteButton quoteId={q.id} />}
                     </span>
                   </li>
                 ))}
@@ -752,9 +802,9 @@ export default function JobDetailPage() {
             <JobCopyLinks jobId={j.id} />
           </Card>
 
-          <SwmsJobCard jobId={j.id} />
+          {productSale ? null : <SwmsJobCard jobId={j.id} />}
 
-          <JobVisits jobId={j.id} />
+          {productSale ? null : <JobVisits jobId={j.id} />}
 
           <Card>
             <CardHeader title="History" subtitle="Everything that's happened on this job." />
@@ -805,7 +855,7 @@ export default function JobDetailPage() {
         </div>
       </div>
 
-      {j.furnitureOnSite ? (
+      {j.furnitureOnSite && !productSale ? (
         <p className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
           <Sofa className="size-3.5 text-[var(--primary)]" />
           Furniture is on site, so every open dispatch on this job is locked to a 2-man crew.

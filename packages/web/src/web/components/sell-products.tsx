@@ -11,6 +11,7 @@ import { ProductFinder, productName } from "./product-finder";
 import { unitLabel } from "./quote-pickers";
 import { ContactMatches, type ContactMatch } from "./contact-matches";
 import { money, moneyExact } from "../lib/money";
+import { emailState, xeroState } from "../lib/invoice-status";
 import { useContactSearch, useCreateContact } from "../queries/contacts";
 import type { FoundProduct } from "../queries/productFind";
 import { useRaiseSale, useSalePreview, useSales, type SaleInput, type SalePreview, type SaleResult, type SaleRow } from "../queries/productSales";
@@ -68,11 +69,12 @@ function lineOf(p: FoundProduct): Line {
     qty: "1",
     unit: p.unit,
     price: priceOf(p),
-    fromStock: "0",
+    // Starts blank on purpose (Damien, 31 Oct): Ops keeps no stock counts, so staff type what comes off the shelf.
+    fromStock: "",
     stocked: !!p.heldInWarehouse,
   };
 }
-const typedLine = (): Line => ({ key: newKey(), productId: null, name: "", detail: "", qty: "1", unit: "each", price: "", fromStock: "0", stocked: false });
+const typedLine = (): Line => ({ key: newKey(), productId: null, name: "", detail: "", qty: "1", unit: "each", price: "", fromStock: "", stocked: false });
 
 /* ------------------------------- the buyer ------------------------------- */
 
@@ -213,7 +215,13 @@ function LineRow({ l, i, set, remove, ordering }: { l: Line; i: number; set: (p:
           <Input placeholder="Typed line, product and colour" value={l.name} onChange={(e) => set({ name: e.target.value })} aria-label={`Line ${i + 1} item`} />
         )}
       </div>
-      <Input className="tabular text-right" inputMode="decimal" value={l.qty} onChange={(e) => set({ qty: e.target.value })} aria-label={`Line ${i + 1} quantity`} />
+      <Input
+        className="tabular text-right"
+        inputMode="decimal"
+        value={l.qty}
+        onChange={(e) => set({ qty: e.target.value })}
+        aria-label={`Line ${i + 1} quantity`}
+      />
       {l.productId ? (
         <span className="text-xs text-muted-foreground">{unitLabel(l.unit)}</span>
       ) : (
@@ -221,8 +229,8 @@ function LineRow({ l, i, set, remove, ordering }: { l: Line; i: number; set: (p:
       )}
       <Input className="tabular text-right" inputMode="decimal" placeholder="0.00" value={l.price} onChange={(e) => set({ price: e.target.value })} aria-label={`Line ${i + 1} price ex GST`} />
       <div>
-        <Input className="tabular text-right" inputMode="decimal" value={l.fromStock} onChange={(e) => set({ fromStock: e.target.value })} aria-label={`Line ${i + 1} from stock now`} />
-        {ordering && toOrder > 0 ? <p className="mt-0.5 text-right text-[11px] text-muted-foreground">order {Number(toOrder.toFixed(4))}</p> : null}
+        <Input className="tabular text-right" inputMode="decimal" placeholder="?" value={l.fromStock} onChange={(e) => set({ fromStock: e.target.value })} aria-label={`Line ${i + 1} from stock now`} />
+        {ordering && l.fromStock.trim() !== "" && toOrder > 0 ? <p className="mt-0.5 text-right text-[11px] text-muted-foreground">order {Number(toOrder.toFixed(4))}</p> : null}
       </div>
       <button type="button" className="justify-self-end text-muted-foreground hover:text-foreground" onClick={remove} aria-label={`Remove line ${i + 1}`}>
         <X className="size-4" />
@@ -290,7 +298,8 @@ export function SellProductsModal({
       if (!l.productId && !l.name.trim()) return `Line ${i + 1} needs a description.`;
       if (!(num(l.qty) > 0)) return `"${name}" needs a quantity over 0.`;
       if (!(num(l.price) > 0)) return `"${name}" needs a price over $0.`;
-      const fs = l.fromStock.trim() === "" ? 0 : num(l.fromStock);
+      if (l.fromStock.trim() === "") return `"${name}": confirm how many come off the shelf in From stock now. Type 0 if none. Ops keeps no stock counts.`;
+      const fs = num(l.fromStock);
       if (!(fs >= 0)) return `"${name}": From stock now must be 0 or more.`;
       if (fs > num(l.qty)) return `"${name}": From stock now is more than the quantity.`;
     }
@@ -305,7 +314,7 @@ export function SellProductsModal({
         qty: num(l.qty),
         unit: l.unit.trim() || "each",
         unitPrice: num(l.price),
-        fromStock: l.fromStock.trim() === "" ? 0 : num(l.fromStock),
+        fromStock: num(l.fromStock),
       })),
     };
   }
@@ -370,6 +379,13 @@ export function SellProductsModal({
         <Button onClick={confirm} disabled={busy} data-testid="sale-confirm">
           {raise.isPending ? <Spinner className="border-white/40 border-t-white" /> : <Check className="size-4" />}
           {mode === "invoice" ? "Confirm, raise invoice" : "Confirm, save quote"}
+          {shown && shown.orderNeeded && shown.ordering.some((o) => !o.note)
+            ? mode === "invoice"
+              ? shown.ordering.filter((o) => !o.note).length === 1
+                ? " and draft a PO"
+                : " and draft POs"
+              : " (POs on accept)"
+            : ""}
         </Button>
       </>
     ) : (
@@ -467,7 +483,7 @@ export function SellProductsModal({
               </span>
             </div>
             <p className="text-xs text-muted-foreground">
-              From stock now: how much you hand over from the showroom or warehouse. Ops keeps no stock counts, so type what you have on the shelf.
+              From stock now: how much you hand over from the showroom or warehouse. Ops keeps no stock counts, so type what you have checked on the shelf, 0 if none. Every line needs a number before Preview.
             </p>
           </section>
 
@@ -477,7 +493,7 @@ export function SellProductsModal({
               <span>
                 <span className="font-medium">We need to order this</span>
                 <span className="block text-xs text-muted-foreground">
-                  Drafts purchase orders for what is not coming from stock{mode === "quote" ? ", once the quote is accepted" : ""}. Drafts only. Ops never sends them.
+                  Drafts purchase orders for what is not coming from stock{mode === "quote" ? ", once the quote is accepted" : ""}. Drafts only. Ops never sends them. Leave it off when it is all coming from stock.
                 </span>
               </span>
             </label>
@@ -498,8 +514,20 @@ export function SellProductsModal({
 }
 
 function PreviewBody({ p, error }: { p: SalePreview; error: string | null }) {
+  const drafting = p.orderNeeded ? p.ordering.filter((o) => !o.note) : [];
   return (
     <div className="grid gap-3 text-sm" data-testid="sale-preview-body">
+      {drafting.length ? (
+        // Loud on purpose (Damien, 31 Oct): stock sales must never order by accident.
+        <div className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2 text-amber-900" data-testid="sale-po-warning">
+          <p className="font-semibold">
+            {p.mode === "invoice" ? "Confirm will also draft" : "When the quote is accepted, Ops drafts"} {drafting.length === 1 ? "a purchase order" : "purchase orders"} for {drafting.length} line{drafting.length === 1 ? "" : "s"}.
+          </p>
+          <p className="text-xs">
+            &quot;We need to order this&quot; is ticked and From stock now is less than the quantity. If it is coming from stock, press Back to edit and untick it, or put the full quantity in From stock now.
+          </p>
+        </div>
+      ) : null}
       <div className="grid gap-1 rounded-md bg-secondary px-3 py-2">
         <p>
           <span className="text-muted-foreground">Buyer: </span>
@@ -702,9 +730,19 @@ export function SalesList({ where }: { where: { installerId?: number; contactId?
               <span className="text-xs text-muted-foreground">
                 {" "}
                 {dateOf(s.createdAt)} · {s.mode === "invoice" ? "invoice" : "quote"} · {moneyExact(s.total)}
-                {s.invoices.some((i) => i.inXero) ? " · in Xero" : ""}
                 {s.orderNeeded ? " · ordering" : ""}
               </span>
+              {s.invoices.length ? (
+                // Email and Xero are separate from paid (Damien, 31 Oct). Not sent until it has actually been emailed.
+                <span className="block text-xs text-muted-foreground" data-testid="sale-invoice-states">
+                  {s.invoices
+                    .map((i) => {
+                      const st = { status: i.status, total: i.total, amountPaid: i.paid, emailedAt: i.emailedAt, inXero: i.inXero };
+                      return `${i.number}: ${emailState(st).label}, ${xeroState(st).label}`;
+                    })
+                    .join("; ")}
+                </span>
+              ) : null}
             </span>
             <span className="flex flex-wrap gap-1.5">
               <Badge colour={pay.colour}>{pay.text}</Badge>

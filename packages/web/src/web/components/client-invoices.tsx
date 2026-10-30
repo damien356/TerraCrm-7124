@@ -7,6 +7,7 @@ import { Checkbox, Field, Input, Select, Textarea } from "./ui/field";
 import { Modal } from "./ui/modal";
 import { errorText } from "./public-shell";
 import { moneyExact } from "../lib/money";
+import { emailState, paymentState } from "../lib/invoice-status";
 import { useBootstrap } from "../queries/settings";
 import { EmailInput } from "./email-input";
 import { CcList, EmailAttachments, NO_ATTACHMENTS, type MailAttachments } from "./email-attachments";
@@ -103,14 +104,6 @@ function EmailInvoiceModal({ invoice, jobId, onClose }: { invoice: Invoice | nul
     </Modal>
   );
 }
-
-const STATUS_META: Record<string, { label: string; colour: string }> = {
-  draft: { label: "Draft", colour: "#7A736D" },
-  sent: { label: "Owing", colour: "#D08A1E" },
-  part_paid: { label: "Part paid", colour: "#4A7FA5" },
-  paid: { label: "Paid", colour: "#3F7D3A" },
-  void: { label: "Void", colour: "#9B3B32" },
-};
 
 const METHODS = [
   { key: "bank", label: "Bank transfer" },
@@ -627,7 +620,9 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
           </div>
           <ul className="divide-y divide-border">
             {rows.map((r) => {
-              const meta = STATUS_META[r.status] ?? { label: r.status, colour: "#7A736D" };
+              // Payment, email and Xero are shown separately. "sent" on the row only means open (Damien, 31 Oct).
+              const meta = paymentState({ status: r.status, total: r.total, amountPaid: r.amountPaid });
+              const mail = emailState({ status: r.status, total: r.total, amountPaid: r.amountPaid, emailedAt: r.emailedAt });
               const open = r.status !== "paid" && r.status !== "void";
               return (
                 <li key={r.id} className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
@@ -636,6 +631,16 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
                       <span className="tabular">{r.ref}</span>
                       <span className="text-muted-foreground">{r.label || r.kindLabel}</span>
                       <Badge colour={meta.colour}>{meta.label}</Badge>
+                      {r.status !== "void" ? (
+                        <span data-testid={`invoice-email-${r.id}`}>
+                          <Badge colour={mail.colour}>{mail.label}</Badge>
+                        </span>
+                      ) : null}
+                      {r.status !== "void" && !r.xero ? (
+                        <span data-testid={`invoice-xero-${r.id}`}>
+                          <Badge colour="#7A736D">Not in Xero</Badge>
+                        </span>
+                      ) : null}
                     </p>
                     <p className="mt-0.5 text-xs text-muted-foreground">
                       {moneyExact(r.total)} inc GST
@@ -662,11 +667,6 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
                             Change
                           </button>
                         ) : null}
-                      </p>
-                    ) : null}
-                    {open ? (
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        {r.emailedAt ? `Emailed ${dateOf(r.emailedAt) ?? ""}` : "Not emailed yet"}
                       </p>
                     ) : null}
                     {r.status === "paid" ? (

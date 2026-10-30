@@ -1,5 +1,7 @@
 import { jobNumberSql } from "../lib/job-ref";
 import { salesByCategory } from "../lib/sales-report";
+import { emailedAtFor } from "../lib/invoice-emailed";
+import { saleCosts } from "../lib/sale-costs";
 import { quoteRef } from "../lib/refs";
 import { z } from "zod";
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
@@ -585,7 +587,15 @@ export const finance = {
     // Job value is inc GST, costs are ex GST. GP and margin are both ex GST.
     const valueIncGst = money(job.value ?? 0);
     const valueExGst = exGst(job.value);
-    const grossProfit = money(valueExGst - totalCost);
+    /*
+     * Sell products (Damien, 31 Oct): the GP comes off Cost by line, the same
+     * figure as What this job makes, so a recorded cost never stands in for a
+     * line with no cost, and a PO and its bill are never both counted. While
+     * any line has no cost there is no GP to show.
+     */
+    const sale = await saleCosts(job.id);
+    // Installer and other costs are not lines on the sale, so they still count.
+    const grossProfit = money(valueExGst - (sale ? sale.materials + installer + other : totalCost));
 
     // The number Damien asked for: how much of Terra's own cash the job eats
     // before the customer pays anything.
@@ -637,6 +647,13 @@ export const finance = {
         grossProfit,
         marginPercent: valueExGst ? money((grossProfit / valueExGst) * 100) : null,
         hasCosts: costs.length > 0,
+        /** Sell products: the GP is off Cost by line, not the rows here. */
+        saleCosted: !!sale,
+        /** Sell products only: lines with no cost yet. Expected GP is not shown while any are left. */
+        costIncomplete: sale?.unknown ?? false,
+        missingCosts: sale?.missing ?? [],
+        /** Sell products only: the material cost the GP uses, off Cost by line. */
+        saleMaterials: sale ? sale.materials : null,
         receiptDate,
         deposit,
         cashRequirement: money(Math.max(0, outBeforeReceipt - deposit)),
@@ -793,6 +810,8 @@ export const finance = {
         .leftJoin(schema.contacts, eq(schema.contacts.id, schema.invoices.billToContactId))
         .orderBy(desc(schema.invoices.id))
         .limit(input.limit);
+      // Email status is its own thing: "sent" on the row only means open (Damien, 31 Oct).
+      const emailed = await emailedAtFor(rows.map((r) => r.i.id));
 
       const shaped = rows.map((r) => {
         const due = r.i.dueDate ? iso(r.i.dueDate) : null;
@@ -805,6 +824,8 @@ export const finance = {
           kind: r.i.kind,
           label: r.i.label,
           status: r.i.status,
+          emailedAt: emailed.get(r.i.id) ?? null,
+          inXero: !!r.i.xeroInvoiceId,
           total: money(r.i.total ?? 0),
           amountPaid: money(r.i.amountPaid ?? 0),
           outstanding,

@@ -57,3 +57,16 @@ export function useFreezeLabour() {
 export function useUnfreezeLabour() {
   return useMutation(useCostingMutation("unfreeze"));
 }
+
+/** Sell products: type the cost price on one sale line. The forecast and Money out both read it. */
+export function useSaleLineCost() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.costing.saleLineCost.mutationOptions({
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: orpc.costing.key() });
+        queryClient.invalidateQueries({ queryKey: orpc.finance.key() });
+      },
+    }),
+  );
+}

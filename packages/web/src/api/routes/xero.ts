@@ -34,6 +34,7 @@ import {
   xeroSettings,
 } from "../lib/xero-invoices";
 import { contraAccountProblem } from "../lib/contras";
+import { emailedAtFor } from "../lib/invoice-emailed";
 
 /**
  * Settings, Xero. Connect the Terra Ops Xero app, pick the organisation, and
@@ -88,6 +89,7 @@ export const xero = {
         number: schema.invoices.number,
         status: schema.invoices.status,
         total: schema.invoices.total,
+        amountPaid: schema.invoices.amountPaid,
         jobId: schema.invoices.jobId,
         xeroInvoiceId: schema.invoices.xeroInvoiceId,
         xeroIssue: schema.invoices.xeroIssue,
@@ -96,6 +98,7 @@ export const xero = {
       .from(schema.invoices);
     const pushable = new Set<string>(PUSHABLE_STATUSES);
     const notYet = invs.filter((i) => !i.xeroInvoiceId && pushable.has(i.status));
+    const emailed = await emailedAtFor(notYet.slice(0, 50).map((i) => i.id));
     const log = await db.select().from(schema.xeroSyncLog).orderBy(desc(schema.xeroSyncLog.id)).limit(20);
     return {
       configured: xeroConfigured(),
@@ -126,7 +129,7 @@ export const xero = {
       notYet: notYet.slice(0, 50).map((i) => {
         const category = asSalesCategory(i.salesCategory);
         // Task H: the list shows where each one will land before it is sent.
-        return { id: i.id, number: i.number, status: i.status, total: i.total, jobId: i.jobId, salesCategory: category, categoryLabel: SALES_CATEGORY_LABEL[category], salesAccount: salesAccountFor(category, s) };
+        return { id: i.id, number: i.number, status: i.status, emailedAt: emailed.get(i.id) ?? null, total: i.total, amountPaid: i.amountPaid ?? 0, jobId: i.jobId, salesCategory: category, categoryLabel: SALES_CATEGORY_LABEL[category], salesAccount: salesAccountFor(category, s) };
       }),
       issues: invs.filter((i) => i.xeroIssue).map((i) => ({ id: i.id, number: i.number, jobId: i.jobId, issue: i.xeroIssue })),
       log: log.map((l) => ({ id: l.id, kind: l.kind, ok: l.ok, detail: l.detail, byName: l.byName, invoiceId: l.invoiceId, at: l.createdAt })),

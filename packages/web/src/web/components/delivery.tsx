@@ -337,7 +337,7 @@ export function DeliveryCard({ jobId }: { jobId: number }) {
         </ul>
       ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-2">
-        <span className="text-xs text-muted-foreground">No automatic care emails on supply only jobs.</span>
+        <span className="text-xs text-muted-foreground">No automatic care emails on supply only jobs. Send a product care guide by hand any time, before or after handover.</span>
         <CareGuideButton jobId={jobId} onSent={setNotice} />
       </div>
       {notice ? <p className="border-t border-border px-4 py-2 text-xs text-[var(--success)]">{notice}</p> : null}

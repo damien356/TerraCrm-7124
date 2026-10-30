@@ -2,6 +2,7 @@ import { and, desc, eq, gte, inArray, lt, notInArray } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { localDate } from "./local-date";
+import { emailedAtFor } from "./invoice-emailed";
 import { asSalesCategory, SALES_CATEGORIES, salesAccountsView, type SalesCategory } from "./xero-invoices";
 
 /* ---------------------------------------------------------------------------
@@ -79,6 +80,8 @@ export async function salesByCategory(range: { from?: string | null; to?: string
     owing: number;
     inXero: boolean;
     xeroSalesAccount: string | null;
+    /** Last successful email. Null: not sent. */
+    emailedAt: Date | null;
   }> = [];
 
   for (const r of rows) {
@@ -124,9 +127,13 @@ export async function salesByCategory(range: { from?: string | null; to?: string
         owing,
         inXero: !!inv.xeroInvoiceId,
         xeroSalesAccount: inv.xeroSalesAccount,
+        emailedAt: null,
       });
     }
   }
+
+  const emailed = await emailedAtFor(materials.map((m) => m.id));
+  for (const m of materials) m.emailedAt = emailed.get(m.id) ?? null;
 
   return {
     from: range.from ?? null,
