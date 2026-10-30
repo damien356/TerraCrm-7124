@@ -10,6 +10,13 @@ import { useQuoteEmailDraft, useQuoteLink, useSendQuoteEmail } from "../queries/
 import { needsScope, SCOPE_FILL } from "../../api/lib/quote-email-template";
 import { EmailInput } from "./email-input";
 import { CcList, EmailAttachments, NO_ATTACHMENTS, type MailAttachments } from "./email-attachments";
+import { SendResult, SmsPanel, type SmsPerson, type SmsState } from "./quote-send-parts";
+import { mobileForSms, scopeFromBody, showMobile } from "../../api/lib/quote-sms-text";
+
+/** Same check as EMAIL_RE on the server. */
+const EMAIL_OK = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
+const newSendKey = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `k${Date.now()}${Math.random().toString(36).slice(2)}`;
 
 /**
  * Email quote (spec 2.1): from team@ as "Damien from Terra", PDF attached,
@@ -49,7 +56,7 @@ export function EmailQuoteButton({
         title={resend ? "Emails the client the updated copy. Logged as wording edited, re-sent." : undefined}
       >
         <Mail className="size-4" />
-        {resend ? "Save and re-send" : again ? "Email again" : "Email quote"}
+        {resend ? "Save and re-send" : again ? "Send again" : "Send quote"}
       </Button>
       {/* Portalled out of the dark page header, or its colour rules turn the form white on white. */}
       {open ? createPortal(<EmailQuoteDialog quoteId={quoteId} onClose={() => setOpen(false)} onSent={onSent} />, document.body) : null}
@@ -66,13 +73,51 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
   const [error, setError] = React.useState<string | null>(null);
   const [cc, setCc] = React.useState<string[]>([]);
   const [files, setFiles] = React.useState<MailAttachments>(NO_ATTACHMENTS);
+  /* One key per opening of this screen. A double click or a retried request sends once. */
+  const sendKey = React.useRef(newSendKey());
+  const [result, setResult] = React.useState<React.ComponentProps<typeof SendResult>["send"] | null>(null);
+  /* The text half. Null until the draft is in. Typed fields stop following the email recipient. */
+  const [sms, setSms] = React.useState<SmsState | null>(null);
+  const [smsTouched, setSmsTouched] = React.useState<{ to: boolean; name: boolean; description: boolean }>({ to: false, name: false, description: false });
 
   const d = draft.data;
   const toValue = to ?? d?.to ?? "";
   const picked = d?.recipients.find((r) => r.email === toValue);
   const subjectValue = subject ?? d?.subject ?? "";
   const bodyValue = body ?? d?.body ?? "";
-  const unfilled = !!d && needsScope(subjectValue, bodyValue);
+  const emailOk = EMAIL_OK.test(toValue.trim());
+  const unfilled = !!d && emailOk && needsScope(subjectValue, bodyValue);
+  const person: SmsPerson | null = d ? (d.sms.byEmail[toValue.trim().toLowerCase()] ?? d.sms.fallback) : null;
+  const emailWarn = d?.sms.emailWarn[toValue.trim().toLowerCase()] ?? null;
+
+  // The text follows whoever the email goes to, until the office types over it.
+  React.useEffect(() => {
+    if (!d) return;
+    setSms((cur) => {
+      const base: SmsState = cur ?? {
+        on: d.sms.defaultOn && !person?.warn && !person?.blocked,
+        to: "",
+        contactId: null,
+        firstName: "",
+        description: d.sms.description,
+        showOption: !!d.sms.option,
+      };
+      return {
+        ...base,
+        to: smsTouched.to && cur ? base.to : (person?.mobileShown ?? ""),
+        contactId: smsTouched.to && cur ? base.contactId : (person?.contactId ?? null),
+        firstName: smsTouched.name && cur ? base.firstName : (person?.firstName || picked?.name.split(" ")[0] || ""),
+      };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d, person?.contactId, person?.mobileShown]);
+
+  // What the quote is for: the words typed in the email's fill-in spot, unless typed for the text.
+  React.useEffect(() => {
+    if (!d || smsTouched.description) return;
+    const scope = scopeFromBody(d.body, bodyValue, SCOPE_FILL);
+    setSms((cur) => (cur ? { ...cur, description: scope || d.sms.description } : cur));
+  }, [d, bodyValue, smsTouched.description]);
 
   // Opens with the fill-in spot selected, so typing replaces it.
   const bodyRef = React.useRef<HTMLTextAreaElement>(null);
@@ -87,23 +132,46 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
     el.setSelectionRange(at, at + SCOPE_FILL.length);
   }, [d]);
 
+  const smsOn = !!sms?.on;
+  const smsMobile = smsOn ? mobileForSms(sms!.to) : null;
+  const smsBlocked = !!smsMobile && !!person && person.mobile === smsMobile && !!person.blocked;
+  const smsGoing = smsOn && !!smsMobile && !smsBlocked && !!sms!.description.trim();
+  const nothing = !emailOk && !smsGoing;
+  const label = emailOk && smsGoing ? "Send email and text" : emailOk ? "Send email" : smsGoing ? "Send text only" : "Send";
+
+  function onSmsChange(v: SmsState) {
+    if (!sms) return;
+    setSmsTouched((t) => ({ to: t.to || v.to !== sms.to, name: t.name || v.firstName !== sms.firstName, description: t.description || v.description !== sms.description }));
+    setSms(v.to !== sms.to ? { ...v, contactId: person && mobileForSms(v.to) === person.mobile ? person.contactId : null } : v);
+  }
+
   async function onSend() {
-    if (!d) return;
+    if (!d || send.isPending || result) return;
     setError(null);
     try {
       const out = await send.mutateAsync({
         quoteId,
-        to: toValue.trim(),
+        sendKey: sendKey.current,
+        to: emailOk ? toValue.trim() : "",
         subject: subjectValue,
         body: bodyValue,
-        cc: cc.map((c) => c.trim()).filter(Boolean),
+        cc: emailOk ? cc.map((c) => c.trim()).filter(Boolean) : [],
         mediaIds: files.mediaIds,
         uploads: files.uploads,
+        sms: smsOn && sms ? { to: sms.to, contactId: sms.contactId, firstName: sms.firstName, description: sms.description, showOption: sms.showOption } : null,
       });
-      const what = d.resend ? `Wording edited, re-sent. Quote ${d.ref} emailed to ${out.to}` : `Quote ${d.ref} emailed to ${out.to}`;
-      const links = out.linked?.length ? ` ${out.linked.length} file${out.linked.length === 1 ? "" : "s"} went as download links, too big to attach.` : "";
-      onSent?.(`${what}${out.via === "relay" ? " (sent through the backup mailer, team@ is not connected)" : ""}.${links}`);
-      onClose();
+      const r = out.send;
+      if (!r) return;
+      const emailFine = r.email.status === "sent" || (!emailOk && r.email.status === "skipped");
+      const smsFine = r.sms.status === "sent" || (!smsOn && r.sms.status === "skipped");
+      if (emailFine && smsFine) {
+        const parts = [r.email.status === "sent" ? `emailed to ${r.email.to}` : "", r.sms.status === "sent" ? `texted to ${r.sms.toShown}` : ""].filter(Boolean).join(" and ");
+        const what = d.resend ? `Wording edited, re-sent. Quote ${d.ref} ${parts}` : `Quote ${d.ref} ${parts}`;
+        onSent?.(`${what}.${r.email.detail && r.email.status === "sent" ? ` ${r.email.detail}` : ""}${out.duplicate ? " (Pressed twice, sent once.)" : ""}`);
+        onClose();
+        return;
+      }
+      setResult(r);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -113,23 +181,27 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
     <Modal
       open
       onClose={onClose}
-      title={d ? `${d.resend ? "Re-send quote" : "Email quote"} ${d.ref}` : "Email quote"}
+      title={d ? `${d.resend ? "Re-send quote" : "Send quote"} ${d.ref}` : "Send quote"}
       subtitle={
         d?.resend
           ? 'The updated copy goes from team@ as "Damien from Terra", PDF attached. The quote stays accepted and the price does not change.'
-          : 'From team@ as "Damien from Terra". Replies come back to team@. The PDF is attached.'
+          : 'Email from team@ as "Damien from Terra", PDF attached. Replies come back to team@. A text with the link goes too, unless you turn it off.'
       }
       width="max-w-2xl"
       footer={
-        <>
-          <Button variant="outline" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={onSend} disabled={!d || send.isPending || !toValue.trim() || unfilled}>
-            {send.isPending ? <Spinner /> : <Mail className="size-4" />}
-            Send
-          </Button>
-        </>
+        result ? (
+          <Button onClick={onClose}>Close</Button>
+        ) : (
+          <>
+            <Button variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button onClick={onSend} disabled={!d || send.isPending || nothing || unfilled}>
+              {send.isPending ? <Spinner /> : <Mail className="size-4" />}
+              {send.isPending ? "Sending…" : label}
+            </Button>
+          </>
+        )
       }
     >
       {draft.isLoading ? (
@@ -138,8 +210,26 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
         </div>
       ) : draft.error ? (
         <p className="text-sm text-destructive">{draft.error.message}</p>
+      ) : result ? (
+        <div className="flex flex-col gap-3">
+          <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            {result.email.status === "sent" || result.sms.status === "sent"
+              ? "Part of this went and part did not. The office has been told. Try again only sends the one that failed."
+              : "Nothing went. The office has been told. Fix the detail and try again, or close and send again."}
+          </p>
+          <SendResult quoteId={quoteId} send={result} onChange={setResult} />
+        </div>
       ) : d ? (
         <div className="flex flex-col gap-3">
+          <div className="rounded-lg border border-border px-3 py-2 text-sm">
+            <p className="label-xs mb-1">Going to</p>
+            <p className="flex flex-wrap gap-x-4 gap-y-1">
+              <span className={emailOk ? "" : "text-destructive"}>Email: {emailOk ? toValue.trim() : toValue.trim() ? `${toValue.trim()} (not valid)` : "none"}</span>
+              <span className={smsGoing ? "" : "text-muted-foreground"}>
+                Text: {!smsOn ? "off" : smsGoing ? showMobile(smsMobile) : smsBlocked ? "blocked, opted out" : !smsMobile ? "no valid mobile" : "add what it is for"}
+              </span>
+            </p>
+          </div>
           {d.recipients.length ? (
             <Field label="Send to">
               <Select value={picked ? picked.email : "__other"} onChange={(e) => setTo(e.target.value === "__other" ? "" : e.target.value)}>
@@ -152,12 +242,19 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
               </Select>
             </Field>
           ) : (
-            <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">Nobody on this quote has an email address. Type one below.</p>
+            <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">Nobody on this quote has an email address. Type one below, or send the text only.</p>
           )}
-          {!picked ? (
-            <Field label="Email address">
-              <EmailInput value={toValue} onValueChange={setTo} placeholder="name@example.com" />
-            </Field>
+          <Field label="Email address">
+            <EmailInput value={toValue} onValueChange={setTo} placeholder="name@example.com" />
+          </Field>
+          {toValue.trim() && !emailOk ? (
+            <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              "{toValue.trim()}" is not a valid email address, so no email will go.{smsGoing ? " The text still goes." : ""}
+            </p>
+          ) : null}
+          {emailWarn ? <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">{emailWarn}</p> : null}
+          {sms ? (
+            <SmsPanel draft={d.sms} value={sms} onChange={onSmsChange} person={person} url={d.url} emailGoing={emailOk} resend={d.resend} />
           ) : null}
           <Field label="CC">
             <CcList value={cc} onChange={setCc} suggestions={d.recipients.filter((r) => r.email !== toValue)} />

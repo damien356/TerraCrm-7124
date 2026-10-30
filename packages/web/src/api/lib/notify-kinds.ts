@@ -15,6 +15,7 @@ export const ALERT_KINDS = {
   missing_invoice: { label: "Supplier invoice missing (on a statement)", group: "Money", urgent: false },
   quote_rework: { label: "Things to sort after a quote is accepted", group: "Clients", urgent: false },
   quote_viewed: { label: "Quote opened 3 or more times", group: "Clients", urgent: false },
+  quote_send_problem: { label: "Quote email or text did not go", group: "Clients", urgent: true },
   variation_accepted: { label: "Client accepted a variation online", group: "Clients", urgent: false },
   variation_declined: { label: "Client declined a variation online", group: "Clients", urgent: false },
   selection_done: { label: "Client filled in flooring or colours", group: "Clients", urgent: false },

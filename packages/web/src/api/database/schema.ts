@@ -2007,6 +2007,51 @@ export const quoteLinks = sqliteTable(
   },
 );
 
+/**
+ * One press of Send on a quote (30 Oct, after 188048): the email and the text
+ * each with their own result, so one going and the other not is plain to see
+ * and only the one that did not go can be tried again.
+ *
+ * Channel status: sending · sent · failed · skipped (bad or missing address,
+ * or turned off) · blocked (opted out). "sent" means the provider took it,
+ * never that it reached the inbox or phone.
+ *
+ * send_key is made by the Send screen when it opens. A double click or a
+ * network retry carries the same key, so it can never send twice.
+ */
+export const quoteSends = sqliteTable(
+  "quote_sends",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    quoteId: integer("quote_id")
+      .notNull()
+      .references(() => quotes.id, { onDelete: "cascade" }),
+    sendKey: text("send_key").notNull().unique(),
+    /** The quote total when sent. A retry after the price changed is refused. */
+    quoteTotal: real("quote_total").notNull().default(0),
+    /** first (a normal send) or resend (an accepted quote's wording fixed). */
+    kind: text("kind").notNull().default("first"),
+    byName: text("by_name").notNull().default(""),
+    emailTo: text("email_to"),
+    emailStatus: text("email_status").notNull().default("skipped"),
+    emailDetail: text("email_detail"),
+    emailMessageId: integer("email_message_id"),
+    emailAt: integer("email_at", { mode: "timestamp" }),
+    /** What the email went with, kept so a retry sends the same words. JSON. */
+    emailJson: text("email_json"),
+    smsTo: text("sms_to"),
+    smsStatus: text("sms_status").notNull().default("skipped"),
+    smsDetail: text("sms_detail"),
+    smsMessageId: integer("sms_message_id"),
+    smsProviderId: text("sms_provider_id"),
+    smsAt: integer("sms_at", { mode: "timestamp" }),
+    /** What the text says up to the link, and after. The "also emailed" line is added only once the email has gone. */
+    smsJson: text("sms_json"),
+    ...timestamps,
+  },
+  (t) => [index("quote_sends_quote_idx").on(t.quoteId, t.createdAt)],
+);
+
 /** A client's signed acceptance of one quote version, online or on paper. */
 export const quoteSignatures = sqliteTable(
   "quote_signatures",

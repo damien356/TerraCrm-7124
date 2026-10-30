@@ -715,6 +715,20 @@ export const conversations = {
             where m.conversation_id = conversations.id
             order by m.created_at desc, m.id desc limit 1
           )`,
+          /**
+           * Email or text to someone that failed and has not gone since on the
+           * same channel (30 Oct, 188048). "email", "sms", "email,sms" or null.
+           */
+          failedOut: sql<string | null>`(
+            select group_concat(distinct f.channel) from messages f
+            where f.conversation_id = conversations.id and f.direction = 'out' and f.status = 'failed'
+              and f.channel in ('email', 'sms')
+              and not exists (
+                select 1 from messages s
+                where s.conversation_id = f.conversation_id and s.channel = f.channel and s.direction = 'out'
+                  and s.status = 'sent' and (s.created_at > f.created_at or (s.created_at = f.created_at and s.id > f.id))
+              )
+          )`,
           /** Whether anything is filed on this thread, shown as a clip. */
           attachmentCount: sql<number>`(
             select count(*) from messages m join message_attachments a on a.message_id = m.id
@@ -747,6 +761,7 @@ export const conversations = {
         lastDirection: r.lastDirection ?? "out",
         lastAuthor: r.lastAuthor ?? "",
         attachmentCount: Number(r.attachmentCount ?? 0),
+        failedOut: (r.failedOut ?? "").split(",").filter(Boolean),
       }));
     }),
 

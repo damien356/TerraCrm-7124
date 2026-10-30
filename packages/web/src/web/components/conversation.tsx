@@ -130,8 +130,12 @@ function Message({
             {m.autoReply ? <Badge>automatic reply</Badge> : null}
             {failed ? (
               <Badge colour="#B4472E">
-                <AlertTriangle className="size-3" /> failed
+                <AlertTriangle className="size-3" /> {m.channel === "sms" ? "text failed" : m.channel === "email" ? "email failed" : "failed"}
               </Badge>
+            ) : !inbound && (m.channel === "email" || m.channel === "sms") && m.status === "sent" ? (
+              <span title={m.channel === "sms" ? "ClickSend accepted the text. That does not prove it reached the phone." : "The mail server accepted it. That does not prove it reached the inbox."}>
+                <Badge colour="#4A7A52">sent</Badge>
+              </span>
             ) : null}
             {m.pinnedAt ? (
               <Badge colour="#BC9558">

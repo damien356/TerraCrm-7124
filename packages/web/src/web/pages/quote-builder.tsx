@@ -21,6 +21,7 @@ import { QuoteBundlesCard } from "../components/quote-bundles";
 import { DELIVERY, KIND_LABELS, SUPPLIER_CHARGE } from "../../api/lib/line-kinds";
 import { QuoteAgentCard } from "../components/quote-agent";
 import { EmailQuoteButton, QuoteLinkCard } from "../components/quote-email";
+import { QuoteSendsCard } from "../components/quote-send-parts";
 import { SiteFillModal } from "../components/site-fill";
 import { useQuoteSiteNeed } from "../queries/siteFill";
 import { useQuoteLink } from "../queries/quoteSend";
@@ -844,29 +845,23 @@ export default function QuoteBuilderPage() {
                 <Send className="size-4" />
                 Mark as sent
               </Button>
-              <EmailQuoteButton
-                quoteId={q.id}
-                disabled={q.discountNeedsApproval || q.items.length === 0}
-                gate={emailGate}
-                onSent={(m) => {
-                  setError(null);
-                  setNotice(m);
-                }}
-              />
             </>
+          ) : null}
+          {/* One button for draft and sent, so the Send screen stays open when the quote turns sent mid-send and a failed text can be retried. */}
+          {q.status === "draft" || q.status === "sent" ? (
+            <EmailQuoteButton
+              quoteId={q.id}
+              again={q.status === "sent"}
+              disabled={q.discountNeedsApproval || (q.status === "draft" && q.items.length === 0)}
+              gate={emailGate}
+              onSent={(m) => {
+                setError(null);
+                setNotice(m);
+              }}
+            />
           ) : null}
           {q.status === "sent" ? (
             <>
-              <EmailQuoteButton
-                quoteId={q.id}
-                again
-                disabled={q.discountNeedsApproval}
-                gate={emailGate}
-                onSent={(m) => {
-                  setError(null);
-                  setNotice(m);
-                }}
-              />
               <Button variant="outline" onClick={() => setDeclining(true)}>
                 <X className="size-4" />
                 Declined
@@ -1110,6 +1105,7 @@ export default function QuoteBuilderPage() {
           </Card>
 
           {q.status !== "draft" && q.status !== "needs_review" ? <QuoteLinkCard quoteId={q.id} status={q.status} /> : null}
+          <QuoteSendsCard quoteId={q.id} />
 
           {q.status === "accepted" && q.deposit > 0 ? (
             <Card>

@@ -4,15 +4,15 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { staffOnly } from "../middleware/auth";
 import { assertBillable } from "../lib/callbacks";
-import { leadToQuotedOnSend } from "../lib/job-stage";
 import { quoteRefOf } from "../lib/quote-number";
 import { linkSummary } from "../lib/quote-links";
 import { depositInvoiceFor } from "../lib/client-invoices";
 import { uploadInput } from "../lib/job-mail";
-import { quoteEmailDraft, sendQuoteEmail } from "../lib/quote-email";
-import { syncJobValue } from "../lib/job-value";
+import { EMAIL_RE, quoteEmailDraft } from "../lib/quote-email";
+import { needsScope, SCOPE_FILL } from "../lib/quote-email-template";
+import { claimSend, releaseSend, retryChannel, runSend, sendByKeySettled, sendsFor, sendSummary, quoteSmsDraft } from "../lib/quote-send";
+import { ORPCError } from "@orpc/server";
 import { assertReadyToGoOut, editableQuoteOrThrow, quoteOrThrow, recordPriceHistory } from "./quotes";
-import { onQuoteSent } from "../lib/quote-followup";
 
 /* ---------------------------------------------------------------------------
  * Emailing a quote from the builder (spec 2.1): the PDF attached, plus the
@@ -65,86 +65,97 @@ export const quoteSend = {
     const ref = await quoteRefOf(quote);
     const resend = quote.status === "accepted";
     const draft = resend ? await resendDraft(quote, ref) : await quoteEmailDraft(quote, ref);
-    return { ...draft, ref, resend, jobId: quote.jobId, link: await linkSummary(quote.id) };
+    return { ...draft, ref, resend, jobId: quote.jobId, link: await linkSummary(quote.id), sms: await quoteSmsDraft(quote, resend) };
   }),
 
-  /** Email it. Only marked sent once the email has actually gone. */
+  /**
+   * Send it: the email as before, and a text with the link unless turned off
+   * (30 Oct, after 188048). Each channel has its own result. Marked sent once
+   * either has actually gone. The same sendKey twice sends once.
+   */
   send: staffOnly
     .input(
       z.object({
         quoteId: z.number(),
-        to: z.string().min(3).max(200),
+        sendKey: z.string().min(8).max(80),
+        /** Empty when there is no usable email: the text can still go. */
+        to: z.string().max(200),
         subject: z.string().max(300),
-        body: z.string().min(1).max(20000),
+        body: z.string().max(20000),
         cc: z.array(z.string().trim().max(200)).max(10).optional(),
         mediaIds: z.array(z.number().int()).max(30).optional(),
         uploads: z.array(uploadInput).max(20).optional(),
+        sms: z
+          .object({
+            to: z.string().max(40),
+            contactId: z.number().int().nullable().optional(),
+            firstName: z.string().max(60),
+            description: z.string().max(160),
+            showOption: z.boolean(),
+          })
+          .nullable()
+          .optional(),
       }),
     )
     .handler(async ({ input, context }) => {
       const quote = await sendableQuoteOrThrow(input.quoteId);
-      if (quote.status === "accepted") {
-        // Wording edited after acceptance. The status, price history and job stage stay as they are.
-        const out = await sendQuoteEmail({
-          quote,
-          to: input.to,
-          subject: input.subject,
-          body: input.body,
-          cc: input.cc,
-          mediaIds: input.mediaIds,
-          uploads: input.uploads,
-          byName: context.actor.name,
-          byProfileId: await profileIdOf(context.actor.userId),
-        });
-        await db.insert(schema.activityLog).values({
-          jobId: quote.jobId,
-          contactId: quote.contactId,
-          entityType: "quote",
-          entityId: quote.id,
-          action: "wording_resent",
-          detail: `Wording edited, re-sent. Quote ${out.ref} emailed to ${out.to}`,
-          actorName: context.actor.name,
-          actorRole: context.actor.role,
-        });
-        return { quote, to: out.to, via: out.via, url: out.url, linked: out.linked };
+      const already = await sendByKeySettled(input.sendKey);
+      if (already) {
+        if (already.quoteId !== quote.id) throw new ORPCError("BAD_REQUEST", { message: "That send belongs to another quote." });
+        return { send: sendSummary(already), duplicate: true };
       }
-      await assertBillable(quote.jobId);
-      await assertReadyToGoOut(quote, context.actor);
-      await recordPriceHistory(quote, context.actor.name);
-      const out = await sendQuoteEmail({
+      const wantsEmail = input.to.trim().length > 0;
+      if (wantsEmail && EMAIL_RE.test(input.to.trim())) {
+        if (!input.body.trim()) throw new ORPCError("BAD_REQUEST", { message: "The email has no message." });
+        if (needsScope(input.subject, input.body)) throw new ORPCError("BAD_REQUEST", { message: `Type what the quote is for in place of ${SCOPE_FILL} before sending.` });
+        for (const c of input.cc ?? []) if (!EMAIL_RE.test(c.trim())) throw new ORPCError("BAD_REQUEST", { message: `"${c}" is not an email address.` });
+      }
+      if (input.sms && !input.sms.description.trim()) throw new ORPCError("BAD_REQUEST", { message: "Type a few words for the text about what the quote is for." });
+
+      const resend = quote.status === "accepted";
+      const row = await claimSend({ quote, sendKey: input.sendKey, kind: resend ? "resend" : "first", byName: context.actor.name });
+      if (!row) {
+        const first = await sendByKeySettled(input.sendKey);
+        return { send: first ? sendSummary(first) : null, duplicate: true };
+      }
+      if (!resend) {
+        try {
+          await assertBillable(quote.jobId);
+          await assertReadyToGoOut(quote, context.actor);
+          await recordPriceHistory(quote, context.actor.name);
+        } catch (e) {
+          await releaseSend(row.id);
+          throw e;
+        }
+      }
+      const who = { name: context.actor.name, role: context.actor.role, profileId: await profileIdOf(context.actor.userId) };
+      const done = await runSend({
+        row,
         quote,
-        to: input.to,
-        subject: input.subject,
-        body: input.body,
-        cc: input.cc,
-        mediaIds: input.mediaIds,
-        uploads: input.uploads,
-        byName: context.actor.name,
-        byProfileId: await profileIdOf(context.actor.userId),
+        who,
+        email: wantsEmail
+          ? { to: input.to, subject: input.subject, body: input.body, cc: input.cc?.map((c) => c.trim()).filter(Boolean), mediaIds: input.mediaIds, uploads: input.uploads }
+          : null,
+        sms: input.sms ? { ...input.sms, contactId: input.sms.contactId ?? null } : null,
       });
-      const now = new Date();
-      const [row] = await db
-        .update(schema.quotes)
-        .set({ status: "sent", sentAt: quote.sentAt ?? now, updatedAt: now })
-        .where(eq(schema.quotes.id, quote.id))
-        .returning();
-      await db.insert(schema.activityLog).values({
-        jobId: quote.jobId,
-        contactId: quote.contactId,
-        entityType: "quote",
-        entityId: quote.id,
-        action: "sent",
-        detail: `Quote ${out.ref} emailed to ${out.to}`,
-        actorName: context.actor.name,
-        actorRole: context.actor.role,
-      });
-      // Notes 18.53: a sent quote always leaves its job on the right value.
-      if (quote.jobId) await syncJobValue(quote.jobId);
-      await leadToQuotedOnSend({ jobId: quote.jobId, quoteNumber: out.ref, actor: context.actor });
-      // Quote follow-ups: a new version moves them on, a first send enrols when the setting is on. Never throws.
-      void onQuoteSent(quote.id, context.actor.name, { to: out.to, cc: input.cc });
-      return { quote: row, to: out.to, via: out.via, url: out.url, linked: out.linked };
+      return { send: sendSummary(done), duplicate: false };
     }),
+
+  /** Try again only the channel that failed. The one that went is never sent twice. */
+  retry: staffOnly
+    .input(z.object({ quoteId: z.number(), sendId: z.number().int(), channel: z.enum(["email", "sms"]) }))
+    .handler(async ({ input, context }) => {
+      const quote = await sendableQuoteOrThrow(input.quoteId);
+      const who = { name: context.actor.name, role: context.actor.role, profileId: await profileIdOf(context.actor.userId) };
+      const row = await retryChannel({ sendId: input.sendId, channel: input.channel, quote, who });
+      return { send: sendSummary(row) };
+    }),
+
+  /** Each send on this quote with the email and the text shown apart. */
+  sends: staffOnly.input(z.object({ quoteId: z.number() })).handler(async ({ input }) => {
+    await quoteOrThrow(input.quoteId);
+    return sendsFor(input.quoteId);
+  }),
 
   /** The link card on the builder: url, how often it was opened, and the signature if signed. */
   link: staffOnly.input(z.object({ quoteId: z.number() })).handler(async ({ input }) => {

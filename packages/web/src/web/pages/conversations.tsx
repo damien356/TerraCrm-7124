@@ -114,6 +114,8 @@ type Row = {
   lastDirection: string;
   lastAuthor: string;
   attachmentCount: number;
+  /** Channels with a send that failed and has not gone since. */
+  failedOut?: string[];
 };
 
 /** Where a row takes you: the job's thread, else the quote, else the client. */
@@ -163,6 +165,15 @@ function ThreadRow({ r }: { r: Row }) {
           <p className={cn("truncate text-[15px] leading-tight", unread ? "font-semibold" : "font-medium")}>
             {title}
           </p>
+          {(r.failedOut ?? []).map((ch) => (
+            <span
+              key={ch}
+              title="This did not go out. Open the thread to see why."
+              className="shrink-0 rounded-full bg-[#B4472E]/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#B4472E]"
+            >
+              {ch === "sms" ? "Text failed" : "Email failed"}
+            </span>
+          ))}
           {r.state === "unassigned" ? (
             <span className="shrink-0 rounded-full bg-[#C0603F]/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#C0603F]">
               Unmatched
