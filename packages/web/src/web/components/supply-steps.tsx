@@ -45,7 +45,7 @@ function jump(id: string) {
 
 const NEXT: Record<string, string> = {
   order: "raise and send the PO",
-  delivered: "mark it delivered with the proof",
+  delivered: "record it delivered or collected",
   invoice: "send the invoice",
   paid: "record the payment",
 };
@@ -158,19 +158,22 @@ export function SupplyStepsCard({
       };
   }
 
+  const part = st.handovers.length > 0 && !st.completedAt;
   const delivered: Step = st.completedAt
     ? {
         key: "delivered",
-        title: "Delivered",
-        state: `Delivered ${dayOf(st.completedAt)}${st.deliveredBy ? `, marked by ${st.deliveredBy}` : ""}.`,
+        title: "Delivered or collected",
+        state: `All supplied ${dayOf(st.completedAt)}${st.deliveredBy ? `, recorded by ${st.deliveredBy}` : ""}.`,
         done: true,
       }
     : {
         key: "delivered",
-        title: "Delivered",
-        state: "Not marked yet. Add the proof when it arrives.",
+        title: "Delivered or collected",
+        state: part
+          ? `Part supplied. ${st.outstanding} line${st.outstanding === 1 ? "" : "s"} still to hand over.`
+          : "Nothing handed over yet. Record it when it is delivered or collected.",
         done: false,
-        go: { label: "Mark delivered", anchor: STEP_ANCHOR.delivered },
+        go: { label: "Delivered or collected", anchor: STEP_ANCHOR.delivered },
       };
 
   const b = billing.data;
@@ -191,7 +194,7 @@ export function SupplyStepsCard({
     invoice = {
       key: "invoice",
       title: "Invoiced",
-      state: `${moneyExact(b.toBill)} still to bill${i.billed > 0 ? `, ${moneyExact(i.billed)} billed so far` : ""}.${st.completedAt ? "" : " Mark delivered raises the final for you."}`,
+      state: `${moneyExact(b.toBill)} still to bill${i.billed > 0 ? `, ${moneyExact(i.billed)} billed so far` : ""}.${st.completedAt ? "" : " When everything is handed over, the final is raised for you."}`,
       done: false,
       go: { label: "Client invoices", anchor: STEP_ANCHOR.invoice },
     };

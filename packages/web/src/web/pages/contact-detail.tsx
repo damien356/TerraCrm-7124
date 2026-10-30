@@ -1,5 +1,6 @@
 import * as React from "react";
 import { ClientQuotesCard } from "../components/quote-copy";
+import { SalesCard } from "../components/sell-products";
 import { ReferrerSection } from "../components/referrals";
 import { useBootstrap } from "../queries/settings";
 import { Link, useParams } from "wouter";
@@ -276,6 +277,8 @@ export default function ContactDetailPage() {
           </Card>
 
           <ClientQuotesCard contactId={c.id} />
+
+          <SalesCard buyer={{ kind: "contact", contactId: c.id }} buyerName={`${c.firstName} ${c.lastName}`.trim()} />
 
           {isAdmin ? <ReferrerSection contactId={c.id} /> : null}
 

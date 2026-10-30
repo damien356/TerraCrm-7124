@@ -1613,6 +1613,8 @@ export const jobMaterials = sqliteTable(
     unit: text("unit").notNull().default("m2"),
     /** to_order · ordered · on_site · installed */
     status: text("status").notNull().default("to_order"),
+    /** Sell products (2026-11-19-product-sales.sql): the sale line this was ordered for. Null on everything else. */
+    saleLineId: integer("sale_line_id"),
     ...timestamps,
   },
   (t) => [index("materials_job_idx").on(t.jobId)],
@@ -4929,4 +4931,87 @@ export const calendarOverrides = sqliteTable(
     ...timestamps,
   },
   (t) => [index("calendar_overrides_task_idx").on(t.taskId), index("calendar_overrides_installer_idx").on(t.installerId, t.date)],
+);
+
+/* ---------------------------------------------------------------------------
+ * Sell products (Damien, 30 Oct; 2026-11-19-product-sales.sql).
+ * One sale of products with nothing to install, to an installer or a
+ * customer. It sits on its own supply only job, like every sale in Ops.
+ * ------------------------------------------------------------------------- */
+
+export const productSales = sqliteTable(
+  "product_sales",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** The form's key. A double click or a second person sends the same key and gets the same sale back. */
+    requestKey: text("request_key").notNull(),
+    /** quote (saved, sent later by hand) · invoice (raised straight away) */
+    mode: text("mode").notNull(),
+    /** installer · contact · company */
+    buyerKind: text("buyer_kind").notNull(),
+    installerId: integer("installer_id").references(() => installers.id, { onDelete: "set null" }),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    companyId: integer("company_id").references(() => companies.id, { onDelete: "set null" }),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    quoteId: integer("quote_id").references(() => quotes.id, { onDelete: "set null" }),
+    /** customer (Xero 200) · installer_materials (Xero 204). Every invoice on the job takes it. */
+    salesCategory: text("sales_category").notNull().default("customer"),
+    /** "We need to order this". Off: nothing is ordered. On: draft POs for what is not from stock. */
+    orderNeeded: integer("order_needed", { mode: "boolean" }).notNull().default(false),
+    note: text("note").notNull().default(""),
+    createdByName: text("created_by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("product_sales_request_key_unique").on(t.requestKey), index("product_sales_job_idx").on(t.jobId)],
+);
+
+export const productSaleLines = sqliteTable(
+  "product_sale_lines",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    saleId: integer("sale_id").notNull().references(() => productSales.id, { onDelete: "cascade" }),
+    /** The quote line it became. Deliveries and collections count against this. */
+    quoteItemId: integer("quote_item_id").references(() => quoteItems.id, { onDelete: "set null" }),
+    productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
+    description: text("description").notNull(),
+    qty: real("qty").notNull().default(0),
+    unit: text("unit").notNull().default("each"),
+    unitPrice: real("unit_price").notNull().default(0),
+    /** How much of the qty comes off the shelf now. Ops keeps no stock counts: this is what the person said. */
+    fromStock: real("from_stock").notNull().default(0),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [index("product_sale_lines_sale_idx").on(t.saleId)],
+);
+
+/**
+ * What left the business on a supply only job: delivered or collected, how
+ * much of which line, when and by whom. Nothing here touches payment.
+ */
+export const supplyHandovers = sqliteTable(
+  "supply_handovers",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    /** The accepted quote line. Null only if that line has since gone. */
+    quoteItemId: integer("quote_item_id").references(() => quoteItems.id, { onDelete: "set null" }),
+    productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
+    description: text("description").notNull(),
+    unit: text("unit").notNull().default("each"),
+    qty: real("qty").notNull().default(0),
+    /** delivered · collected */
+    kind: text("kind").notNull(),
+    /** The day it happened, YYYY-MM-DD, Brisbane. */
+    handedOn: text("handed_on").notNull(),
+    /** Collected: who took it away. */
+    collectedBy: text("collected_by").notNull().default(""),
+    note: text("note").notNull().default(""),
+    /** Same for every line handed over in one go. */
+    batchKey: text("batch_key").notNull(),
+    actorName: text("actor_name").notNull().default(""),
+    actorRole: text("actor_role").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [index("supply_handovers_job_idx").on(t.jobId), index("supply_handovers_batch_idx").on(t.batchKey)],
 );

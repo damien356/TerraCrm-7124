@@ -66,6 +66,7 @@ import { callbacks } from "./routes/callbacks";
 import { quoteSend } from "./routes/quoteSend";
 import { clientInvoices } from "./routes/clientInvoices";
 import { delivery } from "./routes/delivery";
+import { productSales } from "./routes/productSales";
 import { siteFill } from "./routes/siteFill";
 import { emailCheck } from "./routes/emailCheck";
 import { productFind } from "./routes/productFind";
@@ -246,6 +247,7 @@ export const router = {
   /** IQ invoices to the client: deposit, variations, final. Admin and Office mark paid, Admin voids. */
   clientInvoices,
   delivery,
+  productSales,
   /** A quote with a delivery line and no site asks for one, and a job with no site offers one (188001 list item 12). */
   siteFill,
   emailCheck,

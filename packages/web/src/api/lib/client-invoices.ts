@@ -87,6 +87,12 @@ export async function raiseInvoice(args: RaiseInvoice) {
   // Notes 18.54: an invoice from a quote bills that quote's Bill to, else the job's.
   const [quote] = args.quoteId ? await db.select().from(schema.quotes).where(eq(schema.quotes.id, args.quoteId)) : [];
   const payer = (quote ? quoteBillTo(quote) : null) ?? jobBillTo(job);
+  // Sell products (Damien, 30 Oct): a sale to an installer goes to Installer materials (204), on every invoice the job raises.
+  const [sale] = await db
+    .select({ salesCategory: schema.productSales.salesCategory })
+    .from(schema.productSales)
+    .where(eq(schema.productSales.jobId, job.id))
+    .limit(1);
 
   let row: typeof schema.invoices.$inferSelect | undefined;
   for (let attempt = 0; attempt < 6 && !row; attempt++) {
@@ -110,6 +116,7 @@ export async function raiseInvoice(args: RaiseInvoice) {
           billToContactId: payer?.type === "contact" ? payer.id : null,
           billToCompanyId: payer?.type === "company" ? payer.id : null,
           status: "sent",
+          salesCategory: sale?.salesCategory === "installer_materials" ? "installer_materials" : "customer",
           subtotal,
           gst,
           total,

@@ -163,6 +163,12 @@ export async function enrol(
 /** How far back a newly activated journey will reach. Protects against a blast. */
 const TRIGGER_WINDOW_DAYS = 30;
 
+/** Fix 2 (Damien, 30 Oct): job completed and anniversary sequences are about the install. Supply only sales had none. */
+async function supplyOnly(jobId: number) {
+  const { supplyOnlyOf } = await import("./delivery");
+  return (await supplyOnlyOf(jobId)).supplyOnly;
+}
+
 async function scanJobCompleted(journey: Journey, report: TickReport) {
   const since = new Date(Date.now() - days(TRIGGER_WINDOW_DAYS));
 
@@ -182,6 +188,7 @@ async function scanJobCompleted(journey: Journey, report: TickReport) {
 
   for (const r of rows) {
     if (!r.contactId) continue;
+    if (await supplyOnly(r.jobId)) continue;
     const out = await enrol(journey, r.contactId, { jobId: r.jobId });
     if (out.ok) report.enrolled++;
   }
@@ -286,6 +293,7 @@ async function scanAnniversary(journey: Journey, report: TickReport) {
 
   for (const r of rows) {
     if (!r.contactId) continue;
+    if (await supplyOnly(r.jobId)) continue;
     const out = await enrol(journey, r.contactId, { jobId: r.jobId });
     if (out.ok) report.enrolled++;
   }

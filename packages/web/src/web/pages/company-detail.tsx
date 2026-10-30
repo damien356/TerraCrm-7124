@@ -11,6 +11,7 @@ import { Field, Input, Select, Textarea } from "../components/ui/field";
 import { Modal } from "../components/ui/modal";
 import { PaymentTermsCard } from "../components/payment-terms";
 import { ClientQuotesCard } from "../components/quote-copy";
+import { SalesCard } from "../components/sell-products";
 import { ReferrerSection } from "../components/referrals";
 import { useBootstrap } from "../queries/settings";
 import { useCompany, useUpdateCompany } from "../queries/companies";
@@ -291,6 +292,8 @@ export default function CompanyDetailPage() {
           </Card>
 
           <ClientQuotesCard companyId={c.id} />
+
+          <SalesCard buyer={{ kind: "company", companyId: c.id }} buyerName={c.name} />
 
           {isAdmin ? <ReferrerSection companyId={c.id} abn={c.abn} /> : null}
         </div>

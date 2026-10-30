@@ -17,6 +17,7 @@ import { PurchaseOrdersCard } from "../components/purchase-orders";
 import { PaymentTermsCard } from "../components/payment-terms";
 import { ClientInvoicesCard, MaterialSelectionCard } from "../components/client-invoices";
 import { DeliveryCard } from "../components/delivery";
+import { SaleOrderCard } from "../components/sale-job";
 import { JobSiteFact } from "../components/site-fill";
 import { STEP_ANCHOR, SupplyStepsCard } from "../components/supply-steps";
 import { useDeliveryStatus } from "../queries/delivery";
@@ -575,11 +576,13 @@ export default function JobDetailPage() {
               <div id={STEP_ANCHOR.colours} className="scroll-mt-4 transition-shadow">
                 <MaterialSelectionCard jobId={j.id} />
               </div>
+              {/* product sale: from stock now, and what is still to order */}
+              <SaleOrderCard jobId={j.id} />
               {orderCards}
             </>
           ) : null}
 
-          {/* supply only: mark delivered with proof, completes the job and raises the final invoice */}
+          {/* supply only: delivered or collected, in parts, completes the job and raises the final invoice */}
           <div id={STEP_ANCHOR.delivered} className="scroll-mt-4 transition-shadow">
             <DeliveryCard jobId={j.id} />
           </div>

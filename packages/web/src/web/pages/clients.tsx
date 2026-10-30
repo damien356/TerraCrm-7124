@@ -17,6 +17,7 @@ import { Modal } from "../components/ui/modal";
 import { Combobox } from "../components/ui/combobox";
 import { useCreateContact } from "../queries/contacts";
 import { ContactMatches, type ContactMatch } from "../components/contact-matches";
+import { SellProductsButton } from "../components/sell-products";
 import { orpc } from "../lib/api";
 import { useCompanies } from "../queries/companies";
 import { useClientIntel, type ListSort } from "../queries/intel";
@@ -276,10 +277,13 @@ export default function ClientsPage() {
       title="Clients"
       subtitle="People, not accounts. One record each, for life, with what they have put through Terra."
       actions={
-        <Button onClick={() => setModal(true)}>
-          <Plus className="size-4" />
-          New contact
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <SellProductsButton size="default" label="Sell products" />
+          <Button onClick={() => setModal(true)}>
+            <Plus className="size-4" />
+            New contact
+          </Button>
+        </div>
       }
     >
       <div className="mb-3 flex flex-wrap items-center gap-2">

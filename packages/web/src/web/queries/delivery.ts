@@ -19,3 +19,17 @@ export function useMarkDelivered() {
     }),
   );
 }
+
+/** Goods delivered or collected, all of it or part. Never changes what is paid. */
+export function useRecordHandover() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.delivery.recordHandover.mutationOptions({
+      onSuccess: () => {
+        for (const key of [orpc.delivery.key(), orpc.productSales.key(), orpc.clientInvoices.key(), orpc.jobs.key(), orpc.media.key(), orpc.finance.key()]) {
+          queryClient.invalidateQueries({ queryKey: key });
+        }
+      },
+    }),
+  );
+}

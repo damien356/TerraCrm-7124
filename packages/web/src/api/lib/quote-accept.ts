@@ -150,10 +150,15 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     }
   }
 
+  // Sell products (Damien, 30 Oct): a product sale has nothing to install. Its
+  // own ordering runs below instead of the dispatch, materials and Order product task.
+  const { saleOfJob, saleQuoteAccepted } = await import("./product-sale");
+  const isSale = !!(await saleOfJob(jobId));
+
   // Dispatches and materials. A new job already has them (convertQuoteToJob).
   let rework: Rework | null = null;
   let built: { tasksCreated: number; materialsCreated: number } | null = null;
-  if (!converted) {
+  if (!converted && !isSale) {
     const base = await workBaseQuoteId(locked.number, jobId);
     if (base == null) {
       const doubles = await doublesBeforeBuild(locked.id, jobId);
@@ -198,10 +203,18 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
   // Step 2 (20 Oct): draft one PO per supplier for what is still to order.
   // Drafts only, never sent. A failure never stops the accept.
   const { draftPosForJob } = await import("./po-helper");
-  const drafts = await draftPosForJob({ jobId, quoteRef: ref }).catch((e) => {
-    console.error("[quote-accept] PO helper failed:", e);
-    return null;
-  });
+  const saleOut = isSale
+    ? await saleQuoteAccepted({ jobId, quoteId: locked.id, quoteRef: ref, actor: args.actor }).catch((e) => {
+        console.error("[quote-accept] product sale ordering failed:", e);
+        return null;
+      })
+    : null;
+  const drafts = isSale
+    ? { drafted: saleOut?.pos ?? [], skipped: 0 }
+    : await draftPosForJob({ jobId, quoteRef: ref }).catch((e) => {
+        console.error("[quote-accept] PO helper failed:", e);
+        return null;
+      });
 
   // The Order product task. The material selection form is never sent by
   // itself (fix list 13 Oct, item 10): the office sends it from the job page.
@@ -215,7 +228,7 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     invoice?.kind === "deposit" ? `Order once deposit ${invoice.number} (${money(invoice.total)}) is paid.` : "",
     invoice?.kind === "variation" ? `Variation ${invoice.number} raised for ${money(invoice.total)}.` : "",
     !prev && !invoice ? "No deposit on this quote. Raise the invoice from the job's Client invoices card when it is ready to bill." : "",
-    !prev ? "Send the material selection form from the job page so the client can check the colours before you order." : "",
+    !prev && !isSale ? "Send the material selection form from the job page so the client can check the colours before you order." : "",
     drafts?.drafted.length
       ? `Ops drafted ${drafts.drafted.length === 1 ? "PO" : "POs"} ${drafts.drafted.map((d) => d.number).join(", ")}. Not sent. Check and send from the job page.`
       : "",
@@ -224,7 +237,11 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
   ]
     .filter(Boolean)
     .join("\n");
-  const [task] = await db
+  // A product sale only gets a task when it is being ordered: check and send the draft POs.
+  const wantTask = !isSale || (!!saleOut?.ordered && !prev);
+  const [task] = !wantTask
+    ? []
+    : await db
     .insert(schema.officeTasks)
     .values({
       jobId,
@@ -232,7 +249,9 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
         ? `Sort ${rework.flags.length} thing${rework.flags.length === 1 ? "" : "s"} on job ${jobRef}, quote ${ref}`
         : prev
           ? `Check product order, job ${jobRef}`
-          : `Order product, job ${jobRef}`,
+          : isSale
+            ? `Check draft POs for product sale, job ${jobRef}`
+            : `Order product, job ${jobRef}`,
       detail: taskDetail,
       createdByName: args.actor.name,
     })

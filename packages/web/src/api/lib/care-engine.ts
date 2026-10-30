@@ -402,6 +402,12 @@ export async function enrolJob(jobId: number, opts: { now?: Date; notify?: boole
 
   if (job.parentJobId) return done({ state: "skipped", note: "callback job, the original job already counts" });
 
+  // Fix 2 (Damien, 30 Oct): the care emails talk about the install. A supply
+  // only sale had none, so it is skipped. A care guide can still be sent by
+  // hand from the job (Send a care guide).
+  const { supplyOnlyOf } = await import("./delivery");
+  if ((await supplyOnlyOf(jobId)).supplyOnly) return done({ state: "skipped", note: "Supply only, no install. Send a care guide from the job if they want one" });
+
   const pick = await homeownerFor(job);
   if (pick.contactId === null) return done({ state: "skipped", note: pick.reason });
 

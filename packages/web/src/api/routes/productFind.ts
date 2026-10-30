@@ -81,6 +81,9 @@ export const productFind = {
         wearLayerMm: schema.products.wearLayerMm,
         costPrice: schema.products.costPrice,
         priceOnApplication: schema.products.priceOnApplication,
+        /** The stored sell a quote line gets (liveSellFor). Sell products prefills from it. */
+        sellPrice: schema.products.sellPrice,
+        heldInWarehouse: schema.products.heldInWarehouse,
       })
       .from(schema.products)
       .where(and(...clauses));
@@ -102,7 +105,7 @@ export const productFind = {
 
     const priced = rows.map(({ costPrice, ...r }) => {
       const p = priceProduct({ costPrice, priceOnApplication: r.priceOnApplication, unit: r.unit }, specials.get(r.id) ?? [], today);
-      return { ...r, sellExGst: p.sellExGst, onSpecial: p.onSpecial };
+      return { ...r, sellExGst: p.sellExGst, onSpecial: p.onSpecial, passedOnToCustomer: p.passedOnToCustomer };
     });
 
     // Thickness choices come from what matches the search and type, before the thickness pick itself.
