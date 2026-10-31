@@ -102,7 +102,7 @@ async function loadPo(id: number) {
 
 async function pdfFor(poId: number) {
   const po = await loadPo(poId);
-  const [job] = await db.select({ number: jobNumberSql, title: schema.jobs.title }).from(schema.jobs).where(eq(schema.jobs.id, po.jobId));
+  const [job] = await db.select({ number: jobNumberSql }).from(schema.jobs).where(eq(schema.jobs.id, po.jobId));
   const [sup] = await db.select().from(schema.suppliers).where(eq(schema.suppliers.id, po.supplierId));
   const lines = await db.select().from(schema.purchaseOrderLines).where(eq(schema.purchaseOrderLines.poId, poId)).orderBy(asc(schema.purchaseOrderLines.sortOrder));
   const date = po.sentAt ? po.sentAt.toISOString().slice(0, 10) : todayISO();
@@ -112,7 +112,6 @@ async function pdfFor(poId: number) {
     supplierName: sup?.name ?? "Supplier",
     supplierAccount: sup?.accountNumber ?? null,
     jobNumber: job?.number ?? 0,
-    jobTitle: job?.title ?? "",
     deliverTo: po.deliverTo === "site" ? "site" : "warehouse",
     deliveryAddress: po.deliveryAddress,
     notes: po.notes,

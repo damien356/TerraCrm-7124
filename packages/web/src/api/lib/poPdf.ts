@@ -9,6 +9,8 @@ import { TERRA_LOGO_PRINT_PNG_BASE64 } from "./terraLogoPrint";
  * Shows what Terra will pay, ex GST, and says in two places where the invoice
  * has to go and which number to quote on it. That line is what makes the
  * matching work.
+ *
+ * Never prints the job title or the customer. Damien, 31 Oct.
  */
 
 export type PoPdfInput = {
@@ -17,7 +19,6 @@ export type PoPdfInput = {
   supplierName: string;
   supplierAccount: string | null;
   jobNumber: number | string;
-  jobTitle: string;
   deliverTo: "warehouse" | "site";
   deliveryAddress: string;
   notes: string;
@@ -108,8 +109,8 @@ export async function renderPoPdf(po: PoPdfInput): Promise<Buffer> {
     y -= 13;
     t(`Account ${po.supplierAccount}`, M, 9, reg, MUTED);
   }
-  y -= 13;
-  t(`Job: ${po.jobTitle}`.slice(0, 70), M, 9, reg, MUTED);
+  // No job title or customer name (Damien, 31 Oct): the supplier never needs
+  // to know who Terra is selling to. The job number is enough to match it.
   y -= 26;
 
   const cols = { desc: M, qty: M + 300, unit: M + 350, rate: W - M - 90, total: W - M };
