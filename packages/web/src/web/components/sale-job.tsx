@@ -1,21 +1,18 @@
 import * as React from "react";
-import { BookOpen, Send, ShoppingCart } from "lucide-react";
+import { ShoppingCart } from "lucide-react";
 import { Card, CardHeader, Spinner } from "./ui/card";
 import { Button } from "./ui/button";
-import { Field, Input, Select, Textarea } from "./ui/field";
-import { Modal } from "./ui/modal";
+import { Input } from "./ui/field";
 import { errorText } from "./public-shell";
 import { unitLabel } from "./quote-pickers";
-import { useSendMessage } from "../queries/conversations";
-import { useCareGuideDraft, useCareGuides, useSaleForJob, useSetStockAndOrder, type CareDraft } from "../queries/productSales";
+import { useSaleForJob, useSetStockAndOrder } from "../queries/productSales";
 
 /* ---------------------------------------------------------------------------
  * On the job of a product sale (Damien, 30 Oct):
  * - Stock and ordering: change "From stock now" and draft POs for the rest.
  *   Nothing already on order is ordered again. Drafts only, never sent.
- * - Send a care guide by hand. Supply only jobs get no automatic care emails,
- *   so the office picks a guide, fixes the install wording and sends it
- *   through the job's conversation like any other email.
+ * - Care guides by hand are in components/comms-guides.tsx (31 Oct): one
+ *   picker for every job, with the recipient checks and "Send again".
  * ------------------------------------------------------------------------- */
 
 const qtyText = (n: number, unit: string) => `${Number(n.toFixed(4))} ${unitLabel(unit)}`;
@@ -129,137 +126,3 @@ export function SaleOrderCard({ jobId }: { jobId: number }) {
   );
 }
 
-/* ------------------------------ care guide ------------------------------- */
-
-function CareGuideModal({ jobId, open, onClose, onSent }: { jobId: number; open: boolean; onClose: () => void; onSent: (msg: string) => void }) {
-  const guides = useCareGuides(open);
-  const draft = useCareGuideDraft();
-  const send = useSendMessage();
-  const [code, setCode] = React.useState("");
-  const [d, setD] = React.useState<CareDraft | null>(null);
-  const [subject, setSubject] = React.useState("");
-  const [body, setBody] = React.useState("");
-  const [error, setError] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    if (!open) return;
-    setCode("");
-    setD(null);
-    setSubject("");
-    setBody("");
-    setError(null);
-  }, [open]);
-
-  if (!open) return null;
-  const busy = draft.isPending || send.isPending;
-  const stillFlagged = d ? d.flagged.filter((s) => body.includes(s)) : [];
-
-  async function fill(c: string) {
-    setCode(c);
-    setError(null);
-    if (!c) return setD(null);
-    try {
-      const out = await draft.mutateAsync({ jobId, code: c });
-      setD(out);
-      setSubject(out.subject);
-      setBody(out.body);
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
-
-  async function go() {
-    if (!d) return;
-    setError(null);
-    if (!d.to) return setError("There is no email on file for this client. Add one on their card first.");
-    if (!subject.trim() || !body.trim()) return setError("The email needs a subject and a message.");
-    try {
-      await send.mutateAsync({
-        jobId,
-        audience: "customer",
-        channel: "email",
-        subject: subject.trim(),
-        body: body.trim(),
-        contactId: d.contactId,
-        ...(d.contactId ? {} : { to: d.to }),
-      });
-      onSent(`Care guide sent to ${d.toName ?? d.to}. It is in the job's conversation.`);
-      onClose();
-    } catch (e) {
-      setError(errorText(e));
-    }
-  }
-
-  return (
-    <Modal
-      open
-      onClose={busy ? () => {} : onClose}
-      title="Send a care guide"
-      subtitle="Nothing is sent until you press Send. Read it first: these guides were written for installs."
-      width="max-w-2xl"
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button onClick={go} disabled={busy || !d || !d.to} data-testid="care-send">
-            {send.isPending ? <Spinner className="border-white/40 border-t-white" /> : <Send className="size-4" />}
-            {d?.to ? `Send to ${d.to}` : "Send"}
-          </Button>
-        </>
-      }
-    >
-      <div className="grid gap-3">
-        <Field label="Care guide">
-          <Select value={code} onChange={(e) => fill(e.target.value)} disabled={busy} aria-label="Care guide">
-            <option value="">Pick one</option>
-            {(guides.data ?? []).map((g) => (
-              <option key={g.code} value={g.code}>
-                {g.title}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        {draft.isPending ? <Spinner /> : null}
-        {d ? (
-          <>
-            {stillFlagged.length ? (
-              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" data-testid="care-flagged">
-                <p className="font-medium">
-                  {stillFlagged.length} sentence{stillFlagged.length === 1 ? " talks" : "s talk"} about an install. This sale had none, so change or remove {stillFlagged.length === 1 ? "it" : "them"}:
-                </p>
-                <ul className="mt-1 list-disc pl-5">
-                  {stillFlagged.map((s, i) => (
-                    <li key={i}>{s}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : d.flagged.length ? (
-              <p className="text-xs text-[var(--success)]">Install wording removed.</p>
-            ) : null}
-            <Field label="Subject">
-              <Input value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={200} />
-            </Field>
-            <Field label="Message" hint="Plain text. The signature is already at the bottom.">
-              <Textarea rows={14} value={body} onChange={(e) => setBody(e.target.value)} />
-            </Field>
-          </>
-        ) : null}
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      </div>
-    </Modal>
-  );
-}
-
-export function CareGuideButton({ jobId, onSent }: { jobId: number; onSent: (msg: string) => void }) {
-  const [open, setOpen] = React.useState(false);
-  return (
-    <>
-      <Button size="sm" variant="outline" onClick={() => setOpen(true)} data-testid="care-guide">
-        <BookOpen className="size-3.5" />
-        Send a care guide
-      </Button>
-      <CareGuideModal jobId={jobId} open={open} onClose={() => setOpen(false)} onSent={onSent} />
-    </>
-  );
-}

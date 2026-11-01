@@ -277,7 +277,8 @@ export const PASSED_OVER_NOTE = "before the series started, passed over";
 export const RESEND_LINE = "I could be wrong, but it doesn't look like you opened my last email, so here it is again.";
 
 /** Kind of each code, for the report. */
-export function codeKind(code: string): "series" | "fixed" | "holiday" | "bank" {
+export function codeKind(code: string): "series" | "fixed" | "holiday" | "bank" | "guide" {
+  if (code === "D1") return "guide";
   if (/^H\d$/.test(code)) return "holiday";
   if (/^R\d+$/.test(code)) return "bank";
   if (code === "C3" || code === "T6" || code === "S4") return "fixed";

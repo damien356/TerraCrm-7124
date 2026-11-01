@@ -485,6 +485,13 @@ async function runStep(
           .from(schema.emailTemplates)
           .where(eq(schema.emailTemplates.id, step.templateId));
         if (!tpl) return exitEnrolment(enrolment, "template deleted", report);
+        /* Review requests go only from the job's Customer communications card,
+         * after the office approves who gets it (31 Oct). A journey can never
+         * send the Review request template, so the old and new senders cannot
+         * both send. */
+        if (tpl.id === 1 && /review/i.test(tpl.name)) {
+          return exitEnrolment(enrolment, "Review requests now go only from the job's Customer communications card. This step sent nothing.", report);
+        }
         if (!tpl.active) return deferStep(enrolment, 60, report);
         subject = tpl.subject;
         body = tpl.body;

@@ -152,6 +152,10 @@ export async function handleInboundSms(raw: Record<string, unknown>) {
         source: "reply_stop",
       });
     }
+    /* No more review texts to this number. */
+    await import("./comms-review")
+      .then((m) => m.stopReviewsFor({ contactId: contact?.id ?? null, mobile, channel: "sms", reason: "The customer replied STOP." }))
+      .catch((e) => console.error("[sms-inbound] review requests", e));
   }
 
   await db.insert(schema.activityLog).values({

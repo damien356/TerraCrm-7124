@@ -6,7 +6,7 @@ import { Button } from "./ui/button";
 import { Field, Input } from "./ui/field";
 import { Modal } from "./ui/modal";
 import { errorText } from "./public-shell";
-import { CareGuideButton } from "./sale-job";
+import { GuideButton } from "./comms-guides";
 import { unitLabel } from "./quote-pickers";
 import { moneyExact } from "../lib/money";
 import { uploadToStorage } from "../queries/media";
@@ -338,7 +338,7 @@ export function DeliveryCard({ jobId }: { jobId: number }) {
       ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-2">
         <span className="text-xs text-muted-foreground">No automatic care emails on supply only jobs. Send a product care guide by hand any time, before or after handover.</span>
-        <CareGuideButton jobId={jobId} onSent={setNotice} />
+        <GuideButton jobId={jobId} onSent={setNotice} />
       </div>
       {notice ? <p className="border-t border-border px-4 py-2 text-xs text-[var(--success)]">{notice}</p> : null}
       {kind ? <HandoverModal jobId={jobId} kind={kind} st={s} onClose={() => setKind(null)} onDone={setNotice} /> : null}

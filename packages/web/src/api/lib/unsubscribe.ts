@@ -65,12 +65,16 @@ export async function unsubscribeContact(token: string, source: "link" | "one_cl
   await db
     .update(schema.careMembers)
     .set({ status: "unsubscribed", stopReason: "Unsubscribed from the link in an email", updatedAt: new Date() })
-    .where(and(eq(schema.careMembers.contactId, contactId), inArray(schema.careMembers.status, ["active", "stopped"])));
+    .where(and(eq(schema.careMembers.contactId, contactId), inArray(schema.careMembers.status, ["active", "stopped", "awaiting_approval"])));
 
   /* Quote follow-ups stop too. The check before each send would catch it anyway; this shows it on the job at once. */
   await import("./quote-followup")
     .then((m) => m.stopForContact(contactId, "The customer unsubscribed."))
     .catch((e) => console.error("[unsubscribe] quote follow-ups", e));
+  /* Review requests stop too, on every channel. */
+  await import("./comms-review")
+    .then((m) => m.stopReviewsFor({ contactId, channel: "all", reason: "The customer unsubscribed." }))
+    .catch((e) => console.error("[unsubscribe] review requests", e));
 
   return { ok: true, already: !!had, contactId };
 }

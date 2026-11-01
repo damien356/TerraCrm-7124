@@ -8,7 +8,6 @@ export type SaleInput = Parameters<AppRouterClient["productSales"]["preview"]>[0
 export type SalePreview = Awaited<ReturnType<AppRouterClient["productSales"]["preview"]>>;
 export type SaleResult = Awaited<ReturnType<AppRouterClient["productSales"]["raise"]>>;
 export type SaleRow = Awaited<ReturnType<AppRouterClient["productSales"]["list"]>>[number];
-export type CareDraft = Awaited<ReturnType<AppRouterClient["productSales"]["careGuideDraft"]>>;
 
 function useSaleRefresh() {
   const queryClient = useQueryClient();
@@ -51,13 +50,4 @@ export function useSaleForJob(jobId: number) {
 export function useSetStockAndOrder() {
   const onSuccess = useSaleRefresh();
   return useMutation(orpc.productSales.setStockAndOrder.mutationOptions({ onSuccess }));
-}
-
-export function useCareGuides(enabled: boolean) {
-  return useQuery(orpc.productSales.careGuides.queryOptions({ enabled, staleTime: 300_000 }));
-}
-
-/** One care guide filled in for the job's client. Sends nothing. */
-export function useCareGuideDraft() {
-  return useMutation(orpc.productSales.careGuideDraft.mutationOptions());
 }

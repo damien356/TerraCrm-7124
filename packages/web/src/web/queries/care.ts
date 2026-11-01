@@ -22,12 +22,20 @@ export function useCareJob(jobId: number) {
 /** Every care write refreshes the whole care cache: it is small, and the page and job card share it. */
 function useRefresh() {
   const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: orpc.care.key() });
+  return () => {
+    queryClient.invalidateQueries({ queryKey: orpc.care.key() });
+    queryClient.invalidateQueries({ queryKey: orpc.customerComms.key() });
+  };
 }
 
 export function useCareSetMemberStatus() {
   const refresh = useRefresh();
   return useMutation(orpc.care.setMemberStatus.mutationOptions({ onSuccess: refresh }));
+}
+
+export function useCareApproveMember() {
+  const refresh = useRefresh();
+  return useMutation(orpc.care.approveMember.mutationOptions({ onSuccess: refresh }));
 }
 
 export function useCareSetOn() {

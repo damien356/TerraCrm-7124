@@ -1,12 +1,17 @@
 import * as React from "react";
 import { Link } from "wouter";
-import { Pause, Play, Send, SkipForward, Square } from "lucide-react";
+import { CheckCircle2, Pause, Play, Send, SkipForward, Square, Users } from "lucide-react";
 import { Card, CardHeader, Loading } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input, Textarea } from "./ui/field";
 import { errorText } from "./public-shell";
+import { PauseForm } from "./comms-pause";
+import { RecipientApprovalModal, type RecipientPerson } from "./comms-recipients";
+import { useCommsPanel } from "../queries/customer-comms";
 import {
+  useFollowupApprove,
+  useFollowupSetRecipients,
   useFollowupEdit,
   useFollowupEnrol,
   useFollowupPause,
@@ -30,8 +35,8 @@ type View = NonNullable<ReturnType<typeof useQuoteFollowups>["data"]>;
 type SentStep = View["steps"][number];
 type PlanStep = View["plan"][number];
 
-const SEQ_LABEL: Record<string, string> = { active: "On", paused: "Paused", stopped: "Stopped", done: "Finished" };
-const SEQ_COLOUR: Record<string, string> = { active: "#2f7d4f", paused: "#9a6b12", stopped: "#b23b2c", done: "#4b5563" };
+const SEQ_LABEL: Record<string, string> = { active: "Scheduled", awaiting_approval: "Awaiting approval", paused: "Paused", stopped: "Stopped", done: "Finished" };
+const SEQ_COLOUR: Record<string, string> = { active: "#2f7d4f", awaiting_approval: "#9a6b12", paused: "#9a6b12", stopped: "#b23b2c", done: "#4b5563" };
 const STEP_LABEL: Record<string, string> = {
   scheduled: "Waiting",
   sending: "Sending",
@@ -259,20 +264,39 @@ function FollowupsBody({ view: v, quoteId, title }: { view: View; quoteId: numbe
   const pause = useFollowupPause();
   const resume = useFollowupResume();
   const stop = useFollowupStop();
+  const approve = useFollowupApprove();
+  const setRecipients = useFollowupSetRecipients();
   const [note, setNote] = React.useState<{ ok: boolean; text: string } | null>(null);
   const [pausing, setPausing] = React.useState(false);
-  const [until, setUntil] = React.useState("");
-  const [why, setWhy] = React.useState("");
+  const [choosing, setChoosing] = React.useState(false);
   const done = (text: string) => setNote({ ok: true, text });
   const fail = (e: unknown) => setNote({ ok: false, text: errorText(e) });
   const seq = v.sequence;
-  const live = !!seq && (seq.status === "active" || seq.status === "paused");
+  const live = !!seq && (seq.status === "active" || seq.status === "paused" || seq.status === "awaiting_approval");
+  const panel = useCommsPanel(seq?.jobId ?? null);
+  const people: RecipientPerson[] = (panel.data?.people ?? []).map((p) => ({
+    contactId: p.contactId,
+    name: p.name,
+    roleLabel: p.mainRoleLabel,
+    email: p.email,
+    mobile: p.mobile ?? "",
+    block: { email: p.can.followup, sms: "Follow-ups go by email only." },
+  }));
+  const nameOf = (email: string | null | undefined) => {
+    const p = people.find((x) => x.email && x.email === (email ?? "").toLowerCase());
+    return p ? `${p.name} · ${p.roleLabel} · ${p.email}` : (email ?? "nobody");
+  };
+  /* The days depend on the customer type: insurance 3, 10 and 21. */
+  const days = [...new Set((seq ? v.steps.map((s) => s.step) : v.plan.map((p) => p.step)) as number[])].sort((a, b) => a - b);
+  const dayText = days.length ? `Days ${days.slice(0, -1).join(", ")}${days.length > 1 ? " and " : ""}${days[days.length - 1]}` : "Follow-ups";
+  const nextStep = seq ? v.steps.find((s) => s.isNext) : null;
+  const ccIds = seq ? people.filter((p) => seq.ccAddresses.includes(p.email)).map((p) => p.contactId) : [];
 
   return (
     <Card id="quote-followups" className="min-w-0 scroll-mt-4 overflow-hidden">
       <CardHeader
         title={title ?? "Quote follow-ups"}
-        subtitle={`Days 3, 7, 14 and 25 after the quote goes, at ${v.settings.sendHour}am customer time. Weekends and holidays move to the next business day.`}
+        subtitle={`${dayText} after the quote goes, at ${v.settings.sendHour}am customer time. Weekends and holidays move to the next business day.`}
         action={seq ? <Badge colour={SEQ_COLOUR[seq.status]}>{SEQ_LABEL[seq.status] ?? seq.status}</Badge> : <Badge>Not started</Badge>}
       />
       <div className="grid min-w-0 gap-3 break-words px-4 py-3 text-sm [overflow-wrap:anywhere]">
@@ -291,14 +315,23 @@ function FollowupsBody({ view: v, quoteId, title }: { view: View; quoteId: numbe
         {seq ? (
           <>
             <div className="grid gap-0.5 text-xs text-muted-foreground">
+              <p className="text-foreground">To: {nameOf(seq.toAddress)}</p>
+              <p className="text-foreground">CC: {seq.ccAddresses.length ? seq.ccAddresses.map(nameOf).join("; ") : "none"}</p>
+              <p className="text-foreground">BCC: none (not used)</p>
+              {seq.approvedAt ? <p>Approved by {seq.approvedByName} on {when(seq.approvedAt)}.</p> : <p className="text-[#9a6b12]">Not approved yet. Nothing goes until someone approves who gets these.</p>}
               <p>
-                To {v.to ?? "nobody"}
-                {v.cc.length ? `, copying in ${v.cc.join(", ")}` : ""}. Signed by {seq.assignedName || "the office"}. Consent: {seq.consentBasis || "not recorded"}. Started {seq.enrolledHow === "backlog" ? "by hand" : "on send"}
+                Signed by {seq.assignedName || "the office"}. Consent: {seq.consentBasis || "not recorded"}. Started {seq.enrolledHow === "backlog" ? "by hand" : "on send"}
                 {seq.enrolledByName ? ` by ${seq.enrolledByName}` : ""}.
               </p>
               <LeftOff list={v.ccLeftOff} />
               {seq.reason ? <p className={cn(seq.status === "active" ? "" : "text-destructive")}>{seq.reason}</p> : null}
-              {seq.pausedUntil ? <p>Nothing goes before {ddmm(seq.pausedUntil)}.</p> : null}
+              {seq.status === "paused" ? (
+                <p className="text-foreground">
+                  Looked after by {seq.pauseName || "nobody set"}{seq.reviewDate ? `, review on ${ddmm(seq.reviewDate)}` : ""}.{" "}
+                  {seq.pausedUntil && seq.resumeApproved ? `Approved to resume on ${ddmm(seq.pausedUntil)}.` : "Does not resume on its own."}
+                </p>
+              ) : null}
+              {seq.status !== "paused" && seq.pausedUntil ? <p>Nothing goes before {ddmm(seq.pausedUntil)}.</p> : null}
               {seq.nextCheck ? <p>Next one, checked now: {seq.nextCheck}</p> : null}
               {v.validUntil ? <p>Quote valid until {ddmm(v.validUntil)}.</p> : null}
             </div>
@@ -309,7 +342,16 @@ function FollowupsBody({ view: v, quoteId, title }: { view: View; quoteId: numbe
             </ul>
             {live ? (
               <div className="flex flex-wrap items-center gap-2">
-                {seq.status === "active" ? (
+                {seq.status === "awaiting_approval" || !seq.approvedAt ? (
+                  <Button size="sm" onClick={() => setChoosing(true)} data-testid="followup-approve">
+                    <CheckCircle2 className="size-3.5" /> Check and approve
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="outline" onClick={() => setChoosing(true)}>
+                    <Users className="size-3.5" /> Change recipients
+                  </Button>
+                )}
+                {seq.status === "awaiting_approval" ? null : seq.status === "active" ? (
                   <Button size="sm" variant="outline" onClick={() => setPausing((x) => !x)}>
                     <Pause className="size-3.5" /> Pause
                   </Button>
@@ -333,38 +375,44 @@ function FollowupsBody({ view: v, quoteId, title }: { view: View; quoteId: numbe
               </div>
             ) : null}
             {pausing ? (
-              <div className="grid gap-2 rounded-md border border-border px-3 py-2">
-                <p className="text-xs text-muted-foreground">Leave the date empty to pause until someone resumes. Pick a date for "contact me next month": nothing goes before it, then the next step goes once.</p>
-                <div className="flex flex-wrap items-end gap-2">
-                  <div>
-                    <p className="label-xs">Wait until (optional)</p>
-                    <Input type="date" className="mt-0.5 h-8" value={until} onChange={(e) => setUntil(e.target.value)} />
-                  </div>
-                  <div className="min-w-48 flex-1">
-                    <p className="label-xs">Note</p>
-                    <Input className="mt-0.5 h-8" value={why} onChange={(e) => setWhy(e.target.value)} placeholder="Customer is away until March" />
-                  </div>
-                  <Button
-                    size="sm"
-                    disabled={pause.isPending}
-                    onClick={() =>
-                      pause.mutate(
-                        { id: seq.id, until: until || null, note: why },
-                        {
-                          onSuccess: () => {
-                            setPausing(false);
-                            done(until ? `Waiting until ${ddmm(until)}.` : "Paused.");
-                          },
-                          onError: fail,
-                        },
-                      )
-                    }
-                  >
-                    Save
-                  </Button>
-                </div>
-              </div>
+              <PauseForm
+                allowResumeDate
+                allowApprovalPending
+                busy={pause.isPending}
+                onCancel={() => setPausing(false)}
+                onSave={(pv) =>
+                  pause.mutate(
+                    { id: seq.id, ...pv },
+                    {
+                      onSuccess: () => {
+                        setPausing(false);
+                        done(pv.resumeOn ? `Paused. Approved to resume on ${ddmm(pv.resumeOn)}.` : "Paused. It stays paused until someone presses Resume.");
+                      },
+                      onError: fail,
+                    },
+                  )
+                }
+              />
             ) : null}
+            <RecipientApprovalModal
+              open={choosing}
+              onClose={() => setChoosing(false)}
+              what="quote follow-ups"
+              people={people}
+              allowCc
+              channels={["email"]}
+              initial={{ toContactId: seq.contactId ?? null, ccContactIds: ccIds, channel: "email" }}
+              preview={nextStep ? { subject: nextStep.subject, text: nextStep.text } : null}
+              previous={v.steps.filter((s) => s.status === "sent").map((s) => ({ at: s.sentAt, to: `${s.to ?? ""}${s.cc ? `, CC ${s.cc}` : ""}`, what: `Day ${s.step} follow-up` }))}
+              nextSend={nextStep ? `Day ${nextStep.step}, ${weekday(nextStep.dueDate)} ${ddmm(nextStep.dueDate)} at ${v.settings.sendHour}am, once approved. Anything already due while it waited is skipped, never sent late.` : "Nothing left to send."}
+              notes={v.ccLeftOff.length ? [`Not copied in: ${v.ccLeftOff.map((l) => `${l.email} (${l.why})`).join("; ")}.`] : []}
+              busy={approve.isPending || setRecipients.isPending}
+              onApprove={async (r) => {
+                if (r.changed) await setRecipients.mutateAsync({ id: seq.id, toContactId: r.toContactId, ccContactIds: r.ccContactIds });
+                await approve.mutateAsync({ id: seq.id });
+                done("Approved. Each one is checked again before it goes.");
+              }}
+            />
           </>
         ) : v.plan.length ? (
           <>
@@ -386,11 +434,11 @@ function FollowupsBody({ view: v, quoteId, title }: { view: View; quoteId: numbe
                 disabled={enrol.isPending || v.blockers.length > 0 || !v.startFrom}
                 onClick={() =>
                   v.startFrom &&
-                  window.confirm(`Start follow-ups on this quote from day ${v.startFrom}? Each one is checked again before it goes.`) &&
-                  enrol.mutate({ quoteId, firstStep: v.startFrom as 3 | 7 | 14 | 25 }, { onSuccess: () => done("Started."), onError: fail })
+                  window.confirm(`Set up follow-ups on this quote from day ${v.startFrom}? Nothing goes until you approve who gets them.`) &&
+                  enrol.mutate({ quoteId, firstStep: v.startFrom as 3 | 7 | 10 | 14 | 21 | 25 }, { onSuccess: () => done("Set up. Awaiting approval: press Check and approve."), onError: fail })
                 }
               >
-                <Send className="size-3.5" /> Start follow-ups{v.startFrom ? ` from day ${v.startFrom}` : ""}
+                <Send className="size-3.5" /> Set up follow-ups{v.startFrom ? ` from day ${v.startFrom}` : ""}
               </Button>
             </div>
           </>

@@ -322,6 +322,8 @@ export async function logMessage(args: LogArgs) {
 
   /* A customer got in touch: any quote follow-ups for them pause at once. Never blocks the log. */
   if (row!.direction === "in") void import("./quote-followup").then((m) => m.pauseForInbound(row!)).catch(() => null);
+  /* The same for a review request: a reply pauses the reminders for the office to look at. */
+  if (row!.direction === "in") void import("./comms-review").then((m) => m.pauseReviewForInbound(row!)).catch(() => null);
 
   return row!;
 }

@@ -36,7 +36,7 @@ const ADVICE_LABEL: Record<string, string> = {
   replied: "Customer replied",
   expires_soon: "Expires soon",
   expired: "Expired",
-  too_old: "Past day 25",
+  too_old: "Past the last day",
   no_contact: "No contact",
   no_consent: "No consent",
   has_job_stage: "Job moved on",
@@ -166,7 +166,7 @@ export default function QuoteFollowupsPage() {
                           Quote {r.ref}
                         </Link>
                         <span>{r.customer ?? "No customer"}</span>
-                        {r.audience === "trade" ? <Badge>Builder</Badge> : null}
+                        {r.audience === "trade" ? <Badge>Builder type</Badge> : r.audience === "insurance" ? <Badge>Insurance</Badge> : null}
                         <span className="tabular text-muted-foreground">{money(r.total)}</span>
                       </div>
                       <Badge colour={ADVICE_COLOUR[r.advice]}>{ADVICE_LABEL[r.advice] ?? r.advice}</Badge>

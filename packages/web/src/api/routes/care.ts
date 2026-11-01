@@ -5,8 +5,8 @@ import * as schema from "../database/schema";
 import { adminOnly, staffOnly } from "../middleware/auth";
 import { CARE_FLOORS, CARE_FLOOR_LABELS, FIBRE_LABELS, JOB_FIBRES, PILES, PILE_LABELS, SCHEDULE_LABELS, codeKind, isCareFloor, scheduleKeyFor, type Fibre, type Pile } from "../lib/care-codes";
 import { careLastRun, careRunOnce, careTicking } from "../lib/care-boot";
-import { careSettings, careTemplates, enrolJob, homeownerFor, inactiveCodes, jobCareFacts, parseMemberFloors, planInputFor, sendCareEmail, setCareOn, setWoolRanges, slowGroups } from "../lib/care-engine";
-import { holidayDue, nextEmail, simulate } from "../lib/care-plan";
+import { NOT_SENT_LATE_NOTE, approveCareMember, careApprovalProblem, careSettings, careTemplates, enrolJob, homeownerFor, inactiveCodes, jobCareFacts, parseMemberFloors, planInputFor, sendCareEmail, setCareOn, setWoolRanges, slowGroups } from "../lib/care-engine";
+import { holidayDue, nextEmail, pastDue, simulate } from "../lib/care-plan";
 import { careBody, renderCareEmail } from "../lib/care-render";
 import { CARE_TEMPLATE_MAP } from "../lib/care-templates";
 import { fillMergeFields } from "../lib/email";
@@ -148,8 +148,24 @@ export const care = {
     const rows = await db.select().from(schema.careSends).where(eq(schema.careSends.memberId, m.id)).orderBy(desc(schema.careSends.id));
     const templates = await careTemplates();
     const now = new Date();
-    const plan = m.status === "active" ? simulate(planInputFor(m, rows, now, inactiveCodes(templates)), new Date(now.getTime() + 365 * DAY), 40) : [];
+    /*
+     * Awaiting approval: the plan is shown as it would run if approved now.
+     * Anything already due is listed as not sent late, never as next.
+     */
+    const planIn = planInputFor(m, rows, now, inactiveCodes(templates));
+    const late = m.status === "awaiting_approval" ? pastDue(planIn) : [];
+    if (late.length) planIn.history = [...planIn.history, ...late.map((p) => ({ code: p.code, at: p.dueAt, status: "skipped" as const }))];
+    const plan = m.status === "active" || m.status === "awaiting_approval" ? simulate(planIn, new Date(now.getTime() + 365 * DAY), 40) : [];
+    const problem = m.status === "awaiting_approval" ? await careApprovalProblem(m, { checkSnapshot: false }) : null;
+    const [job] = m.lastJobId ? await db.select({ id: schema.jobs.id, number: schema.jobs.number, displayNumber: schema.jobs.displayNumber }).from(schema.jobs).where(eq(schema.jobs.id, m.lastJobId)) : [];
     return {
+      awaitingReason: m.awaitingReason,
+      approvedAt: m.approvedAt?.getTime() ?? null,
+      approvedByName: m.approvedByName,
+      /** Why Approve can't be pressed yet, with the fix. */
+      approveBlock: problem,
+      job: job ? { id: job.id, ref: job.displayNumber ?? String(job.number) } : null,
+      notSentLate: late.map((p) => ({ code: p.code, title: titleOf(p.code), dueAt: p.dueAt.getTime(), note: NOT_SENT_LATE_NOTE })),
       id: m.id,
       name: nameOf(c),
       email: c?.email ?? "",
@@ -181,11 +197,27 @@ export const care = {
     const [m] = await db.select().from(schema.careMembers).where(eq(schema.careMembers.id, input.memberId));
     if (!m) throw bad("Not in the care series.");
     if (m.status === "unsubscribed") throw bad("They unsubscribed. Only they can come back, by asking.");
+    if (input.active && m.status === "awaiting_approval") throw bad("Check the person, the guides and the dates, then press Approve.");
+    if (input.active && m.status === "active") return { ok: true as const };
+    /* Putting someone back in never starts the emails. It waits for approval like anyone new. */
     await db
       .update(schema.careMembers)
-      .set({ status: input.active ? "active" : "stopped", stopReason: input.active ? "" : `Taken out by ${context.actor.name}`, updatedAt: new Date() })
+      .set(
+        input.active
+          ? { status: "awaiting_approval", stopReason: "", awaitingReason: `Put back in by ${context.actor.name}. Check and approve.`, updatedAt: new Date() }
+          : { status: "stopped", stopReason: `Taken out by ${context.actor.name}`, updatedAt: new Date() },
+      )
       .where(eq(schema.careMembers.id, m.id));
     return { ok: true as const };
+  }),
+
+  /** Approve one person for the care emails. Anything already due is not sent late. */
+  approveMember: staffOnly.input(z.object({ memberId: z.number().int() })).handler(async ({ input, context }) => {
+    try {
+      return await approveCareMember(input.memberId, context.actor.name);
+    } catch (e) {
+      throw bad(e instanceof Error ? e.message : String(e));
+    }
   }),
 
   setOn: adminOnly.input(z.object({ on: z.boolean() })).handler(async ({ input }) => {

@@ -326,4 +326,22 @@ export const CARE_TEMPLATES: CareTemplate[] = [
   }
 ];
 
-export const CARE_TEMPLATE_MAP: ReadonlyMap<string, CareTemplate> = new Map(CARE_TEMPLATES.map((t) => [t.code, t]));
+/**
+ * Guides sent by hand from a job only (Customer communications, 31 Oct). Never
+ * in the series: no schedule in lib/care-codes.ts names these codes, and
+ * codeKind() gives them the kind "guide".
+ */
+export const HAND_GUIDE_TEMPLATES: CareTemplate[] = [
+  {
+      "code": "D1",
+      "title": "Looking after your timber deck",
+      "audience": "exterior timber decking, sent by hand only",
+      "subject": "Looking after your timber deck",
+      "body": "Hi {{first_name}},\n\nHere are some general tips for looking after your timber deck. Coatings vary, so always follow the instructions for the product used on your deck. If you're not sure what that was, contact Terra Flooring and we can help identify the finish used.\n\n**Keep it clean and dry**\n\n- Sweep regularly. Leaves, dirt and grit hold moisture and wear the surface.\n- Keep the gaps between boards clear so water can drain away.\n- Once the coating has fully cured (its instructions say how long), rinse with plain water from time to time.\n- Don't use a pressure washer unless the coating's instructions say it is OK. If you're not sure, ask Terra Flooring first.\n- Wipe up spills like oil, grease, food and drinks as soon as you can.\n\n**Protect the surface**\n\n- Put pot plants on feet or stands so water doesn't sit underneath.\n- Use pads under furniture legs and lift rather than drag.\n- If you use a mat under the barbecue, pick one that suits the coating and doesn't trap moisture underneath.\n- Keep soil, mulch and garden beds from building up against the boards, and keep the space under the deck clear for airflow.\n- Parts of the deck that get the most sun and rain wear faster, so give them extra attention.\n\n**What's normal**\n\nOutdoor timber moves with the weather. It can swell, shrink, show small surface cracks and change colour in the sun. That is normal for natural timber.\n\n**Check it**\n\nHave a look every few months, and after any severe weather. Look for worn or dull areas, raised screws or nails, loose boards and soft spots. Worn areas can mean the coating needs attention. When that is due depends on the product and how much sun and rain the deck gets, so contact Terra Flooring and we can advise.\n\n**Before using any cleaner**\n\nCheck it suits the coating on your deck, and test it on a small hidden area first.\n\nIf you have any questions about your deck, just reply to this email."
+  }
+];
+
+/** The sign-off on a hand guide, when it is not the usual two lines. */
+export const HAND_GUIDE_SIGNOFF: Record<string, string[]> = { D1: ["Damien, Terra Flooring"] };
+
+export const CARE_TEMPLATE_MAP: ReadonlyMap<string, CareTemplate> = new Map([...CARE_TEMPLATES, ...HAND_GUIDE_TEMPLATES].map((t) => [t.code, t]));

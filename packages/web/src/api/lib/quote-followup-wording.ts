@@ -21,19 +21,36 @@
 /** The number on every follow-up (Damien, 28 Oct: the digits, not "1300 1 TERRA"). */
 export const FOLLOWUP_PHONE = "1300 183 772";
 export const FOLLOWUP_STEPS = [3, 7, 14, 25] as const;
-export type FollowupStep = (typeof FOLLOWUP_STEPS)[number];
-export const STEP_PURPOSE: Record<FollowupStep, string> = {
+/** Insurance builders (Damien, 31 Oct): days 3, 10 and 21, then stop. No sales chasing. */
+export const INSURANCE_STEPS = [3, 10, 21] as const;
+export const ALL_STEPS = [3, 7, 10, 14, 21, 25] as const;
+export type FollowupStep = (typeof ALL_STEPS)[number];
+export type FollowupAudience = "homeowner" | "trade" | "insurance";
+/** Who the trade wording is written for. Property managers, real estate and commercial follow the builder steps with their own words. */
+export type TradeRole = "builder" | "property_manager" | "real_estate" | "commercial";
+export const stepsFor = (audience: FollowupAudience): readonly FollowupStep[] => (audience === "insurance" ? INSURANCE_STEPS : FOLLOWUP_STEPS);
+export const lastStepFor = (audience: FollowupAudience): FollowupStep => (audience === "insurance" ? 21 : 25);
+export const STEP_PURPOSE: Partial<Record<FollowupStep, string>> = {
   3: "Product and colour",
   7: "Prep and removal quoted",
   14: "Timing and help to decide",
   25: "Still considering, or pause? Last one",
 };
-export const TRADE_STEP_PURPOSE: Record<FollowupStep, string> = {
+export const TRADE_STEP_PURPOSE: Partial<Record<FollowupStep, string>> = {
   3: "Reached the right person for approval?",
   7: "Scope check against the plans",
   14: "Program and start date",
   25: "Still going ahead? Last one",
 };
+export const INSURANCE_STEP_PURPOSE: Partial<Record<FollowupStep, string>> = {
+  3: "Received? Anything needed for approval",
+  10: "Anything outstanding for the insurer?",
+  21: "Approval status. Last one",
+};
+export function purposeFor(audience: FollowupAudience, step: number) {
+  const m = audience === "insurance" ? INSURANCE_STEP_PURPOSE : audience === "trade" ? TRADE_STEP_PURPOSE : STEP_PURPOSE;
+  return m[step as FollowupStep] ?? `Day ${step}`;
+}
 
 export const WORDS_MIN = 60;
 export const WORDS_MAX = 120;
@@ -42,7 +59,11 @@ export type FloorFact = { brand: string; range: string; colour: string; category
 export type PrepFact = { description: string; provisional: boolean };
 
 export type FollowupFacts = {
-  audience: "homeowner" | "trade";
+  audience: FollowupAudience;
+  /** Trade wording for a builder, a property manager, real estate or a commercial client. */
+  tradeRole?: TradeRole;
+  /** Insurance: the site address, with the builder ref or work order number after it when set. */
+  jobPlace?: string | null;
   firstName: string | null;
   companyName: string | null;
   /** "188034" or "188034-3", as the client sees it. */
@@ -138,10 +159,17 @@ function signatureBlock(f: FollowupFacts) {
 }
 
 function footerBlock(f: FollowupFacts) {
+  const role = f.tradeRole ?? "builder";
   const why =
-    f.audience === "trade"
-      ? "You're getting this because you asked Terra Flooring to quote on this project."
-      : "You're getting this because you asked Terra Flooring for a quote.";
+    f.audience === "insurance"
+      ? "You're getting this because you asked Terra Flooring to quote on this job."
+      : f.audience === "trade"
+        ? role === "property_manager" || role === "real_estate"
+          ? "You're getting this because you asked Terra Flooring to quote on this property."
+          : role === "commercial"
+            ? "You're getting this because you asked Terra Flooring to quote on this job."
+            : "You're getting this because you asked Terra Flooring to quote on this project."
+        : "You're getting this because you asked Terra Flooring for a quote.";
   const lines = ["--", `Terra Flooring  ·  ${FOLLOWUP_PHONE}  ·  team@terraflooring.com.au  ·  terraflooring.com.au`, why];
   if (f.unsubscribeUrl && f.ccUnsubscribe?.length) {
     lines.push("Don't want these follow-ups? Each person can unsubscribe with their own link:");
@@ -173,8 +201,87 @@ function provisionalSentence(lines: PrepFact[]) {
   return ` ${andList(names)} ${prov.length === 1 ? "is" : "are"} listed as ${prov.length === 1 ? "a provisional allowance" : "provisional allowances"}, so ${prov.length === 1 ? "that figure" : "those figures"} can change.`;
 }
 
+/**
+ * Insurance builder follow-ups (Damien, 31 Oct), word for word. Short on
+ * purpose, so the 60 to 120 word check does not apply. Still carries the quote
+ * link and the unsubscribe footer.
+ */
+function renderInsurance(step: FollowupStep, f: FollowupFacts): RenderedFollowup {
+  const review: string[] = [];
+  const notes: string[] = [];
+  const name = f.firstName ?? "there";
+  if (!f.firstName) review.push("Insurance quote with no named person. Check who it should go to.");
+  if (!f.link) review.push("No quote link yet. It is made when the email goes, so check the preview again.");
+  if (!f.unsubscribeUrl) review.push("No unsubscribe link: the person it goes to is not a contact card. Pick a contact first.");
+  const place = clean(f.jobPlace) || null;
+  if (!place) review.push("No site address and no builder ref on the job. Add one so they know which job it is.");
+  const at = place ? ` for ${place}` : "";
+  const q = `quote ${f.quoteRef}`;
+  let subject = "";
+  let line = "";
+  if (step === 3) {
+    subject = `Quote ${f.quoteRef}${at}`;
+    line = `Hi ${name}, just checking you received our ${q}${at}, sent on ${f.sentOn}. Please let us know if you need any scope clarification or further information to progress approval.`;
+  } else if (step === 10) {
+    subject = `Quote ${f.quoteRef}: anything outstanding?`;
+    line = `Hi ${name}, following up on our ${q}${at}. Is there anything outstanding from us that you or the insurer need, such as photos, measurements or a breakdown of the scope? Happy to send it through.`;
+  } else if (step === 21) {
+    subject = `Quote ${f.quoteRef}: approval status`;
+    line = `Hi ${name}, a last check on our ${q}${at}. Could you let us know where approval is up to? If it's still with the insurer, no problem. We'll leave it with you, and we're here if anything changes on the scope.`;
+  } else {
+    return { subject: "", text: "", body: "", words: 0, review: [], notes, skip: `Insurance jobs only get days 3, 10 and 21.` };
+  }
+  const linkLine = f.link ? `The quote is here if you need it:\n${f.link}` : `The quote is in our email from ${f.sentOn}.`;
+  const who = clean(f.signature.name).split(" ")[0] || "Damien";
+  const signOff = `Thanks, ${who}, Terra Flooring, ${FOLLOWUP_PHONE}`;
+  const bodyText = [line, linkLine].join("\n\n");
+  const text = `${bodyText}\n\n${signOff}\n\n${footerBlock(f)}`;
+  return { subject, text, body: bodyText, words: countWords(bodyText), review, notes, skip: null };
+}
+
+const TRADE_WORDS: Record<TradeRole, { approval: string; ask3: string; scope: string; program: [string, string]; moved: string; last: string; ahead: string }> = {
+  builder: {
+    approval: "I know quotes often need to go through a few hands before they're signed off, so I wanted to check it's landed with the right person.",
+    ask3: "Is there anything else you need from us to get it through your approval process?",
+    scope: "It's worth checking against your plans and schedule of finishes now, so the quote you approve matches the job on site.",
+    program: ["Knowing where the flooring sits in your program helps us plan our crews around it once it's approved.", "Do you have a rough start date for the flooring stage yet?"],
+    moved: "If anything has moved on the program, or the quote needs updating to suit, I can turn that around for you.",
+    last: "If it's still with the client or waiting on other trades, that's fine.",
+    ahead: "Is the project still going ahead with us, or should I pause follow-ups for now?",
+  },
+  property_manager: {
+    approval: "I know quotes often need the owner's OK before they can be approved, so I wanted to check it's landed with the right person.",
+    ask3: "Is there anything else you or the owner need from us to approve it?",
+    scope: "It's worth checking against what the owner has asked for now, so the quote you approve matches the work at the property.",
+    program: ["Knowing when the property is available, and whether anyone needs notice, helps us plan our crews once it's approved.", "Do you have a rough timeframe for the work yet?"],
+    moved: "If anything has changed with access or the owner's plans, or the quote needs updating to suit, I can turn that around for you.",
+    last: "If it's still with the owner, that's fine.",
+    ahead: "Is the work still going ahead with us, or should I pause follow-ups for now?",
+  },
+  real_estate: {
+    approval: "I know quotes often need the owner's OK before they can be approved, so I wanted to check it's landed with the right person.",
+    ask3: "Is there anything else you or the owner need from us to approve it?",
+    scope: "It's worth checking against what the owner has asked for now, so the quote you approve matches the work at the property.",
+    program: ["Knowing when the property is available, and whether anyone needs notice, helps us plan our crews once it's approved.", "Do you have a rough timeframe for the work yet?"],
+    moved: "If anything has changed with access or the owner's plans, or the quote needs updating to suit, I can turn that around for you.",
+    last: "If it's still with the owner, that's fine.",
+    ahead: "Is the work still going ahead with us, or should I pause follow-ups for now?",
+  },
+  commercial: {
+    approval: "I know quotes often go through a few people before they're approved, so I wanted to check it's landed with the right person.",
+    ask3: "Is there anything else you need from us to get it through your approval process?",
+    scope: "It's worth checking against your scope or specification now, so the quote you approve matches the work on site.",
+    program: ["Knowing when the site is available helps us plan our crews around it once it's approved.", "Do you have a rough timeframe for the work yet?"],
+    moved: "If anything has moved on your timing, or the quote needs updating to suit, I can turn that around for you.",
+    last: "If it's still going through approvals, that's fine.",
+    ahead: "Is the work still going ahead with us, or should I pause follow-ups for now?",
+  },
+};
+
 /** The email for one step. */
 export function renderFollowup(step: FollowupStep, f: FollowupFacts, weeksSinceSent = 4): RenderedFollowup {
+  if (f.audience === "insurance") return renderInsurance(step, f);
+  if (step === 10 || step === 21) return { subject: "", text: "", body: "", words: 0, review: [], notes: [], skip: "Days 10 and 21 are for insurance jobs only." };
   const review: string[] = [];
   const notes: string[] = [];
   const hi = f.firstName ? `Hi ${f.firstName},` : "Hi there,";
@@ -261,20 +368,28 @@ export function renderFollowup(step: FollowupStep, f: FollowupFacts, weeksSinceS
       ];
     }
   } else {
-    const project = f.companyName ? `${f.companyName}${/s$/i.test(f.companyName) ? "'" : "'s"} project${where}` : `the project${where}`;
+    const tw = TRADE_WORDS[f.tradeRole ?? "builder"];
+    const isProperty = f.tradeRole === "property_manager" || f.tradeRole === "real_estate";
+    const project = isProperty
+      ? `the property${where}`
+      : f.tradeRole === "commercial"
+        ? `the job${where}`
+        : f.companyName
+          ? `${f.companyName}${/s$/i.test(f.companyName) ? "'" : "'s"} project${where}`
+          : `the project${where}`;
     if (step === 3) {
       subject = `Quote ${f.quoteRef}: anything needed for approval?`;
       paras = [
         `Just following up on ${ref} for ${project}, which I sent on ${f.sentOn}.`,
-        "I know quotes often need to go through a few hands before they're signed off, so I wanted to check it's landed with the right person.",
-        "Is there anything else you need from us to get it through your approval process?",
+        tw.approval,
+        tw.ask3,
       ];
     } else if (step === 7) {
       if (!hasPrep) skip = "No prep or removal on the quote, so there is no scope detail to check.";
       subject = `Quote ${f.quoteRef}: scope check`;
       paras = [
         `A quick check on the scope in ${ref}. ${prepSentence(f.prepLines, f.prepProductsOnly)}${provisionalSentence(f.prepLines)}`,
-        "It's worth checking against your plans and schedule of finishes now, so the quote you approve matches the job on site.",
+        tw.scope,
         "Does that line up with your scope, or should anything be added or taken out?",
       ];
     } else if (step === 14) {
@@ -283,24 +398,23 @@ export function renderFollowup(step: FollowupStep, f: FollowupFacts, weeksSinceS
         ? [
             `Just touching base on ${ref} for ${project}.`,
             `We've got ${f.startDate} noted as the start you're working towards.`,
-            "If anything has moved on the program, or the quote needs updating to suit, I can turn that around for you.",
+            tw.moved,
             "Is that date still holding?",
           ]
         : [
             `Just touching base on ${ref} for ${project}.`,
-            "Knowing where the flooring sits in your program helps us plan our crews around it once it's approved.",
-            "Do you have a rough start date for the flooring stage yet?",
+            ...tw.program,
           ];
       if (f.startDate) notes.push("A start date is already on the job, so it asks whether it is still holding.");
     } else {
       subject = `Quote ${f.quoteRef}: still going ahead?`;
       paras = [
         `It's been about ${weeksSinceSent} weeks since I sent ${ref} for ${project}, so this is my last follow-up on it.`,
-        `If it's still with the client or waiting on other trades, that's fine.${f.validUntil ? ` The quote is valid until ${f.validUntil}.` : ""}`,
-        "Is the project still going ahead with us, or should I pause follow-ups for now?",
+        `${tw.last}${f.validUntil ? ` The quote is valid until ${f.validUntil}.` : ""}`,
+        tw.ahead,
       ];
     }
-    if (!f.firstName) review.push("Builder quote with no named person. Check who it should go to.");
+    if (!f.firstName) review.push(`${isProperty ? "Property" : f.tradeRole === "commercial" ? "Commercial" : "Builder"} quote with no named person. Check who it should go to.`);
   }
 
   /* A step that does not apply has no email to show. */

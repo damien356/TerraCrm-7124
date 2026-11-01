@@ -26,6 +26,7 @@ import { CARE_TEMPLATE_MAP } from "./care-templates";
 import { openPixelUrl, sendMarketing } from "./marketing";
 import { notifyOffice } from "./notify";
 import { COMPANY_TYPE_LABELS, parseTags } from "./person-tags";
+import { blockFor, commsEvent, jobComms, snapshotChange, snapshotOf } from "./comms-people";
 
 /* ---------------------------------------------------------------------------
  * The after-job care series engine. Section 18.37.
@@ -470,10 +471,28 @@ export async function enrolJob(jobId: number, opts: { now?: Date; notify?: boole
 
   const [had] = await db.select().from(schema.careMembers).where(eq(schema.careMembers.contactId, contact.id));
   if (had) {
+    /* Not approved yet: the new floors join, and it stays waiting for a person to check it. */
+    if (had.status === "awaiting_approval") {
+      const merged = mergeFloors(parseMemberFloors(had.floors), add);
+      await db
+        .update(schema.careMembers)
+        .set({
+          floors: JSON.stringify(merged.floors),
+          fibre: strongerFibre(had.fibre, fibre),
+          pile: strongerPile(had.pile, pile),
+          landlord: had.landlord || landlord,
+          lastJobId: job.id,
+          updatedAt: now,
+        })
+        .where(eq(schema.careMembers.id, had.id));
+      return done({ state: "added", note: `${name} already waiting for approval in the series${merged.added.length ? `, added ${floorList(merged.added)}` : ""}`, memberId: had.id, contactId: contact.id });
+    }
     if (had.status !== "active") {
       return done({ state: "skipped", note: `${name} ${had.status === "unsubscribed" ? "unsubscribed" : "was taken out of the series"}, not restarted`, memberId: had.id, contactId: contact.id });
     }
     const merged = mergeFloors(parseMemberFloors(had.floors), add);
+    /* A new job means a new approval: the person, the job's company and the guides are checked again. */
+    const newJob = had.lastJobId !== job.id;
     await db
       .update(schema.careMembers)
       .set({
@@ -482,10 +501,11 @@ export async function enrolJob(jobId: number, opts: { now?: Date; notify?: boole
         pile: strongerPile(had.pile, pile),
         landlord: had.landlord || landlord,
         lastJobId: job.id,
+        ...(newJob ? { status: "awaiting_approval", awaitingReason: `New job ${job.displayNumber ?? job.number} added. Check the person, the guides and the dates, then approve.` } : {}),
         updatedAt: now,
       })
       .where(eq(schema.careMembers.id, had.id));
-    if (lateJoin) await passOverMember(had.id, now);
+    if (lateJoin && !newJob) await passOverMember(had.id, now);
     const bits = [
       merged.added.length ? `added ${floorList(merged.added)}` : "",
       merged.restarted.length ? `restarted ${floorList(merged.restarted)} (last one over 12 months ago)` : "",
@@ -502,7 +522,9 @@ export async function enrolJob(jobId: number, opts: { now?: Date; notify?: boole
     .insert(schema.careMembers)
     .values({
       contactId: contact.id,
-      status: "active",
+      /* Nothing goes until a person approves it (Customer communications, 31 Oct). */
+      status: "awaiting_approval",
+      awaitingReason: `Added after job ${job.displayNumber ?? job.number} was completed. Check the person, the guides and the dates, then approve.`,
       floors: JSON.stringify(add),
       fibre,
       pile,
@@ -513,15 +535,14 @@ export async function enrolJob(jobId: number, opts: { now?: Date; notify?: boole
       updatedAt: now,
     })
     .returning({ id: schema.careMembers.id });
-  if (lateJoin) await passOverMember(row!.id, now);
-  return done({ state: "added", note: `${name} added (${floorList(facts.floors)}, via ${pick.via})`, memberId: row!.id, contactId: contact.id });
+  return done({ state: "added", note: `${name} added, waiting for approval (${floorList(facts.floors)}, via ${pick.via})`, memberId: row!.id, contactId: contact.id });
 }
 
 /**
  * Writes every series email whose date has gone as passed over, so the member
  * starts from now. Safe to run again: passed over counts as handled.
  */
-export async function passOverMember(memberId: number, now = new Date()) {
+export async function passOverMember(memberId: number, now = new Date(), note = PASSED_OVER_NOTE) {
   const [m] = await db.select().from(schema.careMembers).where(eq(schema.careMembers.id, memberId));
   if (!m || m.status !== "active") return 0;
   const rows = await db.select().from(schema.careSends).where(eq(schema.careSends.memberId, m.id));
@@ -536,12 +557,63 @@ export async function passOverMember(memberId: number, now = new Date()) {
       kind: p.kind,
       dueAt: p.dueAt,
       status: "skipped" as const,
-      note: PASSED_OVER_NOTE,
+      note,
       createdAt: now,
       updatedAt: now,
     })),
   );
   return past.length;
+}
+
+/* ---------------------------------------------------------------------------
+ * Approval (Customer communications, 31 Oct)
+ *
+ * Nobody gets a care email until a person has checked who it goes to, the
+ * guides and the dates. Approving never sends what was already due: those are
+ * passed over and noted. Anything that changes the person or the job after
+ * approval puts them back to Awaiting approval with the reason.
+ * ------------------------------------------------------------------------- */
+
+export const NOT_SENT_LATE_NOTE = "Not sent late. It was due before this was approved.";
+
+/** Why this member cannot be approved or sent to right now, or null. */
+export async function careApprovalProblem(m: MemberRow, opts: { checkSnapshot: boolean }): Promise<string | null> {
+  if (!m.lastJobId) return "No job to check this person against. Take them out, or add them from a job.";
+  const ctx = await jobComms(m.lastJobId);
+  if (!ctx) return "The job is gone.";
+  const p = ctx.people.find((x) => x.contactId === m.contactId);
+  if (!p) return "This person is no longer on the job.";
+  if (opts.checkSnapshot) {
+    if (!m.approvedAt || !m.approvalSnapshot) return "Not approved yet.";
+    const changed = snapshotChange(ctx, m.approvalSnapshot);
+    if (changed) return changed;
+  }
+  return blockFor(ctx, p, "care_series", "email");
+}
+
+/** Approve one member: saves what was approved, passes over anything already due, then it runs on its dates. */
+export async function approveCareMember(memberId: number, byName: string, now = new Date()) {
+  const [m] = await db.select().from(schema.careMembers).where(eq(schema.careMembers.id, memberId));
+  if (!m) throw new Error("Not in the care series.");
+  if (m.status !== "awaiting_approval") throw new Error(m.status === "active" ? "Already approved." : "Taken out of the series. It can't be approved.");
+  const problem = await careApprovalProblem(m, { checkSnapshot: false });
+  if (problem) throw new Error(problem);
+  const ctx = (await jobComms(m.lastJobId!))!;
+  await db
+    .update(schema.careMembers)
+    .set({ status: "active", approvedAt: now, approvedByName: byName, approvalSnapshot: snapshotOf(ctx, [m.contactId]), awaitingReason: "", updatedAt: now })
+    .where(eq(schema.careMembers.id, m.id));
+  const passed = await passOverMember(m.id, now, NOT_SENT_LATE_NOTE);
+  const p = ctx.people.find((x) => x.contactId === m.contactId)!;
+  await commsEvent({ jobId: m.lastJobId, kind: "care", refId: m.id, event: "approved", detail: `${p.name} approved for the care emails${passed ? `. ${passed} already due ${passed === 1 ? "is" : "are"} not sent late` : ""}.`, channel: "email", toAddress: p.email, byName });
+  return { ok: true as const, passedOver: passed };
+}
+
+/** Back to Awaiting approval with the reason. Nothing goes until approved again. */
+export async function careNeedsApproval(m: MemberRow, reason: string, byName: string) {
+  if (m.status !== "active" && m.status !== "awaiting_approval") return;
+  await db.update(schema.careMembers).set({ status: "awaiting_approval", awaitingReason: reason.slice(0, 300), updatedAt: new Date() }).where(eq(schema.careMembers.id, m.id));
+  if (m.status === "active") await commsEvent({ jobId: m.lastJobId, kind: "care", refId: m.id, event: "needs_approval", detail: reason, byName });
 }
 
 /** The first switch on: everyone already in the series starts from that day. */
@@ -553,7 +625,7 @@ export async function passOverAll(now = new Date()) {
 }
 
 /** Statuses that count as Completed for the trigger: stage complete (Complete, Invoiced) and Paid. */
-async function completedStatusIds() {
+export async function completedStatusIds() {
   const rows = await db.select({ id: schema.jobStatuses.id, name: schema.jobStatuses.name, stage: schema.jobStatuses.stage }).from(schema.jobStatuses);
   return rows.filter((r) => r.stage === "complete" || (r.stage === "closed" && r.name.trim().toLowerCase() === "paid")).map((r) => r.id);
 }
@@ -774,6 +846,13 @@ export async function careTick(now = new Date(), opts: { pauseMs?: number } = {}
     })();
 
     if (due) {
+      /* Still the approved person on the same job, with nothing changed. Otherwise back to Awaiting approval. */
+      const problem = await careApprovalProblem(m, { checkSnapshot: true });
+      if (problem) {
+        await careNeedsApproval(m, problem, "Terra Ops");
+        out.skipped++;
+        continue;
+      }
       /* Too late to be useful: passed over and noted, so the plan moves on. */
       const urgentLate = due.code === "S1" && now.getTime() - due.dueAt.getTime() > URGENT_LATE_DAYS * DAY;
       if (urgentLate) {
@@ -808,6 +887,12 @@ export async function careTick(now = new Date(), opts: { pauseMs?: number } = {}
         now.getTime() - r.sentAt.getTime() < 2 * RESEND_AFTER_DAYS * DAY,
     );
     if (resend) {
+      const problem = await careApprovalProblem(m, { checkSnapshot: true });
+      if (problem) {
+        await careNeedsApproval(m, problem, "Terra Ops");
+        out.skipped++;
+        continue;
+      }
       const r = await sendCareEmail({ member: m, contact, item: { code: resend.code, kind: resend.kind as PlanItem["kind"], dueAt: resend.dueAt ?? now, jobId: resend.jobId }, templates, resendOf: resend });
       budget--;
       if (r.ok) out.resent++;

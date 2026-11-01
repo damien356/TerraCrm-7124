@@ -5,6 +5,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly } from "../middleware/auth";
 import {
+  approveFollowups,
   editStep,
   enrolQuote,
   followupSettings,
@@ -13,6 +14,7 @@ import {
   pauseByHand,
   resumeByHand,
   saveFollowupSettings,
+  setFollowupRecipients,
   setStepDate,
   skipStep,
   stopByHand,
@@ -26,7 +28,17 @@ import { followupBacklog, followupMetrics } from "../lib/quote-followup-report";
  * ------------------------------------------------------------------------- */
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const step = z.union([z.literal(3), z.literal(7), z.literal(14), z.literal(25)]);
+const step = z.union([z.literal(3), z.literal(7), z.literal(10), z.literal(14), z.literal(21), z.literal(25)]);
+/** A pause (31 Oct): a reason, the office person looking after it, an internal review date, and a resume date only when explicitly approved. */
+export const pauseInput = z.object({
+  id: z.number(),
+  kind: z.enum(["pause", "approval_pending"]).default("pause"),
+  note: z.string().max(300).default(""),
+  pauseProfileId: z.number().nullable(),
+  pauseName: z.string().min(1).max(120),
+  reviewDate: isoDate,
+  resumeOn: isoDate.nullable().optional(),
+});
 
 const fail = (e: unknown): never => {
   throw new ORPCError("BAD_REQUEST", { message: String((e as Error)?.message ?? e) });
@@ -64,13 +76,25 @@ export const quoteFollowups = {
     return viewOrThrow(input.quoteId);
   }),
 
-  /** Pause. With a date: "contact me next month", nothing goes before it. */
-  pause: staffOnly
-    .input(z.object({ id: z.number(), until: isoDate.nullable().optional(), note: z.string().max(300).optional() }))
-    .handler(async ({ input, context }) => {
-      await pauseByHand(input.id, context.actor.name, input.until ?? null, input.note ?? "").catch(fail);
+  /** Pause or Approval pending. Never resumes on its own unless a resume date is explicitly approved. */
+  pause: staffOnly.input(pauseInput).handler(async ({ input, context }) => {
+      await pauseByHand(input.id, context.actor.name, { ...input, resumeOn: input.resumeOn ?? null }).catch(fail);
       return viewOrThrow(await quoteIdOfSeq(input.id));
     }),
+
+  /** Pick exactly who gets them: one To and anyone copied in, all on the job. Back to Awaiting approval. */
+  setRecipients: staffOnly
+    .input(z.object({ id: z.number(), toContactId: z.number().int(), ccContactIds: z.array(z.number().int()).max(6).default([]) }))
+    .handler(async ({ input, context }) => {
+      await setFollowupRecipients(input.id, context.actor.name, input.toContactId, input.ccContactIds).catch(fail);
+      return viewOrThrow(await quoteIdOfSeq(input.id));
+    }),
+
+  /** Approve the To and CC as saved, BCC none. Steps already due are skipped, never sent late. */
+  approve: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
+    await approveFollowups(input.id, context.actor.name).catch(fail);
+    return viewOrThrow(await quoteIdOfSeq(input.id));
+  }),
 
   resume: staffOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     await resumeByHand(input.id, context.actor.name).catch(fail);

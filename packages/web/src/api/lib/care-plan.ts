@@ -84,7 +84,8 @@ export interface PlanInput {
 
 export interface PlanItem {
   code: string;
-  kind: "series" | "fixed" | "holiday" | "bank";
+  /** "guide" is only for a test send of a guide sent by hand. The plan never makes one. */
+  kind: "series" | "fixed" | "holiday" | "bank" | "guide";
   dueAt: Date;
   floor?: CareFloor;
   jobId?: number | null;

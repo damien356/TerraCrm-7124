@@ -653,6 +653,12 @@ export const jobs = sqliteTable(
     careState: text("care_state").notNull().default(""),
     /** Why it was skipped, in plain words. */
     careNote: text("care_note").notNull().default(""),
+    /** Customer comms (31 Oct): the builder's own reference or work order number for this job. Used in insurance follow-ups. Blank uses the site address. */
+    builderRef: text("builder_ref").notNull().default(""),
+    /** Ticked by the office when the builder has OK'd Terra contacting the homeowner directly. Needed for any homeowner message on a builder job. */
+    directContactOk: integer("direct_contact_ok", { mode: "boolean" }).notNull().default(false),
+    directContactOkBy: text("direct_contact_ok_by").notNull().default(""),
+    directContactOkAt: integer("direct_contact_ok_at", { mode: "timestamp" }),
     /** SWMS override for this job. Null follows the client and company, true or false wins. */
     requiresSwms: integer("requires_swms", { mode: "boolean" }),
     /**
@@ -3124,9 +3130,14 @@ export const careMembers = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     contactId: integer("contact_id").notNull().references(() => contacts.id, { onDelete: "cascade" }),
-    /** active · stopped · unsubscribed */
-    status: text("status").notNull().default("active"),
+    /** awaiting_approval · active · stopped · unsubscribed */
+    status: text("status").notNull().default("awaiting_approval"),
     stopReason: text("stop_reason").notNull().default(""),
+    /** Customer comms (31 Oct): approved by a person before any email goes. */
+    approvedAt: integer("approved_at", { mode: "timestamp" }),
+    approvedByName: text("approved_by_name").notNull().default(""),
+    approvalSnapshot: text("approval_snapshot").notNull().default(""),
+    awaitingReason: text("awaiting_reason").notNull().default(""),
     /** JSON [{ floor, jobId, startedAt (ms) }], one entry per floor type. */
     floors: text("floors").notNull().default("[]"),
     /** Best known fibre across their carpet jobs. wool and wool_blend get the wool advice. */
@@ -4494,11 +4505,21 @@ export const quoteFollowups = sqliteTable(
     /** YYYY-MM-DD, Brisbane: the day the latest version went out. Steps count from here. */
     anchorDate: text("anchor_date").notNull(),
     timeZone: text("time_zone").notNull().default("Australia/Brisbane"),
-    /** active · paused · stopped · done */
-    status: text("status").notNull().default("active"),
+    /** awaiting_approval · active · paused · stopped · done */
+    status: text("status").notNull().default("awaiting_approval"),
     reason: text("reason"),
-    /** YYYY-MM-DD. "Contact me next month": nothing goes before this day. */
+    /** YYYY-MM-DD. Nothing goes before this day. Only resumes on its own when resumeApproved is set. */
     pausedUntil: text("paused_until"),
+    /** Customer comms (31 Oct): who approved the recipients, and exactly what they approved (lib/comms-people.ts). */
+    approvedAt: integer("approved_at", { mode: "timestamp" }),
+    approvedByName: text("approved_by_name").notNull().default(""),
+    approvalSnapshot: text("approval_snapshot").notNull().default(""),
+    /** A pause: the office person looking after it, and the day they review it. */
+    pauseProfileId: integer("pause_profile_id").references(() => profiles.id, { onDelete: "set null" }),
+    pauseName: text("pause_name").notNull().default(""),
+    reviewDate: text("review_date"),
+    /** The office explicitly approved resuming on pausedUntil. Without it a pause never ends on its own. */
+    resumeApproved: integer("resume_approved", { mode: "boolean" }).notNull().default(false),
     /** Replies, texts and app messages after this pause the sequence. Moved on when someone resumes it. */
     repliesSeenAt: integer("replies_seen_at", { mode: "timestamp" }).notNull(),
     assignedProfileId: integer("assigned_profile_id").references(() => profiles.id, { onDelete: "set null" }),
@@ -5014,4 +5035,103 @@ export const supplyHandovers = sqliteTable(
     ...timestamps,
   },
   (t) => [index("supply_handovers_job_idx").on(t.jobId), index("supply_handovers_batch_idx").on(t.batchKey)],
+);
+
+/* ---------------------------------------------------------------------------
+ * Customer communications (31 Oct). See lib/comms-*.ts.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * One review request per job, ever. sentCount never goes back down, so a new
+ * recipient or channel can never start the count again.
+ */
+export const reviewRequests = sqliteTable(
+  "review_requests",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    /** The role they were approved in: homeowner · supervisor · property_manager · customer and so on. */
+    role: text("role").notNull().default(""),
+    /** email · sms */
+    channel: text("channel").notNull().default("email"),
+    toAddress: text("to_address").notNull().default(""),
+    /** awaiting_approval · scheduled · paused · stopped · sent · failed · skipped */
+    status: text("status").notNull().default("awaiting_approval"),
+    reason: text("reason").notNull().default(""),
+    /** 1 for an insurance job, 2 for the rest. */
+    maxSends: integer("max_sends").notNull().default(2),
+    sentCount: integer("sent_count").notNull().default(0),
+    /** initial · reminder */
+    nextKind: text("next_kind").notNull().default("initial"),
+    /** When the next one goes. Null while waiting for confirmed completion or approval. */
+    nextSendAt: integer("next_send_at", { mode: "timestamp" }),
+    /** What was done, as the message says it: "hybrid flooring". The office can change it. */
+    what: text("what").notNull().default(""),
+    lastSentAt: integer("last_sent_at", { mode: "timestamp" }),
+    lastError: text("last_error").notNull().default(""),
+    approvedAt: integer("approved_at", { mode: "timestamp" }),
+    approvedByName: text("approved_by_name").notNull().default(""),
+    approvalSnapshot: text("approval_snapshot").notNull().default(""),
+    pauseProfileId: integer("pause_profile_id").references(() => profiles.id, { onDelete: "set null" }),
+    pauseName: text("pause_name").notNull().default(""),
+    reviewDate: text("review_date"),
+    /** Replies after this pause the reminder. */
+    repliesSeenAt: integer("replies_seen_at", { mode: "timestamp" }),
+    receivedAt: integer("received_at", { mode: "timestamp" }),
+    receivedByName: text("received_by_name").notNull().default(""),
+    declinedAt: integer("declined_at", { mode: "timestamp" }),
+    declinedByName: text("declined_by_name").notNull().default(""),
+    /** Set while a send is in flight, so two ticks or a double click never send twice. */
+    sendingAt: integer("sending_at", { mode: "timestamp" }),
+    createdByName: text("created_by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("review_requests_job_uq").on(t.jobId), index("review_requests_contact_idx").on(t.contactId)],
+);
+
+/** Everything that happened to a job's customer messages: approvals, pauses, sends, failures. */
+export const commsEvents = sqliteTable(
+  "comms_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "cascade" }),
+    /** quote_followup · care · care_guide · review · people */
+    kind: text("kind").notNull(),
+    refId: integer("ref_id"),
+    event: text("event").notNull(),
+    detail: text("detail").notNull().default(""),
+    channel: text("channel").notNull().default(""),
+    toAddress: text("to_address").notNull().default(""),
+    sendId: integer("send_id").references(() => sends.id, { onDelete: "set null" }),
+    messageId: integer("message_id").references(() => messages.id, { onDelete: "set null" }),
+    byName: text("by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [index("comms_events_job_idx").on(t.jobId), index("comms_events_ref_idx").on(t.kind, t.refId)],
+);
+
+/** Care guides sent by hand from a job. One row per guide per press of Send. */
+export const careGuideSends = sqliteTable(
+  "care_guide_sends",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    code: text("code").notNull(),
+    toAddress: text("to_address").notNull(),
+    role: text("role").notNull().default(""),
+    /** The text as sent, so Retry sends exactly the same. */
+    subject: text("subject").notNull().default(""),
+    body: text("body").notNull().default(""),
+    /** sending · sent · failed */
+    status: text("status").notNull().default("sending"),
+    messageId: integer("message_id").references(() => messages.id, { onDelete: "set null" }),
+    error: text("error").notNull().default(""),
+    /** One per press of Send, so a double click sends once. */
+    requestKey: text("request_key").notNull(),
+    byName: text("by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("care_guide_sends_request_uq").on(t.requestKey, t.code), index("care_guide_sends_job_idx").on(t.jobId)],
 );

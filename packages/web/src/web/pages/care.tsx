@@ -10,6 +10,7 @@ import { Modal } from "../components/ui/modal";
 import { errorText } from "../components/public-shell";
 import { useBootstrap } from "../queries/settings";
 import {
+  useCareApproveMember,
   useCareMember,
   useCarePreview,
   useCareReport,
@@ -35,12 +36,13 @@ import {
  */
 
 const STATUS_COLOUR: Record<string, string> = {
+  awaiting_approval: "#B7791F",
   active: "#3F7D3A",
   stopped: "#7A736D",
   unsubscribed: "#C0603F",
 };
-const STATUS_LABEL: Record<string, string> = { active: "Active", stopped: "Taken out", unsubscribed: "Unsubscribed" };
-const KIND_LABEL: Record<string, string> = { series: "Series", fixed: "Floor email", holiday: "Holiday", bank: "Extra" };
+const STATUS_LABEL: Record<string, string> = { awaiting_approval: "Awaiting approval", active: "Active", stopped: "Taken out", unsubscribed: "Unsubscribed" };
+const KIND_LABEL: Record<string, string> = { series: "Series", fixed: "Floor email", holiday: "Holiday", bank: "Extra", guide: "Sent by hand only" };
 
 const day = (ms: number | null | undefined) =>
   ms ? new Date(ms).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric", timeZone: "Australia/Brisbane" }) : "";
@@ -343,7 +345,7 @@ type MemberRow = {
 
 function MembersCard({ rows }: { rows: MemberRow[] }) {
   const [q, setQ] = React.useState("");
-  const [status, setStatus] = React.useState("active");
+  const [status, setStatus] = React.useState(rows.some((r) => r.status === "awaiting_approval") ? "awaiting_approval" : "active");
   const [open, setOpen] = React.useState<number | null>(null);
   const shown = rows.filter(
     (r) => (status === "all" || r.status === status) && (!q.trim() || `${r.name} ${r.email}`.toLowerCase().includes(q.trim().toLowerCase())),
@@ -358,6 +360,7 @@ function MembersCard({ rows }: { rows: MemberRow[] }) {
           <div className="flex gap-2">
             <Input placeholder="Search name or email" value={q} onChange={(e) => setQ(e.target.value)} className="h-8 w-48" />
             <Select value={status} onChange={(e) => setStatus(e.target.value)} className="h-8 w-36">
+              <option value="awaiting_approval">Awaiting approval</option>
               <option value="active">Active</option>
               <option value="unsubscribed">Unsubscribed</option>
               <option value="stopped">Taken out</option>
@@ -419,7 +422,7 @@ function MembersCard({ rows }: { rows: MemberRow[] }) {
                         </p>
                       </>
                     ) : (
-                      <span className="text-muted-foreground">{m.status === "active" ? "Series finished" : ""}</span>
+                      <span className="text-muted-foreground">{m.status === "active" ? "Series finished" : m.status === "awaiting_approval" ? "Nothing until approved" : ""}</span>
                     )}
                   </td>
                   <td className="tabular px-4 py-2 text-right">
@@ -442,8 +445,21 @@ function MembersCard({ rows }: { rows: MemberRow[] }) {
 function MemberModal({ memberId, onClose }: { memberId: number | null; onClose: () => void }) {
   const q = useCareMember(memberId);
   const setStatus = useCareSetMemberStatus();
+  const approve = useCareApproveMember();
   const [error, setError] = React.useState<string | null>(null);
+  const [done, setDone] = React.useState<string | null>(null);
   const m = q.data;
+
+  async function doApprove() {
+    if (!m) return;
+    setError(null);
+    try {
+      const r = await approve.mutateAsync({ memberId: m.id });
+      setDone(r.passedOver ? `Approved. ${r.passedOver} already due ${r.passedOver === 1 ? "is" : "are"} not sent late.` : "Approved.");
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
 
   async function flip(active: boolean) {
     if (!m) return;
@@ -464,7 +480,16 @@ function MemberModal({ memberId, onClose }: { memberId: number | null; onClose: 
       subtitle={m ? `${m.email}. ${m.floors.map((f) => f.label).join(", ")}${m.landlord ? ", landlord" : ""}` : undefined}
       footer={
         m && m.status !== "unsubscribed" ? (
-          m.status === "active" ? (
+          m.status === "awaiting_approval" ? (
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => flip(false)} disabled={setStatus.isPending}>
+                Take out of the series
+              </Button>
+              <Button onClick={doApprove} disabled={approve.isPending || !!m.approveBlock}>
+                Approve {m.name ? `for ${m.name}` : ""}
+              </Button>
+            </div>
+          ) : m.status === "active" ? (
             <Button variant="outline" onClick={() => flip(false)} disabled={setStatus.isPending}>
               Take out of the series
             </Button>
@@ -488,6 +513,43 @@ function MemberModal({ memberId, onClose }: { memberId: number | null; onClose: 
             </Link>
           </div>
           {error ? <p className="text-destructive">{error}</p> : null}
+          {done ? <p className="text-[#3F7D3A]">{done}</p> : null}
+
+          {m.status === "awaiting_approval" ? (
+            <div className="space-y-2 rounded-md border border-[#B7791F]/40 bg-[#B7791F]/5 p-3">
+              <p className="font-medium">Awaiting approval. Nothing is sent until you approve.</p>
+              {m.awaitingReason ? <p className="text-xs">{m.awaitingReason}</p> : null}
+              <p className="text-xs">
+                Goes to: <span className="font-medium">{m.name || "No name"}</span> · {m.email || "no email"}
+                {m.job ? (
+                  <>
+                    {" "}
+                    · from job{" "}
+                    <Link to={`/jobs/${m.job.id}`} className="text-primary hover:underline">
+                      {m.job.ref}
+                    </Link>
+                  </>
+                ) : null}
+              </p>
+              {m.approveBlock ? <p className="text-xs text-destructive">Can't approve yet: {m.approveBlock}</p> : null}
+              {m.notSentLate.length ? (
+                <div>
+                  <p className="text-xs font-medium">Already due, so these will not be sent late:</p>
+                  <ul className="text-xs text-muted-foreground">
+                    {m.notSentLate.map((p, i) => (
+                      <li key={`${p.code}-${i}`}>
+                        {p.code} {p.title}, was due {day(p.dueAt)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : m.approvedAt ? (
+            <p className="text-xs text-muted-foreground">
+              Approved by {m.approvedByName} on {day(m.approvedAt)}.
+            </p>
+          ) : null}
 
           <div>
             <p className="label-xs mb-1">Sent so far</p>
@@ -510,9 +572,9 @@ function MemberModal({ memberId, onClose }: { memberId: number | null; onClose: 
             )}
           </div>
 
-          {m.status === "active" ? (
+          {m.status === "active" || m.status === "awaiting_approval" ? (
             <div>
-              <p className="label-xs mb-1">Coming up in the next 12 months</p>
+              <p className="label-xs mb-1">{m.status === "active" ? "Coming up in the next 12 months" : "If approved now, the next 12 months"}</p>
               {m.plan.length === 0 ? (
                 <p className="text-muted-foreground">Nothing left to send.</p>
               ) : (
@@ -540,7 +602,7 @@ function MemberModal({ memberId, onClose }: { memberId: number | null; onClose: 
  * The emails
  * ------------------------------------------------------------------------- */
 
-const KIND_ORDER = ["series", "fixed", "bank", "holiday"];
+const KIND_ORDER = ["series", "fixed", "bank", "holiday", "guide"];
 const codeSort = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
 
 function TemplatesCard({ perCode, isAdmin }: { perCode: { code: string; sent: number; opened: number }[]; isAdmin: boolean }) {

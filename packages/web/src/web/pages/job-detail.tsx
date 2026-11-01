@@ -1,7 +1,7 @@
 import * as React from "react";
 import { JobBillTo } from "../components/job-bill-to";
 import { DuplicateQuoteButton, JobCopyLinks } from "../components/quote-copy";
-import { CareCard } from "../components/care-card";
+import { CustomerCommsCard } from "../components/customer-comms";
 import { Link, Redirect, useParams, useSearch } from "wouter";
 import { AlertTriangle, ArrowLeft, LifeBuoy, MessagesSquare, Plus, Sofa, Trash2, Users } from "lucide-react";
 import { Page } from "../components/layout";
@@ -24,7 +24,6 @@ import { useDeliveryStatus } from "../queries/delivery";
 import { useSaleForJob } from "../queries/productSales";
 import { VariationsCard } from "../components/variations";
 import { JobConversation } from "../components/conversation";
-import { JobQuoteFollowups } from "../components/quote-followups";
 import { BookInstallerPanel } from "../components/book-installer";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge, TASK_STATUS_COLOUR, TASK_STATUS_LABEL, tintFor } from "../components/ui/badge";
@@ -533,7 +532,6 @@ export default function JobDetailPage() {
       {tab === "conversation" ? (
         <div className="grid gap-4">
           <JobConversation jobId={j.id} />
-          <JobQuoteFollowups jobId={j.id} />
         </div>
       ) : null}
 
@@ -727,8 +725,8 @@ export default function JobDetailPage() {
           {/* what goes to the client before the install, and when (notes 18.56) */}
           {supplyOnly ? null : <JobPrepCard jobId={j.id} />}
 
-          {/* quote follow-up emails, days 3, 7, 14 and 28 (28 Oct). A sale only while its quote is open. */}
-          {sale?.quoteAccepted ? null : <JobQuoteFollowups jobId={j.id} />}
+          {/* one card for everything sent to the customer: people, quote follow-ups, care guides, review (31 Oct) */}
+          <CustomerCommsCard jobId={j.id} isAdmin={isAdmin} showFollowups={!sale?.quoteAccepted} showCareFacts={!isCallback && !productSale} />
 
           {productSale ? null : (
           <>
@@ -769,7 +767,6 @@ export default function JobDetailPage() {
         <div className="grid gap-4">
           {isCallback || productSale ? null : <CallbacksListCard jobId={j.id} />}
           {isCallback && isAdmin ? <ReworkCostCard jobId={j.id} /> : null}
-          {isCallback || productSale ? null : <CareCard jobId={j.id} isAdmin={isAdmin} />}
 
           <Card>
             <CardHeader title="Quotes" action={productSale ? undefined : <CreateQuoteButton jobId={j.id} size="sm" />} />

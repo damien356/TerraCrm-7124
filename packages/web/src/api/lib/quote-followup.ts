@@ -8,16 +8,18 @@ import { contactsByEmails, sendJobEmail } from "./job-mail";
 import { addLocalDays, daysApart, localDate } from "./local-date";
 import { checkConsent, unsubscribeToken, unsubscribeUrl } from "./marketing";
 import { notifyOffice } from "./notify";
-import { quoteRecipients, EMAIL_RE } from "./quote-email";
+import { EMAIL_RE } from "./quote-email";
+import { blockFor, commsEvent, customerTypeOf, jobComms, snapshotChange, snapshotOf, type JobCommsContext } from "./comms-people";
 import { quoteUrl } from "./quote-links";
 import { isLiveServer } from "./runtime";
 import {
   FLOOR_CATEGORIES,
-  FOLLOWUP_STEPS,
   FOLLOWUP_PHONE,
-  STEP_PURPOSE,
-  TRADE_STEP_PURPOSE,
+  purposeFor,
   renderFollowup,
+  stepsFor,
+  type FollowupAudience,
+  type TradeRole,
   type FloorFact,
   type FollowupFacts,
   type FollowupStep,
@@ -34,6 +36,16 @@ import {
  * shutdown moves a step to the next business day, and no two steps are ever
  * closer than MIN_GAP_DAYS. Day 7 only goes when prep or removal was quoted.
  * Day 25 is the last.
+ *
+ * Customer comms (Damien, 31 Oct):
+ *   - Insurance builder jobs get days 3, 10 and 21 instead, in their own words.
+ *   - Nothing goes until a person approves exactly who gets it (To and CC).
+ *     The quote email's CC is never carried over. No fallback addresses.
+ *   - The approval is a snapshot. A change to the person, their tags, the
+ *     job's company or type, or the recipient puts it back to Awaiting
+ *     approval with the reason.
+ *   - A pause has a reason, an office person and a review date. It only ends
+ *     on its own when a resume date was explicitly approved.
  *
  * Kept apart from the prep messages (lib/prep.ts) and the after-job care
  * emails (lib/care-engine.ts): its own tables, its own timer, its own switch.
@@ -156,12 +168,19 @@ export function layoutSteps(
     }
     const raw = addLocalDays(anchor, s.step);
     let d = raw;
-    if (d < addLocalDays(prev, MIN_GAP_DAYS)) d = addLocalDays(prev, MIN_GAP_DAYS);
-    if (opts.floor && d < opts.floor) d = opts.floor;
+    let pushed: string | null = null;
+    if (d < addLocalDays(prev, MIN_GAP_DAYS)) {
+      d = addLocalDays(prev, MIN_GAP_DAYS);
+      pushed = `to keep ${MIN_GAP_DAYS} days between emails`;
+    }
+    if (opts.floor && d < opts.floor) {
+      d = opts.floor;
+      pushed = `as nothing sends before ${auDate(opts.floor)}`;
+    }
     const firstTry = d;
     d = onOrAfterBusinessDay(d, opts.showDays);
     const why = d !== firstTry ? notBusinessDay(firstTry, opts.showDays) : null;
-    const moved = d !== raw ? (why ? `moved from ${auDate(raw)}: ${why}` : `moved from ${auDate(raw)} to keep ${MIN_GAP_DAYS} days between emails`) : null;
+    const moved = d !== raw ? (why && !pushed ? `moved from ${auDate(raw)}: ${why}` : `moved from ${auDate(raw)} ${pushed ?? ""}`.trim()) : null;
     prev = d;
     out.push({ step: s.step, dueDate: d, status: s.status, agreed: false, sentDate: null, moved });
   }
@@ -170,6 +189,14 @@ export function layoutSteps(
 
 export const auDate = (d: string) => d.split("-").reverse().join("/");
 /** A local YYYY-MM-DD as "28 October". The date is already local, so it is read as UTC. */
+/** "12 Smith St, Mermaid Waters (ref 20301852)", or whichever of the two the job has. */
+export function placeLine(siteLine: string, builderRef: string) {
+  const site = (siteLine ?? "").trim();
+  const ref = (builderRef ?? "").trim();
+  if (site && ref) return `${site} (ref ${ref})`;
+  return site || (ref ? `ref ${ref}` : null);
+}
+
 const longDay = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString("en-AU", { timeZone: "UTC", day: "numeric", month: "long" });
 const startDay = (d: Date) => d.toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", weekday: "long", day: "numeric", month: "long" });
 
@@ -248,7 +275,9 @@ export type QuoteFacts = {
   quote: Quote;
   versions: Quote[];
   facts: FollowupFacts;
-  audience: "homeowner" | "trade";
+  audience: FollowupAudience;
+  /** The job's people and customer type (lib/comms-people.ts). Null for a quote with no job. */
+  ctx: JobCommsContext | null;
   /** The To of the quote email, when it has a contact card. */
   recipient: { contactId: number | null; name: string; email: string } | null;
   /** Why there is no recipient, in words for the card. */
@@ -271,26 +300,31 @@ export type QuoteFacts = {
  */
 export async function quoteFacts(
   quoteId: number,
-  opts: { makeLink: boolean; assigned?: { profileId: number | null; name: string }; sentTo?: SentTo | null },
+  opts: { makeLink: boolean; assigned?: { profileId: number | null; name: string }; sentTo?: SentTo | null; contactId?: number | null },
 ): Promise<QuoteFacts | null> {
   const [quote] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, quoteId));
   if (!quote) return null;
   const versions = await versionsOf(quote.number);
-  const company = quote.companyId ? (await db.select().from(schema.companies).where(eq(schema.companies.id, quote.companyId)))[0] ?? null : null;
-  const audience: "homeowner" | "trade" = company ? "trade" : "homeowner";
+  /* The customer type comes from the job's company when there is a job (31 Oct), else the quote's. */
+  const ctx = quote.jobId ? await jobComms(quote.jobId) : null;
+  const quoteCo = quote.companyId ? (await db.select().from(schema.companies).where(eq(schema.companies.id, quote.companyId)))[0] ?? null : null;
+  const company = ctx ? ctx.company : quoteCo;
+  const type = ctx?.type ?? customerTypeOf(quoteCo?.type, !!quoteCo);
+  const audience: FollowupAudience = type === "direct" ? "homeowner" : type === "insurance" ? "insurance" : "trade";
+  const tradeRole: TradeRole = type === "property_manager" || type === "real_estate" || type === "commercial" ? type : "builder";
   const [job] = quote.jobId ? await db.select().from(schema.jobs).where(eq(schema.jobs.id, quote.jobId)) : [];
   const siteId = quote.siteId ?? job?.siteId ?? null;
   const [site] = siteId ? await db.select().from(schema.sites).where(eq(schema.sites.id, siteId)) : [];
 
   /*
-   * The people the quote email went to (Damien, 28 Oct): the To, and everyone
-   * copied in. Each needs a contact card, because each needs their own
-   * unsubscribe link. A quote with no logged send falls back to the first
-   * person on it with a card.
+   * Who it goes to (Damien, 31 Oct). A sequence passes exactly what was
+   * approved, To and CC. With nothing passed, the To of the quote email is
+   * shown as a suggestion only, and its CC is never carried over. No
+   * fallback: a quote with no logged send has nobody until a person picks.
    */
-  const sentTo = opts.sentTo ?? (await quoteSentTo(quote));
-  const fallback = sentTo ? null : ((await quoteRecipients(quote)).find((r) => r.contactId && EMAIL_RE.test(r.email)) ?? null);
-  const toEmail = sentTo?.to ?? fallback?.email.trim().toLowerCase() ?? null;
+  const logged = opts.sentTo === undefined ? await quoteSentTo(quote) : null;
+  const sentTo: SentTo | null = opts.sentTo !== undefined ? opts.sentTo : logged ? { to: logged.to, cc: [] } : null;
+  const toEmail = sentTo?.to ?? null;
   const ccEmails = (sentTo?.cc ?? []).filter((e) => e !== toEmail);
   const cards = await contactsByEmails([toEmail ?? "", ...ccEmails].filter(Boolean));
   const preferIds = [quote.contactId, quote.supervisorContactId].filter((x): x is number => !!x);
@@ -298,17 +332,15 @@ export async function quoteFacts(
     const xs = cards.filter((c) => (c.email ?? "").trim().toLowerCase() === email).sort((a, b) => a.id - b.id);
     return xs.find((c) => preferIds.includes(c.id)) ?? xs[0] ?? null;
   };
-  const contact: Contact | null = fallback?.contactId
-    ? ((await db.select().from(schema.contacts).where(eq(schema.contacts.id, fallback.contactId)))[0] ?? null)
-    : toEmail
-      ? cardFor(toEmail)
-      : null;
+  const chosen = opts.contactId ? ((await db.select().from(schema.contacts).where(eq(schema.contacts.id, opts.contactId)))[0] ?? null) : null;
+  const contact: Contact | null =
+    chosen && toEmail && (chosen.email ?? "").trim().toLowerCase() === toEmail ? chosen : toEmail ? cardFor(toEmail) : null;
   const pick = toEmail && contact ? { contactId: contact.id, name: [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim(), email: toEmail } : null;
   const recipientIssue = pick
     ? null
     : toEmail
       ? `The quote went to ${toEmail}, which has no contact card, so they would have no way to unsubscribe. Add them as a contact.`
-      : "Nobody on the quote with an email and a contact card.";
+      : "Nobody picked yet. Choose who gets these.";
   const cc = ccEmails.map((email) => ({ email, contact: cardFor(email) }));
 
   const items = await db
@@ -347,7 +379,7 @@ export async function quoteFacts(
         .filter(Boolean)
     : [];
 
-  const chosen = await db
+  const picked = await db
     .select({ colour: schema.materialSelectionItems.colour })
     .from(schema.materialSelections)
     .innerJoin(schema.materialSelectionItems, eq(schema.materialSelectionItems.selectionId, schema.materialSelections.id))
@@ -357,7 +389,7 @@ export async function quoteFacts(
         or(eq(schema.materialSelections.quoteId, quote.id), quote.jobId ? eq(schema.materialSelections.jobId, quote.jobId) : sql`0`),
       ),
     );
-  const coloursChosen = [...new Set(chosen.map((c) => (c.colour ?? "").trim()).filter(Boolean))];
+  const coloursChosen = [...new Set(picked.map((c) => (c.colour ?? "").trim()).filter(Boolean))];
 
   const [link] = await db.select().from(schema.quoteLinks).where(eq(schema.quoteLinks.quoteId, quote.id));
   let url: string | null = link ? quoteUrl(link.token) : null;
@@ -369,8 +401,12 @@ export async function quoteFacts(
   const assigned = opts.assigned ?? (await assignedFor(quote));
   const timeZone = timeZoneForPostcode(site?.postcode);
   const sentDate = dateIn(timeZone, quote.sentAt ?? quote.createdAt);
+  const siteLine = ctx?.siteAddress || (site ? [site.address, site.suburb].map((x) => (x ?? "").trim()).filter(Boolean).join(", ") : "");
   const facts: FollowupFacts = {
     audience,
+    tradeRole,
+    /* Insurance: the site address AND the builder ref when there is one (Damien, 31 Oct): "12 Smith St, Mermaid Waters (ref 20301852)". */
+    jobPlace: placeLine(siteLine, job?.builderRef ?? ""),
     firstName: (contact?.firstName ?? "").trim() || null,
     companyName: company?.name?.trim() || null,
     quoteRef: quoteRefOf(quote),
@@ -394,6 +430,7 @@ export async function quoteFacts(
     versions,
     facts,
     audience,
+    ctx,
     recipient: pick,
     recipientIssue,
     contact: contact ?? null,
@@ -412,7 +449,7 @@ export async function quoteFacts(
 
 export type Decision =
   | { ok: true; basis: string }
-  | { ok: false; action: "stop" | "pause" | "review" | "skip" | "defer"; reason: string; until?: string };
+  | { ok: false; action: "stop" | "pause" | "review" | "skip" | "defer" | "await"; reason: string; until?: string };
 
 /** What allows it, under the consent setting. */
 export async function consentFor(contact: Contact | null, mode: ConsentMode) {
@@ -562,7 +599,14 @@ export async function checkStep(seq: Seq, _step: Step, qf: QuoteFacts | null, no
   if (qf.validUntilDate && qf.validUntilDate <= today)
     return { ok: false, action: "stop", reason: `The quote ${qf.validUntilDate < today ? "expired" : "expires"} on ${auDate(qf.validUntilDate)}. It needs a review before the customer is told it can still be accepted.` };
 
-  if (!qf.recipient) return { ok: false, action: "review", reason: qf.recipientIssue ?? "Nobody on the quote with an email and a contact card." };
+  /* The approved person's card changed: say that, rather than the quote address having no card. */
+  if (seq.approvedAt && seq.contactId && qf.ctx) {
+    const was = qf.ctx.people.find((p) => p.contactId === seq.contactId);
+    const approved = (seq.toAddress ?? "").toLowerCase();
+    if (was && approved && was.email !== approved)
+      return { ok: false, action: "await", reason: `${was.name}'s email changed from ${approved} to ${was.email || "nothing"} since this was approved. Check who gets these and approve again.` };
+  }
+  if (!qf.recipient) return { ok: false, action: "await", reason: qf.recipientIssue ?? "Nobody picked yet. Choose who gets these." };
   const email = qf.recipient.email;
   const consent = await consentFor(qf.contact, s.consent);
   if (!consent.allowed)
@@ -571,6 +615,17 @@ export async function checkStep(seq: Seq, _step: Step, qf: QuoteFacts | null, no
       : { ok: false, action: "stop", reason: `No consent to follow up: ${consent.reason}.` };
   const bounce = await hardBounce(email);
   if (bounce) return { ok: false, action: "stop", reason: `Email to ${email} bounced: ${bounce.slice(0, 160)}` };
+
+  /* Approved, and nothing that was approved has changed (31 Oct). */
+  if (!seq.approvedAt || !seq.approvalSnapshot) return { ok: false, action: "await", reason: "Nobody has approved who gets these yet." };
+  if (!qf.ctx) return { ok: false, action: "await", reason: "This quote is not on a job, so who gets it can't be checked. Put it on a job first." };
+  const changed = snapshotChange(qf.ctx, seq.approvalSnapshot);
+  if (changed) return { ok: false, action: "await", reason: changed };
+  const person = qf.ctx.people.find((p) => p.contactId === seq.contactId);
+  if (!person) return { ok: false, action: "await", reason: "The approved person is no longer on this job." };
+  if (person.email !== (seq.toAddress ?? "").toLowerCase()) return { ok: false, action: "await", reason: `${person.name}'s email changed since this was approved.` };
+  const blocked = await blockFor(qf.ctx, person, "followup", "email");
+  if (blocked) return { ok: false, action: "await", reason: blocked };
 
   const reply = await inboundSince(seq, seq.repliesSeenAt, peopleOf(qf));
   if (reply) return { ok: false, action: "pause", reason: `The customer got in touch on ${auDate(localDate(reply.createdAt))} (${reply.channel}). Answer them first.` };
@@ -648,6 +703,9 @@ async function stepsOf(followupId: number) {
 }
 
 /** Put every unsent step on the dates the layout gives. */
+/** A note saying why a step's date moved. It is out of date once the date moves again. */
+const isMoveNote = (r: string | null) => !!r && /^(moved from |moved to this date earlier|Waiting: )/i.test(r);
+
 async function respace(seq: Seq, s: FollowupSettings, now: Date, floor?: string) {
   const steps = await stepsOf(seq.id);
   const plan = layoutSteps(
@@ -668,7 +726,7 @@ async function respace(seq: Seq, s: FollowupSettings, now: Date, floor?: string)
     if (row.dueDate !== p.dueDate || row.dueAt.getTime() !== dueAt.getTime())
       await db
         .update(schema.quoteFollowupSteps)
-        .set({ dueDate: p.dueDate, dueAt, reason: p.moved ?? row.reason, updatedAt: new Date() })
+        .set({ dueDate: p.dueDate, dueAt, reason: p.moved ?? (isMoveNote(row.reason) ? null : row.reason), updatedAt: new Date() })
         .where(eq(schema.quoteFollowupSteps.id, row.id));
   }
 }
@@ -686,15 +744,17 @@ export async function enrolQuote(
 ): Promise<EnrolResult> {
   const now = args.now ?? new Date();
   const s = await followupSettings();
-  const qf = await quoteFacts(quoteId, { makeLink: false, sentTo: args.sentTo });
+  /* The CC of the quote email is never carried over. */
+  const qf = await quoteFacts(quoteId, { makeLink: false, sentTo: args.sentTo ? { to: args.sentTo.to, cc: [] } : undefined });
   if (!qf) return { ok: false, reason: "Quote not found." };
   const sent = latestSent(qf.versions);
   if (!sent || sent.id !== qf.quote.id) return { ok: false, reason: "Only the newest version that went out can be followed up." };
   const [existing] = await db.select().from(schema.quoteFollowups).where(eq(schema.quoteFollowups.quoteNumber, qf.quote.number));
   if (existing) return { ok: true, followupId: existing.id, created: false };
-  if (!qf.recipient || !qf.contact) return { ok: false, reason: qf.recipientIssue ?? "Nobody on the quote with an email and a contact card." };
-  const consent = await consentFor(qf.contact, s.consent);
-  if (!consent.allowed) return { ok: false, reason: `Not enrolled: ${consent.reason}.` };
+  /* Somebody to suggest is not needed: the office picks and approves. A suggestion with no consent is not offered. */
+  const consent = qf.contact ? await consentFor(qf.contact, s.consent) : { allowed: false, basis: "", reason: "" };
+  if (qf.contact && !consent.allowed) return { ok: false, reason: `Not enrolled: ${consent.reason}.` };
+  const ccNote = args.sentTo?.cc.length ? ` The quote was copied to ${args.sentTo.cc.join(", ")}. Copies are never carried over: add them here if they should get these.` : "";
   if (qf.validUntilDate && qf.validUntilDate <= dateIn(qf.timeZone, now)) return { ok: false, reason: "The quote has expired. Review it first." };
 
   const [seq] = await db
@@ -703,14 +763,16 @@ export async function enrolQuote(
       quoteNumber: qf.quote.number,
       quoteId: qf.quote.id,
       jobId: qf.quote.jobId,
-      contactId: qf.contact.id,
+      contactId: qf.contact?.id ?? null,
       companyId: qf.quote.companyId,
-      toAddress: qf.recipient.email,
-      ccAddresses: qf.cc.map((c) => c.email).join(","),
+      toAddress: qf.recipient?.email ?? null,
+      /* Never carried from the quote email (31 Oct). */
+      ccAddresses: "",
       audience: qf.audience,
       anchorDate: qf.sentDate,
       timeZone: qf.timeZone,
-      status: "active",
+      status: "awaiting_approval",
+      reason: `Check who gets these and approve them. Nothing goes until then.${ccNote}`,
       repliesSeenAt: args.how === "backlog" ? now : (qf.quote.sentAt ?? now),
       assignedProfileId: qf.assigned.profileId,
       assignedName: qf.assigned.name,
@@ -725,7 +787,7 @@ export async function enrolQuote(
     return again ? { ok: true, followupId: again.id, created: false } : { ok: false, reason: "Could not start the follow-ups." };
   }
   const first = args.firstStep ?? 3;
-  for (const step of FOLLOWUP_STEPS) {
+  for (const step of stepsFor(qf.audience)) {
     const skipped = step < first;
     await db
       .insert(schema.quoteFollowupSteps)
@@ -738,13 +800,14 @@ export async function enrolQuote(
         status: skipped ? "skipped" : "scheduled",
         reason: skipped ? "Started late from the backlog, so this step is not sent." : null,
         quoteId: qf.quote.id,
-        toAddress: qf.recipient.email,
+        toAddress: qf.recipient?.email ?? null,
         byName: args.byName,
       })
       .onConflictDoNothing();
   }
   await respace(seq, s, now);
-  await logQuote(qf.quote, "followup_enrolled", `Quote follow-ups started (${args.how === "backlog" ? `by hand, from day ${first}` : "on send"}) for ${qf.recipient.email}${qf.cc.length ? `, copying in ${qf.cc.map((c) => c.email).join(", ")}` : ""}`, args.byName);
+  await logQuote(qf.quote, "followup_enrolled", `Quote follow-ups set up (${args.how === "backlog" ? `by hand, from day ${first}` : "on send"}), awaiting approval${qf.recipient ? `, suggested ${qf.recipient.email}` : ""}`, args.byName);
+  await commsEvent({ jobId: seq.jobId, kind: "quote_followup", refId: seq.id, event: "set_up", detail: `Quote ${quoteRefOf(qf.quote)}: set up, awaiting approval.${ccNote}`, byName: args.byName });
   return { ok: true, followupId: seq.id, created: true };
 }
 
@@ -766,17 +829,19 @@ export async function onQuoteSent(quoteId: number, byName: string, sent?: { to: 
       if (seq.status === "stopped" || seq.status === "done") return;
       const [prev] = seq.quoteId ? await db.select().from(schema.quotes).where(eq(schema.quotes.id, seq.quoteId)) : [];
       if (prev && prev.version > quote.version) return;
-      /* The follow-ups go to whoever this latest send went to. */
-      const people = sentTo
-        ? { toAddress: sentTo.to, ccAddresses: sentTo.cc.join(","), contactId: (await contactsByEmails([sentTo.to])).sort((a, b) => a.id - b.id)[0]?.id ?? seq.contactId }
-        : {};
+      /*
+       * Sent to someone else: the follow-ups never switch over on their own
+       * (31 Oct). They go back to Awaiting approval and the office picks.
+       * Whoever was copied in is never added.
+       */
+      const toChanged = !!sentTo && sentTo.to !== (seq.toAddress ?? "").toLowerCase();
+      const why = toChanged ? `The quote was sent to ${sentTo!.to}, not the approved ${seq.toAddress || "person"}. Check who gets these.` : "";
       if (seq.quoteId === quote.id) {
-        /* The same version sent again, perhaps to someone else. Same steps, new people. */
-        if (sentTo) await setSeq(seq, people);
+        if (toChanged) await needsApproval(seq, why, byName);
         return;
       }
       const anchor = dateIn(seq.timeZone, new Date());
-      await db.update(schema.quoteFollowups).set({ quoteId: quote.id, anchorDate: anchor, ...people, updatedAt: new Date() }).where(eq(schema.quoteFollowups.id, seq.id));
+      await db.update(schema.quoteFollowups).set({ quoteId: quote.id, anchorDate: anchor, updatedAt: new Date() }).where(eq(schema.quoteFollowups.id, seq.id));
       await db
         .update(schema.quoteFollowupSteps)
         .set({ status: "scheduled", reason: `Moved to version ${quote.version}, sent ${auDate(anchor)}.`, quoteId: quote.id, edited: false, subject: null, body: null, updatedAt: new Date() })
@@ -784,6 +849,7 @@ export async function onQuoteSent(quoteId: number, byName: string, sent?: { to: 
       const [fresh] = await db.select().from(schema.quoteFollowups).where(eq(schema.quoteFollowups.id, seq.id));
       await respace(fresh!, s, new Date());
       await logQuote(quote, "followup_moved", `Quote follow-ups moved to version ${quote.version}. Steps already sent stay sent.`, byName);
+      if (toChanged) await needsApproval(fresh!, why, byName);
       return;
     }
     if (s.autoEnrol) await enrolQuote(quote.id, { byName, how: "on_send", sentTo });
@@ -809,9 +875,20 @@ export async function stopSequence(seq: Seq, reason: string, byName: string) {
 }
 
 /** Pause, tell the office, and make the next action a task for the person it is assigned to. */
-export async function pauseSequence(seq: Seq, reason: string, byName: string, source?: { messageId?: number | null; conversationId?: number | null; notify?: boolean }) {
+export async function pauseSequence(
+  seq: Seq,
+  reason: string,
+  byName: string,
+  source?: { messageId?: number | null; conversationId?: number | null; notify?: boolean; pauseProfileId?: number | null; pauseName?: string; reviewDate?: string | null },
+) {
   if (seq.status === "stopped" || seq.status === "done") return;
-  await setSeq(seq, { status: "paused", reason });
+  /* Every pause has an office person and a day to look at it again (31 Oct). It never ends on its own. */
+  const s = await followupSettings();
+  const reviewDate = source?.reviewDate ?? onOrAfterBusinessDay(addLocalDays(dateIn(seq.timeZone), 1), s.showDays);
+  const pauseProfileId = source?.pauseProfileId !== undefined ? source.pauseProfileId : seq.assignedProfileId;
+  const pauseName = source?.pauseName || seq.assignedName || "Office";
+  await setSeq(seq, { status: "paused", reason, pauseProfileId, pauseName, reviewDate, resumeApproved: false, pausedUntil: null });
+  await commsEvent({ jobId: seq.jobId, kind: "quote_followup", refId: seq.id, event: "paused", detail: `${reason} Looked after by ${pauseName}, review ${auDate(reviewDate)}.`, byName });
   if (seq.quoteId) await logQuote({ id: seq.quoteId, jobId: seq.jobId, contactId: seq.contactId }, "followup_paused", `Quote follow-ups paused: ${reason}`, byName);
   if (source?.notify === false) return;
   const title = `Quote ${seq.quoteNumber} follow-ups paused`;
@@ -837,9 +914,9 @@ export async function pauseSequence(seq: Seq, reason: string, byName: string, so
     sourceMessageId: source?.messageId ?? null,
     title: `${title}: get back to the customer, then resume or stop`.slice(0, 300),
     detail: reason.slice(0, 600),
-    assignedProfileId: seq.assignedProfileId,
-    assignedName: seq.assignedName,
-    dueDate: localDate(),
+    assignedProfileId: pauseProfileId,
+    assignedName: pauseName,
+    dueDate: source?.messageId ? localDate() : reviewDate,
     createdByName: FOLLOWUP_AUTHOR,
   });
 }
@@ -869,7 +946,7 @@ export async function pauseForInbound(msg: typeof schema.messages.$inferSelect) 
     const seqs = await db
       .select()
       .from(schema.quoteFollowups)
-      .where(and(eq(schema.quoteFollowups.status, "active"), or(...conds)));
+      .where(and(inArray(schema.quoteFollowups.status, ["active", "awaiting_approval"]), or(...conds)));
     for (const seq of seqs) {
       const what = msg.channel === "sms" ? "a text" : msg.channel === "app" ? "a message" : "an email";
       await pauseSequence(seq, `The customer sent ${what} on ${auDate(localDate(msg.createdAt))}: "${(msg.body ?? "").replace(/\s+/g, " ").slice(0, 120)}"`, FOLLOWUP_AUTHOR, {
@@ -887,7 +964,7 @@ export async function stopForContact(contactId: number, reason: string) {
   const seqs = await db
     .select()
     .from(schema.quoteFollowups)
-    .where(and(eq(schema.quoteFollowups.contactId, contactId), inArray(schema.quoteFollowups.status, ["active", "paused"])));
+    .where(and(eq(schema.quoteFollowups.contactId, contactId), inArray(schema.quoteFollowups.status, ["active", "paused", "awaiting_approval"])));
   for (const seq of seqs) await stopSequence(seq, reason, FOLLOWUP_AUTHOR);
   return seqs.length;
 }
@@ -900,32 +977,233 @@ async function seqOrThrow(id: number) {
   return seq;
 }
 
-export async function pauseByHand(id: number, byName: string, until: string | null, note: string) {
+export type PauseArgs = {
+  /** "pause", or "approval_pending" when the quote is with the client, the insurer or an assessor. */
+  kind: "pause" | "approval_pending";
+  note: string;
+  pauseProfileId: number | null;
+  pauseName: string;
+  /** YYYY-MM-DD: the day the office looks at it again. Internal only, nothing goes to the customer. */
+  reviewDate: string;
+  /** YYYY-MM-DD: only when the office explicitly approves resuming on that day. Otherwise it never resumes on its own. */
+  resumeOn?: string | null;
+};
+
+export async function pauseByHand(id: number, byName: string, a: PauseArgs) {
   const seq = await seqOrThrow(id);
   if (seq.status === "stopped" || seq.status === "done") throw new Error("These follow-ups have ended.");
-  if (until) {
-    /* "Contact me next month": stays active, nothing goes before the date, then the next step goes once. */
-    await setSeq(seq, { pausedUntil: until, reason: `Customer asked to wait until ${auDate(until)}${note ? `: ${note}` : ""}` });
-    const s = await followupSettings();
-    await respace({ ...seq, pausedUntil: until }, s, new Date(), onOrAfterBusinessDay(until, s.showDays));
-    if (seq.quoteId) await logQuote({ id: seq.quoteId, jobId: seq.jobId, contactId: seq.contactId }, "followup_paused", `Quote follow-ups wait until ${auDate(until)}`, byName);
-    return;
-  }
-  await pauseSequence(seq, note || "Paused by hand.", byName, { notify: false });
+  const today = dateIn(seq.timeZone);
+  if (a.reviewDate < today) throw new Error("Pick a review date from today on.");
+  if (a.resumeOn && a.resumeOn <= today) throw new Error("Pick a resume date after today.");
+  if (!a.pauseName.trim()) throw new Error("Pick who looks after it.");
+  const what = a.kind === "approval_pending" ? "Approval pending" : "Paused";
+  const reason = `${what} by ${byName}${a.note ? `: ${a.note}` : "."}`;
+  await setSeq(seq, {
+    status: "paused",
+    reason,
+    pauseProfileId: a.pauseProfileId,
+    pauseName: a.pauseName.trim(),
+    reviewDate: a.reviewDate,
+    pausedUntil: a.resumeOn ?? null,
+    resumeApproved: !!a.resumeOn,
+  });
+  await db.insert(schema.officeTasks).values({
+    jobId: seq.jobId,
+    title: `Quote ${seq.quoteNumber} follow-ups: ${what.toLowerCase()}. Review, then resume or stop`.slice(0, 300),
+    detail: `${reason}${a.resumeOn ? ` Approved to resume on ${auDate(a.resumeOn)}.` : " Will not resume on its own."}`.slice(0, 600),
+    assignedProfileId: a.pauseProfileId,
+    assignedName: a.pauseName.trim(),
+    dueDate: a.reviewDate,
+    createdByName: byName,
+  });
+  await commsEvent({
+    jobId: seq.jobId,
+    kind: "quote_followup",
+    refId: seq.id,
+    event: a.kind === "approval_pending" ? "approval_pending" : "paused",
+    detail: `${reason} Looked after by ${a.pauseName}, review ${auDate(a.reviewDate)}.${a.resumeOn ? ` Approved to resume on ${auDate(a.resumeOn)}.` : " Does not resume on its own."}`,
+    byName,
+  });
+  if (seq.quoteId) await logQuote({ id: seq.quoteId, jobId: seq.jobId, contactId: seq.contactId }, "followup_paused", `Quote follow-ups: ${reason}`, byName);
 }
 
-export async function resumeByHand(id: number, byName: string) {
+/**
+ * Back on. Nothing missed goes in a burst: the steps left are laid out again
+ * from `floor` (tomorrow by default), MIN_GAP_DAYS apart. Without a current
+ * approval it goes to Awaiting approval instead.
+ */
+export async function resumeByHand(id: number, byName: string, floor?: string) {
   const seq = await seqOrThrow(id);
   if (seq.status === "stopped" || seq.status === "done") throw new Error("These follow-ups have ended. Start them again from the backlog.");
+  if (seq.status === "awaiting_approval") throw new Error("Approve who gets these first.");
   const now = new Date();
+  const approved = !!seq.approvedAt && !!seq.approvalSnapshot;
   /* Replies before now have been seen. Failed and review steps go back on the schedule, once, from tomorrow. */
-  await setSeq(seq, { status: "active", reason: null, repliesSeenAt: now });
+  await setSeq(seq, {
+    status: approved ? "active" : "awaiting_approval",
+    reason: approved ? null : "Resumed, but who gets these needs approving again.",
+    repliesSeenAt: now,
+    pausedUntil: null,
+    resumeApproved: false,
+    reviewDate: null,
+  });
   await db
     .update(schema.quoteFollowupSteps)
     .set({ status: "scheduled", error: null, updatedAt: now })
     .where(and(eq(schema.quoteFollowupSteps.followupId, seq.id), inArray(schema.quoteFollowupSteps.status, ["failed", "needs_review"])));
-  await respace({ ...seq, repliesSeenAt: now }, await followupSettings(), now);
+  await respace({ ...seq, repliesSeenAt: now }, await followupSettings(), now, floor);
+  await commsEvent({ jobId: seq.jobId, kind: "quote_followup", refId: seq.id, event: "resumed", detail: approved ? "Resumed." : "Resumed, awaiting approval.", byName });
   if (seq.quoteId) await logQuote({ id: seq.quoteId, jobId: seq.jobId, contactId: seq.contactId }, "followup_resumed", "Quote follow-ups resumed", byName);
+}
+
+/* ------------------------------ approval (31 Oct) ------------------------ */
+
+/** The approval no longer holds. Active goes to Awaiting approval; a paused one stays paused and needs approving before it resumes. */
+export async function needsApproval(seq: Seq, reason: string, byName: string) {
+  if (seq.status === "stopped" || seq.status === "done") return;
+  const patch: Partial<typeof schema.quoteFollowups.$inferInsert> = { approvedAt: null, approvedByName: "", approvalSnapshot: "" };
+  if (seq.status === "paused") patch.reason = `${seq.reason ?? "Paused."} Also needs approving again: ${reason}`;
+  else {
+    patch.status = "awaiting_approval";
+    patch.reason = reason;
+  }
+  await setSeq(seq, patch);
+  await commsEvent({ jobId: seq.jobId, kind: "quote_followup", refId: seq.id, event: "awaiting_approval", detail: reason, byName });
+}
+
+/**
+ * Pick who gets the follow-ups: the To and anyone copied in, all people on
+ * the job. Saved as Awaiting approval. Nothing goes until someone approves.
+ */
+export async function setFollowupRecipients(id: number, byName: string, toContactId: number, ccContactIds: number[]) {
+  const seq = await seqOrThrow(id);
+  if (seq.status === "stopped" || seq.status === "done") throw new Error("These follow-ups have ended.");
+  if (!seq.jobId) throw new Error("This quote is not on a job.");
+  const ctx = await jobComms(seq.jobId);
+  if (!ctx) throw new Error("Job not found.");
+  const to = ctx.people.find((p) => p.contactId === toContactId);
+  if (!to) throw new Error("Pick someone on this job.");
+  const block = await blockFor(ctx, to, "followup", "email");
+  if (block) throw new Error(block);
+  const cc = [];
+  for (const cid of [...new Set(ccContactIds)].filter((x) => x !== toContactId)) {
+    const p = ctx.people.find((x) => x.contactId === cid);
+    if (!p) throw new Error("Everyone copied in must be on this job.");
+    const b = await blockFor(ctx, p, "followup", "email");
+    if (b) throw new Error(`Can't copy in ${p.name}: ${b}`);
+    if (p.email === to.email) continue;
+    cc.push(p);
+  }
+  await setSeq(seq, { contactId: to.contactId, toAddress: to.email, ccAddresses: cc.map((c) => c.email).join(",") });
+  const [fresh] = await db.select().from(schema.quoteFollowups).where(eq(schema.quoteFollowups.id, seq.id));
+  await db
+    .update(schema.quoteFollowupSteps)
+    .set({ toAddress: to.email, updatedAt: new Date() })
+    .where(and(eq(schema.quoteFollowupSteps.followupId, seq.id), inArray(schema.quoteFollowupSteps.status, ["scheduled", "needs_review", "failed"])));
+  await needsApproval(fresh!, `Recipient changed by ${byName}. Approve before anything goes.`, byName);
+  await commsEvent({
+    jobId: seq.jobId,
+    kind: "quote_followup",
+    refId: seq.id,
+    event: "recipient_changed",
+    detail: `To ${to.name} (${to.email})${cc.length ? `, CC ${cc.map((c) => `${c.name} (${c.email})`).join(", ")}` : ", no CC"}.`,
+    toAddress: to.email,
+    byName,
+  });
+}
+
+/**
+ * Approve exactly who is saved: the To, the CC, no BCC. Recorded with name and
+ * time and a snapshot. Steps that fell due while it waited are skipped, never
+ * sent late, and the rest are laid out again from the next send time.
+ */
+export async function approveFollowups(id: number, byName: string, now: Date = new Date()) {
+  const seq = await seqOrThrow(id);
+  if (seq.status === "stopped" || seq.status === "done") throw new Error("These follow-ups have ended.");
+  if (!seq.jobId) throw new Error("This quote is not on a job, so who gets it can't be checked.");
+  if (!seq.contactId || !seq.toAddress) throw new Error("Pick who gets these first.");
+  const ctx = await jobComms(seq.jobId);
+  if (!ctx) throw new Error("Job not found.");
+  const to = ctx.people.find((p) => p.contactId === seq.contactId);
+  if (!to) throw new Error("The person picked is no longer on this job. Pick again.");
+  if (to.email !== seq.toAddress.toLowerCase()) throw new Error(`${to.name}'s email is now ${to.email || "blank"}. Pick again.`);
+  const block = await blockFor(ctx, to, "followup", "email");
+  if (block) throw new Error(block);
+  const ccIds: number[] = [];
+  for (const email of splitAddresses(seq.ccAddresses)) {
+    const p = ctx.people.find((x) => x.email === email);
+    if (!p) throw new Error(`${email} is copied in but is not on this job. Change the recipients.`);
+    const b = await blockFor(ctx, p, "followup", "email");
+    if (b) throw new Error(`Can't copy in ${p.name}: ${b}`);
+    ccIds.push(p.contactId);
+  }
+  const s = await followupSettings();
+  const [contact] = await db.select().from(schema.contacts).where(eq(schema.contacts.id, to.contactId));
+  const consent = await consentFor(contact ?? null, s.consent);
+  if (!consent.allowed) throw new Error(`No consent to follow up ${to.name}: ${consent.reason}.`);
+
+  /* The customer type decides the steps. Changed since set up: unsent steps that don't fit are skipped and the missing ones added. */
+  const audience: FollowupAudience = ctx.type === "direct" ? "homeowner" : ctx.type === "insurance" ? "insurance" : "trade";
+  const want = stepsFor(audience);
+  const steps = await stepsOf(seq.id);
+  for (const st of steps)
+    if (!want.includes(st.step as FollowupStep) && ["scheduled", "needs_review", "failed"].includes(st.status))
+      await db.update(schema.quoteFollowupSteps).set({ status: "skipped", reason: `Not used for ${ctx.typeLabel.toLowerCase()} jobs.`, updatedAt: now }).where(eq(schema.quoteFollowupSteps.id, st.id));
+  for (const step of want)
+    if (!steps.some((x) => x.step === step))
+      await db
+        .insert(schema.quoteFollowupSteps)
+        .values({
+          followupId: seq.id,
+          quoteNumber: seq.quoteNumber,
+          step,
+          dueDate: addLocalDays(seq.anchorDate, step),
+          dueAt: zonedTimeOn(addLocalDays(seq.anchorDate, step), "10:00", seq.timeZone),
+          status: "scheduled",
+          quoteId: seq.quoteId,
+          toAddress: to.email,
+          byName,
+        })
+        .onConflictDoNothing();
+
+  /* Due while it waited: skipped, never sent late. */
+  const today = dateIn(seq.timeZone, now);
+  for (const st of await stepsOf(seq.id))
+    if (["scheduled", "needs_review", "failed"].includes(st.status) && !st.dateAgreed && st.dueDate < today)
+      await db
+        .update(schema.quoteFollowupSteps)
+        .set({ status: "skipped", reason: `Was due on ${auDate(st.dueDate)} while waiting for approval. Not sent late.`, updatedAt: now })
+        .where(eq(schema.quoteFollowupSteps.id, st.id));
+
+  const snapshot = snapshotOf(ctx, [to.contactId, ...ccIds]);
+  const wasPaused = seq.status === "paused";
+  await setSeq(seq, {
+    audience,
+    approvedAt: now,
+    approvedByName: byName,
+    approvalSnapshot: snapshot,
+    consentBasis: consent.basis,
+    status: wasPaused ? "paused" : "active",
+    reason: wasPaused ? seq.reason : null,
+  });
+  const left = (await stepsOf(seq.id)).filter((x) => ["scheduled", "needs_review", "failed"].includes(x.status));
+  if (!left.length) {
+    await setSeq(seq, { status: "done", reason: "Every follow-up fell due while it waited for approval. None were sent late." });
+  } else {
+    /* The next send time: today if it is still before the send hour on a business day, else the next business day. */
+    const floor = hourIn(seq.timeZone, now) < s.sendHour ? onOrAfterBusinessDay(today, s.showDays) : onOrAfterBusinessDay(addLocalDays(today, 1), s.showDays);
+    const [fresh] = await db.select().from(schema.quoteFollowups).where(eq(schema.quoteFollowups.id, seq.id));
+    await respace(fresh!, s, now, floor);
+  }
+  await commsEvent({
+    jobId: seq.jobId,
+    kind: "quote_followup",
+    refId: seq.id,
+    event: "approved",
+    detail: `Approved: To ${to.name} · ${to.roleLabel} · ${to.email}${ccIds.length ? `, CC ${splitAddresses(seq.ccAddresses).join(", ")}` : ", no CC"}, BCC none.`,
+    toAddress: to.email,
+    byName,
+  });
 }
 
 export async function stopByHand(id: number, byName: string, reason: string) {
@@ -995,6 +1273,10 @@ async function applyDecision(seq: Seq, step: Step, d: Exclude<Decision, { ok: tr
     await db.update(schema.quoteFollowupSteps).set({ status: "needs_review", reason: d.reason, updatedAt: now }).where(eq(schema.quoteFollowupSteps.id, step.id));
     return;
   }
+  if (d.action === "await") {
+    await db.update(schema.quoteFollowupSteps).set({ status: "scheduled", updatedAt: now }).where(eq(schema.quoteFollowupSteps.id, step.id));
+    return needsApproval(seq, d.reason, FOLLOWUP_AUTHOR);
+  }
   if (d.action === "skip") {
     await db.update(schema.quoteFollowupSteps).set({ status: "skipped", reason: d.reason, updatedAt: now }).where(eq(schema.quoteFollowupSteps.id, step.id));
     return respace(seq, s, now);
@@ -1005,7 +1287,7 @@ async function applyDecision(seq: Seq, step: Step, d: Exclude<Decision, { ok: tr
   const later = dueAt.getTime() > step.dueAt.getTime();
   await db
     .update(schema.quoteFollowupSteps)
-    .set({ status: "scheduled", ...(later ? { dueDate: until, dueAt, reason: `Waiting: ${d.reason}` } : {}), updatedAt: now })
+    .set({ status: "scheduled", ...(later ? { dueDate: until, dueAt, reason: `Moved from ${auDate(step.dueDate)}. ${d.reason}` } : {}), updatedAt: now })
     .where(eq(schema.quoteFollowupSteps.id, step.id));
   if (later) await respace(seq, s, now, until);
 }
@@ -1031,7 +1313,7 @@ export async function sendStep(stepId: number, now: Date = new Date()): Promise<
   }
   /* The newest version that went out. If it is not the one written for, checkStep sends it to review. */
   const qf = seq.quoteId
-    ? await quoteFacts(seq.quoteId, { makeLink: true, assigned: { profileId: seq.assignedProfileId, name: seq.assignedName }, sentTo: seqSentTo(seq) })
+    ? await quoteFacts(seq.quoteId, { makeLink: true, assigned: { profileId: seq.assignedProfileId, name: seq.assignedName }, sentTo: seqSentTo(seq), contactId: seq.contactId })
     : null;
   const d = await checkStep(seq, claimed, qf, now, s);
   if (!d.ok) {
@@ -1101,7 +1383,19 @@ export async function sendStep(stepId: number, now: Date = new Date()): Promise<
       })
       .where(eq(schema.quoteFollowupSteps.id, stepId));
     await respace(seq, s, now);
-    if (claimed.step === 25) await setSeq(seq, { status: "done", reason: "All follow-ups sent." });
+    await commsEvent({
+      jobId: seq.jobId,
+      kind: "quote_followup",
+      refId: seq.id,
+      event: "sent",
+      detail: `Day ${claimed.step}: "${out.subject}" accepted by ${out.via}${cc.length ? `, CC ${cc.join(", ")}` : ""}.${leftOffText(ccp)}`,
+      channel: "email",
+      toAddress: to,
+      messageId: out.message.id,
+      byName: FOLLOWUP_AUTHOR,
+    });
+    const left = (await stepsOf(seq.id)).filter((x) => ["scheduled", "needs_review", "failed", "sending"].includes(x.status));
+    if (!left.length) await setSeq(seq, { status: "done", reason: "All follow-ups sent." });
     return { stepId, outcome: "sent", detail: `${out.via} to ${to}${cc.length ? `, cc ${cc.join(", ")}` : ""}` };
   } catch (e) {
     const error = String((e as Error)?.message ?? e).slice(0, 400);
@@ -1124,6 +1418,7 @@ export async function sendStep(stepId: number, now: Date = new Date()): Promise<
       statusDetail: error,
       failedAt: new Date(),
     }).catch(() => null);
+    await commsEvent({ jobId: seq.jobId, kind: "quote_followup", refId: seq.id, event: "failed", detail: `Day ${claimed.step}: ${error}`, channel: "email", toAddress: to, byName: FOLLOWUP_AUTHOR });
     await pauseSequence(seq, `Day ${claimed.step} follow-up did not send: ${error}`, FOLLOWUP_AUTHOR);
     return { stepId, outcome: "failed", detail: error };
   }
@@ -1145,6 +1440,16 @@ export async function tickFollowups(now: Date = new Date()) {
       .update(schema.quoteFollowupSteps)
       .set({ status: "needs_review", reason: "Was being sent when the server stopped. Check the thread before sending it again.", updatedAt: now })
       .where(and(eq(schema.quoteFollowupSteps.status, "sending"), lte(schema.quoteFollowupSteps.updatedAt, new Date(now.getTime() - STALE_SENDING_MS))));
+
+    /* A pause with a resume date the office explicitly approved. Anything else stays paused until a person resumes it. */
+    const waiting = await db
+      .select()
+      .from(schema.quoteFollowups)
+      .where(and(eq(schema.quoteFollowups.status, "paused"), eq(schema.quoteFollowups.resumeApproved, true)));
+    for (const seq of waiting) {
+      if (!seq.pausedUntil || seq.pausedUntil > dateIn(seq.timeZone, now)) continue;
+      await resumeByHand(seq.id, FOLLOWUP_AUTHOR, onOrAfterBusinessDay(seq.pausedUntil, s.showDays)).catch((e) => console.error("[quote-followup] resume failed", e));
+    }
 
     /* Replies that came in by a path that skipped the hook. */
     const live = await db.select().from(schema.quoteFollowups).where(eq(schema.quoteFollowups.status, "active"));
@@ -1203,7 +1508,7 @@ export function bootQuoteFollowups() {
 
 /* ------------------------------ what the office sees --------------------- */
 
-const purposeOf = (audience: string, step: number) => (audience === "trade" ? TRADE_STEP_PURPOSE : STEP_PURPOSE)[step as FollowupStep] ?? "";
+const purposeOf = (audience: string, step: number) => purposeFor(audience as FollowupAudience, step);
 
 /** The follow-ups card: every step, its date, its wording, why it is held, and what went. */
 export async function followupView(quoteId: number, now: Date = new Date()) {
@@ -1230,11 +1535,12 @@ export async function followupView(quoteId: number, now: Date = new Date()) {
     /* Started today, the steps already passed are skipped, never sent late. */
     const today = qf ? dateIn(qf.timeZone, now) : localDate(now);
     const age = qf ? daysApart(qf.sentDate, today) : 0;
-    const startFrom = FOLLOWUP_STEPS.find((st) => st > age) ?? null;
-    if (qf && sent && !startFrom) blockers.push("More than 25 days since it went. Too late for follow-ups.");
+    const steps0 = stepsFor(qf?.audience ?? "homeowner");
+    const startFrom = steps0.find((st) => st > age) ?? null;
+    if (qf && sent && !startFrom) blockers.push(`More than ${steps0[steps0.length - 1]} days since it went. Too late for follow-ups.`);
     const laid =
       qf && sent
-        ? layoutSteps(qf.sentDate, FOLLOWUP_STEPS.map((step) => ({ step, status: startFrom && step >= startFrom ? "scheduled" : "skipped" })), {
+        ? layoutSteps(qf.sentDate, steps0.map((step) => ({ step, status: startFrom && step >= startFrom ? "scheduled" : "skipped" })), {
             showDays: s.showDays,
             floor: onOrAfterBusinessDay(addLocalDays(today, 1), s.showDays),
           })
@@ -1264,14 +1570,15 @@ export async function followupView(quoteId: number, now: Date = new Date()) {
       plan,
       steps: [],
       to: qf?.recipient?.email ?? null,
-      cc: ccp.send.map((c) => c.email),
-      ccLeftOff: ccp.leftOff,
+      /* Never carried from the quote email (31 Oct): shown so the office can add them by hand after starting. */
+      cc: [] as string[],
+      ccLeftOff: [...ccp.send.map((c) => c.email), ...ccp.leftOff.map((l) => l.email)].map((email) => ({ email, why: "copied on the quote email, not carried over. Add them after starting if they should get these" })),
       validUntil: qf?.validUntilDate ?? null,
     };
   }
   const steps = await stepsOf(seq.id);
   const qf = seq.quoteId
-    ? await quoteFacts(seq.quoteId, { makeLink: false, assigned: { profileId: seq.assignedProfileId, name: seq.assignedName }, sentTo: seqSentTo(seq) })
+    ? await quoteFacts(seq.quoteId, { makeLink: false, assigned: { profileId: seq.assignedProfileId, name: seq.assignedName }, sentTo: seqSentTo(seq), contactId: seq.contactId })
     : null;
   if (qf && !qf.facts.link) qf.facts.link = "(the quote link goes in when it sends)";
   const ccp = qf ? await ccPlanFor(qf, s) : { send: [], leftOff: [] };
@@ -1317,11 +1624,20 @@ export async function followupView(quoteId: number, now: Date = new Date()) {
     settings: s,
     sequence: {
       id: seq.id,
+      jobId: seq.jobId,
       quoteNumber: seq.quoteNumber,
       quoteId: seq.quoteId,
       status: seq.status,
       reason: seq.reason,
       pausedUntil: seq.pausedUntil,
+      resumeApproved: seq.resumeApproved,
+      pauseName: seq.pauseName,
+      reviewDate: seq.reviewDate,
+      approvedAt: seq.approvedAt,
+      approvedByName: seq.approvedByName,
+      contactId: seq.contactId,
+      toAddress: seq.toAddress,
+      ccAddresses: splitAddresses(seq.ccAddresses),
       audience: seq.audience,
       anchorDate: seq.anchorDate,
       timeZone: seq.timeZone,

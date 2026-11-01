@@ -27,7 +27,7 @@ export function useFollowupSettings() {
 function useRefresh() {
   const queryClient = useQueryClient();
   return () => {
-    for (const key of [orpc.quoteFollowups.key(), orpc.quotes.key(), orpc.conversations.key(), orpc.officeTasks.key()]) queryClient.invalidateQueries({ queryKey: key });
+    for (const key of [orpc.quoteFollowups.key(), orpc.quotes.key(), orpc.conversations.key(), orpc.officeTasks.key(), orpc.customerComms.key()]) queryClient.invalidateQueries({ queryKey: key });
   };
 }
 
@@ -39,6 +39,18 @@ export function useFollowupEnrol() {
 export function useFollowupPause() {
   const refresh = useRefresh();
   return useMutation(orpc.quoteFollowups.pause.mutationOptions({ onSuccess: refresh }));
+}
+
+/** Approve the To and CC as saved. BCC is never used. */
+export function useFollowupApprove() {
+  const refresh = useRefresh();
+  return useMutation(orpc.quoteFollowups.approve.mutationOptions({ onSuccess: refresh }));
+}
+
+/** Pick the To and anyone copied in, from the people on the job. Goes back to Awaiting approval. */
+export function useFollowupSetRecipients() {
+  const refresh = useRefresh();
+  return useMutation(orpc.quoteFollowups.setRecipients.mutationOptions({ onSuccess: refresh }));
 }
 
 export function useFollowupResume() {

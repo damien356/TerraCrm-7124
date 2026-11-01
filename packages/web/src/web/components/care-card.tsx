@@ -21,7 +21,8 @@ const STATE_TEXT: Record<string, { label: string; colour?: string }> = {
   skipped: { label: "Skipped", colour: "#7A736D" },
 };
 
-export function CareCard({ jobId, isAdmin }: { jobId: number; isAdmin: boolean }) {
+/** `embedded`: inside the Customer communications card, which shows who gets them, so only the floors and the wool question show here. */
+export function CareCard({ jobId, isAdmin, embedded }: { jobId: number; isAdmin: boolean; embedded?: boolean }) {
   const q = useCareJob(jobId);
   const wool = useCareWoolAnswer();
   const retry = useCareRetryJob();
@@ -71,14 +72,8 @@ export function CareCard({ jobId, isAdmin }: { jobId: number; isAdmin: boolean }
     });
   }
 
-  return (
-    <Card>
-      <CardHeader
-        title="Care emails"
-        subtitle="Plain emails from Damien to the homeowner over the next few years."
-        action={state ? <Badge colour={state.colour}>{state.label}</Badge> : <Badge>Not looked at yet</Badge>}
-      />
-      <div className="space-y-3 px-4 py-3 text-sm">
+  const inner = (
+      <div className={embedded ? "space-y-3 text-sm" : "space-y-3 px-4 py-3 text-sm"}>
         {askWool ? (
           <div className="rounded-md border border-[#D08A1E]/40 bg-[#D08A1E]/10 px-3 py-2.5">
             <p className="font-medium">Is this carpet wool?</p>
@@ -97,6 +92,7 @@ export function CareCard({ jobId, isAdmin }: { jobId: number; isAdmin: boolean }
           </div>
         ) : null}
 
+        {embedded ? null : (
         <div>
           <p className="label-xs">Goes to</p>
           {d.person ? (
@@ -120,6 +116,7 @@ export function CareCard({ jobId, isAdmin }: { jobId: number; isAdmin: boolean }
             </p>
           ) : null}
         </div>
+        )}
 
         {!editing ? (
           <div>
@@ -212,8 +209,18 @@ export function CareCard({ jobId, isAdmin }: { jobId: number; isAdmin: boolean }
             ) : null}
           </div>
         ) : null}
-        {!d.engineOn ? <p className="text-xs text-muted-foreground">The care emails are switched off, so nothing sends yet.</p> : null}
+        {!d.engineOn && !embedded ? <p className="text-xs text-muted-foreground">The care emails are switched off, so nothing sends yet.</p> : null}
       </div>
+  );
+  if (embedded) return inner;
+  return (
+    <Card>
+      <CardHeader
+        title="Care emails"
+        subtitle="Plain emails from Damien to the homeowner over the next few years."
+        action={state ? <Badge colour={state.colour}>{state.label}</Badge> : <Badge>Not looked at yet</Badge>}
+      />
+      {inner}
     </Card>
   );
 }

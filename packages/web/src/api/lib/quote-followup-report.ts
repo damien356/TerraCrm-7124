@@ -16,7 +16,7 @@ import {
   quoteRefOf,
   threadsFor,
 } from "./quote-followup";
-import { FOLLOWUP_STEPS, renderFollowup, type FollowupStep } from "./quote-followup-wording";
+import { renderFollowup, stepsFor, type FollowupStep } from "./quote-followup-wording";
 
 /* ---------------------------------------------------------------------------
  * QUOTE FOLLOW-UPS: the backlog report and the numbers (28 Oct).
@@ -46,7 +46,7 @@ const ADVICE_TEXT: Record<BacklogAdvice, string> = {
   replied: "The customer has been in touch since it went. Answer them by hand. No follow-ups.",
   expired: "Expired. Review the prices and send a new version before any contact.",
   expires_soon: "Expires before the next follow-up would go. Call them, or review and send a new version.",
-  too_old: "Past day 25. Too late for the sequence. Call them, or close it off.",
+  too_old: "Past the last follow-up day (25, or 21 on insurance jobs). Too late for the sequence. Call them, or close it off.",
   no_contact: "Nobody on the quote with an email and a contact card. Fix the contact first.",
   no_consent: "The consent setting does not allow it for this contact.",
   has_job_stage: "The job has moved past Quoted. Check the quote status.",
@@ -138,12 +138,13 @@ async function backlogRowFor(number: number, s: FollowupSettings, now: Date, tid
     /* The step it could start from: the first one still ahead, laid out from tomorrow, and only if it lands before expiry. */
     let startStep: FollowupStep | null = null;
     let startDate: string | null = null;
-    const ahead = FOLLOWUP_STEPS.filter((st) => st > ageDays);
+    const allSteps = stepsFor(qf.audience);
+    const ahead = allSteps.filter((st) => st > ageDays);
     let plan: ReturnType<typeof layoutSteps> = [];
     if (ahead.length) {
       plan = layoutSteps(
         qf.sentDate,
-        FOLLOWUP_STEPS.map((step) => ({ step, status: step > ageDays ? "scheduled" : "skipped" })),
+        allSteps.map((step) => ({ step, status: step > ageDays ? "scheduled" : "skipped" })),
         { showDays: s.showDays, floor: onOrAfterBusinessDay(addLocalDays(today, 1), s.showDays) },
       );
       const first = plan.find((p) => p.status === "scheduled")!;

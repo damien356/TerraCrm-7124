@@ -91,7 +91,9 @@ import { judgeWake } from "./lib/wake-guard";
 import { bootPrep } from "./lib/prep";
 import { prep } from "./routes/prep";
 import { quoteFollowups } from "./routes/quoteFollowups";
+import { customerComms } from "./routes/customerComms";
 import { bootQuoteFollowups } from "./lib/quote-followup";
+import { bootReviews } from "./lib/comms-review";
 import { xero } from "./routes/xero";
 import { finishXeroConnect } from "./lib/xero";
 import { bootXeroSync } from "./lib/xero-invoices";
@@ -150,6 +152,7 @@ export const router = {
   prep,
   /** Quote follow-up emails, days 3, 7, 14 and 28 after a quote goes (28 Oct). Off until switched on. */
   quoteFollowups,
+  customerComms,
   /** Staff invites: download page and one-time set-up link (notes 18.55). */
   invites,
   alerts,
@@ -484,6 +487,8 @@ bootPrep();
 bootCareEngine();
 // Quote follow-ups, every 5 minutes. Same gate, and off until switched on in Settings.
 bootQuoteFollowups();
+// Review requests, every 5 minutes. Same gate, and off until switched on in Settings.
+bootReviews();
 // Reads invoices back from Xero every 30 minutes. Same gate, and idle until Xero is connected.
 bootXeroSync();
 // Timber repairs: pushes the office when Marc has not priced one in 2 hours. Same gate.

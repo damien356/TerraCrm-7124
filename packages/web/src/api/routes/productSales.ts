@@ -4,8 +4,6 @@ import { z } from "zod";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { staffOnly } from "../middleware/auth";
-import { CARE_SIGNOFF, applyConditions, careBodyText } from "../lib/care-render";
-import { CARE_TEMPLATES, CARE_TEMPLATE_MAP } from "../lib/care-templates";
 import { rebuildForecast } from "../lib/cashflow";
 import { deliveryStatus } from "../lib/delivery";
 import { orderPlan, previewSale, raiseSale, saleOfJob, setStockAndOrder } from "../lib/product-sale";
@@ -49,9 +47,6 @@ const saleInput = z.object({
   note: z.string().max(500).nullish(),
 });
 
-/** Care guides that read fine for a sale with no install. Seasonal ones are left out. */
-const GUIDE_CODES = CARE_TEMPLATES.filter((t) => !/^H\d/.test(t.code)).map((t) => t.code);
-const INSTALL_WORDS = /\b(install(ed|ing|er|ers|ation)?|we left|after we|our (crew|team|installers?))\b/i;
 
 async function salesList(where: { installerId?: number; contactId?: number; companyId?: number }) {
   const cond = where.installerId
@@ -168,44 +163,5 @@ export const productSales = {
       return out;
     }),
 
-  /** The care guides that can be sent by hand. */
-  careGuides: staffOnly.handler(async () =>
-    GUIDE_CODES.map((c) => CARE_TEMPLATE_MAP.get(c)!).map((t) => ({ code: t.code, title: t.title, audience: t.audience })),
-  ),
-
-  /**
-   * One care guide filled in for this job's client, ready to edit. Nothing
-   * is sent here: the office reads it, changes it, then presses Send, which
-   * goes through the job's conversation like any other email.
-   */
-  careGuideDraft: staffOnly.input(z.object({ jobId: z.number(), code: z.string() })).handler(async ({ input }) => {
-    const t = CARE_TEMPLATE_MAP.get(input.code);
-    if (!t || !GUIDE_CODES.includes(t.code)) throw new ORPCError("BAD_REQUEST", { message: "Pick a care guide from the list." });
-    const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, input.jobId));
-    if (!job) throw new ORPCError("NOT_FOUND", { message: "Job not found" });
-    const contactId = job.contactId ?? job.billToContactId ?? null;
-    const [contact] = contactId ? await db.select().from(schema.contacts).where(eq(schema.contacts.id, contactId)) : [];
-    const companyId = job.companyId ?? job.billToCompanyId ?? null;
-    const [company] = !contact && companyId ? await db.select().from(schema.companies).where(eq(schema.companies.id, companyId)) : [];
-    const first = contact?.firstName?.trim() || "there";
-    const body = careBodyText(applyConditions(t.body, { fibre: "", pile: "" }).replaceAll("{{first_name}}", first));
-    const text = `${body}\n\n${CARE_SIGNOFF.join("\n")}`;
-    const flagged = text
-      .split(/\n+/)
-      .flatMap((p) => p.split(/(?<=[.!?])\s+/))
-      .filter((s) => INSTALL_WORDS.test(s))
-      .map((s) => s.trim())
-      .slice(0, 8);
-    return {
-      code: t.code,
-      subject: t.subject,
-      body: text,
-      /** Sentences that talk about an install. This sale had none, so change or remove them. */
-      flagged,
-      contactId: contact?.id ?? null,
-      to: contact?.email?.trim() || company?.email?.trim() || null,
-      toName: contact ? `${contact.firstName ?? ""} ${contact.lastName ?? ""}`.trim() : (company?.name ?? null),
-      supplyOnly: (await deliveryStatus(job.id)).supplyOnly,
-    };
-  }),
+  /* Care guides by hand moved to customerComms.guideDrafts / guideSend (31 Oct), with the recipient checks. */
 };
