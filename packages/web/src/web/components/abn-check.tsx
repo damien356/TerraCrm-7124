@@ -176,7 +176,7 @@ function AbnLivePreview({ abn, names }: { abn: string; names: CardNames }) {
     return (
       <div className="rounded-lg border border-red-300 bg-red-50/60 px-3 py-2 text-sm">
         <AbnVerdict passes={passes} warning={warning} />
-        <p className="mt-1 text-xs text-muted-foreground">Looked up live. Saved to his card when you save.</p>
+        <p className="mt-1 text-xs text-muted-foreground">Looked up live. Saved to the profile when you save.</p>
       </div>
     );
   }
@@ -195,7 +195,7 @@ function AbnLivePreview({ abn, names }: { abn: string; names: CardNames }) {
     <div className={passes ? "rounded-lg border border-emerald-300 bg-emerald-50/60 px-3 py-2 text-sm" : "rounded-lg border border-red-300 bg-red-50/60 px-3 py-2 text-sm"}>
       <AbnVerdict passes={passes} warning={warning} />
       <DetailRows d={{ ...f, regState: f.state }} />
-      <p className="mt-1 text-xs text-muted-foreground">Looked up live. Saved to his card when you save.</p>
+      <p className="mt-1 text-xs text-muted-foreground">Looked up live. Saved to the profile when you save.</p>
     </div>
   );
 }
@@ -229,7 +229,7 @@ export function AbnField({
           digits(value) ? (
             <AbnLivePreview abn={value} names={names} />
           ) : (
-            <p className="text-xs text-red-700">No ABN. He can't invoice from his phone until his ABN passes.</p>
+            <p className="text-xs text-red-700">No ABN. Can't invoice from the Crew app until an ABN passes.</p>
           )
         ) : (
           <AbnSavedPanel installerId={installerId} check={check} names={names} />
@@ -265,8 +265,8 @@ export function AbnChaseList({ onOpen }: { onOpen: (installerId: number) => void
         title="ABN checks"
         subtitle={
           d
-            ? `${d.passing} of ${d.total} current installers pass. The rest can't invoice from their phone until their ABN passes. Rechecked every month.`
-            : "Current installers with a missing or failed ABN."
+            ? `${d.passing} of ${d.total} current subcontractors and unset people pass. The rest can't invoice from the Crew app until their ABN passes. Employees don't need an ABN and aren't listed. Rechecked every month.`
+            : "Current subcontractors with a missing or failed ABN."
         }
         action={<TriangleAlert className="size-4 text-muted-foreground" />}
       />

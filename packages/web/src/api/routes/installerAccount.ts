@@ -76,7 +76,7 @@ export const installerAccount = {
     ]);
     const emailed = await emailedAtFor(invoices.map((r) => r.id));
     return {
-      installer: { id: i.id, name: i.name, abn: i.abn, legalName: i.abnLegalName ?? null, tradingName: i.tradingName ?? null, email: i.invoiceEmail ?? i.email ?? null, mobile: i.mobile ?? null },
+      installer: { id: i.id, name: i.name, fullName: i.fullName ?? null, abn: i.abn, legalName: i.abnLegalName ?? null, tradingName: i.tradingName ?? null, email: i.invoiceEmail ?? i.email ?? null, mobile: i.mobile ?? null },
       link: link
         ? {
             billTo: billToOfLink(link),

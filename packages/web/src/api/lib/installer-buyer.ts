@@ -46,7 +46,13 @@ async function installerOr404(id: number) {
 /** Names he trades or is registered under. */
 function namesOf(i: typeof schema.installers.$inferSelect) {
   const out = new Set<string>();
-  for (const n of [i.name, i.fullName, i.tradingName, i.abnLegalName]) if (low(n)) out.add(low(n));
+  /*
+   * A person's own name counts only with a first and last name. A first name
+   * on its own ("Damien") matched every contact with that first name and no
+   * surname (Damien, 2 Nov). Business and ABN names count as they are.
+   */
+  for (const n of [i.name, i.fullName]) if (low(n).split(/\s+/).filter(Boolean).length >= 2) out.add(low(n));
+  for (const n of [i.tradingName, i.abnLegalName]) if (low(n)) out.add(low(n));
   try {
     const extra = JSON.parse(i.abnBusinessNames ?? "[]");
     if (Array.isArray(extra)) for (const n of extra) if (typeof n === "string" && low(n)) out.add(low(n));

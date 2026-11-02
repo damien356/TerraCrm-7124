@@ -40,6 +40,7 @@ export function NewInstallerModal({ open, onClose }: { open: boolean; onClose: (
   const create = useCreateInstaller();
   const [form, setForm] = React.useState({
     name: "",
+    workerType: "" as "" | "employee" | "subcontractor",
     mobile: "",
     email: "",
     crewCapacity: "solo" as "solo" | "own_offsider" | "needs_partner",
@@ -59,11 +60,12 @@ export function NewInstallerModal({ open, onClose }: { open: boolean; onClose: (
     try {
       await create.mutateAsync({
         name: form.name,
+        workerType: form.workerType || null,
         mobile: form.mobile || null,
         email: form.email || null,
         crewCapacity: form.crewCapacity,
         serviceArea: form.serviceArea || null,
-        abn: form.abn || null,
+        abn: form.workerType === "employee" ? null : form.abn || null,
         colour: form.colour,
         notes: form.notes || null,
       });
@@ -78,7 +80,7 @@ export function NewInstallerModal({ open, onClose }: { open: boolean; onClose: (
       open={open}
       onClose={onClose}
       title="New installer"
-      subtitle="Add the man first, then tick the skills he's allowed to be dispatched for."
+      subtitle="Add the person first, then tick the skills they can be dispatched for."
       width="max-w-xl"
       footer={
         <>
@@ -96,6 +98,13 @@ export function NewInstallerModal({ open, onClose }: { open: boolean; onClose: (
         <Field label="Name" className="sm:col-span-2">
           <Input value={form.name} onChange={(e) => set("name", e.target.value)} />
         </Field>
+        <Field label="Worker type" className="sm:col-span-2" hint="Separate from their login level. You can set it later.">
+          <Select value={form.workerType} aria-label="Worker type" onChange={(e) => set("workerType", e.target.value as typeof form.workerType)}>
+            <option value="">Not set, please review</option>
+            <option value="employee">Employee</option>
+            <option value="subcontractor">Subcontractor (ABN)</option>
+          </Select>
+        </Field>
         <Field label="Mobile">
           <Input value={form.mobile} onChange={(e) => set("mobile", e.target.value)} placeholder="0412 345 678" />
         </Field>
@@ -108,7 +117,7 @@ export function NewInstallerModal({ open, onClose }: { open: boolean; onClose: (
             onChange={(e) => set("crewCapacity", e.target.value as typeof form.crewCapacity)}
           >
             <option value="solo">Works solo</option>
-            <option value="own_offsider">Brings his own offsider</option>
+            <option value="own_offsider">Brings own offsider</option>
             <option value="needs_partner">Needs a partner</option>
           </Select>
         </Field>
@@ -119,9 +128,11 @@ export function NewInstallerModal({ open, onClose }: { open: boolean; onClose: (
             placeholder="Gold Coast, Tweed"
           />
         </Field>
-        <Field label="ABN">
-          <Input value={form.abn} onChange={(e) => set("abn", e.target.value)} />
-        </Field>
+        {form.workerType !== "employee" ? (
+          <Field label="ABN">
+            <Input value={form.abn} onChange={(e) => set("abn", e.target.value)} />
+          </Field>
+        ) : null}
         <Field label="Board colour">
           <input
             type="color"
@@ -221,8 +232,8 @@ function BlackoutCard({ installerId }: { installerId: number }) {
   return (
     <div className="rounded-lg border border-border">
       <CardHeader
-        title="Days he can't work"
-        subtitle="Type it how you'd say it. He won't be offered or booked on these days."
+        title="Days off"
+        subtitle="Type it how you'd say it. They won't be offered or booked on these days."
       />
       <div className="flex flex-col gap-2 px-4 pb-3">
         <div className="flex gap-2">
@@ -415,18 +426,18 @@ function InstallerInvoicingTab({ id, cardNames }: { id: number; cardNames: { nam
       >
         {blockers.length ? (
           <>
-            <span className="font-medium">He can't raise an invoice yet.</span> Outstanding: {blockers.join(", ")}.
+            <span className="font-medium">Can't raise an invoice yet.</span> Outstanding: {blockers.join(", ")}.
           </>
         ) : (
           <>
             <Check className="mr-1 inline size-4" />
-            Set up. He can invoice a completed job from his phone.
+            Set up. Can invoice a completed job from the Crew app.
           </>
         )}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Trading / business name" hint="His bills go out in the legal name on his ABN, then t/a this name. Empty uses the first business name on his ABN.">
+        <Field label="Trading / business name" hint="Bills go out in the legal name on the ABN, then t/a this name. Empty uses the first business name on the ABN.">
           <Input
             value={form.tradingName}
             placeholder={installer?.name ?? ""}
@@ -446,15 +457,15 @@ function InstallerInvoicingTab({ id, cardNames }: { id: number; cardNames: { nam
         <Field label="Business / home address" className="sm:col-span-2">
           <Textarea rows={2} value={form.businessAddress} onChange={(e) => set("businessAddress", e.target.value)} />
         </Field>
-        <Field label="Invoice email" hint="His copy of every submitted invoice lands here.">
+        <Field label="Invoice email" hint="Their copy of every submitted invoice lands here.">
           <Input value={form.invoiceEmail} onChange={(e) => set("invoiceEmail", e.target.value)} />
         </Field>
-        <Field label="GST" hint="Set by the ABN lookup only. GST is added to his pay only when he's registered.">
+        <Field label="GST" hint="Set by the ABN lookup only. GST is added to the pay only when registered.">
           <p className="flex h-9 items-center text-sm font-medium">
             {installer?.gstRegistered && abnCheck && verdict?.passes
               ? `GST registered${abnCheck.gstFrom ? ` from ${abnDay(abnCheck.gstFrom)}` : ""}`
               : installer?.gstRegistered
-                ? "GST registered, waiting on his ABN to pass"
+                ? "GST registered, waiting on the ABN to pass"
                 : "Not GST registered"}
           </p>
         </Field>
@@ -480,8 +491,8 @@ function InstallerInvoicingTab({ id, cardNames }: { id: number; cardNames: { nam
           label="Starting invoice number"
           hint={
             locked
-              ? `Locked. He's raised ${invoicing.raised}, last one was #${invoicing.lastNumber}. Next will be #${installer?.nextInvoiceNumber}.`
-              : "His sequence, not Terra's. Set it to whatever his next invoice number is, then it locks."
+              ? `Locked. ${invoicing.raised} raised so far, last one was #${invoicing.lastNumber}. Next will be #${installer?.nextInvoiceNumber}.`
+              : "Their own sequence, not Terra's. Set it to their next invoice number, then it locks."
           }
         >
           <Input
@@ -492,7 +503,7 @@ function InstallerInvoicingTab({ id, cardNames }: { id: number; cardNames: { nam
             onChange={(e) => set("nextInvoiceNumber", e.target.value)}
           />
         </Field>
-        <Field label="Business logo" hint="Optional. Sits on his invoice instead of the Terra mark.">
+        <Field label="Business logo" hint="Optional. Sits on their invoice instead of the Terra mark.">
           <div className="flex items-center gap-3">
             {invoicing.logoViewUrl ? (
               <img
@@ -534,6 +545,7 @@ function cardForm(installer: InstallerRow) {
   return {
     name: installer.name,
     fullName: installer.fullName ?? "",
+    workerType: (installer.workerType ?? "") as "" | "employee" | "subcontractor",
     mobile: installer.mobile ?? "",
     email: installer.email ?? "",
     crewCapacity: installer.crewCapacity as "solo" | "own_offsider" | "needs_partner",
@@ -563,6 +575,12 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
   const installer = detail.data?.installer;
   // Notes 18.66: the form follows the saved card, and Save sends only what was edited.
   const { form, setForm, dirty, reset } = useSyncedForm(installer ? cardForm(installer) : null, installer?.id);
+  // Worker type (Damien, 2 Nov): goes by the saved card, so the tabs only change once it's saved.
+  const employee = installer?.workerType === "employee";
+  const mainAdminCard = detail.data?.owner?.isMainAdmin === true;
+  React.useEffect(() => {
+    if (employee && panel === "invoicing") setPanel("card");
+  }, [employee, panel]);
 
   function set<K extends keyof CardForm>(key: K, value: CardForm[K]) {
     setSaved(false);
@@ -574,13 +592,14 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
     setError(null);
     setSaved(false);
     if (!form.name.trim()) {
-      setError("His short name can't be empty.");
+      setError("The short name can't be empty.");
       return;
     }
     const patch: Parameters<typeof update.mutateAsync>[0] = { id };
     for (const k of dirty) {
       if (k === "name") patch.name = form.name.trim();
       else if (k === "fullName") patch.fullName = form.fullName.trim() || null;
+      else if (k === "workerType") patch.workerType = form.workerType || null;
       else if (k === "mobile") patch.mobile = form.mobile || null;
       else if (k === "email") patch.email = form.email || null;
       else if (k === "crewCapacity") patch.crewCapacity = form.crewCapacity;
@@ -616,13 +635,20 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
       open
       onClose={onClose}
       title={form?.name.trim() || installer?.name || "Installer"}
-      subtitle="Skills, rates and availability. He can only ever be offered a task he's ticked for."
+      subtitle="Skills, rates and availability. Only ever offered a task that's ticked here."
       width={panel === "rates" ? "max-w-5xl" : panel === "account" ? "max-w-4xl" : "max-w-3xl"}
       footer={
         <>
+          {/* The main admin can't be archived or deleted. The server refuses it too. */}
           {installer && !installer.archivedAt ? (
             <div className="mr-auto">
-              <PersonActions person={{ installerId: id }} name={installer.name} compact onDone={(what) => what === "deleted" && onClose()} />
+              <PersonActions
+                person={{ installerId: id }}
+                name={installer.name}
+                compact
+                isMainAdminRow={mainAdminCard}
+                onDone={(what) => what === "deleted" && onClose()}
+              />
             </div>
           ) : null}
           <Button variant="ghost" onClick={onClose}>
@@ -638,18 +664,18 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
         </>
       }
     >
-      {/* Two views on the one man: his details, and what Terra pays him. */}
+      {/* Profile, rates, contractor invoicing (subcontractors only) and amounts owed. */}
       <div className="mb-4 flex gap-1 rounded-lg border border-border bg-background p-1">
         {([
-          { id: "card", label: "His card" },
+          { id: "card", label: "Profile" },
           { id: "rates", label: "Rates" },
-          { id: "invoicing", label: "Invoicing" },
+          ...(employee ? [] : [{ id: "invoicing", label: "Invoicing" }]),
           { id: "account", label: "Account" },
         ] as const).map((t) => (
           <button
             key={t.id}
             type="button"
-            onClick={() => setPanel(t.id)}
+            onClick={() => setPanel(t.id as typeof panel)}
             className={
               panel === t.id
                 ? "rounded-md bg-[var(--sidebar)] px-3 py-1.5 text-sm font-medium text-white"
@@ -662,21 +688,49 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
       </div>
 
       {panel === "rates" ? <InstallerRatesTab installerId={id} /> : null}
-      {panel === "account" ? <InstallerAccountTab id={id} /> : null}
-      {panel === "invoicing" ? <InstallerInvoicingTab id={id} cardNames={form ? { name: form.name, fullName: form.fullName } : null} /> : null}
+      {panel === "account" ? <InstallerAccountTab id={id} employee={employee} /> : null}
+      {panel === "invoicing" && !employee ? <InstallerInvoicingTab id={id} cardNames={form ? { name: form.name, fullName: form.fullName } : null} /> : null}
 
       {panel === "card" && (detail.isLoading || !form) ? <Loading /> : null}
       {panel === "card" && !(detail.isLoading || !form) ? (
         <div className="flex flex-col gap-4">
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Short name" hint="What he goes by. Schedule, Crew, his phone and texts.">
+            <Field
+              label="Worker type"
+              className="sm:col-span-2"
+              hint={
+                form.workerType === "employee"
+                  ? "No ABN, GST or contractor invoicing needed. Scheduling, skills, time and job costing still work. Payroll stays outside Ops."
+                  : form.workerType === "subcontractor"
+                    ? "Invoices Terra on an ABN. Needs a passing ABN, bank details and a starting invoice number."
+                    : "Not set yet. Pick one. Login level, booking and skills don't change."
+              }
+            >
+              <Select
+                value={form.workerType}
+                aria-label="Worker type"
+                onChange={(e) => set("workerType", e.target.value as CardForm["workerType"])}
+              >
+                <option value="">Not set, please review</option>
+                <option value="employee">Employee</option>
+                <option value="subcontractor">Subcontractor (ABN)</option>
+              </Select>
+            </Field>
+            <Field label="Short name" hint="The name used on the schedule, the Crew app and texts.">
               <Input value={form.name} aria-label="Short name" onChange={(e) => set("name", e.target.value)} />
             </Field>
-            <Field label="Full name" hint="His legal name, as on his ABN. For the ABN check and bills.">
+            <Field
+              label="Full name"
+              hint={
+                form.workerType === "employee"
+                  ? "First and last name."
+                  : "First and last name, as on the ABN. Used for the ABN check and bills."
+              }
+            >
               <Input
                 value={form.fullName}
                 aria-label="Full name"
-                placeholder="As on his ABN"
+                placeholder="First and last name"
                 onChange={(e) => set("fullName", e.target.value)}
               />
             </Field>
@@ -692,23 +746,26 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
                 onChange={(e) => set("crewCapacity", e.target.value as typeof form.crewCapacity)}
               >
                 <option value="solo">Works solo</option>
-                <option value="own_offsider">Brings his own offsider</option>
+                <option value="own_offsider">Brings own offsider</option>
                 <option value="needs_partner">Needs a partner</option>
               </Select>
             </Field>
             <Field label="Service area">
               <Input value={form.serviceArea} onChange={(e) => set("serviceArea", e.target.value)} />
             </Field>
-            <Field label="ABN" className="sm:col-span-2">
-              <AbnField
-                installerId={id}
-                value={form.abn}
-                onChange={(v) => set("abn", v)}
-                savedAbn={installer?.abn ?? null}
-                names={{ name: form.name, fullName: form.fullName, tradingName: installer?.tradingName ?? null }}
-                check={detail.data?.abnCheck ?? null}
-              />
-            </Field>
+            {/* Employees need no ABN, so the field and its warnings are hidden. Anything on file is kept. */}
+            {!employee ? (
+              <Field label="ABN" className="sm:col-span-2">
+                <AbnField
+                  installerId={id}
+                  value={form.abn}
+                  onChange={(v) => set("abn", v)}
+                  savedAbn={installer?.abn ?? null}
+                  names={{ name: form.name, fullName: form.fullName, tradingName: installer?.tradingName ?? null }}
+                  check={detail.data?.abnCheck ?? null}
+                />
+              </Field>
+            ) : null}
             <Field label="Insurance expiry">
               <Input
                 type="date"
@@ -769,7 +826,7 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
               />
             </Field>
             <Field
-              label="Days he doesn't work"
+              label="Days off each week"
               hint="Sat and Sun are off unless you tap them on. Bookings skip the red days."
               className="sm:col-span-2"
             >
@@ -821,8 +878,8 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
 
           <div className="rounded-lg border border-border">
             <CardHeader
-              title="Skills he's ticked for"
-              subtitle="What he can be sent to. Saves as you tick. His pay is on the Rates tab."
+              title="Skills"
+              subtitle="What they can be sent to. Saves as you tick. Pay and labour cost rates are on the Rates tab."
             />
             {groups.map((group) => (
               <div key={group}>
@@ -849,7 +906,7 @@ export function InstallerPanel({ id, onClose }: { id: number; onClose: () => voi
                 <p className="tabular mt-0.5 text-lg font-semibold">{detail.data.stats.total}</p>
               </div>
               <div className="card-surface px-3 py-2">
-                <p className="label-xs">Pay booked</p>
+                <p className="label-xs">{employee ? "Labour cost booked" : "Pay booked"}</p>
                 <p className="tabular mt-0.5 text-lg font-semibold">{money(detail.data.stats.payTotal)}</p>
               </div>
             </div>

@@ -20,6 +20,7 @@ import {
 } from "../queries/team";
 import { InstallerPanel } from "./installers";
 import { AbnChaseList } from "../components/abn-check";
+import { WorkerTypeReview } from "../components/worker-type-review";
 import { useRevokeVoiceKey, useVoiceKeys } from "../queries/visits";
 import { EmailInput } from "../components/email-input";
 import { useSendInvite, useSetPassword } from "../queries/invites";
@@ -318,6 +319,7 @@ export default function TeamPage() {
 
       <AddPersonModal open={adding} onClose={() => setAdding(false)} />
 
+      <WorkerTypeReview onOpen={setOpenId} />
       <AbnChaseList onOpen={setOpenId} />
       <VoiceKeys />
       <PhoneProblems />

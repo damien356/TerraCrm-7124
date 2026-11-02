@@ -31,6 +31,8 @@ export async function dueForRecheck(now = new Date()) {
       and(
         eq(schema.installers.active, true),
         isNull(schema.installers.archivedAt),
+        // Employees need no ABN, so an old one on file is never chased (Damien, 2 Nov).
+        or(isNull(schema.installers.workerType), ne(schema.installers.workerType, "employee")),
         isNotNull(schema.installers.abn),
         ne(schema.installers.abn, ""),
         or(

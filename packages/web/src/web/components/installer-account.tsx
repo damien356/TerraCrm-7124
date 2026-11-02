@@ -69,9 +69,14 @@ function Note({ tone, children }: { tone: "ok" | "warn" | "bad" | "info"; childr
   return <div className={`rounded-md border px-3 py-2 text-sm ${cls}`}>{children}</div>;
 }
 
-const BASIS: Record<string, string> = { abn_match: "Same ABN, confirmed", confirmed: "Confirmed same person or business", created: "Made from his card" };
+const BASIS: Record<string, string> = { abn_match: "Same ABN, confirmed", confirmed: "Confirmed same person or business", created: "Made from their profile" };
 
-export function InstallerAccountTab({ id }: { id: number }) {
+/**
+ * Product buying and amounts owed. Product buying is optional: nothing here is
+ * needed to book this person for work. Employees raise no contractor bills, so
+ * that side and contras only show if bills already exist (Damien, 2 Nov).
+ */
+export function InstallerAccountTab({ id, employee = false }: { id: number; employee?: boolean }) {
   const q = useInstallerAccount(id);
   if (q.isLoading) return <Loading />;
   if (q.error) return <Note tone="bad">{errText(q.error)}</Note>;
@@ -79,12 +84,13 @@ export function InstallerAccountTab({ id }: { id: number }) {
   return (
     <div className="flex flex-col gap-4" data-testid="installer-account">
       <p className="text-xs text-muted-foreground">
-        Office and Admin only. {d.installer.name}'s own login does not see this and gets nothing new from it.
+        Office and Admin only. {d.installer.name}'s own login does not see this and gets nothing new from it. Product buying is optional. Nothing here is
+        needed to book this person for work.
       </p>
       <BilledAs installerId={id} data={d} />
       <Materials installerId={id} data={d} />
-      <Balances data={d} />
-      {d.flags.workflow ? <Contras installerId={id} data={d} /> : null}
+      <Balances data={d} employee={employee} />
+      {d.flags.workflow && (!employee || d.weOweHim.length > 0 || d.contras.length > 0) ? <Contras installerId={id} data={d} /> : null}
     </div>
   );
 }
@@ -112,7 +118,7 @@ function BilledAs({ installerId, data }: { installerId: number; data: Overview }
   if (data.link) {
     const l = data.link;
     return (
-      <Section title="Billed as" hint="Materials invoices for him go to this record. It is the same legal person or business as his installer card.">
+      <Section title="Billed as" hint="Product and materials invoices for this person go to this record. It is the same legal person or business as this profile.">
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2" data-testid="billed-as">
             <span className="font-medium">{l.name}</span>
@@ -200,17 +206,17 @@ function BilledAs({ installerId, data }: { installerId: number; data: Overview }
   return (
     <Section
       title="Billed as"
-      hint={`Not set. To bill ${i.name} for materials, pick the existing contact or company that is him. Ops does not make a second record when one exists.`}
+      hint={`Optional. Only needed to sell products or materials to ${i.name}. Pick the existing contact or company that is the same person or business. Nothing is linked automatically.`}
     >
       <div className="flex flex-col gap-3">
         <p className="text-xs text-muted-foreground">
-          His card: {i.legalName ?? i.name}
+          Their details: {i.legalName ?? i.fullName ?? i.name}
           {i.tradingName ? ` t/a ${i.tradingName}` : ""}
           {i.abn ? `, ABN ${i.abn}` : ", no ABN"}
           {i.email ? `, ${i.email}` : ""}.
         </p>
         {cands.length ? (
-          <div className="flex flex-col gap-1.5" role="radiogroup" aria-label="Records that may be him">
+          <div className="flex flex-col gap-1.5" role="radiogroup" aria-label="Possible matches">
             {cands.map((c) => {
               const key = `${c.type}:${c.id}`;
               return (
@@ -248,7 +254,7 @@ function BilledAs({ installerId, data }: { installerId: number; data: Overview }
             })}
           </div>
         ) : (
-          <Note tone="info">Ops found no contact or company with his ABN, name, email or mobile.</Note>
+          <Note tone="info">Ops found no contact or company with the same ABN, full name, email or mobile.</Note>
         )}
 
         {chosen ? (
@@ -262,7 +268,7 @@ function BilledAs({ installerId, data }: { installerId: number; data: Overview }
             </label>
             {needReason ? (
               <Field label="How do you know?" hint="The ABNs do not match on file, so say how you know. At least a few words.">
-                <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="For example: he confirmed by text on 29 Oct, sole trader" />
+                <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="For example: confirmed by text on 29 Oct, sole trader" />
               </Field>
             ) : null}
             <div>
@@ -284,14 +290,14 @@ function BilledAs({ installerId, data }: { installerId: number; data: Overview }
                     <option value="contact">Contact (sole trader)</option>
                   </Select>
                 </Field>
-                <Field label="Bill to name" hint="Uses his ABN, invoice email, mobile and address from his card.">
+                <Field label="Bill to name" hint="Uses the ABN, invoice email, mobile and address from this profile.">
                   <Input value={makeName} onChange={(e) => setMakeName(e.target.value)} />
                 </Field>
               </div>
               {free.length ? (
                 <label className="flex items-center gap-2 text-sm">
-                  <Checkbox checked={noneOfThese} onChange={(e) => setNoneOfThese(e.target.checked)} aria-label="None of these is him" />
-                  None of the records above is him.
+                  <Checkbox checked={noneOfThese} onChange={(e) => setNoneOfThese(e.target.checked)} aria-label="None of these is the same person" />
+                  None of the records above is the same person or business.
                 </label>
               ) : null}
               <div className="flex gap-2">
@@ -313,7 +319,7 @@ function BilledAs({ installerId, data }: { installerId: number; data: Overview }
                   setMakeOpen(true);
                 }}
               >
-                None of these. Make one from his card
+                None of these. Make one from this profile
               </Button>
             </div>
           )
@@ -334,8 +340,8 @@ function BilledAs({ installerId, data }: { installerId: number; data: Overview }
 function Materials({ installerId, data }: { installerId: number; data: Overview }) {
   return (
     <Section
-      title="Sell products to him"
-      hint="Products and materials he buys from Terra. Save a quote or raise the invoice straight away, on its own supply only job. No crew or install messages, and nothing comes off his pay."
+      title="Sell products (optional)"
+      hint="Products and materials bought from Terra. Save a quote or raise the invoice straight away, on its own supply only job. No crew or install messages, and nothing comes off their pay."
     >
       <div className="flex flex-col gap-3" data-testid="materials">
         <div>
@@ -346,7 +352,7 @@ function Materials({ installerId, data }: { installerId: number; data: Overview 
             size="default"
             note={
               data.link
-                ? `Billed to ${data.link.name}. Sales category Installer materials (${data.salesAccounts.installer_materials.name}). Work on his own home is a normal job, billed as Customer sales.`
+                ? `Billed to ${data.link.name}. Sales category Installer materials (${data.salesAccounts.installer_materials.name}). Work on their own home is a normal job, billed as Customer sales.`
                 : undefined
             }
           />
@@ -378,13 +384,17 @@ function Materials({ installerId, data }: { installerId: number; data: Overview 
 
 /* ----------------------------- balances ------------------------------ */
 
-function Balances({ data }: { data: Overview }) {
+function Balances({ data, employee }: { data: Overview; employee: boolean }) {
   const owes = data.owesUs.filter((r) => r.due > 0.004);
   const owesTotal = owes.reduce((s, r) => s + r.due, 0);
   const oweTotal = data.weOweHim.reduce((s, b) => s + b.total, 0);
+  // Employees raise no contractor bills. Any bills from before stay listed.
+  const showBills = !employee || data.weOweHim.length > 0;
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      <Section title={`He owes us ${money(owesTotal)}`} hint={data.link ? `Invoices to ${data.link.name}, not draft or void.` : "Link Billed as to see his invoices."}>
+    <div className="flex flex-col gap-2">
+    <p className="label-xs">Amounts owed</p>
+    <div className={showBills ? "grid gap-4 sm:grid-cols-2" : "grid gap-4"}>
+      <Section title={`Owed to Terra ${money(owesTotal)}`} hint={data.link ? `Invoices to ${data.link.name}, not draft or void.` : "Set Billed as to see these invoices."}>
         {data.owesUs.length ? (
           <table className="w-full text-sm" data-testid="owes-us">
             <tbody>
@@ -409,7 +419,8 @@ function Balances({ data }: { data: Overview }) {
           <p className="text-sm text-muted-foreground">Nothing.</p>
         )}
       </Section>
-      <Section title={`We owe him ${money(oweTotal)}`} hint="His contractor bills in Ops that are not paid yet.">
+      {showBills ? (
+      <Section title={`Owed by Terra ${money(oweTotal)}`} hint="Contractor bills in Ops that are not paid yet.">
         {data.weOweHim.length ? (
           <table className="w-full text-sm">
             <tbody>
@@ -426,6 +437,8 @@ function Balances({ data }: { data: Overview }) {
           <p className="text-sm text-muted-foreground">Nothing.</p>
         )}
       </Section>
+      ) : null}
+    </div>
     </div>
   );
 }
@@ -449,7 +462,7 @@ function Contras({ installerId, data }: { installerId: number; data: Overview })
   return (
     <Section
       title="Contras (owner only)"
-      hint="Offset what he owes on one invoice against what Terra owes him on one Xero bill. Two Xero payments to the clearing account, same date, same amount."
+      hint="Offset what is owed to Terra on one invoice against what Terra owes on one Xero bill. Two Xero payments to the clearing account, same date, same amount."
     >
       <div className="flex flex-col gap-3">
         <Note tone={data.flags.posting ? "warn" : "info"}>
@@ -491,11 +504,11 @@ function XeroContact({ installerId, data }: { installerId: number; data: Overvie
     );
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-sm">Pick the one Xero contact his invoices and bills are both on.</p>
+      <p className="text-sm">Pick the one Xero contact their invoices and bills are both on.</p>
       {!look ? (
         <div>
           <Button variant="outline" size="sm" onClick={() => setLook(true)}>
-            Find his Xero contact
+            Find their Xero contact
           </Button>
         </div>
       ) : found.isLoading ? (
@@ -505,7 +518,7 @@ function XeroContact({ installerId, data }: { installerId: number; data: Overvie
       ) : (
         <div className="flex flex-col gap-1.5">
           {found.data?.invoicesGoTo ? (
-            <p className="text-xs text-muted-foreground">Ops sends his invoices to Xero contact {found.data.invoicesGoTo.name}.</p>
+            <p className="text-xs text-muted-foreground">Ops sends their invoices to Xero contact {found.data.invoicesGoTo.name}.</p>
           ) : null}
           {(found.data?.candidates ?? []).map((c) => (
             <div key={c.id} className="flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
@@ -533,7 +546,7 @@ function XeroContact({ installerId, data }: { installerId: number; data: Overvie
               </Button>
             </div>
           ))}
-          {!(found.data?.candidates ?? []).length ? <p className="text-sm text-muted-foreground">Xero has no contact like him.</p> : null}
+          {!(found.data?.candidates ?? []).length ? <p className="text-sm text-muted-foreground">Xero has no matching contact.</p> : null}
         </div>
       )}
       {error ? <Note tone="bad">{error}</Note> : null}
@@ -608,18 +621,18 @@ function NewContra({ installerId, data }: { installerId: number; data: Overview 
       {!show ? (
         <div>
           <Button variant="outline" size="sm" onClick={() => setShow(true)}>
-            Read his Xero bills
+            Read their Xero bills
           </Button>
         </div>
       ) : bills.isLoading ? (
-        <Loading label="Reading his bills from Xero…" />
+        <Loading label="Reading their bills from Xero…" />
       ) : bills.error ? (
         <Note tone="bad">{errText(bills.error)}</Note>
       ) : (
         <>
           <div>
             <div className="mb-1 flex items-center justify-between">
-              <p className="text-xs font-medium text-muted-foreground">His bills in Xero (read only)</p>
+              <p className="text-xs font-medium text-muted-foreground">Their bills in Xero (read only)</p>
               <Button variant="ghost" size="sm" onClick={() => bills.refetch()}>
                 Read again
               </Button>
@@ -654,9 +667,9 @@ function NewContra({ installerId, data }: { installerId: number; data: Overview 
           </div>
 
           <div className="grid gap-2 sm:grid-cols-3">
-            <Field label="His invoice">
+            <Field label="Invoice">
               <Select
-                aria-label="His invoice"
+                aria-label="Invoice"
                 value={invoiceId ?? ""}
                 onChange={(e) => {
                   setInvoiceId(e.target.value ? Number(e.target.value) : null);
@@ -671,9 +684,9 @@ function NewContra({ installerId, data }: { installerId: number; data: Overview 
                 ))}
               </Select>
             </Field>
-            <Field label="Against his bill">
+            <Field label="Against bill">
               <Select
-                aria-label="Against his bill"
+                aria-label="Against bill"
                 value={billId}
                 onChange={(e) => {
                   setBillId(e.target.value);
@@ -700,7 +713,7 @@ function NewContra({ installerId, data }: { installerId: number; data: Overview 
               />
             </Field>
           </div>
-          {!invoices.length ? <p className="text-xs text-muted-foreground">None of his invoices is in Xero with money owing.</p> : null}
+          {!invoices.length ? <p className="text-xs text-muted-foreground">None of their invoices is in Xero with money owing.</p> : null}
           <div>
             <Button size="sm" variant="outline" disabled={invoiceId == null || !billId || preview.isPending} onClick={doPreview}>
               {preview.isPending ? <Spinner /> : null}
@@ -729,7 +742,7 @@ function NewContra({ installerId, data }: { installerId: number; data: Overview 
               {p.ok ? (
                 <>
                   <div className="grid gap-2 sm:grid-cols-[10rem_10rem_1fr]">
-                    <Field label="He agreed by">
+                    <Field label="Agreed by">
                       <Select value={how} onChange={(e) => setHow(e.target.value as typeof how)}>
                         <option value="email">Email</option>
                         <option value="sms">Text</option>
@@ -741,8 +754,8 @@ function NewContra({ installerId, data }: { installerId: number; data: Overview 
                     <Field label="On">
                       <Input type="date" value={on} onChange={(e) => setOn(e.target.value)} />
                     </Field>
-                    <Field label="What he agreed to">
-                      <Textarea aria-label="Agreement note" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="For example: his email of 28 Oct, take the $1,000 for the hybrid off bill 1501" />
+                    <Field label="What was agreed">
+                      <Textarea aria-label="Agreement note" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="For example: their email of 28 Oct, take the $1,000 for the hybrid off bill 1501" />
                     </Field>
                   </div>
                   <label className="flex items-start gap-2 text-sm">
@@ -802,7 +815,7 @@ function ContraRow({ c, posting }: { c: Contra; posting: boolean }) {
       <p className="mt-1 text-xs text-muted-foreground">
         Before: invoice {money(c.invoiceDueBefore)} due, bill {money(c.billDueBefore)} due. Account {c.contraAccount}, dated {day(c.paidOn)}.
         <br />
-        He agreed by {c.agreementHow.replace("_", " ")} on {day(c.agreementOn)}: {c.agreementNote}
+        Agreed by {c.agreementHow.replace("_", " ")} on {day(c.agreementOn)}: {c.agreementNote}
         <br />
         Prepared by {c.preparedByName}
         {c.approvedByName ? `. Approved by ${c.approvedByName} (typed "${c.approvalText}")` : ""}.

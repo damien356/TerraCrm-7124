@@ -217,6 +217,10 @@ function HourlyTask({ t }: { t: TaskView }) {
                 )}
                 {r.unbilledPay ? ` ${money(r.unbilledPay)} approved but not billed yet.` : ""}
               </p>
+            ) : r.unbilledPay && r.employee ? (
+              <p key={r.installerId} className="text-muted-foreground">
+                {r.name}: employee, so no contractor invoice. {money(r.unbilledPay)} of approved time is internal labour cost only.
+              </p>
             ) : r.unbilledPay ? (
               <p key={r.installerId}>
                 {r.name}: no invoice for this task yet. {money(r.unbilledPay)} approved and not billed.

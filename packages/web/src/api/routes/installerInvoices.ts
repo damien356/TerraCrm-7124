@@ -11,6 +11,7 @@ import { getObject, invoicePdfKey, putObject, signGet } from "../lib/s3";
 import { renderInvoicePdf, type InvoiceLineItem } from "../lib/invoicePdf";
 import { sendEmail } from "../lib/email";
 import { abnView } from "../lib/abn-check";
+import { EMPLOYEE_NO_INVOICE, isEmployee } from "../lib/worker-type";
 
 /**
  * The installer's own invoice to Terra for a completed task. Installers can
@@ -165,13 +166,16 @@ export const installerInvoices = {
       emailError: existing?.emailError ?? null,
       canSubmit:
         !existing &&
+        !isEmployee(installer) &&
         installer.nextInvoiceNumber != null &&
         abn.passes &&
         !hourlyBlock &&
         Boolean(installer.bankBsb && installer.bankAccountNumber && installer.bankAccountName),
       blockedReason: existing
         ? null
-        : hourlyBlock
+        : isEmployee(installer)
+          ? EMPLOYEE_NO_INVOICE
+          : hourlyBlock
           ? hourlyBlock
           : installer.nextInvoiceNumber == null
           ? "Terra office hasn't set up your invoice numbering yet. Ask them to enable invoicing before you submit."
@@ -218,6 +222,8 @@ export const installerInvoices = {
 
     const { task, job, site, installer, usableVariations, lineItems, subtotal, gstAmount, total, hourlySessionIds, hourlyBlock } =
       await taskInvoiceContext(input.taskId, context.installerId);
+    // Worker type (Damien, 2 Nov): employees never raise a contractor invoice or bill.
+    if (isEmployee(installer)) throw new ORPCError("BAD_REQUEST", { message: EMPLOYEE_NO_INVOICE });
     if (hourlyBlock) throw new ORPCError("BAD_REQUEST", { message: hourlyBlock });
 
     if (installer.nextInvoiceNumber == null) {

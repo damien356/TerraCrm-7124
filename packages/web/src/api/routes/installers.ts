@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -10,6 +10,7 @@ import { installerLogoKey, signGet, signPut } from "../lib/s3";
 import { taskForStaff } from "../lib/staff-view";
 import { abnChangeColumns, abnView, checkInstallerAbn, hideAbnCheck } from "../lib/abn-check";
 import { abnDigits } from "../lib/abn-lookup";
+import { WORKER_TYPES, cardOwner } from "../lib/worker-type";
 
 /**
  * Skills are TICKS on the installer card (`installer_skills`) with a per-skill
@@ -75,7 +76,7 @@ export const installers = {
     const [installer] = await db.select().from(schema.installers).where(eq(schema.installers.id, input.id));
     if (!installer) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
 
-    const [skillRows, recent, stats, invoiceStats] = await Promise.all([
+    const [skillRows, recent, stats, invoiceStats, owner] = await Promise.all([
       db
         .select({ link: schema.installerSkills, skill: schema.skills })
         .from(schema.installerSkills)
@@ -109,6 +110,7 @@ export const installers = {
         })
         .from(schema.installerInvoices)
         .where(eq(schema.installerInvoices.installerId, input.id)),
+      cardOwner(input.id),
     ]);
 
     return {
@@ -118,6 +120,11 @@ export const installers = {
         worksWeekendDays: safeDays(installer.worksWeekendDays),
         ...(isAdmin ? {} : { creditLimit: 0, bankAccountName: null, bankBsb: null, bankAccountNumber: null }),
       },
+      /**
+       * The login this card belongs to. The main admin's card has no Archive or
+       * Delete (the server refuses them too, in people-archive).
+       */
+      owner: owner ? { isMainAdmin: owner.isMainAdmin, staffCard: owner.staffCard } : null,
       /** Notes 18.64: the ABN check. Admin only, null for Office. */
       abnCheck: isAdmin ? abnView(installer) : null,
       invoicing: {
@@ -149,6 +156,8 @@ export const installers = {
       z.object({
         name: z.string().min(1),
         fullName: z.string().nullable().optional(),
+        /** Employee or Subcontractor (ABN). Empty leaves them for review. */
+        workerType: z.enum(WORKER_TYPES).nullable().optional(),
         mobile: z.string().nullable().optional(),
         email: z.string().nullable().optional(),
         crewCapacity: z.enum(["solo", "own_offsider", "needs_partner"]).default("solo"),
@@ -174,9 +183,11 @@ export const installers = {
     .input(
       z.object({
         id: z.number(),
-        name: z.string().trim().min(1, "His short name can't be empty.").optional(),
+        name: z.string().trim().min(1, "The short name can't be empty.").optional(),
         /** Notes 18.66: his full legal name, for the ABN check and bills. */
         fullName: z.string().nullable().optional(),
+        /** Employee or Subcontractor (ABN). Null puts them back for review. Never set from the ABN. */
+        workerType: z.enum(WORKER_TYPES).nullable().optional(),
         mobile: z.string().nullable().optional(),
         email: z.string().nullable().optional(),
         crewCapacity: z.enum(["solo", "own_offsider", "needs_partner"]).optional(),
@@ -204,7 +215,7 @@ export const installers = {
         nextInvoiceNumber: z.number().int().min(1).nullable().optional(),
       }),
     )
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
       const { id, unavailableDays, worksWeekendDays, gstRegistered, ...rest } = input;
       const [current] = await db.select().from(schema.installers).where(eq(schema.installers.id, id));
       if (!current) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
@@ -229,6 +240,20 @@ export const installers = {
         .where(eq(schema.installers.id, id))
         .returning();
       if (!updated) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
+      if (rest.workerType !== undefined && rest.workerType !== current.workerType) {
+        const say = (w: string | null) => (w === "employee" ? "Employee" : w === "subcontractor" ? "Subcontractor (ABN)" : "Not set");
+        await db
+          .insert(schema.activityLog)
+          .values({
+            entityType: "installer",
+            entityId: id,
+            action: "worker_type",
+            detail: `${updated.name}: worker type ${say(current.workerType)} to ${say(updated.workerType)}`,
+            actorName: context.actor.name || context.actor.email || "Admin",
+            actorRole: context.actor.role,
+          })
+          .catch((e) => console.error("[installers] worker type log failed", e));
+      }
       const row = abnChanged && abnDigits(updated.abn) && (await checkInstallerAbn(id)) ? ((await reread(id)) ?? updated) : updated;
       // One person, one record: name, phone and email live on the login too.
       const sync = {
@@ -358,6 +383,51 @@ export const installers = {
         };
       });
     }),
+
+  /**
+   * Worker type review (Damien, 2 Nov). Every current card nobody has marked
+   * Employee or Subcontractor (ABN) yet. Nothing is guessed from the ABN: the
+   * ABN is shown only so the person reviewing has the facts.
+   */
+  workerReview: adminOnly.handler(async () => {
+    const rows = await db
+      .select()
+      .from(schema.installers)
+      .where(and(eq(schema.installers.active, true), isNull(schema.installers.archivedAt)))
+      .orderBy(asc(schema.installers.name));
+    const ids = rows.map((r) => r.id);
+    const [crew, staff] = ids.length
+      ? await Promise.all([
+          db
+            .select({ installerId: schema.profiles.installerId, role: schema.profiles.role })
+            .from(schema.profiles)
+            .where(inArray(schema.profiles.installerId, ids)),
+          db
+            .select({ installerId: schema.staffCards.installerId, role: schema.profiles.role })
+            .from(schema.staffCards)
+            .innerJoin(schema.profiles, eq(schema.profiles.id, schema.staffCards.profileId))
+            .where(inArray(schema.staffCards.installerId, ids)),
+        ])
+      : [[], []];
+    const loginOf = (id: number) => crew.find((c) => c.installerId === id) ?? staff.find((c) => c.installerId === id) ?? null;
+    const count = (w: string | null) => rows.filter((r) => r.workerType === w).length;
+    return {
+      employees: count("employee"),
+      subcontractors: count("subcontractor"),
+      unclassified: rows
+        .filter((r) => r.workerType == null)
+        .map((r) => {
+          const login = loginOf(r.id);
+          return {
+            id: r.id,
+            name: r.name,
+            fullName: r.fullName,
+            hasAbn: Boolean(abnDigits(r.abn)),
+            login: login ? (login.role === "field" ? "Crew login" : login.role === "admin" ? "Admin login" : "Office login") : "No login",
+          };
+        }),
+    };
+  }),
 
   /** Compliance watchlist: insurance or licence expiring inside 60 days. */
   expiring: staffOnly.handler(async () => {

@@ -46,7 +46,7 @@ export function namesMatch(
 }
 
 export const NAME_MISMATCH =
-  "Name does not match the ABN. None of his short name, full name or trading name matches the legal name or a business name.";
+  "Name does not match the ABN. None of the short name, full name or trading name matches the legal name or a business name.";
 
 export type AbnState = "missing" | "unchecked" | "active" | "cancelled" | "not_found" | "invalid" | "error";
 
@@ -66,7 +66,7 @@ export function abnVerdict(
   const passes = v.state === "active" && !mismatch;
   const warning =
     v.state === "missing"
-      ? "No ABN on his card."
+      ? "No ABN on the profile."
       : v.state === "unchecked"
         ? "Not checked yet."
         : v.state === "error"

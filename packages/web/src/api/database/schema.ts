@@ -260,6 +260,14 @@ export const installers = sqliteTable("installers", {
    * check and bills. Null when it is the same as his short name.
    */
   fullName: text("full_name"),
+  /**
+   * Worker type (Damien, 2 Nov). employee or subcontractor. Null means nobody
+   * has classified this person yet, so the People page lists them for review.
+   * Never set from whether they have an ABN. Separate from login level,
+   * booking availability and skills. Employees raise no contractor invoices
+   * and need no ABN, GST or invoice setup. Payroll is not handled here.
+   */
+  workerType: text("worker_type"),
   mobile: text("mobile"),
   email: text("email"),
   /** Better Auth user id once they've accepted their app invite. */

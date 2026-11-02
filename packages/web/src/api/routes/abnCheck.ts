@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull, ne, or } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -49,12 +49,21 @@ export const abnCheck = {
     return out.view;
   }),
 
-  /** Every current installer whose ABN is missing or doesn't pass. */
+  /**
+   * Every current installer whose ABN is missing or doesn't pass. Employees
+   * are left out: they don't need an ABN (worker type, Damien 2 Nov).
+   */
   chaseList: adminOnly.handler(async () => {
     const rows = await db
       .select()
       .from(schema.installers)
-      .where(and(eq(schema.installers.active, true), isNull(schema.installers.archivedAt)))
+      .where(
+        and(
+          eq(schema.installers.active, true),
+          isNull(schema.installers.archivedAt),
+          or(isNull(schema.installers.workerType), ne(schema.installers.workerType, "employee")),
+        ),
+      )
       .orderBy(asc(schema.installers.name));
     const views = rows.map((i) => ({ id: i.id, name: i.name, mobile: i.mobile, ...abnView(i) }));
     return { total: rows.length, passing: views.filter((v) => v.passes).length, chase: views.filter((v) => !v.passes) };

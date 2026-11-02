@@ -25,6 +25,11 @@ export function useEligible(skillId: number | null, date?: string, crewSize = 1)
   );
 }
 
+/** People page: current cards with no worker type yet, for review. Admin only. */
+export function useWorkerReview() {
+  return useQuery(orpc.installers.workerReview.queryOptions({ staleTime: 15_000 }));
+}
+
 export function useExpiringDocs() {
   return useQuery(orpc.installers.expiring.queryOptions({ staleTime: 60_000 }));
 }

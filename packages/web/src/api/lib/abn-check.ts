@@ -185,11 +185,11 @@ async function raiseTask(i: Installer, changes: string[], after: AbnCheckView) {
     .from(schema.officeTasks)
     .where(and(eq(schema.officeTasks.status, "open"), eq(schema.officeTasks.adminOnly, true), eq(schema.officeTasks.title, title)));
   if (open) return null;
-  const gst = after.gstRegistered ? `GST registered from ${abnDate(after.gstFrom)}.` : "Not GST registered, so no GST on his pay.";
+  const gst = after.gstRegistered ? `GST registered from ${abnDate(after.gstFrom)}.` : "Not GST registered, so no GST on the pay.";
   const detail =
-    `The monthly ABN check on ${i.name}'s card (ABN ${after.abn ?? "none"}) found: ${changes.join(", ")}. ` +
+    `The monthly ABN check on ${i.name}'s profile (ABN ${after.abn ?? "none"}) found: ${changes.join(", ")}. ` +
     `Register says: ${after.legalName ?? "no legal name"}, ${after.status ?? "no status"}. ${gst} ` +
-    (after.passes ? "His card passes, he can still invoice." : "He can't invoice from his phone until his ABN passes.") +
+    (after.passes ? "The profile passes, so invoicing still works." : "No invoices from the Crew app until the ABN passes.") +
     " Open People, ABN checks.";
   const [row] = await db
     .insert(schema.officeTasks)

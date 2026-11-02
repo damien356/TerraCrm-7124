@@ -549,7 +549,10 @@ export async function jobHourlyCosting(jobId: number) {
   const alloc = await vehicleAllocation(hourlyTasks.map((t) => t.id));
   const installerIds = [...new Set([...sessionsAll.map((s) => s.installerId), ...hourlyTasks.map((t) => t.assignedInstallerId).filter((x): x is number => x != null)])];
   const people = installerIds.length
-    ? await db.select({ id: schema.installers.id, name: schema.installers.name }).from(schema.installers).where(inArray(schema.installers.id, installerIds))
+    ? await db
+        .select({ id: schema.installers.id, name: schema.installers.name, workerType: schema.installers.workerType })
+        .from(schema.installers)
+        .where(inArray(schema.installers.id, installerIds))
     : [];
   const nameOf = (id: number) => people.find((p) => p.id === id)?.name ?? `Installer ${id}`;
   const invoices = hourlyTasks.length
@@ -643,6 +646,8 @@ export async function jobHourlyCosting(jobId: number) {
       return {
         installerId: w.installerId,
         name: w.name,
+        /** Employees never invoice. Their approved time is internal labour cost only. */
+        employee: people.find((p) => p.id === w.installerId)?.workerType === "employee",
         invoice: inv ? { id: inv.id, number: inv.invoiceNumber, status: inv.status, subtotal: inv.subtotal, gst: inv.gstAmount, total: inv.total } : null,
         approvedPay: w.approvedPay,
         invoicedHourly: round2(invoicedHourly),
