@@ -28,6 +28,7 @@ import {
   quoteBillToPatch,
 } from "../lib/bill-to";
 import { liveSellFor } from "../lib/live-sell";
+import { repriceRollCuts, rollDuplicateFlags } from "../lib/carpet-roll";
 import { assertNoAcceptedQuote } from "../lib/variations";
 import { suggestProducts } from "../agent/price";
 import { customerCandidates, SAID_DETAILS_NOTE, spokenForQuote, UNMATCHED_NOTE } from "../lib/quote-customer";
@@ -159,7 +160,9 @@ export async function recordPriceHistory(quote: typeof schema.quotes.$inferSelec
 /** Recalculate a quote header from its own line items. Returns the new totals.
  *  Exported for the voice quote pipeline, which inserts lines directly and
  *  then needs the same header maths this file already does. */
-export async function recalc(quoteId: number) {
+export async function recalc(quoteId: number, rollLines: (number | null | undefined)[] | "all" = []) {
+  // Roll and cut carpet (2 Nov 2026): a line just added, or with a new qty or product, gets the roll or cut price first.
+  await repriceRollCuts(quoteId, rollLines);
   // Notes 18.33: the supplier charge lines (freight and fees) are put right first.
   await refreshQuoteFreight(quoteId);
   const items = await db
@@ -415,7 +418,7 @@ export async function createQuoteRecord(
     else await addQuotePerson(row.id, p.contactId, p);
   }
 
-  const totals = await recalc(row.id);
+  const totals = await recalc(row.id, "all");
 
   // New quote: the job is made now, at Lead, with the quote's number and people.
   // A quote never stands without its job (Damien, 16 Oct), so any caller
@@ -695,6 +698,8 @@ export const quotes = {
     const mine = context.actor.role === "admin" ? items : shown;
     const areas = await lineAreas(items);
     const sizes = await lineSizes(items);
+    // Roll and cut carpet: the same colour on two lines is flagged so it can be merged. No prices in it.
+    const rollFlags = await rollDuplicateFlags(items);
     const limit = await discountLimit();
     const discountPercent = discountPercentOf(items);
     // Item 5: waiting on approval stops Send for everyone, Admin too.
@@ -714,8 +719,8 @@ export const quotes = {
       site: row.site,
       job: row.job?.id ? row.job : null,
       items: showCosts
-        ? mine.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice), belowStandard: markupBelowStandard(i), area: areas[i.id] ?? null, size: sizes[i.id] ?? null }))
-        : shown.map((i) => ({ ...i, unitCost: null, markupPercent: null, freightUnitCost: null, belowStandard: null, area: areas[i.id] ?? null, size: sizes[i.id] ?? null })),
+        ? mine.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice), belowStandard: markupBelowStandard(i), area: areas[i.id] ?? null, size: sizes[i.id] ?? null, rollFlag: rollFlags[i.id] ?? null }))
+        : shown.map((i) => ({ ...i, unitCost: null, markupPercent: null, freightUnitCost: null, belowStandard: null, area: areas[i.id] ?? null, size: sizes[i.id] ?? null, rollFlag: rollFlags[i.id] ?? null })),
       ...depositSplit(row.quote.total, quotePercent(row.quote)),
       /** Notes 18.54: who pays this quote and the % on their card. */
       billToCard: await cardOf(quoteBillTo(row.quote)),
@@ -946,7 +951,9 @@ export const quotes = {
         })
         .returning();
 
-      const totals = await recalc(input.quoteId);
+      // Roll and cut carpet: priced off the list only when no price or cost was typed in.
+      const offList = listUnitPrice === null && (input.unitCost ?? null) === null;
+      const totals = await recalc(input.quoteId, offList ? [row?.id] : []);
       return { item: hideCost(row, context.actor), totals };
     }),
 
@@ -1047,7 +1054,7 @@ export const quotes = {
         }
       }
 
-      const totals = await recalc(input.quoteId);
+      const totals = await recalc(input.quoteId, [row?.id]);
       return {
         item: hideCost(item, context.actor),
         labour: hideCost(labour, context.actor),
@@ -1406,7 +1413,9 @@ export const quotes = {
         }
       }
 
-      const totals = await recalc(before.quoteId);
+      // Roll and cut carpet: only a new qty or product prices the line again. Wording and price edits leave it.
+      const rollTouched = sizeTouched || (rest.productId !== undefined && rest.productId !== before.productId);
+      const totals = await recalc(before.quoteId, rollTouched ? [before.id] : []);
       return { item: hideCost(row, context.actor), labour: hideCost(labour, context.actor), totals };
     }),
 
@@ -1646,7 +1655,7 @@ export const quotes = {
         }
       }
 
-      const totals = await recalc(before.quoteId);
+      const totals = await recalc(before.quoteId, [before.id]);
 
       // Next time he says the same thing, this is the pick. A failure here
       // must not undo the swap he just made.

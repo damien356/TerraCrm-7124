@@ -17,6 +17,7 @@ import { rebuildForecast, settleDate } from "./cashflow";
 import { acceptedQuoteIdOf, expectedCostFor, syncExpectedCosts } from "./expected-costs";
 import { termsForSupplier } from "./supplier-terms";
 import { isUnderlayCategory, ordersByRoll, rollOrder, wholeUnits } from "./order-sizes";
+import { atRollQty, duplicateColourText, isRollCutCarpet, rollBreakOf } from "./carpet-roll";
 
 /* ---------------------------------------------------------------------------
  * Purchase orders: what Terra PAYS a supplier for one job.
@@ -157,6 +158,17 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
   const byId = new Map(products.map((p) => [p.id, p]));
   const specials = await specialsFor(productIds);
 
+  // Roll and cut carpet (2 Nov 2026): each line on its own qty, 25 lm or
+  // more at the roll price, under at cut. Lines are never added together. The
+  // same colour on two lines is flagged so it can be merged.
+  const rollQtys = new Map<number, number[]>();
+  for (const l of input.lines) {
+    const p = l.productId ? byId.get(l.productId) : undefined;
+    if (l.kind !== "goods" || !p || !rollBreakOf(p)) continue;
+    const q = qtyInProductUnit(l.qty, l.unit || p.unit, p.unit, p.widthM);
+    if (q !== null && q > 0) rollQtys.set(p.id, [...(rollQtys.get(p.id) ?? []), q]);
+  }
+
   const notes: string[] = [];
   const lines: PricedLine[] = [];
   let m2 = 0;
@@ -186,6 +198,10 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
         note = `Job has ${l.qty} ${lineUnit}, the price book prices it per ${p.unit}. Type the cost.`;
       }
       const priced = priceProduct(p, specials.get(p.id) ?? [], today);
+      const brk = rollBreakOf(p);
+      if (unitCost === null && converted !== null && brk && !priced.onSpecial) unitCost = atRollQty(converted, brk) ? brk.rollRate : brk.cutRate;
+      const twice = brk ? duplicateColourText(rollQtys.get(p.id) ?? [], brk.lengthM, " of this PO") : null;
+      if (twice) note = [note, twice].filter(Boolean).join(" ");
       if (unitCost === null && converted !== null) unitCost = priced.costExGst;
       if (priced.onSpecial && priced.standardCostExGst !== null) {
         standard = priced.standardCostExGst;
@@ -193,7 +209,7 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
         note = note ?? `On special${priced.special?.label ? ` (${priced.special.label})` : ""}, standard $${priced.standardCostExGst.toFixed(2)}.`;
       }
       if (unitCost === null && converted !== null) note = note ?? "No cost in the price book. Type the cost.";
-      if (p.cutCostPrice !== null && p.cutCostPrice !== undefined && l.unitCostExGst == null) {
+      if (p.cutCostPrice !== null && p.cutCostPrice !== undefined && l.unitCostExGst == null && !isRollCutCarpet(p)) {
         note = [note, `Full roll price used. Cut price is $${p.cutCostPrice.toFixed(2)}, type it in if this is a cut.`].filter(Boolean).join(" ");
       }
 

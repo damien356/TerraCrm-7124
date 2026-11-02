@@ -484,7 +484,7 @@ export async function copyCreate(input: CopyCreateInput, actor: Actor) {
   for (const id of underlays) await refollow(id);
 
   // Freight, baling and the other supplier charges come back on their own lines, pallets counted off the new qty.
-  const totals = await recalc(created.id);
+  const totals = await recalc(created.id, "all");
 
   const [fresh] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, created.id));
   const newRef = await quoteRefOf(fresh!);

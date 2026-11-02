@@ -395,7 +395,7 @@ export async function buildQuoteFromTranscript(
   // Items 2 and 3: each underlay follows the floor said with it.
   await linkUnderlay(quoteRow.id);
 
-  const totals = await recalc(quoteRow.id);
+  const totals = await recalc(quoteRow.id, "all");
   const [fresh] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, quoteRow.id));
   const saved = fresh ?? { ...quoteRow, jobId };
   const ref = await quoteRefOf(saved);

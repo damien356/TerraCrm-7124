@@ -122,6 +122,8 @@ type Item = {
   belowStandard?: { markup: number; standard: number } | null;
   /** Notes 18.46. A copied measure or labour line, yellow until someone confirms it. */
   checkRequired?: boolean;
+  /** Same carpet colour on more than one line. Each line is priced on its own qty. */
+  rollFlag?: string | null;
 };
 
 type LineSize = {
@@ -474,6 +476,7 @@ function LineRow({
           </p>
         ) : null}
         {cost.show ? <LastQuotedNote entry={lastQuoted} className="mt-1" /> : null}
+        {item.rollFlag ? <p className="mt-1 text-[11px] leading-snug text-amber-700">{item.rollFlag}</p> : null}
         {item.belowStandard ? (
           <p className="mt-1 text-[11px] text-amber-700" title="Priced by markup, under the markup the price list sell works out at on this cost.">
             Markup {item.belowStandard.markup}%, standard {item.belowStandard.standard}%
