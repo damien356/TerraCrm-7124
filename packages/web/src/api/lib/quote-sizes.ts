@@ -19,12 +19,15 @@ import {
   floorsForUnderlay,
   hardFloorUnderlay,
   isSizeFlag,
+  packUnderlay,
   UNDERLAY_ALONE_FLAG,
   underlayName,
   wholeUnits,
   type UnderlayQty,
 } from "./order-sizes";
 import { qtyForLine } from "./quote-labour";
+import { isCountedPack, isSheetUnderlay, packNameOf, packsFor, packWord } from "./pack-name";
+import { ensurePackInstall, followPackLabour } from "./pack-lines";
 
 type Product = typeof schema.products.$inferSelect;
 type Line = typeof schema.quoteItems.$inferSelect;
@@ -35,7 +38,8 @@ const same = (a: number, b: number) => Math.abs(a - b) <= 0.0005;
 export { isSizeFlag, underlayName, wholeUnits };
 
 /** True for the two underlays that follow a floor line. */
-export const followsAFloor = (p: Pick<Product, "category"> | null | undefined) => !!p && floorsForUnderlay(p.category).length > 0;
+export const followsAFloor = (p: Pick<Product, "category" | "packName"> | null | undefined) =>
+  !!p && floorsForUnderlay(p.category, p.packName).length > 0;
 
 /**
  * What a floor line comes to, for the underlay under it. The line's own qty
@@ -49,6 +53,8 @@ function floorFacts(floor: Line, fp: Product) {
       lm: res.lm,
       widthM: res.widthM,
       totalM2: res.soldAs === "broadloom" ? res.labourM2 : res.totalM2,
+      /** Measured plus wastage, before any roll rounding. A sheet underlay is worked off this (2 Nov). */
+      needM2: res.totalM2,
       measuredM2: floor.measuredM2,
       wastagePct: floor.wastagePct,
     };
@@ -58,7 +64,7 @@ function floorFacts(floor: Line, fp: Product) {
   const lm = fp.unit === "lm" ? floor.qty : fp.unit === "m2" && widthM ? floor.qty / widthM : null;
   const totalM2 =
     fp.unit === "m2" ? floor.qty : fp.unit === "lm" && widthM ? floor.qty * widthM : box && fp.unit !== "lm" ? floor.qty * box : null;
-  return { lm, widthM, totalM2, measuredM2: null, wastagePct: null };
+  return { lm, widthM, totalM2, needM2: totalM2, measuredM2: null, wastagePct: null };
 }
 
 /** The qty an underlay line should carry off its floor line. Null when it is not an underlay that follows. */
@@ -67,7 +73,9 @@ export function underlayQty(up: Product, floor: Line | null | undefined, fp: Pro
   if (!floor || !fp) return { qty: 0, note: "Not following a floor line.", flag: UNDERLAY_ALONE_FLAG };
   const f = floorFacts(floor, fp);
   if (up.category === "carpet_underlay") return carpetUnderlay(f, up.widthM);
-  if (f.totalM2 == null) return { qty: 0, note: "The floor line has no m² to work from.", flag: UNDERLAY_ALONE_FLAG };
+  if (f.totalM2 == null || f.needM2 == null) return { qty: 0, note: "The floor line has no m² to work from.", flag: UNDERLAY_ALONE_FLAG };
+  // Pack name (2 Nov): measured + wastage over the sheet size, up to whole sheets.
+  if (isSheetUnderlay(up)) return packUnderlay(up, { measuredM2: f.measuredM2, totalM2: f.needM2, wastagePct: f.wastagePct });
   return hardFloorUnderlay({ measuredM2: f.measuredM2, totalM2: f.totalM2, wastagePct: f.wastagePct });
 }
 
@@ -88,7 +96,7 @@ export async function floorLineFor(quoteId: number, up: Product, askedId?: numbe
     const line = lines.find((l) => l.id === askedId && l.productId != null) ?? null;
     return { line, product: line ? await productOf(line.productId) : null };
   }
-  const kinds = floorsForUnderlay(up.category);
+  const kinds = floorsForUnderlay(up.category, up.packName);
   const ids = [...new Set(lines.map((l) => l.productId).filter((v): v is number => v != null))];
   const products = ids.length ? await db.select().from(schema.products).where(inArray(schema.products.id, ids)) : [];
   const byId = new Map(products.map((p) => [p.id, p]));
@@ -121,12 +129,14 @@ function flagAfter(line: Pick<Line, "flagged" | "flagReason">, own: string | nul
 }
 
 /** Write an underlay line's qty off its floor line. */
-async function setUnderlay(l: Line, got: UnderlayQty, keepQty = false) {
+async function setUnderlay(l: Line, got: UnderlayQty, keepQty = false, up?: Product | null) {
   const qty = keepQty ? l.qty : got.qty;
   await db
     .update(schema.quoteItems)
     .set({ qty, total: round2(qty * l.unitPrice), ...flagAfter(l, got.flag), updatedAt: new Date() })
     .where(eq(schema.quoteItems.id, l.id));
+  // Pack name (2 Nov): the sheet underlay's install moves with the sheets.
+  if (up && isSheetUnderlay(up) && !same(qty, l.qty)) await followPackLabour(l.id, up, l.qty, qty);
 }
 
 /**
@@ -144,7 +154,7 @@ export async function followUnderlay(before: { line: Line; product: Product | nu
     if (was && !same(l.qty, was.qty)) continue;
     const now = underlayQty(up, after.line, after.product);
     if (!now) continue;
-    await setUnderlay(l, now);
+    await setUnderlay(l, now, false, up);
     moved++;
   }
   return moved;
@@ -158,7 +168,7 @@ export async function refollow(lineId: number) {
   if (!up) return null;
   const [floor] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, l.followsItemId));
   const got = underlayQty(up, floor ?? null, floor ? await productOf(floor.productId) : null);
-  if (got) await setUnderlay(l, got);
+  if (got) await setUnderlay(l, got, false, up);
   return got;
 }
 
@@ -178,7 +188,7 @@ export async function linkUnderlay(quoteId: number) {
   for (const [at, l] of lines.entries()) {
     const up = l.productId != null ? byId.get(l.productId) : undefined;
     if (!up || !followsAFloor(up) || l.followsItemId != null) continue;
-    const kinds = floorsForUnderlay(up.category);
+    const kinds = floorsForUnderlay(up.category, up.packName);
     const isFloor = (f: Line) => f.id !== l.id && kinds.includes(byId.get(f.productId ?? -1)?.category ?? "");
     const before = lines.slice(0, at).reverse();
     const floor =
@@ -188,11 +198,16 @@ export async function linkUnderlay(quoteId: number) {
       null;
     if (!floor) {
       await db.update(schema.quoteItems).set(flagAfter(l, UNDERLAY_ALONE_FLAG)).where(eq(schema.quoteItems.id, l.id));
-      continue;
+    } else {
+      taken.add(floor.id);
+      await db.update(schema.quoteItems).set({ followsItemId: floor.id }).where(eq(schema.quoteItems.id, l.id));
+      await refollow(l.id);
     }
-    taken.add(floor.id);
-    await db.update(schema.quoteItems).set({ followsItemId: floor.id }).where(eq(schema.quoteItems.id, l.id));
-    await refollow(l.id);
+    // Pack name (2 Nov): a sheet underlay brings its install with it.
+    if (isSheetUnderlay(up)) {
+      const [now] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, l.id));
+      if (now) await ensurePackInstall(now, up);
+    }
   }
 }
 
@@ -203,7 +218,21 @@ export type LineSize = {
   follows: { id: number; description: string } | null;
   /** On an underlay line: the floor lines it could follow. */
   floorChoices: { id: number; description: string }[] | null;
+  /**
+   * Pack name (2 Nov). On a sheet, carton or bag line: the pack count, so the
+   * line can choose whether the client copy shows m² (the default) or packs.
+   */
+  packs?: { word: string; count: number } | null;
 };
+
+/** The pack count on a sheet, carton or bag line. Null on box goods and anything without a pack size. */
+function packsOnLine(p: Product, qty: number): LineSize["packs"] {
+  if (!isCountedPack(p)) return null;
+  const m2 = boxM2Of(p);
+  const count = p.unit === "m2" ? (m2 ? packsFor(qty, m2) : null) : Math.round(qty);
+  if (count == null) return null;
+  return { word: packWord(packNameOf(p), 2), count };
+}
 
 /** Per line, the size sums in words and what an underlay follows. For the quote page. */
 export async function lineSizes(items: Line[]): Promise<Record<number, LineSize>> {
@@ -216,7 +245,7 @@ export async function lineSizes(items: Line[]): Promise<Record<number, LineSize>
     const p = i.productId != null ? byId.get(i.productId) : undefined;
     if (!p) continue;
     if (followsAFloor(p)) {
-      const kinds = floorsForUnderlay(p.category);
+      const kinds = floorsForUnderlay(p.category, p.packName);
       const floor = i.followsItemId != null ? items.find((l) => l.id === i.followsItemId) : undefined;
       const got = underlayQty(p, floor, floor ? byId.get(floor.productId ?? -1) : null);
       const typed = got && floor && !same(i.qty, got.qty);
@@ -229,12 +258,18 @@ export async function lineSizes(items: Line[]): Promise<Record<number, LineSize>
             return l.id !== i.id && !!fp && !followsAFloor(fp) && (!!fp.soldAs || kinds.includes(fp.category));
           })
           .map((l) => ({ id: l.id, description: `${l.description} (${round2(l.qty)} ${l.unit})` })),
+        packs: packsOnLine(p, i.qty),
       };
       continue;
     }
-    if (i.measuredM2 != null) continue;
+    const packs = packsOnLine(p, i.qty);
+    if (i.measuredM2 != null) {
+      if (packs) out[i.id] = { note: null, follows: null, floorChoices: null, packs };
+      continue;
+    }
     const r = wholeUnits(p, i.qty);
-    if (r.note && same(r.qty, i.qty)) out[i.id] = { note: r.note, follows: null, floorChoices: null };
+    if (r.note && same(r.qty, i.qty)) out[i.id] = { note: r.note, follows: null, floorChoices: null, packs };
+    else if (packs) out[i.id] = { note: null, follows: null, floorChoices: null, packs };
   }
   return out;
 }
@@ -256,7 +291,11 @@ export function sizeFlag(line: Pick<Line, "flagged" | "flagReason">, own: string
 export async function startLine(quoteId: number, product: Product, qty: number, followsItemId?: number | null) {
   if (followsAFloor(product)) {
     const floor = await floorLineFor(quoteId, product, followsItemId);
-    if (!floor.line) return { qty, flag: UNDERLAY_ALONE_FLAG, note: null, followsItemId: null, sortOrder: null };
+    if (!floor.line) {
+      // A sheet underlay with no floor yet: the typed qty, up to whole sheets.
+      const typed = isSheetUnderlay(product) ? wholeUnits(product, qty) : null;
+      return { qty: typed?.qty ?? qty, flag: UNDERLAY_ALONE_FLAG, note: typed?.note ?? null, followsItemId: null, sortOrder: null };
+    }
     const got = underlayQty(product, floor.line, floor.product)!;
     return {
       // No underlay width: the typed qty stands until the width is in.

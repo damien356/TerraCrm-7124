@@ -18,6 +18,8 @@ import { acceptedQuoteIdOf, expectedCostFor, syncExpectedCosts } from "./expecte
 import { termsForSupplier } from "./supplier-terms";
 import { isUnderlayCategory, ordersByRoll, rollOrder, wholeUnits } from "./order-sizes";
 import { atRollQty, duplicateColourText, isRollCutCarpet, rollBreakOf } from "./carpet-roll";
+import { isCountedPack, packNameOf, packsFor } from "./pack-name";
+import { boxM2Of } from "./flooring-qty";
 
 /* ---------------------------------------------------------------------------
  * Purchase orders: what Terra PAYS a supplier for one job.
@@ -128,8 +130,13 @@ async function specialsFor(ids: number[]) {
 }
 
 /** Quantity in the unit the product is priced in. Null when it cannot be converted. */
-function qtyInProductUnit(qty: number, lineUnit: string, productUnit: string, widthM: number | null) {
+function qtyInProductUnit(qty: number, lineUnit: string, productUnit: string, widthM: number | null, p?: typeof schema.products.$inferSelect) {
   if (lineUnit === productUnit) return qty;
+  // Pack name (2 Nov): a line already in sheets (a reopened draft) back into the m2 it is priced in.
+  if (p && isCountedPack(p) && lineUnit === packNameOf(p) && productUnit === "m2") {
+    const pm2 = boxM2Of(p);
+    return pm2 ? Math.round(qty * pm2 * 10_000) / 10_000 : null;
+  }
   if (productUnit === "lm" && lineUnit === "m2") return lmForQty(qty, "m2", widthM);
   if (productUnit === "m2" && lineUnit === "lm") return m2ForQty(qty, "lm", widthM);
   return null;
@@ -138,7 +145,7 @@ function qtyInProductUnit(qty: number, lineUnit: string, productUnit: string, wi
 /** What to put on the order for `qty` of a product, in its own unit. */
 function orderSize(p: typeof schema.products.$inferSelect, qty: number): { qty: number; rolls: number; note: string | null } {
   // Underlay always comes on a roll, so a missing roll length is asked about.
-  const underlayRoll = isUnderlayCategory(p.category) && (p.unit === "lm" || p.unit === "m2");
+  const underlayRoll = isUnderlayCategory(p.category) && (p.unit === "lm" || p.unit === "m2") && !isCountedPack(p);
   if (ordersByRoll(p) || p.unit === "roll" || underlayRoll) {
     const r = rollOrder(p, qty);
     if (r) return { qty: r.qty, rolls: r.rolls, note: `${r.note}.` };
@@ -165,7 +172,7 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
   for (const l of input.lines) {
     const p = l.productId ? byId.get(l.productId) : undefined;
     if (l.kind !== "goods" || !p || !rollBreakOf(p)) continue;
-    const q = qtyInProductUnit(l.qty, l.unit || p.unit, p.unit, p.widthM);
+    const q = qtyInProductUnit(l.qty, l.unit || p.unit, p.unit, p.widthM, p);
     if (q !== null && q > 0) rollQtys.set(p.id, [...(rollQtys.get(p.id) ?? []), q]);
   }
 
@@ -190,7 +197,7 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
 
     if (l.kind === "goods" && p) {
       if (p.supplierId && p.supplierId !== supplier.id) note = `Price book has this under ${p.supplier || "another supplier"}.`;
-      const converted = qtyInProductUnit(l.qty, lineUnit, p.unit, p.widthM);
+      const converted = qtyInProductUnit(l.qty, lineUnit, p.unit, p.widthM, p);
       if (converted !== null) {
         qty = converted;
         unit = p.unit;
@@ -231,6 +238,21 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
       const pm2 = packM2(p.unitsPerPack, p.unitM2) ?? p.packM2Printed;
       if (pm2 && lineM2) autoBoxes += Math.ceil(lineM2 / pm2 - 1e-9);
       if (isSolid(p)) anySolid = true;
+
+      // Pack name (2 Nov): sheets, cartons and bags go on the order in whole
+      // packs at the pack price. 10.8 m² of 1.08 m² sheets at $14.3519/m² is
+      // "10 sheets @ $15.50 = $155.00".
+      const packSize = boxM2Of(p);
+      if (isCountedPack(p) && unit === p.unit && (p.unit !== "m2" || packSize)) {
+        const name = packNameOf(p);
+        if (p.unit === "m2" && packSize) {
+          qty = packsFor(qty, packSize);
+          if (unitCost !== null) unitCost = round2(unitCost * packSize);
+          if (standard !== null) standard = round2(standard * packSize);
+          if (note) note = note.replace(/standard \$[\d.]+\./, `standard $${(standard ?? 0).toFixed(2)} a ${name}.`);
+        }
+        unit = name;
+      }
     } else if (l.kind === "goods") {
       if (unit === "m2") m2 += qty;
       if (unit === "lm") lm += qty;

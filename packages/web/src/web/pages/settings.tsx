@@ -39,6 +39,7 @@ import { useCreateSupplier, useSuppliers } from "../queries/suppliers";
 import { SUPPLIER_CHARGES_MARKUP_DEFAULT, SUPPLIER_CHARGES_MARKUP_KEY } from "../../api/lib/charge-fold";
 import { UNDERLAY_UPGRADES_KEY } from "../../api/lib/underlay-pairs";
 import { autoSoldAs, boxM2Of, FLOOR_TYPE_LABELS, FLOOR_TYPES, wastageKey } from "../../api/lib/flooring-qty";
+import { PACK_LABELS, PACK_NAMES, packNameOf, type PackName } from "../../api/lib/pack-name";
 import { categoryLabel, PRODUCT_CATEGORIES } from "../../api/lib/product-categories";
 
 const SKILL_GROUPS = Object.keys(SKILL_TINT);
@@ -894,6 +895,8 @@ type ProductRow = {
   sku: string | null;
   active: boolean;
   soldAs: string | null;
+  /** Box, sheet, carton or bag (2 Nov). */
+  packName?: string | null;
   widthM: number | null;
   rollLengthM: number | null;
   pieceLengthM: number | null;
@@ -929,6 +932,8 @@ function ProductSizesModal({ product, onClose }: { product: ProductRow; onClose:
     unitsPerPack: shown(product.unitsPerPack),
     defaultWastagePct: shown(product.defaultWastagePct),
   });
+  const [pack, setPack] = React.useState<PackName>(packNameOf(product));
+  const packWordLower = PACK_LABELS[pack].toLowerCase();
   const [error, setError] = React.useState<string | null>(null);
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -946,6 +951,7 @@ function ProductSizesModal({ product, onClose }: { product: ProductRow; onClose:
         widthMm: numOrNull(form.widthMm),
         unitsPerPack: numOrNull(form.unitsPerPack),
         defaultWastagePct: numOrNull(form.defaultWastagePct),
+        ...(pack !== packNameOf(product) ? { packName: pack } : {}),
       });
       onClose();
     } catch (e) {
@@ -996,13 +1002,32 @@ function ProductSizesModal({ product, onClose }: { product: ProductRow; onClose:
         <Field label="Board width (mm)">
           <Input inputMode="decimal" value={form.widthMm} onChange={set("widthMm")} />
         </Field>
-        <Field label="Pieces per box" hint="Box m² is pieces x one board. Quotes round to whole boxes.">
+        <Field
+          label="Pack name"
+          hint="How it comes from the supplier. Box is how everything was sold before. Sheet, Carton and Bag quote and order in whole packs."
+        >
+          <Select aria-label="Pack name" value={pack} onChange={(e) => setPack(e.target.value as PackName)}>
+            {PACK_NAMES.map((n) => (
+              <option key={n} value={n}>
+                {PACK_LABELS[n]}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field
+          label={`Pieces per ${packWordLower}`}
+          hint={`${PACK_LABELS[pack]} m² is pieces x one board. Quotes round to whole ${packWordLower === "box" ? "boxes" : `${packWordLower}s`}.`}
+        >
           <Input inputMode="numeric" value={form.unitsPerPack} onChange={set("unitsPerPack")} />
         </Field>
       </div>
       {product.size || product.unitsPerPack ? (
         <p className="mt-3 text-xs text-muted-foreground">
-          Now: {[product.size, product.unitsPerPack ? `${product.unitsPerPack} per box` : "", boxM2Of(product) ? `${boxM2Of(product)} m² a box` : ""]
+          Now: {[
+            product.size,
+            product.unitsPerPack ? `${product.unitsPerPack} per ${packNameOf(product)}` : "",
+            boxM2Of(product) ? `${boxM2Of(product)} m² a ${packNameOf(product)}` : "",
+          ]
             .filter(Boolean)
             .join(" · ")}
         </p>

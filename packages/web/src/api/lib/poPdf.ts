@@ -1,4 +1,5 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
+import { isPackUnit, unitText } from "./pack-name";
 import { INVOICES_TO } from "./gmail";
 import { TERRA_LOGO_PRINT_PNG_BASE64 } from "./terraLogoPrint";
 
@@ -134,7 +135,8 @@ export async function renderPoPdf(po: PoPdfInput): Promise<Buffer> {
     }
     t(rows[0] ?? "", cols.desc, 10);
     right(fmtQty(l.qty), cols.qty + 30, 10);
-    t(l.unit, cols.unit, 10);
+    // Pack name (2 Nov): "10 sheets". Every other unit prints as it always has.
+    t(isPackUnit(l.unit) && l.unit !== "box" ? unitText(l.unit, l.qty) : l.unit, cols.unit, 10);
     right(money(l.unitCostExGst), cols.rate + 30, 10);
     right(money(l.totalExGst), cols.total, 10);
     for (const r of rows.slice(1)) {

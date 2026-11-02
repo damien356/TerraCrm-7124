@@ -1289,6 +1289,13 @@ export const products = sqliteTable(
      * Item 9, 10 Oct. See api/lib/flooring-qty.ts.
      */
     soldAs: text("sold_as"),
+    /**
+     * What one pack is called (Damien, 2 Nov): box, sheet, carton or bag.
+     * Everything on file is box. Sheet, carton and bag are counted packs:
+     * the PO orders whole packs at the pack price, and a quote line can show
+     * the client the pack count. See api/lib/pack-name.ts.
+     */
+    packName: text("pack_name").notNull().default("box"),
 
     /* ------------------------- variant dimensions -------------------------
      * Whatever makes this variant cost a different amount from its siblings.
@@ -1731,6 +1738,8 @@ export const quoteItems = sqliteTable(
      * cannot be sent while one is left.
      */
     checkRequired: integer("check_required", { mode: "boolean" }).notNull().default(false),
+    /** Pack name (2 Nov). True = the client copy shows this line in packs ("10 sheets"), false = m2. */
+    clientPacks: integer("client_packs", { mode: "boolean" }).notNull().default(false),
     /**
      * The raw, normalised phrase Damien spoke for this line, when it came
      * from a voice capture. Kept so a human's correction (picking the right

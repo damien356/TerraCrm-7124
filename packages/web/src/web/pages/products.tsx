@@ -23,6 +23,7 @@ import {
 import { PRODUCT_CATEGORIES, PRODUCT_CATEGORY_LABELS } from "../../api/lib/product-categories";
 import { FIBRES, FIBRE_LABELS, PILES, PILE_LABELS } from "../../api/lib/care-codes";
 import { boardSizeText } from "../../api/lib/board-size";
+import { PACK_LABELS, PACK_NAMES, packNameOf } from "../../api/lib/pack-name";
 
 const money = (n: number | null | undefined) =>
   n === null || n === undefined ? "-" : n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
@@ -307,6 +308,33 @@ function SoldAsCell({ id, soldAs }: { id: number; soldAs: string | null }) {
   );
 }
 
+/**
+ * Pack name (2 Nov). Box for everything today. Sheet, carton or bag: the
+ * quote rounds up to whole packs and the PO orders packs at the pack price.
+ */
+function PackNameCell({ id, packName }: { id: number; packName?: string | null }) {
+  const save = useSetSoldAs();
+  const now = packNameOf({ packName });
+  return (
+    <Select
+      aria-label="Pack name"
+      className="h-8 w-[96px] text-xs"
+      value={now}
+      disabled={save.isPending}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => {
+        if (e.target.value !== now) save.mutate({ id, packName: e.target.value as (typeof PACK_NAMES)[number] });
+      }}
+    >
+      {PACK_NAMES.map((n) => (
+        <option key={n} value={n}>
+          {PACK_LABELS[n]}
+        </option>
+      ))}
+    </Select>
+  );
+}
+
 function VariantTable({
   supplierId,
   range,
@@ -399,6 +427,9 @@ function VariantTable({
             <th className="label-xs px-4 py-2" title="Box: rounded up to full boxes on a quote. Broadloom: off the roll.">
               Sold as
             </th>
+            <th className="label-xs px-4 py-2" title="What one pack is called. Sheet, carton and bag round up to whole packs on a quote and a PO.">
+              Pack name
+            </th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
@@ -486,6 +517,9 @@ function VariantTable({
               </td>
               <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                 <SoldAsCell id={p.id} soldAs={p.soldAs} />
+              </td>
+              <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+                <PackNameCell id={p.id} packName={p.packName} />
               </td>
             </tr>
             );

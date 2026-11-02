@@ -19,6 +19,7 @@
  */
 import { boxM2Of, type ProductShape } from "./flooring-qty";
 import { isAccessoryCategory } from "./product-categories";
+import { isCountedPack, isSheetUnderlay, packedM2, packNameOf, packsFor, packsNote, SHEET_UNDERLAY_FLOORS } from "./pack-name";
 
 export const UNDERLAY_CATEGORIES = ["carpet_underlay", "hard_floor_underlay", "underlay"] as const;
 export const isUnderlayCategory = (c: string | null | undefined) => (UNDERLAY_CATEGORIES as readonly string[]).includes(c ?? "");
@@ -27,9 +28,14 @@ export const isUnderlayCategory = (c: string | null | undefined) => (UNDERLAY_CA
 export const CARPET_FLOORS = ["carpet"] as const;
 /** Floors a hard floor underlay follows on its own. */
 export const HARD_FLOORS = ["engineered_timber", "solid_timber", "timber", "laminate", "hybrid"] as const;
-/** The floors an underlay of this category goes with, when nobody said which line. */
-export function floorsForUnderlay(category: string): readonly string[] {
+/**
+ * The floors an underlay of this category goes with, when nobody said which
+ * line. A hard floor underlay sold by the sheet (SureBoard Wet, 2 Nov) goes
+ * under vinyl and cork, which are vinyl in the price book.
+ */
+export function floorsForUnderlay(category: string, packName?: string | null): readonly string[] {
   if (category === "carpet_underlay") return CARPET_FLOORS;
+  if (isSheetUnderlay({ category, packName })) return SHEET_UNDERLAY_FLOORS;
   if (category === "hard_floor_underlay") return HARD_FLOORS;
   return [];
 }
@@ -38,7 +44,8 @@ export const PIECE_FLAG = "No length size in the price book, so this is not roun
 export const UNDERLAY_WIDTH_FLAG = "No roll width on this underlay in the price book. Put it in, or type the metres.";
 export const UNDERLAY_WAIT_FLAG = "The carpet has no roll width yet, so the underlay metres wait for it.";
 export const UNDERLAY_ALONE_FLAG = "No floor line for this underlay to follow. Type the quantity, or add the floor first.";
-const OWN_FLAGS = new Set([PIECE_FLAG, UNDERLAY_WIDTH_FLAG, UNDERLAY_WAIT_FLAG, UNDERLAY_ALONE_FLAG]);
+export const SHEET_SIZE_FLAG = "No pack size in the price book, so this is not rounded to whole packs. Put the m² per pack in.";
+const OWN_FLAGS = new Set([PIECE_FLAG, UNDERLAY_WIDTH_FLAG, UNDERLAY_WAIT_FLAG, UNDERLAY_ALONE_FLAG, SHEET_SIZE_FLAG]);
 /** Flags this file sets, so they clear once the gap is filled. */
 export const isSizeFlag = (reason: string | null | undefined) => !!reason && OWN_FLAGS.has(reason);
 
@@ -96,12 +103,15 @@ export type Rounded = {
  */
 export function wholeUnits(p: SizeShape, qtyIn: number): Rounded {
   const qty = Math.max(0, qtyIn);
-  if (p.soldAs === "box") {
+  // Pack name (2 Nov): a sheet, carton or bag product rounds to whole packs like a box good.
+  if (p.soldAs === "box" || isCountedPack(p)) {
     const boxM2 = boxM2Of(p);
     if (!boxM2) return { qty, note: null, flag: null };
     if (p.unit !== "m2") return { qty: Math.ceil(qty - 1e-9), note: null, flag: null };
-    const boxes = Math.ceil(qty / boxM2 - 1e-9);
-    const m2 = Math.floor(boxes * boxM2 * 10_000 + 1e-6) / 10_000;
+    const boxes = packsFor(qty, boxM2);
+    const m2 = packedM2(boxes, boxM2);
+    // Pack name (2 Nov): "10 sheets (10.80 m²)". Box goods read exactly as before.
+    if (isCountedPack(p)) return { qty: m2, note: packsNote(packNameOf(p), boxes, m2), flag: null };
     return { qty: m2, note: `${plural(boxes, "box", "boxes")} (${fmt(m2)} m²)`, flag: null };
   }
   if (p.soldAs === "broadloom") return { qty, note: null, flag: null };
@@ -154,6 +164,30 @@ export function hardFloorUnderlay(floor: { measuredM2: number | null; totalM2: n
   return { qty: m2, note: `${head} = ${fmt(m2)} m².`, flag: null };
 }
 
+/**
+ * Pack name (2 Nov). A hard floor underlay sold by the sheet, carton or bag:
+ * the floor's measured m2 plus its wastage, over the m2 in one pack, always
+ * rounded UP to a whole pack. 10 m2 at 10% on 1.08 m2 sheets = 11 sheets (11.88 m²).
+ * The qty is in the product's own unit: the m2 on those packs, or the pack count.
+ */
+export function packUnderlay(
+  up: SizeShape,
+  floor: { measuredM2: number | null; totalM2: number; wastagePct: number | null },
+): UnderlayQty {
+  const name = packNameOf(up);
+  const m2Need = r4(floor.totalM2);
+  const head =
+    floor.measuredM2 != null && floor.wastagePct
+      ? `Floor ${fmt(floor.measuredM2)} m² + ${fmt(floor.wastagePct)}% = ${fmt(m2Need)} m²`
+      : `Floor ${fmt(m2Need)} m²`;
+  const packM2 = boxM2Of(up);
+  if (!packM2) return { qty: Math.ceil(m2Need * 100 - 1e-9) / 100, note: `${head}. No ${name} size, not rounded.`, flag: SHEET_SIZE_FLAG };
+  const packs = packsFor(m2Need, packM2);
+  const m2 = packedM2(packs, packM2);
+  const byPack = up.unit !== "m2";
+  return { qty: byPack ? packs : m2, note: `${head}. ${packsNote(name, packs, m2)}.`, flag: null };
+}
+
 /* ---------------------------------- rolls --------------------------------- */
 
 /** Metres on one roll. The roll length, or worked back from the qty on a roll. */
@@ -169,6 +203,8 @@ export function rollLengthOf(p: SizeShape & { rollM2?: number | null }): number 
 export function ordersByRoll(p: SizeShape & { rollM2?: number | null }): boolean {
   // Import fixes 26 Oct: underlay tagged Broadloom is still cut off the roll.
   if (p.soldAs && !isUnderlayCategory(p.category)) return false;
+  // Pack name (2 Nov): sheets, cartons and bags come in whole packs, never off a roll.
+  if (isCountedPack(p)) return false;
   if (p.unit === "roll") return true;
   return (isUnderlayCategory(p.category) || isAccessoryCategory(p.category)) && rollLengthOf(p) != null && (p.unit === "lm" || p.unit === "m2");
 }

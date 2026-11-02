@@ -21,6 +21,8 @@
  * broadloom with its own wastage and no install in the rate book.
  */
 
+import { isCountedPack, packNameOf, packsNote } from "./pack-name";
+
 export type SoldAs = "box" | "broadloom";
 export const SOLD_AS = ["box", "broadloom"] as const;
 
@@ -69,6 +71,8 @@ export type ProductShape = {
   unitM2?: number | null;
   packM2Printed?: number | null;
   rollM2?: number | null;
+  /** Box, sheet, carton or bag (2 Nov). Unset reads as box. */
+  packName?: string | null;
 };
 
 /**
@@ -194,12 +198,14 @@ export function floorQty(
     }
     const boxes = Math.ceil(totalM2 / boxM2 - 1e-9);
     const boxedM2 = floor4(boxes * boxM2);
-    const byBox = p.unit === "box" || p.unit === "each" || p.unit === "pack";
+    const byBox = p.unit === "box" || p.unit === "each" || p.unit === "pack" || p.unit === packNameOf(p);
+    // Pack name (2 Nov): "10 sheets (10.80 m²)". Box goods read exactly as before.
+    const packs = isCountedPack(p) ? packsNote(packNameOf(p), boxes, boxedM2) : null;
     return {
       soldAs, qty: byBox ? boxes : boxedM2, totalM2, boxes, boxM2, lm: null, widthM: null,
       labourM2: r4(measured), labourLm: null, problem: null,
       // Fix list 11 Oct, item 2: "30 boxes (62.94 m²)", in his words.
-      note: `${head}. ${boxes} box${boxes === 1 ? "" : "es"} (${fmt(boxedM2)} m²). Labour on ${fmt(measured)} m².`,
+      note: `${head}. ${packs ?? `${boxes} box${boxes === 1 ? "" : "es"} (${fmt(boxedM2)} m²)`}. Labour on ${fmt(measured)} m².`,
     };
   }
 

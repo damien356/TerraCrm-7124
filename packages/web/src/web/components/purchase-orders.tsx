@@ -6,6 +6,7 @@ import { Button } from "./ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "./ui/field";
 import { Modal } from "./ui/modal";
 import { moneyExact } from "../lib/money";
+import { isPackUnit, unitText } from "../../api/lib/pack-name";
 import { EmailInput } from "./email-input";
 import {
   type PoPreviewInput,
@@ -64,8 +65,10 @@ export const PAIR_META: Record<string, { label: string; colour: string }> = {
   no_invoice: { label: "No invoice yet", colour: "#7A736D" },
 };
 
-const UNITS = ["m2", "lm", "each", "roll", "box"];
+const UNITS = ["m2", "lm", "each", "roll", "box", "sheet", "carton", "bag"];
 const unitLabel = (u: string) => (u === "m2" ? "m²" : u);
+/** Next to a qty: "10 sheets", "1 sheet", "12 m²". */
+const qtyUnit = (qty: number, u: string) => `${qty} ${unitText(u, qty)}`;
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e ?? ""));
 let keySeq = 0;
 const nextKey = () => `l${++keySeq}`;
@@ -557,7 +560,7 @@ function PoEditor({
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-sm">{m.description}</span>
                           <span className="block text-xs text-muted-foreground">
-                            {m.qty} {unitLabel(m.unit)}
+                            {qtyUnit(m.qty, m.unit)}
                             {otherPo ? ` · already on ${otherPo}` : ""}
                             {otherSupplier ? ` · price book: ${otherSupplier}` : ""}
                             {!m.productId ? " · not in the price book" : ""}
@@ -728,7 +731,9 @@ function PoEditor({
                         <span className="tabular font-medium">{moneyExact(l.totalExGst)}</span>
                       </div>
                       <p className="text-muted-foreground">
-                        {l.unit === "%" ? `${l.unitCostExGst}% of ${/goods and charges/.test(l.note ?? "") ? "goods and charges" : "goods"}` : `${l.qty} ${unitLabel(l.unit)} × ${moneyExact(l.unitCostExGst)}`}
+                        {l.unit === "%" ? `${l.unitCostExGst}% of ${/goods and charges/.test(l.note ?? "") ? "goods and charges" : "goods"}` : isPackUnit(l.unit) && l.unit !== "box"
+                            ? `${qtyUnit(l.qty, l.unit)} @ ${moneyExact(l.unitCostExGst)} = ${moneyExact(l.totalExGst)}`
+                            : `${l.qty} ${unitLabel(l.unit)} × ${moneyExact(l.unitCostExGst)}`}
                         {l.standardUnitCostExGst != null ? <span className="line-through"> {moneyExact(l.standardUnitCostExGst)}</span> : null}
                       </p>
                       {l.note ? <p className="text-[var(--warning)]">{l.note}</p> : null}

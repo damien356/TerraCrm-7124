@@ -13,12 +13,15 @@
  * `trim_length_m`. Then `thickness_mm` and `wear_layer_mm` (188001 list item 4).
  * Then `board_length_mm` and `pieces_per_box` (13 Oct): with board width and
  * thickness they fill the Sizes line, "2200 x 194 x 12mm, 5 per carton".
+ * Then `pack_name` (2 Nov): Box, Sheet, Carton or Bag. Blank keeps what is
+ * there, and a new product with it blank is a Box.
  */
 import type { products } from "../database/schema";
 import { boxM2Of, floorTypeOf } from "./flooring-qty";
 import { derivedBoardFields } from "./board-size";
 import { carpetWidthByRule, isAccessoryCategory } from "./product-categories";
 import { roundTo, sellExGst } from "./bulk-price";
+import { isCountedPack, isPackName, PACK_LABELS, packNameOf, type PackName } from "./pack-name";
 
 export type Product = typeof products.$inferSelect;
 export type SupplierLite = { id: number; name: string };
@@ -53,6 +56,7 @@ export const SHEET_COLUMNS = [
   "trim_length_m",
   "thickness_mm",
   "wear_layer_mm",
+  "pack_name",
 ] as const;
 export type SheetColumn = (typeof SHEET_COLUMNS)[number];
 
@@ -152,10 +156,12 @@ const FORMAT_IN: Record<string, "box" | "broadloom" | null> = {
 };
 const SOLD_AS_IN = new Set(["box", "roll", "each", "broadloom", "length", "lengths"]);
 
-const isRollGood = (p: Pick<Product, "category" | "unit" | "rollLengthM">) =>
-  p.unit === "roll" || (p.rollLengthM ?? 0) > 0 || p.category === "carpet_underlay" || p.category === "hard_floor_underlay";
+const isRollGood = (p: Pick<Product, "category" | "unit" | "rollLengthM"> & { packName?: string | null }) =>
+  // Pack name (2 Nov): sheets, cartons and bags come in whole packs, never off a roll.
+  !isCountedPack(p) &&
+  (p.unit === "roll" || (p.rollLengthM ?? 0) > 0 || p.category === "carpet_underlay" || p.category === "hard_floor_underlay");
 
-type FormatShape = Pick<Product, "soldAs" | "category" | "unit" | "rollLengthM"> & { pieceLengthM?: number | null };
+type FormatShape = Pick<Product, "soldAs" | "category" | "unit" | "rollLengthM"> & { pieceLengthM?: number | null; packName?: string | null };
 
 /** A trim, scotia, nosing or skirting priced per lm and bought in whole lengths. */
 const isLengthGood = (p: FormatShape) => !p.soldAs && p.unit === "lm" && isAccessoryCategory(p.category) && (p.pieceLengthM ?? 0) > 0;
@@ -255,6 +261,7 @@ export function productRow(p: Product): string[] {
     trim_length_m: num(p.pieceLengthM),
     thickness_mm: num(p.thicknessMm),
     wear_layer_mm: num(p.wearLayerMm),
+    pack_name: PACK_LABELS[packNameOf(p)],
   };
   return SHEET_COLUMNS.map((c) => cells[c]);
 }
@@ -297,6 +304,8 @@ export type Patch = Partial<{
   pieceLengthM: number | null;
   thicknessMm: number | null;
   wearLayerMm: number | null;
+  /** Pack name (2 Nov). */
+  packName: PackName;
 }>;
 type PatchKey = keyof Patch;
 
@@ -330,6 +339,7 @@ export const FIELD_LABELS: Record<PatchKey, string> = {
   pieceLengthM: "Trim length (m)",
   thicknessMm: "Thickness (mm)",
   wearLayerMm: "Wear layer (mm)",
+  packName: "Pack name",
 };
 
 export const PRICE_FIELDS: PatchKey[] = ["costPrice", "sellPrice", "cutCostPrice", "rollPrice"];
@@ -383,6 +393,7 @@ function show(field: PatchKey, v: unknown, suppliers: Map<number, string>): stri
   if (field === "heldInWarehouse") return v ? "Y" : "N";
   if (field === "supplierId") return suppliers.get(Number(v)) ?? `#${v}`;
   if (field === "soldAs") return v === "box" ? "Box" : v === "broadloom" ? "Broadloom" : String(v);
+  if (field === "packName") return isPackName(v) ? PACK_LABELS[v] : String(v);
   if ((PRICE_FIELDS as string[]).includes(field)) return money(Number(v));
   return String(v);
 }
@@ -654,6 +665,8 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
     if (fmtRaw && !(fmtRaw in FORMAT_IN)) problems.push(`unknown format "${cell("format")}" (use Box, Broadloom, Roll, Each or Length)`);
     const soldRaw = norm(cell("sold_as"));
     if (soldRaw && !SOLD_AS_IN.has(soldRaw)) problems.push(`unknown sold_as "${cell("sold_as")}" (use Box, Roll, Each or Length)`);
+    const packRaw = norm(cell("pack_name"));
+    if (packRaw && !isPackName(packRaw)) problems.push(`unknown pack_name "${cell("pack_name")}" (use Box, Sheet, Carton or Bag)`);
 
     // ---- which product is this row?
     const supRaw = cell("supplier");
@@ -758,6 +771,7 @@ export function planImport(grid: string[][], productsList: Product[], suppliers:
     if (category) said.category = category;
     if (unit) said.unit = unit;
     if (fmtRaw) said.soldAs = FORMAT_IN[fmtRaw];
+    if (isPackName(packRaw)) said.packName = packRaw;
     const numField: [SheetColumn, PatchKey, number][] = [
       ["box_m2", "packM2Printed", 4],
       ["roll_width_m", "widthM", 4],

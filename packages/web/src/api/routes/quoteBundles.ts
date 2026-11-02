@@ -76,6 +76,12 @@ async function clientLines(quoteId: number) {
       chargeSupplierId: schema.quoteItems.chargeSupplierId,
       labourForItemId: schema.quoteItems.labourForItemId,
       followsItemId: schema.quoteItems.followsItemId,
+      // Pack name (2 Nov): itemised rows can show this line in sheets.
+      clientPacks: schema.quoteItems.clientPacks,
+      packName: schema.products.packName,
+      unitsPerPack: schema.products.unitsPerPack,
+      unitM2: schema.products.unitM2,
+      packM2Printed: schema.products.packM2Printed,
     })
     .from(schema.quoteItems)
     .leftJoin(schema.products, eq(schema.products.id, schema.quoteItems.productId))

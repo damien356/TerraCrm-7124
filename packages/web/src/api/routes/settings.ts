@@ -6,6 +6,7 @@ import * as schema from "../database/schema";
 import { adminOnly, authed } from "../middleware/auth";
 import { groupForSkill } from "./labour";
 import { autoSoldAs, SOLD_AS } from "../lib/flooring-qty";
+import { PACK_NAMES } from "../lib/pack-name";
 import { carpetWidthByRule } from "../lib/product-categories";
 import { derivedBoardFields } from "../lib/board-size";
 import { JOB_NUMBER_KEY, JOB_NUMBER_START_KEY, jobNumbering, setJobNumberStart } from "../lib/job-number";
@@ -194,6 +195,8 @@ export const settings = {
         supplierId: z.number().nullable().optional(),
         /** Box or Broadloom (item 9). Left out = worked out from category and unit. Null = neither. */
         soldAs: z.enum(SOLD_AS).nullable().optional(),
+        /** Pack name (2 Nov): box, sheet, carton or bag. Left out = box on a new product, unchanged on an edit. */
+        packName: z.enum(PACK_NAMES).optional(),
         /** Fix list items 2 and 3. Roll width (m), metres on a roll, one trim length (m), wastage % for this product. */
         widthM: z.number().positive().max(10).nullable().optional(),
         rollLengthM: z.number().positive().max(1000).nullable().optional(),
@@ -244,6 +247,8 @@ export const settings = {
         active: z.boolean().optional(),
         /** Box or Broadloom (item 9). Null = neither. */
         soldAs: z.enum(SOLD_AS).nullable().optional(),
+        /** Pack name (2 Nov): box, sheet, carton or bag. Left out = box on a new product, unchanged on an edit. */
+        packName: z.enum(PACK_NAMES).optional(),
         /** Fix list items 2 and 3. Roll width (m), metres on a roll, one trim length (m), wastage % for this product. */
         widthM: z.number().positive().max(10).nullable().optional(),
         rollLengthM: z.number().positive().max(1000).nullable().optional(),

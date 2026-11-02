@@ -3,6 +3,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { boxM2Of, FLOOR_TYPES } from "./flooring-qty";
 import { wholeUnits } from "./order-sizes";
+import { isCountedPack, packNameOf, packWord as packNameWord } from "./pack-name";
 
 /**
  * The materials list on the crew app (notes 18.61).
@@ -96,7 +97,23 @@ export function crewQty(qty: number, unit: string, p: Product | null): { count: 
     lengthMm: p.lengthMm,
     pieceLengthM: p.pieceLengthM,
     rollLengthM: p.rollLengthM,
+    packName: p.packName,
   };
+
+  // Pack name (2 Nov): sheets, cartons and bags. "11 sheets", 11.88 m².
+  if (isCountedPack(p) && (unit === "m2" || unit === p.unit)) {
+    const name = packNameOf(p);
+    const packM2 = boxM2Of(shape);
+    if (unit !== "m2") {
+      const n = Math.ceil(qty - 1e-9);
+      return { count: `${n} ${packNameWord(name, n)}`, m2: packM2 ? `${r2(n * packM2)} m²` : null, n, word: packNameWord(name, n) };
+    }
+    if (packM2) {
+      const n = Math.ceil(qty / packM2 - 1e-9);
+      const m2 = Math.floor(n * packM2 * 10_000 + 1e-6) / 10_000;
+      return { count: `${n} ${packNameWord(name, n)}`, m2: `${r2(m2)} m²`, n, word: packNameWord(name, n) };
+    }
+  }
 
   // Floors in boxes: whole boxes, and the m2 those boxes cover.
   if (p.soldAs === "box" && unit === "m2") {

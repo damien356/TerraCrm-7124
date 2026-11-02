@@ -267,7 +267,7 @@ export async function voiceAreas<
       // Items 2 and 3. Underlay that follows a floor gets its qty off that
       // floor once the lines are in (linkUnderlay), so what he said about its
       // unit no longer applies. Anything else rounds to what can be bought.
-      if (floorsForUnderlay(p.category).length) {
+      if (floorsForUnderlay(p.category, p.packName).length) {
         const keep = l.flagReason?.startsWith("You said ") ? { flagged: false, flagReason: null } : {};
         return { ...l, ...keep, ...plain };
       }

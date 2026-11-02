@@ -20,6 +20,7 @@ import { markupOf } from "./pricing";
 import { floorQty, floorTypeOf, type QtyResult } from "./flooring-qty";
 import { linkedQty, qtyFlag, qtyForLine, standardLabour, wastageDefaultFor } from "./quote-labour";
 import { followsAFloor, refollow, wholeUnits } from "./quote-sizes";
+import { isCountedPack } from "./pack-name";
 import { isChargeLine } from "./charge-fold";
 import { LEGACY_SOURCE_NAMES } from "./lead-codes";
 import { parseQuoteRef } from "./refs";
@@ -379,6 +380,8 @@ export async function copyCreate(input: CopyCreateInput, actor: Actor) {
       wastagePct,
       rollWidthM,
       floorCategory: l.floorCategory,
+      // Pack name (2 Nov): shown to the client in sheets stays that way, while it is still a sheet product.
+      clientPacks: l.clientPacks && isCountedPack(product),
       flagged: Boolean(flag),
       flagReason: flag,
     });

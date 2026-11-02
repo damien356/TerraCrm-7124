@@ -41,6 +41,7 @@ import {
   useUpdateQuote,
   useUpdateQuoteItem,
 } from "../queries/quotes";
+import { useSetClientPacks } from "../queries/quotePacks";
 import { useProducts } from "../queries/products";
 import { useLastQuoted, type LastQuoted } from "../queries/productFind";
 import { LastQuotedNote } from "../components/product-finder";
@@ -122,6 +123,8 @@ type Item = {
   belowStandard?: { markup: number; standard: number } | null;
   /** Notes 18.46. A copied measure or labour line, yellow until someone confirms it. */
   checkRequired?: boolean;
+  /** Pack name (2 Nov). The client copy shows packs, not m², on this line. */
+  clientPacks?: boolean;
   /** Same carpet colour on more than one line. Each line is priced on its own qty. */
   rollFlag?: string | null;
 };
@@ -130,7 +133,29 @@ type LineSize = {
   note: string | null;
   follows: { id: number; description: string } | null;
   floorChoices: { id: number; description: string }[] | null;
+  /** Pack name (2 Nov). On a sheet, carton or bag line. */
+  packs?: { word: string; count: number } | null;
 };
+
+/** Pack name (2 Nov). m² (the default) or packs on the client copy, per line. */
+function ClientPacksPick({ item, packs, locked }: { item: Item; packs: { word: string; count: number }; locked: boolean }) {
+  const set = useSetClientPacks();
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span>Client copy shows</span>
+      <Select
+        aria-label="Client copy shows"
+        className="h-7 w-auto text-xs"
+        value={item.clientPacks ? "packs" : "m2"}
+        disabled={locked || set.isPending}
+        onChange={(e) => set.mutate({ itemId: item.id, packs: e.target.value === "packs" })}
+      >
+        <option value="m2">m²</option>
+        <option value="packs">{packs.word}</option>
+      </Select>
+    </div>
+  );
+}
 
 /** Whole boxes, lengths and pails, and which floor an underlay follows. Office only, never on the client quote. */
 function LineSizeStrip({ item, locked }: { item: Item; locked: boolean }) {
@@ -168,6 +193,7 @@ function LineSizeStrip({ item, locked }: { item: Item; locked: boolean }) {
         </div>
       ) : null}
       {size.note ? <p>{size.note}</p> : null}
+      {size.packs && item.unit === "m2" ? <ClientPacksPick item={item} packs={size.packs} locked={locked} /> : null}
     </div>
   );
 }

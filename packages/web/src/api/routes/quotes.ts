@@ -54,6 +54,8 @@ import {
   wastageDefaultFor,
 } from "../lib/quote-labour";
 import { floorLineFor, followsAFloor, followUnderlay, lineSizes, refollow, sizeFlag, startLine, wholeUnits } from "../lib/quote-sizes";
+import { ensurePackInstall, followPackLabour } from "../lib/pack-lines";
+import { isSheetUnderlay } from "../lib/pack-name";
 import { isUnderlayCategory, underlayName } from "../lib/order-sizes";
 import { foldForClient, quoteFreightView, refreshQuoteFreight, supplierChargesMarkupPct } from "../lib/quote-freight";
 import { isChargeLine } from "../lib/charge-fold";
@@ -534,6 +536,7 @@ export async function reviseQuoteRecord(
           chargeTyped: i.chargeTyped,
           // A copied line still to check stays to check on the next version.
           checkRequired: i.checkRequired,
+          clientPacks: i.clientPacks,
           ...(isChargeLine(i) ? { flagged: i.flagged, flagReason: i.flagReason } : {}),
         })),
       )
@@ -1054,6 +1057,12 @@ export const quotes = {
         }
       }
 
+      // Pack name (2 Nov): a sheet underlay brings its install on with it, unless unticked.
+      if (!res && input.labour !== null && isSheetUnderlay(product)) {
+        labour = (await ensurePackInstall(row, product)) ?? undefined;
+        [item = row] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, row.id));
+      }
+
       const totals = await recalc(input.quoteId, [row?.id]);
       return {
         item: hideCost(item, context.actor),
@@ -1302,7 +1311,8 @@ export const quotes = {
       }
       // Fix list items 2 and 3: a typed qty goes up to whole boxes, lengths or pails.
       // A typed qty on underlay is taken as typed, and the floor stops moving it.
-      if (product && !areaRes && fields.qty !== undefined && !followsAFloor(product)) {
+      // Pack name (2 Nov): a typed qty on a sheet underlay goes up to whole sheets too.
+      if (product && !areaRes && fields.qty !== undefined && (!followsAFloor(product) || isSheetUnderlay(product))) {
         const r = wholeUnits(product, fields.qty);
         fields.qty = r.qty;
         if (fields.flagged === undefined) Object.assign(fields, sizeFlag(before, r.flag));
@@ -1387,6 +1397,8 @@ export const quotes = {
       if (sizeTouched && product && row) {
         await followUnderlay({ line: before, product }, { line: row, product });
         if (fields.followsItemId != null && input.qty === undefined) await refollow(row.id);
+        // Pack name (2 Nov): sheets typed over, the install follows them.
+        if (input.qty !== undefined && isSheetUnderlay(product)) await followPackLabour(row.id, product, before.qty, row.qty);
       }
 
       // Item 8. The install lines linked to it follow the new area.
@@ -1608,6 +1620,11 @@ export const quotes = {
             if (floor.line) await db.update(schema.quoteItems).set({ followsItemId: floor.line.id }).where(eq(schema.quoteItems.id, row.id));
           }
           await refollow(row.id);
+          // Pack name (2 Nov): swapped to a sheet underlay, its install goes on.
+          if (isSheetUnderlay(product)) {
+            const [now] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, row.id));
+            if (now) await ensurePackInstall(now, product);
+          }
         } else if (row.followsItemId != null) {
           await db.update(schema.quoteItems).set({ followsItemId: null }).where(eq(schema.quoteItems.id, row.id));
         }
