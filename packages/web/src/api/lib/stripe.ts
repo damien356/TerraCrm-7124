@@ -121,12 +121,14 @@ type Session = {
  * only (Apple Pay and Google Pay are cards too). The amount is the balance,
  * nothing added for the card.
  */
-export async function checkoutForInvoice(invoiceId: number, back: { returnTo: string }) {
+export async function checkoutForInvoice(invoiceId: number, back: { returnTo: string; amount?: number | null }) {
   const [inv] = await db.select().from(schema.invoices).where(eq(schema.invoices.id, invoiceId));
   if (!inv) throw new Error("Invoice not found.");
   const owing = owingOn(inv);
   if (!(owing > 0)) throw new Error(inv.status === "void" ? "This invoice has been cancelled." : "This invoice is already paid. Thank you.");
-  const cents = Math.round(owing * 100);
+  // A part amount (the deposit to secure stock) is never more than what is owing.
+  const pay = back.amount != null && back.amount > 0 ? Math.min(Math.round(back.amount * 100) / 100, owing) : owing;
+  const cents = Math.round(pay * 100);
   const email = await emailFor(inv);
   const sep = back.returnTo.includes("?") ? "&" : "?";
   const label = inv.label?.trim() || `Invoice ${inv.number}`;
@@ -154,7 +156,7 @@ export async function checkoutForInvoice(invoiceId: number, back: { returnTo: st
     cancel_url: `${back.returnTo}${sep}cancelled=1`,
   });
   if (!session.url) throw new Error("Stripe did not return a payment page.");
-  return { url: session.url, sessionId: session.id, amount: owing };
+  return { url: session.url, sessionId: session.id, amount: pay };
 }
 
 /* ------------------------------ payment lands ----------------------------- */
@@ -218,13 +220,13 @@ export async function applySession(s: Session): Promise<Applied> {
       path: inv.jobId ? undefined : "/finance/invoices",
     });
     if (owing > 0.005) {
-      await markInvoicePaid({ id: inv.id, amount: owing, method: "card", byName: `${who} (Stripe)`, actorRole: "customer" });
+      await markInvoicePaid({ id: inv.id, amount: owing, method: "card", byName: `${who} (Stripe)`, actorRole: "customer", source: "stripe" });
     }
     return { ok: true, invoiceId, state: owing > 0.005 ? "paid" : "already_counted", amount };
   }
   let row: Invoice;
   try {
-    row = await markInvoicePaid({ id: inv.id, amount, method: "card", byName: `${who} (Stripe)`, actorRole: "customer" });
+    row = await markInvoicePaid({ id: inv.id, amount, method: "card", byName: `${who} (Stripe)`, actorRole: "customer", source: "stripe" });
   } catch (e) {
     await db.insert(schema.activityLog).values({
       jobId: inv.jobId,

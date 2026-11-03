@@ -1439,6 +1439,13 @@ export const products = sqliteTable(
      * separate job and is not built.
      */
     heldInWarehouse: integer("held_in_warehouse", { mode: "boolean" }).notNull().default(false),
+    /* Six columns already on live (Terra Stock, never in code until Step A). Code alignment only. */
+    stockTracked: integer("stock_tracked", { mode: "boolean" }).notNull().default(false),
+    installerCanBuy: integer("installer_can_buy", { mode: "boolean" }).notNull().default(false),
+    reorderLevel: real("reorder_level"),
+    reorderQty: real("reorder_qty"),
+    stockUnitLabel: text("stock_unit_label").notNull().default(""),
+    lowStockAlertedAt: integer("low_stock_alerted_at", { mode: "timestamp" }),
     /**
      * Fix list 11 Oct, items 2 and 3. Metres on one roll of underlay, plastic
      * or Floorshield. Ordering: stocked (`heldInWarehouse`) is cut to the exact
@@ -2723,8 +2730,13 @@ export const jobCosts = sqliteTable(
      *   quote  expected cost made from the accepted quote's cost prices
      *   po     a purchase order sent to the supplier
      * A PO sent to a supplier takes over that supplier's quote row.
+     *   stock         actual cost of stock allocated or issued to the job (Step A)
+     *   stock_return  internal "returned to stock" line, never money (Step A)
+     *   stock_realloc an approved cost move for an opened container (Step A)
      */
     source: text("source").notNull().default(""),
+    /** Step A: the stock record behind a stock line, e.g. "hold:12" or "return:5". Null otherwise. */
+    stockRef: text("stock_ref"),
     ...timestamps,
   },
   (t) => [
@@ -3783,6 +3795,8 @@ export const purchaseOrders = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     /** "4113-A". Job number plus a letter, unique for ever. */
     number: text("number").notNull(),
+    /** job · warehouse. Already on live (Terra Stock). Code alignment only. */
+    kind: text("kind").notNull().default("job"),
     jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "restrict" }),
     supplierId: integer("supplier_id").notNull().references(() => suppliers.id, { onDelete: "restrict" }),
     /** draft · sent · invoiced · cancelled */
@@ -3831,6 +3845,8 @@ export const purchaseOrderLines = sqliteTable(
     /** Standard cost when a special made this line cheaper. Shown, never charged. */
     standardUnitCostExGst: real("standard_unit_cost_ex_gst"),
     sortOrder: integer("sort_order").notNull().default(0),
+    /** Already on live (Terra Stock). How much has been received into the warehouse. */
+    receivedQty: real("received_qty").notNull().default(0),
     ...timestamps,
   },
   (t) => [index("po_lines_po_idx").on(t.poId)],
@@ -4746,6 +4762,8 @@ export const invoicePayments = sqliteTable(
     method: text("method").notNull(),
     paidOn: integer("paid_on", { mode: "timestamp" }).notNull(),
     byName: text("by_name").notNull().default(""),
+    /** Step A: stripe (online card page) · xero (read back) · null typed in by hand. Decides "Confirm for stock". */
+    source: text("source"),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
   },
   (t) => [index("invoice_payments_invoice_idx").on(t.invoiceId)],
@@ -5151,4 +5169,337 @@ export const careGuideSends = sqliteTable(
     ...timestamps,
   },
   (t) => [uniqueIndex("care_guide_sends_request_uq").on(t.requestKey, t.code), index("care_guide_sends_job_idx").on(t.jobId)],
+);
+
+/* ---------------------------------------------------------------------------
+ * Warehouse stock, Stage 1 (Step A, Nov 2026). See lib/stock/*.
+ *
+ * The first four tables already exist on live, empty, from Terra Stock. They
+ * are written here exactly as live has them, plus new optional columns only.
+ * Nothing is renamed or removed: today's Crew materials list reads
+ * job_material_id and status from stock_reservations and keeps working.
+ * ------------------------------------------------------------------------- */
+
+export const stockLocations = sqliteTable(
+  "stock_locations",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull(),
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    sortOrder: integer("sort_order").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("stock_locations_name_uq").on(t.name)],
+);
+
+/** One row per physical thing on the shelf: roll, remnant, cut piece, box lot, loose pieces or unit lot. */
+export const stockItems = sqliteTable(
+  "stock_items",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** Terra stock ID on the label, e.g. "T00012". */
+    code: text("code").notNull(),
+    productId: integer("product_id").notNull().references(() => products.id, { onDelete: "restrict" }),
+    /** roll · remnant · cut_piece · box_lot · loose · unit_lot */
+    type: text("type").notNull(),
+    /** A cut piece or remnant: the roll it came from. Loose pieces: the box lot. */
+    parentItemId: integer("parent_item_id").references((): AnySQLiteColumn => stockItems.id, { onDelete: "set null" }),
+    supplierId: integer("supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
+    supplierRollNo: text("supplier_roll_no").notNull().default(""),
+    colour: text("colour").notNull().default(""),
+    /** Null = unknown. Two unknowns never count as a match. */
+    batch: text("batch"),
+    locationId: integer("location_id").references(() => stockLocations.id, { onDelete: "set null" }),
+    /** good · damaged · quarantined · expired · opened ("Opened — internal use only") */
+    condition: text("condition").notNull().default("good"),
+    /** to_check · available · used_up · written_off */
+    status: text("status").notNull().default("to_check"),
+    /** lm (rolls, remnants, cut pieces) · box · piece · unit */
+    unit: text("unit").notNull(),
+    /** Current quantity in `unit`. For a roll this is its current length in metres. */
+    qty: real("qty").notNull().default(0),
+    originalQty: real("original_qty").notNull().default(0),
+    widthM: real("width_m"),
+    /** measured · supplier_label · estimated */
+    lengthSource: text("length_source"),
+    widthSource: text("width_source"),
+    /** Box lots: full pieces in one box as received. */
+    packSize: real("pack_size"),
+    /** lm · m2 · unit. What unitCost is per. */
+    costPer: text("cost_per").notNull().default("unit"),
+    /** Landed cost ex GST per costPer. Null with costStatus unknown. */
+    unitCost: real("unit_cost"),
+    goodsCost: real("goods_cost"),
+    freightCost: real("freight_cost"),
+    /** final · provisional · estimate · unknown */
+    costStatus: text("cost_status").notNull().default("unknown"),
+    /** Opened containers: what was originally paid, kept as history ("never zero purchase cost"). */
+    purchaseCostNote: text("purchase_cost_note").notNull().default(""),
+    poId: integer("po_id").references(() => purchaseOrders.id, { onDelete: "set null" }),
+    poLineId: integer("po_line_id").references(() => purchaseOrderLines.id, { onDelete: "set null" }),
+    /** "Bought for Job [number] on PO [number]": cost stays on that job's PO line. */
+    boughtForJobId: integer("bought_for_job_id").references(() => jobs.id, { onDelete: "set null" }),
+    /** Returns and remnants: the job it came back from. */
+    originJobId: integer("origin_job_id").references(() => jobs.id, { onDelete: "set null" }),
+    /** Opened container: the job that already carries its cost. */
+    costOnJobId: integer("cost_on_job_id").references(() => jobs.id, { onDelete: "set null" }),
+    /** Opened container: an approved cost moved off the first job, carried to the next job that uses it. */
+    costCarry: real("cost_carry").notNull().default(0),
+    terraOwned: integer("terra_owned", { mode: "boolean" }).notNull().default(true),
+    madeOn: text("made_on"),
+    expiresOn: text("expires_on"),
+    receivedOn: text("received_on"),
+    note: text("note").notNull().default(""),
+    createdByName: text("created_by_name").notNull().default(""),
+    approvedByName: text("approved_by_name"),
+    approvedAt: integer("approved_at", { mode: "timestamp" }),
+    /** One per press, so a repeated click returns the first item. */
+    requestKey: text("request_key"),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("stock_items_code_uq").on(t.code),
+    uniqueIndex("stock_items_request_uq").on(t.requestKey),
+    index("stock_items_product_idx").on(t.productId, t.status),
+  ],
+);
+
+/** Every physical change is a row. A correction is a reversing row. Nothing is edited in place. */
+export const stockMovements = sqliteTable(
+  "stock_movements",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    productId: integer("product_id").notNull().references(() => products.id, { onDelete: "restrict" }),
+    kind: text("kind").notNull(),
+    qty: real("qty").notNull(),
+    /** Step A: the stock item's quantity before and after this row. */
+    balanceBefore: real("balance_before").notNull(),
+    balanceAfter: real("balance_after").notNull(),
+    unitCostExGst: real("unit_cost_ex_gst"),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    reservationId: integer("reservation_id").references((): AnySQLiteColumn => stockReservations.id, { onDelete: "set null" }),
+    installerId: integer("installer_id").references(() => installers.id, { onDelete: "set null" }),
+    accountEntryId: integer("account_entry_id").references(() => installerAccountEntries.id, { onDelete: "set null" }),
+    poId: integer("po_id").references(() => purchaseOrders.id, { onDelete: "set null" }),
+    poLineId: integer("po_line_id").references(() => purchaseOrderLines.id, { onDelete: "set null" }),
+    stocktakeId: integer("stocktake_id").references((): AnySQLiteColumn => stocktakes.id, { onDelete: "set null" }),
+    reversesId: integer("reverses_id"),
+    source: text("source").notNull().default("office"),
+    note: text("note").notNull().default(""),
+    byProfileId: integer("by_profile_id").references(() => profiles.id, { onDelete: "set null" }),
+    byName: text("by_name").notNull().default(""),
+    /* New in Step A, all optional. */
+    stockItemId: integer("stock_item_id").references(() => stockItems.id, { onDelete: "set null" }),
+    unit: text("unit"),
+    requestKey: text("request_key"),
+    ...timestamps,
+  },
+  (t) => [
+    index("stock_movements_installer_idx").on(t.installerId),
+    index("stock_movements_job_idx").on(t.jobId),
+    index("stock_movements_product_idx").on(t.productId, t.id),
+    uniqueIndex("stock_movements_reverses_uq").on(t.reversesId),
+    index("stock_movements_item_idx").on(t.stockItemId, t.id),
+    uniqueIndex("stock_movements_request_uq").on(t.requestKey),
+  ],
+);
+
+/**
+ * Holds and reservations on stock. `status` is the stage:
+ *   planned · temporary · awaiting · reserved (firm) · cut · picked ·
+ *   handed_over · issued · short · released · cancelled
+ * Only temporary, reserved, cut and picked block the stock for others.
+ */
+export const stockReservations = sqliteTable(
+  "stock_reservations",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    productId: integer("product_id").notNull().references(() => products.id, { onDelete: "restrict" }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    jobMaterialId: integer("job_material_id").references(() => jobMaterials.id, { onDelete: "set null" }),
+    quoteId: integer("quote_id").references(() => quotes.id, { onDelete: "set null" }),
+    quoteItemId: integer("quote_item_id").references(() => quoteItems.id, { onDelete: "set null" }),
+    /** The physical quantity held, in the stock item's unit (supplied, free part included). */
+    qty: real("qty").notNull().default(0),
+    /** Handed over or issued so far, in the stock item's unit. */
+    collectedQty: real("collected_qty").notNull().default(0),
+    status: text("status").notNull().default("reserved"),
+    confirmNote: text("confirm_note").notNull().default(""),
+    confirmedByName: text("confirmed_by_name"),
+    confirmedAt: integer("confirmed_at", { mode: "timestamp" }),
+    /* New in Step A, all optional. */
+    stockItemId: integer("stock_item_id").references(() => stockItems.id, { onDelete: "set null" }),
+    orderId: integer("order_id").references((): AnySQLiteColumn => stockOrders.id, { onDelete: "set null" }),
+    saleLineId: integer("sale_line_id").references(() => productSaleLines.id, { onDelete: "set null" }),
+    /** The line's own unit (m2, lm, box, each). */
+    lineUnit: text("line_unit"),
+    /** What the customer ordered from this piece, in the line's unit. */
+    orderedQty: real("ordered_qty"),
+    /** What is billed, in the line's unit. Never changed by a free remainder. */
+    billedQty: real("billed_qty"),
+    /** Free remainder, in the stock item's unit. Held, deducted and costed, never billed. */
+    freeQty: real("free_qty").notNull().default(0),
+    /** none · proposed · approved · declined */
+    freeState: text("free_state").notNull().default("none"),
+    freeByName: text("free_by_name"),
+    /** Bought on this job's PO and received into the warehouse: the cost is on the PO line, issue adds none. */
+    costOnPo: integer("cost_on_po", { mode: "boolean" }).notNull().default(false),
+    expiresAt: integer("expires_at", { mode: "timestamp" }),
+    warnedAt: integer("warned_at", { mode: "timestamp" }),
+    extendReason: text("extend_reason"),
+    appliedByProfileId: integer("applied_by_profile_id").references(() => profiles.id, { onDelete: "set null" }),
+    appliedByName: text("applied_by_name"),
+    releasedAt: integer("released_at", { mode: "timestamp" }),
+    releaseReason: text("release_reason"),
+    /** A hold that replaced this one (damaged roll swapped). */
+    replacedById: integer("replaced_by_id"),
+    requestKey: text("request_key"),
+    ...timestamps,
+  },
+  (t) => [
+    index("stock_reservations_job_idx").on(t.jobId),
+    index("stock_reservations_product_idx").on(t.productId, t.status),
+    index("stock_reservations_item_idx").on(t.stockItemId, t.status),
+    uniqueIndex("stock_reservations_request_uq").on(t.requestKey),
+  ],
+);
+
+export const stocktakes = sqliteTable(
+  "stocktakes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    status: text("status").notNull().default("counting"),
+    note: text("note").notNull().default(""),
+    countedByProfileId: integer("counted_by_profile_id").references(() => profiles.id, { onDelete: "set null" }),
+    countedByName: text("counted_by_name").notNull().default(""),
+    submittedAt: integer("submitted_at", { mode: "timestamp" }),
+    approvedByProfileId: integer("approved_by_profile_id").references(() => profiles.id, { onDelete: "set null" }),
+    approvedByName: text("approved_by_name"),
+    approvedAt: integer("approved_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (t) => [index("stocktakes_status_idx").on(t.status)],
+);
+
+export const stocktakeLines = sqliteTable(
+  "stocktake_lines",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    stocktakeId: integer("stocktake_id").notNull().references(() => stocktakes.id, { onDelete: "cascade" }),
+    productId: integer("product_id").notNull().references(() => products.id, { onDelete: "restrict" }),
+    expectedQty: real("expected_qty").notNull().default(0),
+    countedQty: real("counted_qty"),
+    countedAt: integer("counted_at", { mode: "timestamp" }),
+    adjustmentQty: real("adjustment_qty"),
+    ...timestamps,
+  },
+  (t) => [index("stocktake_lines_product_idx").on(t.productId), uniqueIndex("stocktake_lines_product_uq").on(t.stocktakeId, t.productId)],
+);
+
+/** A count of one stock item. A difference is a proposed correction until an Admin approves it. */
+export const stockCounts = sqliteTable(
+  "stock_counts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    stockItemId: integer("stock_item_id").notNull().references(() => stockItems.id, { onDelete: "cascade" }),
+    expectedQty: real("expected_qty").notNull(),
+    countedQty: real("counted_qty").notNull(),
+    /** pending · approved · rejected · matched */
+    status: text("status").notNull().default("pending"),
+    byName: text("by_name").notNull().default(""),
+    approvedByName: text("approved_by_name"),
+    movementId: integer("movement_id"),
+    note: text("note").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [index("stock_counts_item_idx").on(t.stockItemId)],
+);
+
+/**
+ * An order in the stock workflow, one per job. Terms frozen at acceptance
+ * (or "Raise invoice now"). Deposit and stock status are worked out from the
+ * payments and holds each time, never kept as a running total.
+ */
+export const stockOrders = sqliteTable(
+  "stock_orders",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    saleId: integer("sale_id").references(() => productSales.id, { onDelete: "set null" }),
+    /** sale_quote · sale_invoice (Raise invoice now) · job (installation) */
+    kind: text("kind").notNull(),
+    /** planned (not accepted yet) · active · cancelled · review */
+    status: text("status").notNull().default("planned"),
+    /** Null = "Deposit % to complete". Never read as 0. */
+    depositPercent: real("deposit_percent"),
+    /** The Bill to card's % when the stock was chosen, before acceptance. Frozen into depositPercent at acceptance. */
+    proposedPercent: real("proposed_percent"),
+    orderTotal: real("order_total"),
+    requiredDeposit: real("required_deposit"),
+    frozenAt: integer("frozen_at", { mode: "timestamp" }),
+    /** sale_invoice: the one invoice. */
+    invoiceId: integer("invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+    /** switch (accepted after the switch was on) · brought_in (Admin action) */
+    joinedVia: text("joined_via").notNull().default("switch"),
+    broughtInByName: text("brought_in_by_name"),
+    broughtInAt: integer("brought_in_at", { mode: "timestamp" }),
+    /** JSON, what was ordered, on a PO, paid and on site when brought in. */
+    startPosition: text("start_position"),
+    reviewNote: text("review_note").notNull().default(""),
+    lastCheckAt: integer("last_check_at", { mode: "timestamp" }),
+    lastCheckError: text("last_check_error"),
+    failCount: integer("fail_count").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("stock_orders_job_uq").on(t.jobId), index("stock_orders_status_idx").on(t.status)],
+);
+
+/** An Admin pressed "Confirm for stock" on a payment that was typed in by hand or read back from Xero. */
+export const stockPaymentConfirmations = sqliteTable(
+  "stock_payment_confirmations",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    paymentId: integer("payment_id").notNull().references(() => invoicePayments.id, { onDelete: "cascade" }),
+    invoiceId: integer("invoice_id").notNull().references(() => invoices.id, { onDelete: "cascade" }),
+    amount: real("amount").notNull(),
+    byProfileId: integer("by_profile_id").references(() => profiles.id, { onDelete: "set null" }),
+    byName: text("by_name").notNull(),
+    note: text("note").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("stock_payment_confirmations_payment_uq").on(t.paymentId)],
+);
+
+/** Each stock alert has a fixed key, so a retry never sends it twice. */
+export const stockAlerts = sqliteTable(
+  "stock_alerts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    key: text("key").notNull(),
+    kind: text("kind").notNull(),
+    orderId: integer("order_id").references(() => stockOrders.id, { onDelete: "cascade" }),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default(""),
+    body: text("body").notNull().default(""),
+    alertId: integer("alert_id"),
+    sentAt: integer("sent_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("stock_alerts_key_uq").on(t.key)],
+);
+
+/** The stock ticks, per person. Nobody gets any by default. Admin role covers all but changeCosts. */
+export const stockPermissions = sqliteTable(
+  "stock_permissions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    profileId: integer("profile_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+    handle: integer("handle", { mode: "boolean" }).notNull().default(false),
+    allocate: integer("allocate", { mode: "boolean" }).notNull().default(false),
+    /** Enter or correct stock costs, approve estimates and cost moves. Only the main admin can grant it. */
+    changeCosts: integer("change_costs", { mode: "boolean" }).notNull().default(false),
+    grantedByName: text("granted_by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("stock_permissions_profile_uq").on(t.profileId)],
 );

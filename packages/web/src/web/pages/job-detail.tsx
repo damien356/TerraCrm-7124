@@ -14,6 +14,7 @@ import { JobForecastCard, MeasureUpModal } from "../components/costing";
 import { HourlyJobCard } from "../components/hourly-job";
 import { JobCashCard } from "../components/job-cash";
 import { PurchaseOrdersCard } from "../components/purchase-orders";
+import { StockPanelCard } from "../components/stock-panel";
 import { PaymentTermsCard } from "../components/payment-terms";
 import { ClientInvoicesCard, MaterialSelectionCard } from "../components/client-invoices";
 import { DeliveryCard } from "../components/delivery";
@@ -463,6 +464,9 @@ export default function JobDetailPage() {
             <PurchaseOrdersCard jobId={j.id} />
           </div>
           ) : null}
+
+          {/* warehouse stock held for this job. Hides itself while the switch is off. */}
+          <StockPanelCard jobId={j.id} />
     </>
   );
   const customer = j.company?.name ?? [j.contact?.firstName, j.contact?.lastName].filter(Boolean).join(" ") ?? "-";

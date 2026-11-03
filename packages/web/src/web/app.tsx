@@ -61,6 +61,8 @@ import RepairsPage from "./pages/repairs";
 import RepairDetailPage from "./pages/repair-detail";
 import LeadsReportPage from "./pages/leads-report";
 import HourlyPage from "./pages/hourly";
+import StockPage from "./pages/stock";
+import StockItemPage from "./pages/stock-item";
 
 // Finish a returning managed sign-in before anything renders. This top-level
 // await resolves before __main.tsx mounts React (app.tsx is its dependency).
@@ -138,6 +140,8 @@ function App() {
               <Route path="/team" component={TeamPage} />
               <Route path="/archived-people" component={ArchivedPeoplePage} />
               <Route path="/suppliers" component={SuppliersPage} />
+              <Route path="/stock" component={StockPage} />
+              <Route path="/stock/:id" component={StockItemPage} />
               <Route path="/products" component={ProductsPage} />
               <Route path="/settings" component={SettingsPage} />
               <Route path="/my-calendar" component={MyCalendarPage} />

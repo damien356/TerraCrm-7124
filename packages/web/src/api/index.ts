@@ -4,6 +4,7 @@ import { auth } from "./auth";
 import { bootJourneyEngine } from "./lib/journey-boot";
 import { bootOffsiteBackup } from "./lib/offsite-backup-boot";
 import { bootOfferTimer } from "./lib/offer-timer";
+import { bootStockTimer } from "./lib/stock/timer";
 import { handleWebhook as handleStripeWebhook } from "./lib/stripe";
 import { rebuildForecast } from "./lib/cashflow";
 import { ping, diag, diagThrow, diagActor } from "./routes/ping";
@@ -68,6 +69,7 @@ import { quoteSend } from "./routes/quoteSend";
 import { clientInvoices } from "./routes/clientInvoices";
 import { delivery } from "./routes/delivery";
 import { productSales } from "./routes/productSales";
+import { stock } from "./routes/stock";
 import { siteFill } from "./routes/siteFill";
 import { emailCheck } from "./routes/emailCheck";
 import { productFind } from "./routes/productFind";
@@ -253,6 +255,8 @@ export const router = {
   clientInvoices,
   delivery,
   productSales,
+  /** Warehouse stock: register, holds, deposits for stock, returns. Switches S1 to S5 start off. */
+  stock,
   /** A quote with a delivery line and no site asks for one, and a job with no site offers one (188001 list item 12). */
   siteFill,
   emailCheck,
@@ -481,6 +485,8 @@ bootOffsiteBackup();
 bootCalendarSync();
 // Expires offers and locks lapsed 2-hour holds once a minute. Same gate.
 bootOfferTimer();
+// Warehouse stock check: start-up and every 10 minutes. Same gate, and idle while S1 Stock register is off.
+bootStockTimer();
 // The 7am summary email to the office (item 15). Same gate.
 bootDailySummary();
 // Client prep messages from 10am, checked every 5 minutes (notes 18.56). Same gate.

@@ -36,6 +36,14 @@ export const ALERT_KINDS = {
   ready_to_invoice: { label: "Job ready to invoice", group: "Crew", urgent: false },
   running_late: { label: "Crew running late", group: "Crew", urgent: false },
   crew_note: { label: "Voice note from the crew", group: "Crew", urgent: false },
+  stock_reserved: { label: "Stock reserved after a deposit", group: "Stock", urgent: true },
+  stock_short: { label: "Paid order short of stock", group: "Stock", urgent: true },
+  stock_full: { label: "Order now fully reserved", group: "Stock", urgent: false },
+  stock_check_failed: { label: "Stock check failed", group: "Stock", urgent: true },
+  stock_hold_expiring: { label: "Temporary stock hold about to expire", group: "Stock", urgent: false },
+  stock_review: { label: "Paid order with stock cancelled or voided", group: "Stock", urgent: true },
+  stock_short_roll: { label: "Roll arrived shorter than ordered", group: "Stock", urgent: false },
+  stock_po_overlap: { label: "Stock now covers part of a PO line", group: "Stock", urgent: true },
 } as const;
 
 export type AlertKind = keyof typeof ALERT_KINDS;

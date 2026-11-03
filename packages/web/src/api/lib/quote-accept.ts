@@ -200,6 +200,24 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     await afterRepairAccepted(locked.id, jobId, args.actor).catch((e) => console.error("[quote-accept] timber repair offer failed:", e));
   }
 
+  // Warehouse stock (A1.2): an order with stock chosen gets its deposit terms
+  // frozen now and is checked once. If this fails the background check picks
+  // it up from the accepted quote. Never stops the accept.
+  try {
+    const { isLive } = await import("./stock/core");
+    if (await isLive("s1")) {
+      const { orderOfJob, syncTerms } = await import("./stock/orders");
+      const o = await orderOfJob(jobId);
+      if (o) {
+        await syncTerms(o);
+        const { recheckOrder } = await import("./stock/recheck");
+        await recheckOrder(o.id);
+      }
+    }
+  } catch (e) {
+    console.error("[quote-accept] stock terms failed:", (e as Error).message);
+  }
+
   // Step 2 (20 Oct): draft one PO per supplier for what is still to order.
   // Drafts only, never sent. A failure never stops the accept.
   const { draftPosForJob } = await import("./po-helper");

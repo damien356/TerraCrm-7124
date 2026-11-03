@@ -152,6 +152,8 @@ function productName(p: Product | null, fallback: string) {
   return name.join(" ") || fallback;
 }
 
+const IN_WAREHOUSE = new Set(["reserved", "cut", "picked"]);
+
 /**
  * Stock held for these lines. Terra Stock owns the table, so it is read plainly
  * and an empty list comes back if it isn't there.
@@ -192,7 +194,8 @@ export async function crewMaterials(jobId: number, parentJobId: number | null): 
     reservedFor(ids),
   ]);
   const deliverTo = new Map(poLines.map((l) => [l.jobMaterialId!, l.deliverTo]));
-  const held = new Set(reserved.filter((r) => r.status !== "cancelled" && r.status !== "released").map((r) => r.jobMaterialId!));
+  // Only stock firmly held in the warehouse for the job. Planned, awaiting a deposit, temporary and short holds are not the crew's yet.
+  const held = new Set(reserved.filter((r) => IN_WAREHOUSE.has(r.status)).map((r) => r.jobMaterialId!));
 
   const out: CrewMaterial[] = rows.map(({ m, p }) => {
     let where: CrewWhere;

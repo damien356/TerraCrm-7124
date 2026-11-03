@@ -142,12 +142,17 @@ export const clientInvoices = {
         amount: z.number().positive().nullish(),
         /** YYYY-MM-DD, the day the money arrived. Today if left out. */
         paidOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+        /** Admin tick: "I have checked the bank: confirm for stock". Only shown when stock waits on this invoice. */
+        confirmForStock: z.boolean().optional(),
       }),
     )
     .handler(async ({ input, context }) => {
       const paidOn = input.paidOn ? new Date(`${input.paidOn}T12:00:00+10:00`) : null;
       if (paidOn && paidOn.getTime() > Date.now() + 86_400_000) {
         throw new ORPCError("BAD_REQUEST", { message: "The paid date cannot be in the future." });
+      }
+      if (input.confirmForStock && context.actor.role !== "admin") {
+        throw new ORPCError("FORBIDDEN", { message: "Only an Admin can confirm a payment for stock." });
       }
       const row = await markInvoicePaid({
         id: input.id,
@@ -157,6 +162,17 @@ export const clientInvoices = {
         byName: context.actor.name,
         actorRole: context.actor.role,
       });
+      if (input.confirmForStock && row.paymentId) {
+        // The payment stands whatever happens here. A failed confirm can be redone from the stock panel.
+        try {
+          const { confirmForStock } = await import("../lib/stock/orders");
+          const { recheckAfterPayment } = await import("../lib/stock/recheck");
+          await confirmForStock(row.paymentId, "I have checked the bank: confirm for stock", context.actor);
+          await recheckAfterPayment(row.id);
+        } catch (e) {
+          console.error("[stock] confirm for stock failed:", (e as Error).message);
+        }
+      }
       await rebuild();
       return shapeInvoice(row);
     }),

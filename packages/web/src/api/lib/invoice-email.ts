@@ -2,7 +2,7 @@ import { ORPCError } from "@orpc/server";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { clientInvoicePdfFor } from "./clientInvoicePdf";
+import { clientInvoicePdfFor, stockDepositLine } from "./clientInvoicePdf";
 import { autoPushAfterEmail } from "./xero-invoices";
 import { ensureForJob } from "./conversations";
 import { pickedFiles, sendJobEmail, type MailUpload } from "./job-mail";
@@ -35,13 +35,14 @@ export async function invoiceRecipient(inv: typeof schema.invoices.$inferSelect)
   return null;
 }
 
-export function invoiceEmailBody(args: { first: string; ref: string; label: string; owing: number; url: string | null }) {
+export function invoiceEmailBody(args: { first: string; ref: string; label: string; owing: number; url: string | null; depositLine?: string | null }) {
   const lines = [
     `Hi ${args.first || "there"},`,
     "",
     `Here is your invoice ${args.ref}${args.label ? ` (${args.label})` : ""} for ${money(args.owing)} including GST.`,
     "",
   ];
+  if (args.depositLine) lines.push(args.depositLine, "");
   if (args.url) lines.push("Pay by card online:", args.url, "", "Or pay by bank transfer:");
   else lines.push("Please pay by bank transfer:");
   lines.push(
@@ -88,6 +89,7 @@ export async function sendInvoiceEmail(args: {
     label: inv.label || INVOICE_KIND_LABEL[inv.kind] || "",
     owing,
     url,
+    depositLine: await stockDepositLine(inv.id, owing),
   });
   /* The invoice itself goes as a PDF, with the pay link in the email (spec 15 Oct). */
   const { pdf, filename, snapshot, fresh } = await clientInvoicePdfFor(inv.id);

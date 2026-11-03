@@ -236,6 +236,8 @@ export async function markInvoicePaid(args: {
   actorRole: string;
   /** Replaces "received by <method>" in the log, e.g. how a contra was settled. */
   how?: string | null;
+  /** Where the payment came from: "stripe" (online card), "xero" (read back) or left out (typed in by hand). */
+  source?: "stripe" | "xero" | null;
 }) {
   const [inv] = await db.select().from(schema.invoices).where(eq(schema.invoices.id, args.id));
   if (!inv) throw bad("Invoice not found");
@@ -262,7 +264,10 @@ export async function markInvoicePaid(args: {
     .returning();
   if (!row) throw bad("Someone else just changed this invoice. Refresh and try again.");
   // Each payment kept on its own, so reports can split bank, card and contra.
-  await db.insert(schema.invoicePayments).values({ invoiceId: inv.id, amount, method: args.method, paidOn: when, byName: args.byName });
+  const [pay] = await db
+    .insert(schema.invoicePayments)
+    .values({ invoiceId: inv.id, amount, method: args.method, paidOn: when, byName: args.byName, source: args.source ?? null })
+    .returning({ id: schema.invoicePayments.id });
   // The job card's deposit flag follows the deposit invoice, so the forecast and the job agree.
   if (full && inv.kind === "deposit" && inv.jobId) {
     await db.update(schema.jobs).set({ depositPaid: true, updatedAt: new Date() }).where(eq(schema.jobs.id, inv.jobId));
@@ -278,7 +283,20 @@ export async function markInvoicePaid(args: {
   });
   // Notes 18.47: the job paid in full makes the referral fee owed (an Admin task, never a payment).
   if (full && inv.jobId) await checkReferral(inv.jobId);
-  return row;
+  // Stock check, after the payment is saved. It never throws: the payment always stands.
+  await stockCheckAfterPayment(inv.id);
+  return { ...row, paymentId: pay?.id ?? null };
+}
+
+async function stockCheckAfterPayment(invoiceId: number) {
+  try {
+    const { isLive } = await import("./stock/core");
+    if (!(await isLive("s1"))) return;
+    const { recheckAfterPayment } = await import("./stock/recheck");
+    await recheckAfterPayment(invoiceId);
+  } catch (e) {
+    console.error("[stock] check after payment failed:", (e as Error).message);
+  }
 }
 
 export async function voidInvoice(args: { id: number; reason: string; byName: string; actorRole: string }) {

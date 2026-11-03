@@ -45,6 +45,8 @@ export type ClientInvoicePdfInput = {
   paid: number;
   owing: number;
   payUrl: string | null;
+  /** A direct invoice with stock waiting on a deposit: "Deposit to secure stock: $300 (30%). Balance $700." */
+  depositLine?: string | null;
   /** The quote this invoice bills, drawn as the quote PDF draws it. */
   works?: InvoiceWorks | null;
   /** Inc GST. Only given when it holds together (lib/invoice-summary.ts). */
@@ -272,7 +274,7 @@ export async function renderClientInvoicePdf(input: ClientInvoicePdfInput): Prom
   // the payment boxes never sit alone on the last page.
   const bh = 58;
   const payH = bh + 6 + (input.payUrl ? 50 : 0) + 6;
-  need(142 + desc.length * 13 + (input.paid > 0 ? 14 : 0) + payH, 34);
+  need(142 + desc.length * 13 + (input.paid > 0 ? 14 : 0) + (input.depositLine ? 16 : 0) + payH, 34);
   cur.page.drawRectangle({ x: M, y: cur.y - 6, width: CW, height: 20, color: FILL });
   text(cur.page, works ? "THIS INVOICE" : "DESCRIPTION", M + 8, cur.y, bold, 7.5, LABEL);
   textRight(cur.page, "AMOUNT (EX GST)", r - 8, cur.y, bold, 7.5, LABEL);
@@ -304,6 +306,10 @@ export async function renderClientInvoicePdf(input: ClientInvoicePdfInput): Prom
   text(cur.page, "Amount due on this invoice", bx + 13, cur.y, bold, 11);
   textRight(cur.page, money(input.owing), r - 8, cur.y - 1, bold, 14);
   cur.y -= dueH + 6;
+  if (input.depositLine) {
+    textRight(cur.page, input.depositLine, r - 8, cur.y, bold, 9.5);
+    cur.y -= 16;
+  }
 
   /* Bank transfer. */
   // The footer sits at 22, so the payment boxes can run closer to it than the works do.
@@ -458,8 +464,22 @@ export async function clientInvoicePdfFor(invoiceId: number) {
   if (!inv) throw new Error("Invoice not found");
   const stored = storedSnapshot(inv);
   const snapshot = stored ?? (await legacySnapshot(inv)) ?? (await freshSnapshot(inv));
-  const pdf = await renderClientInvoicePdf(pdfInputFrom(inv, snapshot));
+  const input = pdfInputFrom(inv, snapshot);
+  input.depositLine = await stockDepositLine(inv.id, input.owing);
+  const pdf = await renderClientInvoicePdf(input);
   return { pdf, filename: `Terra Flooring Invoice ${inv.number}.pdf`, snapshot, fresh: !stored };
+}
+
+/** The stock deposit line, worked out now. Never stops the PDF. */
+export async function stockDepositLine(invoiceId: number, owing: number): Promise<string | null> {
+  if (!(owing > 0)) return null;
+  try {
+    const { stockPayInfo } = await import("./stock/pay");
+    return (await stockPayInfo(invoiceId, owing))?.depositLine ?? null;
+  } catch (e) {
+    console.error("[stock] deposit line failed:", (e as Error).message);
+    return null;
+  }
 }
 
 /**

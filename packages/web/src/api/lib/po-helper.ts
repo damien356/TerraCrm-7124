@@ -57,7 +57,12 @@ async function openMaterials(jobId: number): Promise<Material[]> {
       ),
     );
   const taken = new Set(onPo.map((r) => r.jobMaterialId));
-  return rows.filter((r) => r.qty > 0 && !taken.has(r.id));
+  // Warehouse stock already allocated to a line is never ordered again, whatever the switches say (A1.5).
+  const { stockAllocatedByMaterial } = await import("./stock/costs");
+  const fromStock = await stockAllocatedByMaterial(jobId);
+  return rows
+    .map((r) => ({ ...r, qty: Math.round((r.qty - (fromStock.get(r.id) ?? 0)) * 10_000) / 10_000 }))
+    .filter((r) => r.qty > 0.0001 && !taken.has(r.id));
 }
 
 /**

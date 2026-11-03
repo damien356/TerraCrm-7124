@@ -9,6 +9,7 @@ import { errorText } from "./public-shell";
 import { moneyExact } from "../lib/money";
 import { emailState, paymentState } from "../lib/invoice-status";
 import { useBootstrap } from "../queries/settings";
+import { useInvoiceStock } from "../queries/stock";
 import { EmailInput } from "./email-input";
 import { CcList, EmailAttachments, NO_ATTACHMENTS, type MailAttachments } from "./email-attachments";
 import {
@@ -129,8 +130,11 @@ const dateOf = (v: Date | string | null | undefined) => {
   return d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
 };
 
-function MarkPaidModal({ invoice, onClose }: { invoice: Invoice | null; onClose: () => void }) {
+function MarkPaidModal({ invoice, onClose, isAdmin }: { invoice: Invoice | null; onClose: () => void; isAdmin: boolean }) {
   const mark = useMarkInvoicePaid();
+  // Stock waiting on this invoice: an Admin can confirm the money for stock as it is recorded. Nothing is paid twice.
+  const stockWait = useInvoiceStock(invoice?.id ?? 0, !!invoice && isAdmin);
+  const [forStock, setForStock] = React.useState(false);
   const [method, setMethod] = React.useState<(typeof METHODS)[number]["key"]>("bank");
   const [part, setPart] = React.useState(false);
   const [amount, setAmount] = React.useState("");
@@ -144,6 +148,7 @@ function MarkPaidModal({ invoice, onClose }: { invoice: Invoice | null; onClose:
     setAmount("");
     setPaidOn(todayIso());
     setError(null);
+    setForStock(false);
   }, [invoice]);
 
   if (!invoice) return null;
@@ -160,7 +165,7 @@ function MarkPaidModal({ invoice, onClose }: { invoice: Invoice | null; onClose:
     if (!paidOn) return setError("Pick the day the money arrived.");
     if (paidOn > todayIso()) return setError("The paid date cannot be in the future.");
     mark.mutate(
-      { id: invoice.id, method, amount: value, paidOn },
+      { id: invoice.id, method, amount: value, paidOn, ...(forStock ? { confirmForStock: true } : {}) },
       { onSuccess: onClose, onError: (e) => setError(errorText(e)) },
     );
   }
@@ -212,6 +217,15 @@ function MarkPaidModal({ invoice, onClose }: { invoice: Invoice | null; onClose:
         <Field label="Day the money arrived">
           <Input type="date" value={paidOn} max={todayIso()} onChange={(e) => setPaidOn(e.target.value)} />
         </Field>
+        {isAdmin && stockWait.data?.waiting ? (
+          <label htmlFor="pay-for-stock" className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-sm">
+            <Checkbox id="pay-for-stock" checked={forStock} onChange={(e) => setForStock(e.target.checked)} className="mt-0.5" />
+            <span>
+              I have checked the bank: confirm for stock
+              <span className="block text-xs text-muted-foreground">Stock is waiting on this invoice ({stockWait.data.label}). Leave unticked to record the payment only.</span>
+            </span>
+          </label>
+        ) : null}
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
       </div>
     </Modal>
@@ -765,7 +779,7 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
         </>
       )}
       {bill ? <RaiseInvoiceModal jobId={jobId} billing={bill} open={raising} onClose={() => setRaising(false)} onDone={setNotice} /> : null}
-      <MarkPaidModal invoice={paying} onClose={() => setPaying(null)} />
+      <MarkPaidModal invoice={paying} onClose={() => setPaying(null)} isAdmin={isAdmin} />
       <SalesCategoryModal
         invoice={categoryFor?.inv ?? null}
         sending={categoryFor?.sending ?? false}

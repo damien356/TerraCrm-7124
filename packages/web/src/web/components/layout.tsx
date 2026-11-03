@@ -131,6 +131,7 @@ const NAV: NavEntry[] = [
       { to: "/finance/suppliers-owed", label: "Suppliers owed", icon: HandCoins },
       { to: "/finance/referrers-owed", label: "Referrers owed", icon: Handshake },
       { to: "/suppliers", label: "Suppliers", icon: Truck },
+      { to: "/stock", label: "Warehouse stock", icon: Package },
       { to: "/finance/profitability", label: "Profitability", icon: PieChart },
       { to: "/finance/callbacks", label: "Callbacks", icon: LifeBuoy },
     ],

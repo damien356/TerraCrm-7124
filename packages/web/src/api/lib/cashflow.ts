@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { depositDefaultOf } from "./deposits";
+import { CHARGES_DROPPED_NOTE } from "./expected-costs";
 import { quoteRef } from "./refs";
 import { isTestJob } from "./lead-codes";
 import { costCashOut, costHasGst } from "./gst";
@@ -585,6 +586,8 @@ export async function rebuildForecast(): Promise<RebuildResult> {
     for (const c of costs) {
       const cc = confidenceForCost(c.state ?? "budget");
       if (!cc) continue;
+      // Warehouse stock A1.1: the $0 note row saying a supplier's charges are not expected is not money out.
+      if (c.amount === 0 && c.notes === CHARGES_DROPPED_NOTE) continue;
       const computed = costDueDate(c.kind ?? "other", start, completion, now, (c.supplierId && supTerms.get(c.supplierId)) || DEFAULT_SUPPLIER_TERMS);
       const date = c.dueDateLocked && c.dueDate ? c.dueDate : (c.dueDate ?? computed.date);
       const gstOn = c.installerId ? (installerGst.get(c.installerId) ?? false) : false;

@@ -397,6 +397,7 @@ export async function payState(inv: typeof schema.invoices.$inferSelect) {
   const [company] = inv.billToCompanyId ? await db.select().from(schema.companies).where(eq(schema.companies.id, inv.billToCompanyId)) : [];
   const [site] = job?.siteId ? await db.select().from(schema.sites).where(eq(schema.sites.id, job.siteId)) : [];
   const owing = owingOn(inv);
+  const stock = await stockPayFor(inv.id, owing);
   return {
     ref: inv.number,
     kindLabel: INVOICE_KIND_LABEL[inv.kind] ?? "Invoice",
@@ -413,7 +414,22 @@ export async function payState(inv: typeof schema.invoices.$inferSelect) {
     siteAddress: site ? [site.address, site.suburb].filter(Boolean).join(", ") : null,
     cardPayments: cardPaymentsOn() && owing > 0,
     bank: bank(),
+    /** Only a direct invoice with stock waiting on its deposit. */
+    stockLabel: stock?.stockLabel ?? null,
+    depositOption: stock?.depositOption ?? null,
   };
+}
+
+/** The stock deposit choice for the pay page. Never stops the page loading. */
+async function stockPayFor(invoiceId: number, owing: number) {
+  if (!(owing > 0)) return null;
+  try {
+    const { stockPayInfo } = await import("../lib/stock/pay");
+    return await stockPayInfo(invoiceId, owing);
+  } catch (e) {
+    console.error("[stock] pay page info failed:", (e as Error).message);
+    return null;
+  }
 }
 
 const payPage = {
@@ -422,11 +438,18 @@ const payPage = {
   }),
 
   /** Open a Stripe page for what is owing now. The browser goes there. */
-  checkout: withUser.input(z.object({ token: z.string().min(1).max(80) })).handler(async ({ input }) => {
+  checkout: withUser.input(z.object({ token: z.string().min(1).max(80), choice: z.enum(["deposit", "full"]).optional() })).handler(async ({ input }) => {
     const inv = await invoiceForPayToken(input.token);
     if (!cardPaymentsOn()) throw bad("Card payments are not available right now. Please pay by bank transfer.");
+    // The deposit amount is worked out again here, never taken from the browser.
+    let amount: number | null = null;
+    if (input.choice === "deposit") {
+      const stock = await stockPayFor(inv.id, owingOn(inv));
+      if (!stock?.depositOption) throw bad("The deposit has already been paid or recorded. Please pay the balance shown.");
+      amount = stock.depositOption.amount;
+    }
     try {
-      const out = await checkoutForInvoice(inv.id, { returnTo: `${payUrl(inv.id)}` });
+      const out = await checkoutForInvoice(inv.id, { returnTo: `${payUrl(inv.id)}`, amount });
       return { url: out.url };
     } catch (e) {
       throw bad(String((e as Error)?.message ?? e).replace(/^Stripe: /, "Card payment could not start: "));

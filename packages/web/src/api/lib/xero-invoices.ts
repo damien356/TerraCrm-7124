@@ -621,6 +621,7 @@ async function recordFromXero(
         paidOn: l.read.date ?? new Date(),
         byName: "Xero",
         actorRole: "system",
+        source: "xero",
         how: l.kind === "contra" ? `settled by contra in Xero (${acct}), not a bank payment` : `received by bank (${acct} in Xero)`,
       });
     } catch (e) {

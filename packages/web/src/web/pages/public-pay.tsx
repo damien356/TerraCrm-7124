@@ -77,10 +77,10 @@ export default function PublicPayPage() {
   const inv = confirm.data ?? page.data;
   const justPaid = confirm.data && (confirm.data.result === "paid" || confirm.data.result === "part_paid" || confirm.data.result === "already_counted");
 
-  async function pay() {
+  async function pay(choice: "deposit" | "full" = "full") {
     setError(null);
     try {
-      const out = await start.mutateAsync({ token });
+      const out = await start.mutateAsync({ token, choice });
       window.location.href = out.url;
     } catch (e) {
       setError(errorText(e));
@@ -145,6 +145,7 @@ export default function PublicPayPage() {
             <dd className="tabular">{moneyExact(inv.owing)}</dd>
           </div>
         </dl>
+        {inv.stockLabel ? <p className="mt-3 text-right text-sm text-muted-foreground">{inv.stockLabel}</p> : null}
       </PublicCard>
 
       {inv.status === "void" ? (
@@ -156,10 +157,28 @@ export default function PublicPayPage() {
           <div className="flex flex-col gap-3">
             {inv.cardPayments ? (
               <>
-                <Button size="lg" onClick={pay} disabled={start.isPending} className="w-full sm:w-auto sm:self-start">
-                  {start.isPending ? <Spinner /> : <CreditCard className="size-4" />}
-                  Pay {moneyExact(inv.owing)} by card
-                </Button>
+                {inv.depositOption ? (
+                  <>
+                    <p className="text-sm">
+                      Pay the deposit of {moneyExact(inv.depositOption.amount)} ({inv.depositOption.percent}%) to secure your stock, or pay it all now. Balance after the deposit:{" "}
+                      {moneyExact(inv.depositOption.balance)}.
+                    </p>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Button size="lg" onClick={() => pay("deposit")} disabled={start.isPending} className="w-full sm:w-auto">
+                        {start.isPending ? <Spinner /> : <CreditCard className="size-4" />}
+                        Pay the {moneyExact(inv.depositOption.amount)} deposit
+                      </Button>
+                      <Button size="lg" variant="outline" onClick={() => pay("full")} disabled={start.isPending} className="w-full sm:w-auto">
+                        Pay the full {moneyExact(inv.owing)}
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <Button size="lg" onClick={() => pay("full")} disabled={start.isPending} className="w-full sm:w-auto sm:self-start">
+                    {start.isPending ? <Spinner /> : <CreditCard className="size-4" />}
+                    Pay {moneyExact(inv.owing)} by card
+                  </Button>
+                )}
                 <p className="text-xs text-muted-foreground">
                   Secure payment through Stripe. Visa, Mastercard, Amex, Apple Pay and Google Pay. No card surcharge.
                 </p>

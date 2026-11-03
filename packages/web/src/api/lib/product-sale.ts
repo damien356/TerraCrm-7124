@@ -192,8 +192,10 @@ export async function previewSale(input: SaleInput) {
   const totals = totalsOf(lines);
   const accounts = await salesAccountsView();
   const account = accounts[buyer.salesCategory];
-  const depositPercent = input.mode === "invoice" ? 0 : (input.depositPercent ?? buyer.cardPercent ?? 0);
+  const depositPercent = input.mode === "invoice" && !(await stockSalesOn()) ? 0 : (input.depositPercent ?? buyer.cardPercent ?? 0);
   const deposit = input.mode === "quote" && depositPercent > 0 ? r2((totals.total * depositPercent) / 100) : 0;
+  // S2 (A1.5): a sale with no % typed and none on the card is flagged, never treated as 0%.
+  const depositBlank = (await stockSafeguardsOn()) && input.depositPercent == null && buyer.cardPercent == null;
   const email = await emailOf(buyer.billTo);
   const ordering = input.orderNeeded ? lines.filter((l) => l.toOrder > 0) : [];
   return {
@@ -205,6 +207,7 @@ export async function previewSale(input: SaleInput) {
     ...totals,
     depositPercent,
     deposit,
+    depositBlank,
     orderNeeded: input.orderNeeded,
     ordering: ordering.map((l) => ({ description: l.description, qty: l.toOrder, unit: l.unit, supplierName: l.supplierName, note: l.orderNote })),
     /** Plain statements shown above Confirm. */
@@ -220,6 +223,7 @@ export async function previewSale(input: SaleInput) {
           : "Everything is coming from stock, so nothing is ordered."
         : "Nothing is ordered. Tick \"We need to order this\" if it has to come from a supplier.",
       "No install tasks, crew alerts, care emails or Crew logins. Nothing is marked paid.",
+      ...(depositBlank ? ["Deposit % to complete: no % was typed and the client card has none. Stock is not reserved until the office fills it in."] : []),
     ],
   };
 }
@@ -341,7 +345,11 @@ export async function raiseSale(input: SaleInput & { requestKey: string; expecte
         source: buyer.kind === "installer" ? "Installer (materials)" : SALE_SOURCE,
         siteId: null,
         billTo: buyer.billTo,
-        depositPercent: input.mode === "invoice" ? 0 : (input.depositPercent ?? buyer.cardPercent ?? 0),
+        // With S2 on, no typed % and no card % stays blank ("Deposit % to complete"), never 0.
+        // A1.3: with stock on, a direct invoice keeps the typed % or the card % so stock can wait on a deposit. Off, today's 0%.
+        depositPercent: (await stockSafeguardsOn()) || (input.mode === "invoice" && (await stockSalesOn()))
+          ? (input.depositPercent ?? undefined)
+          : input.mode === "invoice" ? 0 : (input.depositPercent ?? buyer.cardPercent ?? 0),
         validDays: 30,
         notes: null,
         terms: null,
@@ -421,6 +429,8 @@ export async function raiseSale(input: SaleInput & { requestKey: string; expecte
     await db.update(schema.jobs).set({ value: realTotal, depositAmount: 0, updatedAt: now }).where(eq(schema.jobs.id, jobId));
     await moveJobForward({ jobId, target: "won", why: "product sale, invoiced straight away", actor });
     const inv = await raiseJobInvoice({ jobId, kind: "final", label: `Products supplied, quote ${ref}`, actor: { name: actor.name, role: actor.role } });
+
+    await stockFreezeOnRaise(jobId);
 
     let poDrafts: string[] = [];
     if (input.orderNeeded) poDrafts = (await orderForSale(sale.id, { quoteRef: ref, actor })).drafted;
@@ -590,4 +600,37 @@ export async function saleQuoteAccepted(args: { jobId: number; quoteId: number; 
   if (!sale.orderNeeded) return { sale, pos: [] as Awaited<ReturnType<typeof orderForSale>>["pos"], ordered: false };
   const out = await orderForSale(sale.id, { quoteRef: args.quoteRef, actor: args.actor });
   return { sale, pos: out.pos, ordered: true };
+}
+
+/** S2 Deposit safeguards on or paused. Off, or the stock tables missing, means today's behaviour. */
+async function stockSafeguardsOn() {
+  try {
+    const { isLive } = await import("./stock/core");
+    return await isLive("s2");
+  } catch {
+    return false;
+  }
+}
+
+/** "Raise invoice now": freeze the stock terms if a stock order already exists. Nothing happens when S3 is off. */
+async function stockFreezeOnRaise(jobId: number) {
+  try {
+    const { isLive } = await import("./stock/core");
+    if (!(await isLive("s3"))) return;
+    const { orderOfJob, syncTerms } = await import("./stock/orders");
+    const o = await orderOfJob(jobId);
+    if (o) await syncTerms(o);
+  } catch (e) {
+    console.error("[stock] freeze on raise", e);
+  }
+}
+
+/** S3 Stock-backed sales on or paused. */
+async function stockSalesOn() {
+  try {
+    const { isLive } = await import("./stock/core");
+    return await isLive("s3");
+  } catch {
+    return false;
+  }
 }
