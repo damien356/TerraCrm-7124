@@ -21,6 +21,7 @@ import {
   useReleaseHold,
   useStockPanel,
 } from "../queries/stock";
+import { useCustomerArrangement } from "../queries/stockSupply";
 
 /**
  * The stock card on a job or a product sale (v3 section 4, A1.2 to A1.4).
@@ -31,7 +32,6 @@ import {
  * this kind of order is off and no order exists.
  */
 
-const unitText = (u: string | null | undefined) => (u === "m2" ? "m²" : u === "lm" ? "m" : u === "unit" || u === "ea" || u === "item" ? "each" : (u ?? ""));
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function StockPanelCard({ jobId }: { jobId: number }) {
@@ -59,6 +59,7 @@ export function StockPanelCard({ jobId }: { jobId: number }) {
         action={p.order ? <RecheckButton jobId={jobId} onMsg={setMsg} /> : null}
       />
       <DepositBox p={p} run={run} />
+      <ShortageBox p={p} run={run} />
       <HoldList p={p} run={run} />
       {p.switchState === "on" && p.order?.status !== "cancelled" && p.order?.status !== "review" ? <AllocateForm p={p} jobId={jobId} run={run} /> : null}
       {p.canBringIn ? <BringIn jobId={jobId} run={run} /> : null}
@@ -140,6 +141,55 @@ function DepositBox({ p, run }: { p: Panel; run: Run }) {
   );
 }
 
+/**
+ * A2c: material on this order that is short right now. Container and
+ * stock-only shortages stop the customer paying online until the shortage is
+ * resolved or the main admin writes down what the customer agreed to. That
+ * record is separate from the internal approval note.
+ */
+function ShortageBox({ p, run }: { p: Panel; run: Run }) {
+  if (!p.shortages.length) return null;
+  return (
+    <div className="grid gap-2 border-b border-border bg-amber-50 px-4 py-3 text-sm">
+      {p.shortages.map((s) => (
+        <ShortageRow key={`${s.target.orderId ?? "i" + s.target.invoiceId}-${s.productId}`} s={s} canRecord={p.canRecordArrangement} run={run} />
+      ))}
+    </div>
+  );
+}
+
+function ShortageRow({ s, canRecord, run }: { s: Panel["shortages"][number]; canRecord: boolean; run: Run }) {
+  const save = useCustomerArrangement();
+  const [text, setText] = React.useState("");
+  const [agreed, setAgreed] = React.useState(false);
+  const id = `arr-${s.target.orderId ?? "i" + s.target.invoiceId}-${s.productId}`;
+  return (
+    <div className="grid gap-1">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span className="font-medium">{s.product}</span>
+        <span className="text-amber-800">{s.label}</span>
+        {s.blocksPayment && !s.arrangement ? <span className="text-xs text-amber-800">Online payment is paused until this is resolved or the customer's arrangement is recorded.</span> : null}
+      </div>
+      {s.arrangement ? (
+        <p className="text-xs text-muted-foreground">
+          Customer agreed: {s.arrangement.text} ({s.arrangement.byName ?? "main admin"}
+          {s.arrangement.at ? `, ${new Date(s.arrangement.at).toLocaleDateString("en-AU")}` : ""})
+        </p>
+      ) : s.blocksPayment && canRecord ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Input className="h-8 min-w-64 flex-1" value={text} onChange={(e) => setText(e.target.value)} placeholder="What the customer agreed to, for example: 40 bags now, 10 in December" />
+          <label htmlFor={id} className="flex items-center gap-1.5 text-xs">
+            <Checkbox id={id} checked={agreed} onChange={(e) => setAgreed(e.target.checked)} /> The customer agreed to this
+          </label>
+          <Button size="sm" variant="outline" className="h-8" disabled={save.isPending} onClick={() => run(() => save.mutateAsync({ orderId: s.target.orderId ?? null, invoiceId: s.target.invoiceId ?? null, productId: s.productId, arrangement: text, customerAgreed: agreed }), "Customer arrangement recorded.")}>
+            Record arrangement
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function HoldList({ p, run }: { p: Panel; run: Run }) {
   if (!p.order) return null;
   if (!p.holds.length) return <Empty>No stock chosen for this order yet.</Empty>;
@@ -172,10 +222,10 @@ function HoldRow({ h, p, run }: { h: StockHold; p: Panel; run: Run }) {
         <span className="w-20 text-muted-foreground">to come in</span>
       )}
       <span className="w-28">
-        {h.outstanding} {unitText(h.unit)}
+        {h.outstanding} {h.unitLabel}
         {h.collectedQty > 0 ? ` (${h.collectedQty} out)` : ""}
       </span>
-      {h.freeQty > 0 ? <span className="text-xs">Free remainder {h.freeQty} {unitText(h.unit)} ({h.freeState})</span> : null}
+      {h.freeQty > 0 ? <span className="text-xs">Free remainder {h.freeQty} {h.unitLabel} ({h.freeState})</span> : null}
       {h.expiresAt && h.status === "temporary" ? <span className="text-xs text-muted-foreground">until {new Date(h.expiresAt).toLocaleString("en-AU")}</span> : null}
       {h.note ? <span className="text-xs text-muted-foreground">{h.note}</span> : null}
       <span className="ml-auto flex flex-wrap gap-1.5">
@@ -234,7 +284,8 @@ function AllocateForm({ p, jobId, run }: { p: Panel; jobId: number; run: Run }) 
           <option value="">{lineChoices.length ? "Pick the quote line or material" : "No matching line on this job"}</option>
           {lineChoices.map((l) => (
             <option key={l.key} value={l.key}>
-              {l.label} · {l.qty} {unitText(l.unit)}
+              {l.label} · {l.qty} {l.unitLabel}
+              {l.conversion ? ` (${l.conversion})` : ""}
             </option>
           ))}
         </Select>
@@ -251,7 +302,7 @@ function AllocateForm({ p, jobId, run }: { p: Panel; jobId: number; run: Run }) 
           <option value="">Pick a roll, box or lot</option>
           {p.choices.map((c) => (
             <option key={c.id} value={c.id}>
-              {c.code} {c.product} · batch {c.batch ?? "unknown"} · {c.available} {unitText(c.unit)} free
+              {c.code} {c.product} · batch {c.batch ?? "unknown"} · {c.available} {c.unitLabel} free{c.conversion ? ` (${c.conversion})` : ""}
             </option>
           ))}
         </Select>
@@ -263,7 +314,7 @@ function AllocateForm({ p, jobId, run }: { p: Panel; jobId: number; run: Run }) 
             <option value="lm">m</option>
             <option value="m2">m²</option>
             <option value="box">boxes</option>
-            <option value="each">each</option>
+            <option value="each">{chosen && !["lm", "m2", "box"].includes(chosen.unit) ? chosen.unitLabel : "each"}</option>
           </Select>
         </div>
       </Field>

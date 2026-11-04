@@ -5584,13 +5584,21 @@ export const stockSupplyApprovals = sqliteTable(
   "stock_supply_approvals",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    /** quote · sale (the request key of the sale being raised) */
+    /** quote · sale (the request key of the sale being raised) · order or invoice (A2c: the customer's agreed arrangement, on a stock order or on a direct-sale invoice with no stock order) */
     entityType: text("entity_type").notNull(),
     entityKey: text("entity_key").notNull(),
     productId: integer("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
     shortQty: real("short_qty").notNull(),
     note: text("note").notNull(),
     byName: text("by_name").notNull(),
+    /**
+     * A2c: only on entityType "order" or "invoice". What the customer agreed to, recorded by
+     * the main admin. Empty means no customer agreement. The internal note above
+     * never stands in for it: payment stays blocked until this is filled in.
+     */
+    customerAgreed: text("customer_agreed").notNull().default(""),
+    customerAgreedBy: text("customer_agreed_by"),
+    customerAgreedAt: integer("customer_agreed_at", { mode: "timestamp" }),
     ...timestamps,
   },
   (t) => [uniqueIndex("stock_supply_approvals_uq").on(t.entityType, t.entityKey, t.productId)],

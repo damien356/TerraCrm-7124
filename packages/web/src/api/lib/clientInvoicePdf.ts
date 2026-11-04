@@ -45,7 +45,12 @@ export type ClientInvoicePdfInput = {
   paid: number;
   owing: number;
   payUrl: string | null;
-  /** A direct invoice with stock waiting on a deposit: "Deposit to secure stock: $300 (30%). Balance $700." */
+  /** A2c: true while a container or stock-only shortage blocks payment. No bank details or pay link then. */
+  payBlocked?: boolean;
+  /**
+   * Stock wording under the amount due: "Required deposit: $300.00 (30% of the invoice total). Balance after deposit: $700.00.",
+   * or the A2c shortage notice. Paragraphs split by a new line.
+   */
   depositLine?: string | null;
   /** The quote this invoice bills, drawn as the quote PDF draws it. */
   works?: InvoiceWorks | null;
@@ -273,8 +278,9 @@ export async function renderClientInvoicePdf(input: ClientInvoicePdfInput): Prom
   // The invoice line, its totals and how to pay stay together on one page, so
   // the payment boxes never sit alone on the last page.
   const bh = 58;
-  const payH = bh + 6 + (input.payUrl ? 50 : 0) + 6;
-  need(142 + desc.length * 13 + (input.paid > 0 ? 14 : 0) + (input.depositLine ? 16 : 0) + payH, 34);
+  const payH = (input.payBlocked ? 0 : bh + 6) + (input.payUrl ? 50 : 0) + 6;
+  const stockLines = (input.depositLine ?? "").split("\n").filter((x) => x.trim()).flatMap((para) => wrap(para, bold, 9.5, CW * 0.62));
+  need(142 + desc.length * 13 + (input.paid > 0 ? 14 : 0) + (stockLines.length ? stockLines.length * 13 + 3 : 0) + payH, 34);
   cur.page.drawRectangle({ x: M, y: cur.y - 6, width: CW, height: 20, color: FILL });
   text(cur.page, works ? "THIS INVOICE" : "DESCRIPTION", M + 8, cur.y, bold, 7.5, LABEL);
   textRight(cur.page, "AMOUNT (EX GST)", r - 8, cur.y, bold, 7.5, LABEL);
@@ -306,9 +312,12 @@ export async function renderClientInvoicePdf(input: ClientInvoicePdfInput): Prom
   text(cur.page, "Amount due on this invoice", bx + 13, cur.y, bold, 11);
   textRight(cur.page, money(input.owing), r - 8, cur.y - 1, bold, 14);
   cur.y -= dueH + 6;
-  if (input.depositLine) {
-    textRight(cur.page, input.depositLine, r - 8, cur.y, bold, 9.5);
-    cur.y -= 16;
+  if (stockLines.length) {
+    for (const l of stockLines) {
+      textRight(cur.page, l, r - 8, cur.y, bold, 9.5);
+      cur.y -= 13;
+    }
+    cur.y -= 3;
   }
 
   /* Bank transfer. */
@@ -316,20 +325,23 @@ export async function renderClientInvoicePdf(input: ClientInvoicePdfInput): Prom
   need(payH, 34);
   page = cur.page;
   y = cur.y;
-  page.drawRectangle({ x: M, y: y - bh + 12, width: CW, height: bh, color: FILL });
-  text(page, "PAYMENT BY BANK TRANSFER", M + 10, y, bold, 7.5, LABEL);
-  const cols: [string, string][] = [
-    ["Account Name", TERRA_PRINT.bank.name],
-    ["BSB", TERRA_PRINT.bank.bsb],
-    ["Account", TERRA_PRINT.bank.account],
-    ["Reference", input.number],
-  ];
-  const cw = (CW - 20) / cols.length;
-  cols.forEach(([k, v], i) => {
-    text(page, k, M + 10 + i * cw, y - 14, reg, 8, MUTED);
-    text(page, v, M + 10 + i * cw, y - 26, bold, 10);
-  });
-  y -= bh + 6;
+  // A2c: while payment is blocked the shortage notice above asks the customer to contact us, so no bank details.
+  if (!input.payBlocked) {
+    page.drawRectangle({ x: M, y: y - bh + 12, width: CW, height: bh, color: FILL });
+    text(page, "PAYMENT BY BANK TRANSFER", M + 10, y, bold, 7.5, LABEL);
+    const cols: [string, string][] = [
+      ["Account Name", TERRA_PRINT.bank.name],
+      ["BSB", TERRA_PRINT.bank.bsb],
+      ["Account", TERRA_PRINT.bank.account],
+      ["Reference", input.number],
+    ];
+    const cw = (CW - 20) / cols.length;
+    cols.forEach(([k, v], i) => {
+      text(page, k, M + 10 + i * cw, y - 14, reg, 8, MUTED);
+      text(page, v, M + 10 + i * cw, y - 26, bold, 10);
+    });
+    y -= bh + 6;
+  }
 
   /* Pay by card, when it is switched on. */
   if (input.payUrl) {
@@ -465,21 +477,34 @@ export async function clientInvoicePdfFor(invoiceId: number) {
   const stored = storedSnapshot(inv);
   const snapshot = stored ?? (await legacySnapshot(inv)) ?? (await freshSnapshot(inv));
   const input = pdfInputFrom(inv, snapshot);
-  input.depositLine = await stockDepositLine(inv.id, input.owing);
+  const note = await stockPayNote(inv.id, input.owing);
+  input.depositLine = note.text;
+  // A2c: payment is blocked while a container or stock-only shortage is open. No pay link on the PDF then.
+  if (note.blocked) {
+    input.payUrl = null;
+    input.payBlocked = true;
+  }
   const pdf = await renderClientInvoicePdf(input);
   return { pdf, filename: `Terra Flooring Invoice ${inv.number}.pdf`, snapshot, fresh: !stored };
 }
 
-/** The stock deposit line, worked out now. Never stops the PDF. */
-export async function stockDepositLine(invoiceId: number, owing: number): Promise<string | null> {
-  if (!(owing > 0)) return null;
+/** The stock wording for the PDF and email, worked out now: the shortage notice, then the deposit line. Never stops the PDF. */
+export async function stockPayNote(invoiceId: number, owing: number): Promise<{ text: string | null; blocked: boolean }> {
+  if (!(owing > 0)) return { text: null, blocked: false };
   try {
     const { stockPayInfo } = await import("./stock/pay");
-    return (await stockPayInfo(invoiceId, owing))?.depositLine ?? null;
+    const info = await stockPayInfo(invoiceId, owing);
+    const text = [info?.notice, info?.depositLine].filter((x): x is string => !!x).join("\n");
+    return { text: text || null, blocked: !!info?.blocked };
   } catch (e) {
     console.error("[stock] deposit line failed:", (e as Error).message);
-    return null;
+    return { text: null, blocked: false };
   }
+}
+
+/** The same, as one string. */
+export async function stockDepositLine(invoiceId: number, owing: number): Promise<string | null> {
+  return (await stockPayNote(invoiceId, owing)).text;
 }
 
 /**

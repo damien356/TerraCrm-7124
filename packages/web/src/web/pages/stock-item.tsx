@@ -12,7 +12,6 @@ import { useApproveItem, useSetCost, useStockItem } from "../queries/stock";
  * Admin with the "Change stock costs" tick.
  */
 
-const unitText = (u: string | null | undefined) => (u === "m2" ? "m²" : u === "lm" ? "m" : (u ?? ""));
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export default function StockItemPage() {
@@ -58,11 +57,12 @@ export default function StockItemPage() {
         <Card>
           <CardHeader title="On this item" />
           <div className="grid grid-cols-2 gap-4 p-4 text-sm sm:grid-cols-4">
-            <Fact label="On hand" value={`${item.qty} ${unitText(item.unit)}`} />
-            <Fact label="Held (blocking)" value={`${Math.round(heldTotal * 100) / 100} ${unitText(item.unit)}`} />
-            <Fact label="Free" value={`${item.available} ${unitText(item.unit)}`} strong />
+            <Fact label="On hand" value={`${item.qty} ${item.unitLabel}`} />
+            <Fact label="Held (blocking)" value={`${Math.round(heldTotal * 100) / 100} ${item.unitLabel}`} />
+            <Fact label="Free" value={`${item.available} ${item.unitLabel}`} strong />
             <Fact label="Status" value={`${item.status === "to_check" ? "To check" : item.status} · ${item.conditionLabel}`} />
             {perms.viewCosts ? <Fact label="Cost" value={item.costLabel ?? ""} warn={item.costUnknown} /> : null}
+            {item.conversion ? <Fact label="Bought as" value={item.conversion} /> : null}
           </div>
           {item.status === "to_check" && perms.approve ? (
             <div className="border-t border-border px-4 py-3">
@@ -83,7 +83,7 @@ export default function StockItemPage() {
                 <div key={h.id} className="flex flex-wrap items-center gap-3 px-4 py-2">
                   <span className="w-28 font-medium">{h.statusLabel}</span>
                   <span className="w-24">
-                    {h.outstanding} {unitText(h.unit)}
+                    {h.outstanding} {h.unitLabel}
                   </span>
                   {h.jobId ? (
                     <Link href={`/jobs/${h.jobId}`} className="text-primary underline-offset-2 hover:underline">

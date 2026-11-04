@@ -4,6 +4,7 @@ import * as schema from "../database/schema";
 import { boxM2Of, FLOOR_TYPES } from "./flooring-qty";
 import { wholeUnits } from "./order-sizes";
 import { isCountedPack, packNameOf, packWord as packNameWord } from "./pack-name";
+import { singular } from "./stock/replenish";
 
 /**
  * The materials list on the crew app (notes 18.61).
@@ -152,7 +153,9 @@ export function crewQty(qty: number, unit: string, p: Product | null): { count: 
   if (unit === "m2") return { count: `${r2(qty)} m²`, m2: `${r2(qty)} m²`, n: r2(qty), word: "m²" };
   // Everything else comes whole: bags, pails, tubes, rolls.
   const n = Math.ceil(qty - 1e-9);
-  const [one, many] = packWord(unit, `${p.colour} ${p.range} ${p.size} ${p.weight}`);
+  // A2c: the product's own stock unit word first ("bags"), the same word as the stock list and the PO.
+  const label = (p.stockUnitLabel ?? "").trim().toLowerCase();
+  const [one, many] = label ? [singular(label), label] : packWord(unit, `${p.colour} ${p.range} ${p.size} ${p.weight}`);
   return { count: plural(n, one, many), m2: null, n, word: n === 1 ? one : many };
 }
 

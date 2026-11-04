@@ -2,7 +2,7 @@ import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import { db } from "../../database";
 import * as schema from "../../database/schema";
 import { stockAlert } from "./alerts";
-import { BLOCKING, cm, isOn, r4, unitText } from "./core";
+import { bad, BLOCKING, cm, isOn, r4, unitText } from "./core";
 
 /* ---------------------------------------------------------------------------
  * A2: supply settings, the numbers per product, and the reorder suggestion.
@@ -62,6 +62,65 @@ export const supplierOf = (p: Pick<Product, "preferredSupplierId" | "supplierId"
 /** The unit a warehouse PO line is written in, which is also what receiving counts. */
 export const lineUnitOf = (p: Pick<Product, "unit">) => (p.unit === "m2" || p.unit === "lm" || p.unit === "box" ? p.unit : "unit");
 export const stockUnitText = (p: Pick<Product, "stockUnitLabel" | "unit">) => p.stockUnitLabel || unitText(lineUnitOf(p) === "unit" ? "each" : lineUnitOf(p));
+
+const EACH = new Set(["unit", "each", "ea", "item", "units", ""]);
+/**
+ * A2c: the one word for a quantity of this product, used by the stock list,
+ * the job's stock card, receiving, warehouse POs, the PO PDF and the crew.
+ * The product's own stock unit ("bags") whenever the quantity is in its stock
+ * unit, so a product is never "each" on one screen and "pieces" on another.
+ * Any other unit (m², m) is written as that unit.
+ */
+export function unitWord(p: Pick<Product, "stockUnitLabel" | "unit"> | null | undefined, unit: string | null | undefined) {
+  const u = unit ?? (p ? lineUnitOf(p) : "");
+  if (p) {
+    const stock = lineUnitOf(p);
+    if (u === stock || (EACH.has(u) && EACH.has(stock))) return stockUnitText(p);
+  }
+  return unitText(EACH.has(u) ? "each" : u);
+}
+/** One word for one of them: "bags" -> "bag", "boxes" -> "box". */
+export function singular(word: string) {
+  if (/(xes|ches|shes|sses)$/.test(word)) return word.slice(0, -2);
+  if (/[^s]s$/.test(word)) return word.slice(0, -1);
+  return word;
+}
+/** "pallet" -> "pallets"; a word already plural stays as it is. */
+export function manyOf(word: string) {
+  if (word.endsWith("s")) return word;
+  if (/(x|ch|sh)$/.test(word)) return `${word}es`;
+  return `${word}s`;
+}
+/** "1 pallet = 50 bags" when the product is bought in a different unit. Null when it is bought as it is counted. */
+export function conversionText(p: Pick<Product, "stockUnitLabel" | "unit" | "purchaseUnit" | "stockPerPurchase">) {
+  const pu = (p.purchaseUnit ?? "").trim();
+  if (!pu || !(p.stockPerPurchase && p.stockPerPurchase > 0)) return null;
+  const word = stockUnitText(p);
+  if (pu.toLowerCase() === word.toLowerCase() && p.stockPerPurchase === 1) return null;
+  return `1 ${singular(pu)} = ${r4(p.stockPerPurchase)} ${p.stockPerPurchase === 1 ? singular(word) : word}`;
+}
+
+/**
+ * A2c gate: what is still unconfirmed before this product can go into stock.
+ * Its supply rule saved by hand (Reorder > product settings), the stock unit
+ * word for a product counted in whole units, and the conversion when it is
+ * bought in a different unit. Empty: ready.
+ */
+export function setupProblems(p: Product): string[] {
+  const out: string[] = [];
+  if (!p.supplySetAt) out.push("Its supply rule has not been confirmed.");
+  if (lineUnitOf(p) === "unit" && !(p.stockUnitLabel ?? "").trim()) out.push("The stock unit word is missing (for example bags or pails).");
+  if ((p.purchaseUnit ?? "").trim() && !(p.stockPerPurchase && p.stockPerPurchase > 0)) out.push(`Purchase unit "${p.purchaseUnit}" has no conversion to the stock unit.`);
+  return out;
+}
+
+/** Refuses stock in for a product that is not set up. */
+export async function assertSetUp(productId: number) {
+  const [p] = await db.select().from(schema.products).where(eq(schema.products.id, productId));
+  if (!p) return;
+  const problems = setupProblems(p);
+  if (problems.length) throw bad(`Confirm ${productName(p)} before it goes into stock. ${problems.join(" ")} Set it on Reorder, product supply settings.`);
+}
 
 /**
  * A shortage row is written in the order line's unit. Warehouse orders count

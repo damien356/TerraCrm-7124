@@ -305,8 +305,15 @@ export function registerA2b(h: Helpers) {
         holds: hs.map((x) => [x.status, x.qty]),
         status: m().recheck.reserveStatus(hs),
         payLabel: pay?.stockLabel ?? null,
+        payNotice: pay?.notice ?? null,
+        payBlocked: pay?.blocked ?? null,
       };
-      if (hs.some((x) => x.status === "short") && pay) expect(pay.stockLabel).toBe(m().pay.PART_SHORT_LABEL);
+      // A2c: the container shortage is a known shortage. The customer is told before paying, and online payment waits.
+      expect(pay).not.toBeNull();
+      expect(pay!.notice).toBe(m().pay.SHORT_BEFORE_PAY);
+      expect(pay!.blocked).toBe(true);
+      expect(pay!.stockLabel).toBeNull();
+      expect(pay!.depositOption).toBeNull();
     });
   });
 

@@ -8,7 +8,7 @@ import { bad, cm, forbid, isOn, notFound, type PermActor, r2, r4 } from "./core"
 import { afterChange } from "./holds";
 import type { Item } from "./items";
 import { depositState, orderById } from "./orders";
-import { itemFactor, lineUnitOf, modeOf, productName, productNumbers, roundOrder, stockUnitText, supplierOf, supplyState, toStockUnits, type Product } from "./replenish";
+import { conversionText, itemFactor, lineUnitOf, manyOf, modeOf, productName, productNumbers, roundOrder, singular, stockUnitText, supplierOf, supplyState, toStockUnits, type Product } from "./replenish";
 
 /* ---------------------------------------------------------------------------
  * A2: warehouse purchase orders (PO-W0001, PO-W0002 ...).
@@ -97,9 +97,13 @@ async function ensureDraft(supplierId: number, actor: Actor) {
   throw bad("Could not number the warehouse order. Try again.");
 }
 
+/** A2c: "(100 bags = 2 pallets. 1 pallet = 50 bags)" when bought in a different unit. */
 const lineDescription = (p: Product, stockQty: number) => {
   const per = p.stockPerPurchase && p.stockPerPurchase > 0 ? p.stockPerPurchase : null;
-  const packs = per && p.purchaseUnit ? `, ${r4(stockQty / per)} ${p.purchaseUnit} of ${per}` : "";
+  const conv = conversionText(p);
+  const pu = (p.purchaseUnit ?? "").trim();
+  const n = per ? r4(stockQty / per) : 0;
+  const packs = per && pu && conv ? ` = ${n} ${n === 1 ? singular(pu) : manyOf(pu)}. ${conv}` : "";
   return `${productName(p)}${p.size ? ` ${p.size}` : ""} (${r4(stockQty)} ${stockUnitText(p)}${packs})`;
 };
 

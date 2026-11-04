@@ -77,6 +77,9 @@ CREATE TABLE `stock_supply_approvals` (
 	`short_qty` real NOT NULL,
 	`note` text NOT NULL,
 	`by_name` text NOT NULL,
+	`customer_agreed` text DEFAULT '' NOT NULL,
+	`customer_agreed_by` text,
+	`customer_agreed_at` integer,
 	`created_at` integer NOT NULL,
 	`updated_at` integer NOT NULL,
 	FOREIGN KEY (`product_id`) REFERENCES `products`(`id`) ON UPDATE no action ON DELETE cascade

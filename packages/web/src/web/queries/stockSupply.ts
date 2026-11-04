@@ -47,3 +47,4 @@ export const useToJobPo = () => useMutation(orpc.stockSupply.toJobPo.mutationOpt
 export const useRemoveLink = () => useMutation(orpc.stockSupply.removeLink.mutationOptions({ onSuccess: useSupplyRefresh() }));
 export const useCloseLine = () => useMutation(orpc.stockSupply.closeLine.mutationOptions({ onSuccess: useSupplyRefresh() }));
 export const useApproveShort = () => useMutation(orpc.stockSupply.approveShort.mutationOptions({ onSuccess: useSupplyRefresh() }));
+export const useCustomerArrangement = () => useMutation(orpc.stockSupply.customerArrangement.mutationOptions({ onSuccess: useSupplyRefresh() }));

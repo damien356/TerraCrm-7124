@@ -126,6 +126,7 @@ async function load() {
     costs: await import("../../src/api/lib/stock/costs"),
     alerts: await import("../../src/api/lib/stock/alerts"),
     pay: await import("../../src/api/lib/stock/pay"),
+    shortage: await import("../../src/api/lib/stock/shortage"),
     receiving: await import("../../src/api/lib/stock/receiving"),
     remainders: await import("../../src/api/lib/stock/remainders"),
     returns: await import("../../src/api/lib/stock/returns"),

@@ -185,14 +185,21 @@ async function loadPo(id: number) {
   return po;
 }
 
-async function warehouseUnits(jobId: number | null, lines: { productId: number | null; unit: string }[]) {
-  const ids = jobId == null ? [...new Set(lines.filter((l) => l.unit === "unit" && l.productId != null).map((l) => l.productId!))] : [];
+const EACH_UNITS = new Set(["unit", "each", "ea", "item"]);
+/**
+ * A2 follow-up and A2c: a line counted in "unit" inside Ops prints the
+ * product's own stock unit (for example "pails"), on warehouse and job POs
+ * alike, the same word as the stock list, receiving and the crew. m², m and
+ * boxes print as they always have.
+ */
+async function warehouseUnits(_jobId: number | null, lines: { productId: number | null; unit: string }[]) {
+  const ids = [...new Set(lines.filter((l) => EACH_UNITS.has(l.unit) && l.productId != null).map((l) => l.productId!))];
   if (!ids.length) return (l: { unit: string }) => l.unit;
-  const { stockUnitText } = await import("../lib/stock/replenish");
+  const { unitWord } = await import("../lib/stock/replenish");
   const prods = await db.select().from(schema.products).where(inArray(schema.products.id, ids));
   return (l: { productId: number | null; unit: string }) => {
-    const p = l.unit === "unit" ? prods.find((x) => x.id === l.productId) : undefined;
-    return p ? stockUnitText(p) : l.unit;
+    const p = EACH_UNITS.has(l.unit) ? prods.find((x) => x.id === l.productId) : undefined;
+    return p && p.stockUnitLabel ? unitWord(p, l.unit) : l.unit;
   };
 }
 

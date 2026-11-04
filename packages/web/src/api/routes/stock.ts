@@ -30,6 +30,8 @@ import { receiveLine } from "../lib/stock/receiving";
 import { approveReturn, returnFromJob } from "../lib/stock/returns";
 import { approveFree, declineFree } from "../lib/stock/remainders";
 import { generalStockValue, jobMaterialTotal } from "../lib/stock/costs";
+import { assertSetUp, conversionText, singular, unitWord } from "../lib/stock/replenish";
+import { jobShortages } from "../lib/stock/shortage";
 
 /* ---------------------------------------------------------------------------
  * Warehouse stock (v3 + amendment A1). Thin: every rule, permission tick and
@@ -54,6 +56,9 @@ async function itemView(it: typeof schema.stockItems.$inferSelect, showCost: boo
     colour: it.colour,
     batch: it.batch,
     unit: it.unit,
+    /** A2c: the product's own unit word ("bags"), the same on every screen. */
+    unitLabel: unitWord(p ?? null, it.unit),
+    conversion: p ? conversionText(p) : null,
     qty: it.qty,
     widthM: it.widthM,
     available: await availableOn(it.id),
@@ -62,7 +67,7 @@ async function itemView(it: typeof schema.stockItems.$inferSelect, showCost: boo
     conditionLabel: CONDITION_LABEL[it.condition] ?? it.condition,
     location: loc?.name ?? null,
     terraOwned: it.terraOwned,
-    costLabel: showCost ? (it.costStatus === "unknown" ? COST_UNKNOWN : it.unitCost != null ? `$${it.unitCost.toFixed(2)} per ${it.costPer} (${it.costStatus})` : null) : null,
+    costLabel: showCost ? (it.costStatus === "unknown" ? COST_UNKNOWN : it.unitCost != null ? `$${it.unitCost.toFixed(2)} per ${it.costPer === "unit" ? singular(unitWord(p ?? null, it.unit)) : it.costPer} (${it.costStatus})` : null) : null,
     costUnknown: it.costStatus === "unknown",
   };
 }
@@ -70,6 +75,7 @@ async function itemView(it: typeof schema.stockItems.$inferSelect, showCost: boo
 async function holdView(h: typeof schema.stockReservations.$inferSelect) {
   const it = h.stockItemId ? await itemById(h.stockItemId).catch(() => null) : null;
   const [job] = h.jobId ? await db.select({ number: schema.jobs.number }).from(schema.jobs).where(eq(schema.jobs.id, h.jobId)) : [];
+  const [prod] = await db.select().from(schema.products).where(eq(schema.products.id, h.productId));
   return {
     id: h.id,
     jobId: h.jobId,
@@ -77,6 +83,7 @@ async function holdView(h: typeof schema.stockReservations.$inferSelect) {
     itemId: h.stockItemId,
     itemCode: it?.code ?? null,
     unit: it?.unit ?? h.lineUnit,
+    unitLabel: unitWord(prod ?? null, it?.unit ?? h.lineUnit),
     qty: h.qty,
     outstanding: outstanding(h),
     collectedQty: h.collectedQty,
@@ -143,7 +150,7 @@ export const stock = {
     return rows
       .filter((p) => !q || productName(p).toLowerCase().includes(q))
       .slice(0, 30)
-      .map((p) => ({ id: p.id, name: productName(p), unit: p.unit, category: p.category, widthM: p.widthM }));
+      .map((p) => ({ id: p.id, name: productName(p), unit: p.unit, unitLabel: unitWord(p, null), conversion: conversionText(p), category: p.category, widthM: p.widthM }));
   }),
 
   /** Opening stock: each piece starts "to check" until an Admin approves it. */
@@ -169,6 +176,8 @@ export const stock = {
       await need(context.actor, "handle");
       await needOn("s1");
       if (input.unitCost == null && !input.costUnknown) throw bad(`Enter the cost, or tick "${COST_UNKNOWN}".`);
+      // A2c: supply rule, stock unit and conversion confirmed before a product goes into stock.
+      await assertSetUp(input.productId);
       const { requestKey, costUnknown, ...rest } = input;
       return createItem(
         { ...rest, unitCost: costUnknown ? null : (rest.unitCost ?? null), costStatus: costUnknown ? "unknown" : "provisional", terraOwned: true },
@@ -194,7 +203,15 @@ export const stock = {
     const [po] = await db.select().from(schema.purchaseOrders).where(eq(schema.purchaseOrders.id, input.poId));
     if (!po) throw bad("PO not found.");
     const lines = await db.select().from(schema.purchaseOrderLines).where(eq(schema.purchaseOrderLines.poId, po.id));
-    return { po: { id: po.id, number: po.number, status: po.status, jobId: po.jobId }, lines: lines.map((l) => ({ id: l.id, description: l.description, qty: l.qty, unit: l.unit, productId: l.productId })) };
+    const ids = [...new Set(lines.map((l) => l.productId).filter((x): x is number => x != null))];
+    const prods = ids.length ? await db.select().from(schema.products).where(inArray(schema.products.id, ids)) : [];
+    return {
+      po: { id: po.id, number: po.number, status: po.status, jobId: po.jobId },
+      lines: lines.map((l) => {
+        const p = prods.find((x) => x.id === l.productId) ?? null;
+        return { id: l.id, description: l.description, qty: l.qty, unit: l.unit, unitLabel: unitWord(p, l.unit), conversion: p ? conversionText(p) : null, productId: l.productId };
+      }),
+    };
   }),
   receive: staffOnly
     .input(
@@ -237,6 +254,17 @@ export const stock = {
     const choices = [];
     for (const it of candidates) choices.push(await itemView(it, perms.viewCosts));
     const accepted = !!(await db.select({ id: schema.quotes.id }).from(schema.quotes).where(and(eq(schema.quotes.jobId, input.jobId), eq(schema.quotes.status, "accepted"))).limit(1))[0];
+    // A2c: a known shortage on the order. Never "Fully reserved" while one is open.
+    const shortages = await jobShortages(input.jobId, order);
+    // A2c: the status line counts in the product's own word ("8 bags outstanding"), as the hold rows do.
+    let reserved = reserveStatus(rawHolds.map((h, i) => ({ ...h, lineUnit: holds[i]?.unitLabel ?? h.lineUnit })));
+    if (shortages.some((x) => !x.arrangement) && (reserved === "Fully reserved" || reserved == null)) reserved = "Not fully reserved: some material is short";
+    const rawLines = await stockLinesOf(input.jobId);
+    const lineProds = rawLines.length ? await db.select().from(schema.products).where(inArray(schema.products.id, [...new Set(rawLines.map((l) => l.productId))])) : [];
+    const lines = rawLines.map((l) => {
+      const lp = lineProds.find((x) => x.id === l.productId) ?? null;
+      return { ...l, unitLabel: unitWord(lp, l.unit), conversion: lp ? conversionText(lp) : null };
+    });
     return {
       kind,
       switchKey: switchFor(kind),
@@ -255,10 +283,12 @@ export const stock = {
           }
         : null,
       awaitingConfirmLabel: AWAITING_CONFIRM,
-      reserveStatus: reserveStatus(rawHolds),
+      reserveStatus: reserved,
+      shortages,
+      canRecordArrangement: context.actor.isMainAdmin,
       holds,
       choices,
-      lines: await stockLinesOf(input.jobId),
+      lines,
       perms,
       canBringIn: context.actor.role === "admin" && (!order || order.status === "planned") && accepted && sw.state !== "off",
       startPosition: order?.startPosition ? JSON.parse(order.startPosition) : null,

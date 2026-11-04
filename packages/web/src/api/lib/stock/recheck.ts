@@ -157,13 +157,13 @@ async function checkOne(o0: Order): Promise<CheckResult> {
 async function paidWhileSupplyShort(o: Order, shortNow: Hold[]) {
   const ids = [...new Set(shortNow.map((h) => h.productId))];
   const prods = await db.select().from(schema.products).where(inArray(schema.products.id, ids));
-  const { modeOf, productName, SHORT_LABEL } = await import("./replenish");
+  const { modeOf, productName, SHORT_LABEL, unitWord } = await import("./replenish");
   for (const p of prods) {
     const mode = modeOf(p);
     if (mode !== "container" && mode !== "stock_only") continue;
     const byUnit = new Map<string, number>();
     for (const h of shortNow.filter((x) => x.productId === p.id)) byUnit.set(h.lineUnit ?? "", r4((byUnit.get(h.lineUnit ?? "") ?? 0) + (h.orderedQty ?? h.qty)));
-    const qty = [...byUnit].map(([u, q]) => qtyText(q, u)).join(" + ");
+    const qty = [...byUnit].map(([u, q]) => `${r4(q)} ${unitWord(p, u || null)}`).join(" + ");
     await stockAlert(`paid-short:${o.id}:${p.id}`, "stock_paid_short", {
       orderId: o.id,
       jobId: o.jobId,

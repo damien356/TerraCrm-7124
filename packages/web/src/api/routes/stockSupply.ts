@@ -7,6 +7,7 @@ import { bad, cm, notFound, productKind, r4, stockPerms, switches } from "../lib
 import {
   leadFlag,
   LEAD_UNKNOWN_TEXT,
+  lineUnitOf,
   modeOf,
   productName,
   productNumbers,
@@ -20,6 +21,7 @@ import {
 } from "../lib/stock/replenish";
 import { addShortageToWarehouse, closeLine, draftSuggestions, editDraftLine, editWarehouseTerms, removeShortageLink, shortageToJobPo, warehouseOrders } from "../lib/stock/warehouse-po";
 import { approveSupplyShort, quoteSupplyLines, supplyShorts } from "../lib/stock/supply-check";
+import { recordCustomerArrangement } from "../lib/stock/shortage";
 
 /* ---------------------------------------------------------------------------
  * A2: supply settings, the Reorder list and warehouse orders. Admin only,
@@ -254,6 +256,8 @@ export const stockSupply = {
       if (input.reorderMethod === "fixed" && !(input.reorderQty && input.reorderQty > 0)) throw bad("Enter the reorder quantity.");
     }
     if (input.purchaseUnit && !input.stockPerPurchase) throw bad(`How many ${input.stockUnitLabel || "stock units"} are in one ${input.purchaseUnit}?`);
+    // A2c: a product counted in whole units says what one is, so every screen uses the same word.
+    if ((input.stockTracked || input.supplyMode !== "job") && lineUnitOf(p) === "unit" && !input.stockUnitLabel) throw bad("Enter the stock unit word, for example bags or pails.");
     if (input.preferredSupplierId != null) {
       const [s] = await db.select({ id: schema.suppliers.id }).from(schema.suppliers).where(eq(schema.suppliers.id, input.preferredSupplierId));
       if (!s) throw bad("Supplier not found.");
@@ -353,4 +357,15 @@ export const stockSupply = {
   approveShort: staffOnly
     .input(z.object({ entityType: z.enum(["quote", "sale"]), entityKey: z.string().trim().min(1).max(80), productId: z.number().int(), shortQty: z.number().positive(), note: z.string().trim().min(5).max(500) }))
     .handler(({ input, context }) => approveSupplyShort(input, context.actor)),
+  /** A2c: the arrangement the customer agreed to for a short product. Main admin only (checked in lib). Kept apart from the internal note. */
+  customerArrangement: staffOnly
+    .input(
+      z.object({ orderId: z.number().int().nullish(), invoiceId: z.number().int().nullish(), productId: z.number().int(), arrangement: z.string().trim().min(10).max(500), customerAgreed: z.boolean() }),
+    )
+    .handler(({ input, context }) => {
+      const base = { productId: input.productId, arrangement: input.arrangement, customerAgreed: input.customerAgreed };
+      if (input.orderId != null) return recordCustomerArrangement({ ...base, orderId: input.orderId }, context.actor);
+      if (input.invoiceId != null) return recordCustomerArrangement({ ...base, invoiceId: input.invoiceId }, context.actor);
+      throw bad("Choose the order or invoice.");
+    }),
 };

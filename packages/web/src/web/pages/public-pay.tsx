@@ -146,12 +146,16 @@ export default function PublicPayPage() {
           </div>
         </dl>
         {inv.stockLabel ? <p className="mt-3 text-right text-sm text-muted-foreground">{inv.stockLabel}</p> : null}
+        {inv.depositLine && !inv.payBlocked ? <p className="mt-3 text-right text-sm font-medium">{inv.depositLine}</p> : null}
+        {inv.stockNotice ? <p className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">{inv.stockNotice}</p> : null}
       </PublicCard>
 
       {inv.status === "void" ? (
         <PublicMessage title="This invoice has been cancelled">Nothing is owing on it. Reply to our email if you have a question.</PublicMessage>
       ) : inv.owing <= 0 && !justPaid ? (
         <PublicMessage title="This invoice is paid">Thank you. Nothing is owing on {inv.ref}.</PublicMessage>
+      ) : inv.owing > 0 && inv.payBlocked ? (
+        <PublicMessage title="Please contact us before paying">Call Terra Flooring on 1300 183 772, or reply to our email. Please mention invoice {inv.ref}.</PublicMessage>
       ) : inv.owing > 0 ? (
         <PublicCard title="Pay this invoice">
           <div className="flex flex-col gap-3">
@@ -159,10 +163,7 @@ export default function PublicPayPage() {
               <>
                 {inv.depositOption ? (
                   <>
-                    <p className="text-sm">
-                      Pay the deposit of {moneyExact(inv.depositOption.amount)} ({inv.depositOption.percent}%) to secure your stock, or pay it all now. Balance after the deposit:{" "}
-                      {moneyExact(inv.depositOption.balance)}.
-                    </p>
+                    <p className="text-sm">Pay the deposit now, or pay it all.</p>
                     <div className="flex flex-col gap-2 sm:flex-row">
                       <Button size="lg" onClick={() => pay("deposit")} disabled={start.isPending} className="w-full sm:w-auto">
                         {start.isPending ? <Spinner /> : <CreditCard className="size-4" />}

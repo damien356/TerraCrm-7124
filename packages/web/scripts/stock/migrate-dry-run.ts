@@ -13,7 +13,7 @@
  * The original file is never written to.
  */
 import { Database } from "bun:sqlite";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -59,6 +59,8 @@ export function dryRun(path: string): DryRun {
   try {
     const copy = join(dir, "copy.db");
     copyFileSync(path, copy);
+    // The backup is often read-only (chmod 444). The copy must be writable.
+    chmodSync(copy, 0o644);
     const db = new Database(copy);
     const oldCounts = Object.fromEntries(have.filter((t) => !t.startsWith("sqlite_")).map((t) => [t, count(db, t)]));
     const cols = (t: string) => (db.query(`pragma table_info("${t}")`).all() as { name: string }[]).length;

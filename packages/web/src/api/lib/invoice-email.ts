@@ -2,7 +2,7 @@ import { ORPCError } from "@orpc/server";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { clientInvoicePdfFor, stockDepositLine } from "./clientInvoicePdf";
+import { clientInvoicePdfFor, stockPayNote } from "./clientInvoicePdf";
 import { autoPushAfterEmail } from "./xero-invoices";
 import { ensureForJob } from "./conversations";
 import { pickedFiles, sendJobEmail, type MailUpload } from "./job-mail";
@@ -35,22 +35,21 @@ export async function invoiceRecipient(inv: typeof schema.invoices.$inferSelect)
   return null;
 }
 
-export function invoiceEmailBody(args: { first: string; ref: string; label: string; owing: number; url: string | null; depositLine?: string | null }) {
+export function invoiceEmailBody(args: { first: string; ref: string; label: string; owing: number; url: string | null; depositLine?: string | null; payBlocked?: boolean }) {
   const lines = [
     `Hi ${args.first || "there"},`,
     "",
     `Here is your invoice ${args.ref}${args.label ? ` (${args.label})` : ""} for ${money(args.owing)} including GST.`,
     "",
   ];
-  if (args.depositLine) lines.push(args.depositLine, "");
-  if (args.url) lines.push("Pay by card online:", args.url, "", "Or pay by bank transfer:");
-  else lines.push("Please pay by bank transfer:");
+  if (args.depositLine) lines.push(...args.depositLine.split("\n").flatMap((l) => [l, ""]));
+  // A2c: a container or stock-only shortage is open. The email does not invite payment until it is sorted.
+  if (!args.payBlocked) {
+    if (args.url) lines.push("Pay by card online:", args.url, "", "Or pay by bank transfer:");
+    else lines.push("Please pay by bank transfer:");
+    lines.push(`Account name: ${TERRA_PRINT.bank.name}`, `BSB: ${TERRA_PRINT.bank.bsb}`, `Account: ${TERRA_PRINT.bank.account}`, `Reference: ${args.ref}`, "");
+  }
   lines.push(
-    `Account name: ${TERRA_PRINT.bank.name}`,
-    `BSB: ${TERRA_PRINT.bank.bsb}`,
-    `Account: ${TERRA_PRINT.bank.account}`,
-    `Reference: ${args.ref}`,
-    "",
     "Any questions, just reply to this email or call me on 1300 183 772.",
     "",
     "Kind regards,",
@@ -83,13 +82,15 @@ export async function sendInvoiceEmail(args: {
 
   const conv = await ensureForJob(inv.jobId);
   const url = cardPaymentsOn() ? payUrl(inv.id) : null;
+  const note = await stockPayNote(inv.id, owing);
   const text = invoiceEmailBody({
     first: found && found.email.toLowerCase() === to.toLowerCase() ? found.first : "",
     ref: inv.number,
     label: inv.label || INVOICE_KIND_LABEL[inv.kind] || "",
     owing,
     url,
-    depositLine: await stockDepositLine(inv.id, owing),
+    depositLine: note.text,
+    payBlocked: note.blocked,
   });
   /* The invoice itself goes as a PDF, with the pay link in the email (spec 15 Oct). */
   const { pdf, filename, snapshot, fresh } = await clientInvoicePdfFor(inv.id);

@@ -37,7 +37,6 @@ const TABS: Array<{ id: Tab; label: string }> = [
 ];
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const unitText = (u: string | null | undefined) => (u === "m2" ? "m²" : u === "lm" ? "m" : (u ?? ""));
 
 export default function StockPage() {
   const initial = (new URLSearchParams(window.location.search).get("tab") as Tab | null) ?? "list";
@@ -126,10 +125,10 @@ function StockList({ o, q, setQ }: { o: StockOverview; q: string; setQ: (s: stri
                     <td className="px-4 py-2">{it.product}</td>
                     <td className="px-4 py-2">{it.batch ?? "unknown"}</td>
                     <td className="px-4 py-2 text-right">
-                      {it.qty} {unitText(it.unit)}
+                      {it.qty} {it.unitLabel}
                     </td>
                     <td className="px-4 py-2 text-right font-medium">
-                      {it.available} {unitText(it.unit)}
+                      {it.available} {it.unitLabel}
                     </td>
                     <td className="px-4 py-2">
                       {it.status === "to_check" ? "To check" : it.status}
@@ -214,7 +213,8 @@ function OpeningStock({ o }: { o: StockOverview }) {
             <option value="">Pick one</option>
             {(products.data ?? []).map((p) => (
               <option key={p.id} value={p.id}>
-                {p.name} ({unitText(p.unit)})
+                {p.name} ({p.unitLabel}
+                {p.conversion ? `, ${p.conversion}` : ""})
               </option>
             ))}
           </Select>
@@ -326,7 +326,7 @@ function ReceiveTab({ o }: { o: StockOverview }) {
             <option value="">Pick one</option>
             {(po.data?.lines ?? []).map((l) => (
               <option key={l.id} value={l.id}>
-                {l.description} ({l.qty} {unitText(l.unit)})
+                {l.description} ({l.qty} {l.unitLabel})
               </option>
             ))}
           </Select>

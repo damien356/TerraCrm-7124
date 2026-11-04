@@ -417,12 +417,15 @@ export async function payState(inv: typeof schema.invoices.$inferSelect) {
     /** Only a direct invoice with stock waiting on its deposit. */
     stockLabel: stock?.stockLabel ?? null,
     depositOption: stock?.depositOption ?? null,
+    depositLine: stock?.depositLine ?? null,
+    /** A2c: a known material shortage on the order, and whether payment waits for it. */
+    stockNotice: stock?.notice ?? null,
+    payBlocked: !!stock?.blocked,
   };
 }
 
 /** The stock deposit choice for the pay page. Never stops the page loading. */
 async function stockPayFor(invoiceId: number, owing: number) {
-  if (!(owing > 0)) return null;
   try {
     const { stockPayInfo } = await import("../lib/stock/pay");
     return await stockPayInfo(invoiceId, owing);
@@ -443,8 +446,10 @@ const payPage = {
     if (!cardPaymentsOn()) throw bad("Card payments are not available right now. Please pay by bank transfer.");
     // The deposit amount is worked out again here, never taken from the browser.
     let amount: number | null = null;
+    const stock = await stockPayFor(inv.id, owingOn(inv));
+    // A2c: a container or stock-only shortage with no recorded customer arrangement. No card payment, deposit or full.
+    if (stock?.blocked) throw bad(stock.notice ?? "Please contact Terra Flooring before paying.");
     if (input.choice === "deposit") {
-      const stock = await stockPayFor(inv.id, owingOn(inv));
       if (!stock?.depositOption) throw bad("The deposit has already been paid or recorded. Please pay the balance shown.");
       amount = stock.depositOption.amount;
     }

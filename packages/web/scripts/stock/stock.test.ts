@@ -34,6 +34,7 @@ import {
 } from "./harness";
 import { registerA2 } from "./a2.cases";
 import { registerA2b } from "./a2b.cases";
+import { registerA2c } from "./a2c.cases";
 
 beforeAll(async () => {
   await setup();
@@ -268,7 +269,7 @@ describe("clarification 3: direct invoice, bank payment recorded but not confirm
     expect(d.stillToPay).toBe(0);
     expect((await holdRow(s.hold.id)).status).toBe("awaiting");
     const info = await m().pay.stockPayInfo(inv.id, 700);
-    expect(info).toEqual({ stockLabel: "Payment recorded — awaiting admin confirmation", depositOption: null, depositLine: null });
+    expect(info).toEqual({ stockLabel: "Payment recorded — awaiting admin confirmation", notice: null, blocked: false, depositOption: null, depositLine: null });
     const page = await m().publicPages.payState(inv);
     expect(page.stockLabel).toBe("Payment recorded — awaiting admin confirmation");
     expect(page.depositOption).toBeNull();
@@ -301,7 +302,8 @@ describe("clarification 3: direct invoice, bank payment recorded but not confirm
 /* ========================= deposit line wording (open item 5) ========================= */
 
 describe("deposit line on the pay page, PDF and email", () => {
-  const LINE = "Deposit to secure stock: $300 (30%). Balance $700.";
+  // A2c approved wording, real amounts with cents.
+  const LINE = "Required deposit: $300.00 (30% of the invoice total). Balance after deposit: $700.00.";
   test("before any payment: $300 (30%), balance $700, on all three", async () => {
     const s = await saleWithStock(30);
     const inv = await invoice(s.invoice.id);
@@ -322,7 +324,7 @@ describe("deposit line on the pay page, PDF and email", () => {
     await m().recheck.recheckAfterPayment(inv.id);
     const after = await m().publicPages.payState(await invoice(inv.id));
     expect(after.depositOption).toEqual({ amount: 200, percent: 30, balance: 700 });
-    expect(await m().pdf.stockDepositLine(inv.id, 900)).toBe("Deposit to secure stock: $200 (30%). Balance $700.");
+    expect(await m().pdf.stockDepositLine(inv.id, 900)).toBe("Required deposit: $300.00 (30% of the invoice total). Paid so far: $100.00. Deposit still to pay: $200.00. Balance after deposit: $700.00.");
   });
   test("an invoice with no stock keeps today's pay page and email", async () => {
     const { job: jb, quote } = await job({ quoteTotal: 1000, percent: 30, accepted: true });
@@ -332,7 +334,7 @@ describe("deposit line on the pay page, PDF and email", () => {
     expect(page.depositOption).toBeNull();
     expect(await m().pdf.stockDepositLine(dep.id, 300)).toBeNull();
     const body = m().mail.invoiceEmailBody({ first: "Pat", ref: dep.number, label: "Deposit", owing: 300, url: null, depositLine: null });
-    expect(body).not.toContain("Deposit to secure stock");
+    expect(body).not.toContain("Required deposit");
   });
 });
 
@@ -1038,6 +1040,7 @@ describe("stock status wording", () => {
 
 registerA2({ no, eq, facts, material });
 registerA2b({ no, eq, facts, material });
+registerA2c({ no, eq, facts, material });
 
 describe("isolation: nothing left the machine", () => {
   test("no network, no SMS, no job email, no customer or supplier email", async () => {

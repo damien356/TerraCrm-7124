@@ -2,8 +2,9 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../../database";
 import * as schema from "../../database/schema";
 import { stockAlert } from "./alerts";
-import { bad, cm, need, needOn, notFound, type PermActor, r4, unitText } from "./core";
+import { bad, cm, need, needOn, notFound, type PermActor, r4 } from "./core";
 import { createItem, type Item } from "./items";
+import { assertSetUp, modeOf, unitWord } from "./replenish";
 
 /** "PO199703-1" stays as it is; an older number like "4113-A" reads "PO 4113-A". */
 const poName = (n: string) => (/^PO/i.test(n) ? n : `PO ${n}`);
@@ -61,12 +62,15 @@ export async function receiveLine(input: { poLineId: number; pieces: ReceivePiec
   if (po.status === "draft") throw bad(`${poName(po.number)} has not been sent yet.`);
   if (line.closedAt) throw bad("This line was closed. The rest is not coming.");
   for (const p of input.pieces) if (!(p.qty > 0)) throw bad("Each piece needs a quantity over 0.");
+  // A2c: a product set up for stock (or anything on a warehouse PO) is confirmed first. Job-only products are unchanged.
+  const [prod] = await db.select().from(schema.products).where(eq(schema.products.id, line.productId));
+  if (prod && (po.kind === "warehouse" || prod.stockTracked || modeOf(prod) !== "job")) await assertSetUp(prod.id);
 
   const roll = isRollLine(line.unit, input.pieces);
   if (line.unit === "m2" && !roll) throw bad("Enter the width of each roll.");
   const adding = r4(input.pieces.reduce((s, p) => s + lineQtyOf(line.unit, p, roll), 0));
   const left = r4(line.qty - line.receivedQty);
-  if (adding > left * 1.1 + 0.01) throw bad(`Only ${left} ${unitText(line.unit)} is still to come on this line.`);
+  if (adding > left * 1.1 + 0.01) throw bad(`Only ${left} ${unitWord(prod, line.unit)} is still to come on this line.`);
 
   // Claim the quantity first, so two people receiving the same delivery cannot both count it.
   const [claimed] = await db
