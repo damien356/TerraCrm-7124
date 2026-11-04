@@ -37,6 +37,7 @@ async function openMaterials(jobId: number): Promise<Material[]> {
       unit: schema.jobMaterials.unit,
       productId: schema.jobMaterials.productId,
       supplierId: schema.products.supplierId,
+      supplyMode: schema.products.supplyMode,
     })
     .from(schema.jobMaterials)
     .leftJoin(schema.products, eq(schema.products.id, schema.jobMaterials.productId))
@@ -57,11 +58,28 @@ async function openMaterials(jobId: number): Promise<Material[]> {
       ),
     );
   const taken = new Set(onPo.map((r) => r.jobMaterialId));
+  // A2: a shortage put on a warehouse order (route B) is never also on a job PO.
+  const linked = await db
+    .select({ jobMaterialId: schema.stockPoLinks.jobMaterialId })
+    .from(schema.stockPoLinks)
+    .where(
+      and(
+        inArray(
+          schema.stockPoLinks.jobMaterialId,
+          rows.map((r) => r.id),
+        ),
+        eq(schema.stockPoLinks.status, "open"),
+      ),
+    );
+  for (const l of linked) taken.add(l.jobMaterialId);
   // Warehouse stock already allocated to a line is never ordered again, whatever the switches say (A1.5).
   const { stockAllocatedByMaterial } = await import("./stock/costs");
   const fromStock = await stockAllocatedByMaterial(jobId);
   return rows
     .map((r) => ({ ...r, qty: Math.round((r.qty - (fromStock.get(r.id) ?? 0)) * 10_000) / 10_000 }))
+    // A2: container and stock-only products never get a small job top-up PO. The owner reviews them.
+    .filter((r) => r.supplyMode !== "container" && r.supplyMode !== "stock_only")
+    .map(({ supplyMode: _m, ...r }) => r)
     .filter((r) => r.qty > 0.0001 && !taken.has(r.id));
 }
 

@@ -11,6 +11,7 @@ import { needsScope, SCOPE_FILL } from "../../api/lib/quote-email-template";
 import { EmailInput } from "./email-input";
 import { CcList, EmailAttachments, NO_ATTACHMENTS, type MailAttachments } from "./email-attachments";
 import { SendResult, SmsPanel, type SmsPerson, type SmsState } from "./quote-send-parts";
+import { QuoteSupplyShort } from "./stock-supply-short";
 import { mobileForSms, scopeFromBody, showMobile } from "../../api/lib/quote-sms-text";
 
 /** Same check as EMAIL_RE on the server. */
@@ -221,6 +222,7 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
         </div>
       ) : d ? (
         <div className="flex flex-col gap-3">
+          {!d.resend ? <QuoteSupplyShort quoteId={quoteId} /> : null}
           <div className="rounded-lg border border-border px-3 py-2 text-sm">
             <p className="label-xs mb-1">Going to</p>
             <p className="flex flex-wrap gap-x-4 gap-y-1">

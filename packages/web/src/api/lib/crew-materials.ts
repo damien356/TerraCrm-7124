@@ -47,6 +47,18 @@ export type CrewMaterial = {
   whereLabel: string;
 };
 
+/**
+ * A2 (7D): what the crew sees for a line still to come, by how the product is
+ * supplied. Never promises a container. Products left on "Order for each
+ * job/sale" (all of them today) keep the wording they have now.
+ */
+export function shortLabel(mode: string | null | undefined): string {
+  if (mode === "container") return "Stock shortage — owner review required";
+  if (mode === "stock_only") return "Insufficient stock — no replenishment planned";
+  if (mode === "reorder") return "Not ordered yet";
+  return WHERE_LABEL.to_order;
+}
+
 const FLOORS = new Set<string>([...FLOOR_TYPES, "timber", "vinyl"]);
 const FLOOR_WORDS = /carpet|timber|hybrid|laminate|vinyl|plank|parquet|turf|lino|floorboard/i;
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -194,6 +206,15 @@ export async function crewMaterials(jobId: number, parentJobId: number | null): 
     reservedFor(ids),
   ]);
   const deliverTo = new Map(poLines.map((l) => [l.jobMaterialId!, l.deliverTo]));
+  // A2: a shortage put on a warehouse order. Sent: coming to the warehouse. Draft: not ordered yet.
+  const linked = ids.length
+    ? await db
+        .select({ jobMaterialId: schema.stockPoLinks.jobMaterialId, poStatus: schema.purchaseOrders.status })
+        .from(schema.stockPoLinks)
+        .innerJoin(schema.purchaseOrders, eq(schema.purchaseOrders.id, schema.stockPoLinks.poId))
+        .where(and(inArray(schema.stockPoLinks.jobMaterialId, ids), eq(schema.stockPoLinks.status, "open")))
+    : [];
+  const onWarehousePo = new Set(linked.filter((l) => l.poStatus === "sent" || l.poStatus === "invoiced").map((l) => l.jobMaterialId!));
   // Only stock firmly held in the warehouse for the job. Planned, awaiting a deposit, temporary and short holds are not the crew's yet.
   const held = new Set(reserved.filter((r) => IN_WAREHOUSE.has(r.status)).map((r) => r.jobMaterialId!));
 
@@ -203,6 +224,7 @@ export async function crewMaterials(jobId: number, parentJobId: number | null): 
     else if (m.status === "on_site") where = "on_site";
     else if (held.has(m.id)) where = "warehouse";
     else if (m.status === "ordered") where = deliverTo.get(m.id) === "site" ? "to_site" : "to_warehouse";
+    else if (onWarehousePo.has(m.id)) where = "to_warehouse";
     else where = "to_order";
     const q = crewQty(m.qty, m.unit, p);
     const product = productName(p, m.description);
@@ -219,7 +241,7 @@ export async function crewMaterials(jobId: number, parentJobId: number | null): 
       count: q.count,
       m2: q.m2,
       where,
-      whereLabel: WHERE_LABEL[where],
+      whereLabel: where === "to_order" ? shortLabel(p?.supplyMode) : WHERE_LABEL[where],
     };
   });
 

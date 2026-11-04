@@ -482,10 +482,18 @@ function SupplierDetail({
                             <Badge colour={meta.colour}>{meta.label}</Badge>
                           </div>
                           <p className="mt-0.5 text-xs text-muted-foreground">
-                            <Link to={`/jobs/${p.po.jobId}`} className="text-primary hover:underline">
-                              #{p.po.jobNumber}
-                            </Link>{" "}
-                            {p.po.jobTitle}
+                            {p.po.jobId == null ? (
+                              <Link to="/stock/reorder" className="text-primary hover:underline">
+                                Warehouse stock
+                              </Link>
+                            ) : (
+                              <>
+                                <Link to={`/jobs/${p.po.jobId}`} className="text-primary hover:underline">
+                                  #{p.po.jobNumber}
+                                </Link>{" "}
+                                {p.po.jobTitle}
+                              </>
+                            )}
                           </p>
                           <p className="mt-0.5 text-xs text-muted-foreground">
                             {moneyExact(p.po.totalExGst)} ex{p.po.sentAt ? ` · sent ${dayOf(p.po.sentAt)}` : ""}

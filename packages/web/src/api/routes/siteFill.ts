@@ -193,7 +193,7 @@ export const siteFill = {
   /** What changing this job's address would touch. Shown in the Change form before saving. */
   changeInfo: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
     const { job, site, otherJobs, crew, pos, swms } = await changeScope(input.jobId);
-    const here = (r: { jobId: number }) => r.jobId === job.id;
+    const here = (r: { jobId: number | null }) => r.jobId === job.id;
     return {
       site: { id: site.id, address: site.address, suburb: site.suburb, state: site.state, postcode: site.postcode, propertyType: site.propertyType, lat: site.lat, lng: site.lng, placeId: site.placeId, geoSource: site.geoSource },
       otherJobs: otherJobs.map((j) => ({ id: j.id, ref: jobRef(j), title: j.title })),

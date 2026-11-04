@@ -44,6 +44,9 @@ export const ALERT_KINDS = {
   stock_review: { label: "Paid order with stock cancelled or voided", group: "Stock", urgent: true },
   stock_short_roll: { label: "Roll arrived shorter than ordered", group: "Stock", urgent: false },
   stock_po_overlap: { label: "Stock now covers part of a PO line", group: "Stock", urgent: true },
+  stock_low: { label: "Product at or below its reorder level", group: "Stock", urgent: false },
+  stock_paid_short: { label: "Payment came in while a product is short", group: "Stock", urgent: true },
+  stock_on_sent_po: { label: "Shortage already on a sent PO", group: "Stock", urgent: false },
 } as const;
 
 export type AlertKind = keyof typeof ALERT_KINDS;

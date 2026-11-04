@@ -258,6 +258,15 @@ export async function assertReadyToGoOut(quote: typeof schema.quotes.$inferSelec
   }
   // Notes 18.54: who pays, and their deposit %, before anything goes out.
   await assertBillToReady(quote);
+  // A2 (7D): a container or stock-only product short before the quote first goes out. The owner approves, or the quote changes.
+  if (quote.status === "draft" || quote.status === "needs_review") {
+    const { assertSupplyOk } = await import("../lib/stock/supply-check");
+    await assertSupplyOk(
+      items.filter((i) => i.kind !== "labour" && i.productId != null && i.qty > 0).map((i) => ({ productId: i.productId, qty: i.qty, unit: i.unit })),
+      quote.jobId,
+      { entityType: "quote", entityKey: String(quote.id) },
+    );
+  }
   const pct = discountPercentOf(items);
   const limit = await discountLimit();
   if (pct > limit && pct > quote.discountApprovedPercent) {

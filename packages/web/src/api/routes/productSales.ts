@@ -105,7 +105,10 @@ async function salesList(where: { installerId?: number; contactId?: number; comp
 
 export const productSales = {
   /** What Confirm will do. Writes nothing. */
-  preview: staffOnly.input(saleInput).handler(async ({ input }) => previewSale(input)),
+  preview: staffOnly
+    .input(saleInput.extend({ requestKey: z.string().max(80).nullish() }))
+    // A2 (7D): only the main admin sees the approve control for a container or stock-only shortage.
+    .handler(async ({ input, context }) => ({ ...(await previewSale(input)), canApproveShort: context.actor.isMainAdmin })),
 
   /** Saves the quote, or raises the invoice. The same requestKey twice gives the first sale back. */
   raise: staffOnly

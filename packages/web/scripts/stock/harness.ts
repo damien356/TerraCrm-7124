@@ -118,6 +118,10 @@ async function load() {
     poHelper: await import("../../src/api/lib/po-helper"),
     cashflow: await import("../../src/api/lib/cashflow"),
     crew: await import("../../src/api/lib/crew-materials"),
+    replenish: await import("../../src/api/lib/stock/replenish"),
+    warehousePo: await import("../../src/api/lib/stock/warehouse-po"),
+    warehouseCash: await import("../../src/api/lib/stock/warehouse-cash"),
+    supplyCheck: await import("../../src/api/lib/stock/supply-check"),
     drizzle: await import("drizzle-orm"),
   };
 }

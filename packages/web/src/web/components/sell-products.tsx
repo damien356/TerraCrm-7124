@@ -15,6 +15,7 @@ import { emailState, xeroState } from "../lib/invoice-status";
 import { useContactSearch, useCreateContact } from "../queries/contacts";
 import type { FoundProduct } from "../queries/productFind";
 import { useRaiseSale, useSalePreview, useSales, type SaleInput, type SalePreview, type SaleResult, type SaleRow } from "../queries/productSales";
+import { SupplyShortList } from "./stock-supply-short";
 
 /* ---------------------------------------------------------------------------
  * SELL PRODUCTS (Damien, 30 Oct). One form for a quote or a straight invoice,
@@ -324,7 +325,7 @@ export function SellProductsModal({
     const i = input();
     if (typeof i === "string") return setError(i);
     try {
-      setShown(await preview.mutateAsync(i));
+      setShown(await preview.mutateAsync({ ...i, requestKey }));
       setStep("preview");
     } catch (e) {
       setError(errorText(e));
@@ -505,7 +506,19 @@ export function SellProductsModal({
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
         </div>
       ) : step === "preview" && shown ? (
-        <PreviewBody p={shown} error={error} />
+        <>
+          <SupplyShortList
+            shorts={shown.supplyShort}
+            canApprove={shown.canApproveShort}
+            entityType="sale"
+            entityKey={requestKey}
+            onApproved={async () => {
+              const i = input();
+              if (typeof i !== "string") setShown(await preview.mutateAsync({ ...i, requestKey }));
+            }}
+          />
+          <PreviewBody p={shown} error={error} />
+        </>
       ) : done ? (
         <DoneBody r={done} />
       ) : null}

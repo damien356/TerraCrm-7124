@@ -1446,6 +1446,34 @@ export const products = sqliteTable(
     reorderQty: real("reorder_qty"),
     stockUnitLabel: text("stock_unit_label").notNull().default(""),
     lowStockAlertedAt: integer("low_stock_alerted_at", { mode: "timestamp" }),
+    /*
+     * A2 (4 Nov): how this product is bought. Set per product row (a row is
+     * one variant), Admin only, never for a whole supplier or category.
+     *   job         Order for each job/sale (default, today's behaviour)
+     *   reorder     Stocked — reorder from supplier
+     *   container   Stocked — owner-approved bulk/container replenishment
+     *   stock_only  Stock only — no planned replenishment
+     * "We count this" is stockTracked, a separate tick.
+     */
+    supplyMode: text("supply_mode").notNull().default("job"),
+    /** Null: the price book supplier. */
+    preferredSupplierId: integer("preferred_supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
+    /** fixed (order reorderQty) · target (top up to targetLevel) */
+    reorderMethod: text("reorder_method").notNull().default("fixed"),
+    targetLevel: real("target_level"),
+    /** What the supplier sells in ("carton", "pallet"). Empty: the stock unit. */
+    purchaseUnit: text("purchase_unit").notNull().default(""),
+    /** Stock units in one purchase unit. Null: 1. */
+    stockPerPurchase: real("stock_per_purchase"),
+    /** Warehouse reorder minimum, in purchase units. Separate from minOrderQty (job ordering, in `unit`). */
+    reorderMinQty: real("reorder_min_qty"),
+    /** In purchase units. */
+    orderMultiple: real("order_multiple"),
+    /** Off until he turns it on per product. */
+    lowStockAlerts: integer("low_stock_alerts", { mode: "boolean" }).notNull().default(false),
+    /** Who last saved the supply settings. Null: never reviewed. */
+    supplySetAt: integer("supply_set_at", { mode: "timestamp" }),
+    supplySetBy: text("supply_set_by"),
     /**
      * Fix list 11 Oct, items 2 and 3. Metres on one roll of underlay, plastic
      * or Floorshield. Ordering: stocked (`heldInWarehouse`) is cut to the exact
@@ -3793,11 +3821,12 @@ export const purchaseOrders = sqliteTable(
   "purchase_orders",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    /** "4113-A". Job number plus a letter, unique for ever. */
+    /** "4113-A". Job number plus a letter, unique for ever. Warehouse orders: PO-W0001 (A2), never reused. */
     number: text("number").notNull(),
     /** job · warehouse. Already on live (Terra Stock). Code alignment only. */
     kind: text("kind").notNull().default("job"),
-    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "restrict" }),
+    /** Null on a warehouse order (A2). Already nullable on live; the code now agrees. */
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "restrict" }),
     supplierId: integer("supplier_id").notNull().references(() => suppliers.id, { onDelete: "restrict" }),
     /** draft · sent · invoiced · cancelled */
     status: text("status").notNull().default("draft"),
@@ -3818,6 +3847,12 @@ export const purchaseOrders = sqliteTable(
     sentAt: integer("sent_at", { mode: "timestamp" }),
     /** The forecast line this PO feeds. */
     jobCostId: integer("job_cost_id").references(() => jobCosts.id, { onDelete: "set null" }),
+    /* A2, warehouse orders only. Typed by an Admin; never guessed. */
+    /** YYYY-MM-DD the balance is expected to be paid. Null: supplier terms, or flagged. */
+    expectedPayDate: text("expected_pay_date"),
+    /** A supplier deposit, ex GST, where one was agreed. */
+    supplierDepositExGst: real("supplier_deposit_ex_gst"),
+    supplierDepositDue: text("supplier_deposit_due"),
     createdByProfileId: integer("created_by_profile_id").references(() => profiles.id, { onDelete: "set null" }),
     ...timestamps,
   },
@@ -3847,6 +3882,9 @@ export const purchaseOrderLines = sqliteTable(
     sortOrder: integer("sort_order").notNull().default(0),
     /** Already on live (Terra Stock). How much has been received into the warehouse. */
     receivedQty: real("received_qty").notNull().default(0),
+    /** A2: the rest will not come (supplier short-shipped, closed by an Admin). It stops counting as incoming. */
+    closedAt: integer("closed_at", { mode: "timestamp" }),
+    closedNote: text("closed_note").notNull().default(""),
     ...timestamps,
   },
   (t) => [index("po_lines_po_idx").on(t.poId)],
@@ -5502,4 +5540,58 @@ export const stockPermissions = sqliteTable(
     ...timestamps,
   },
   (t) => [uniqueIndex("stock_permissions_profile_uq").on(t.profileId)],
+);
+
+/**
+ * A2: part of a warehouse order line bought for one job's shortage
+ * ("20 bags expected for that job + 40 bags for general warehouse stock").
+ * The short hold it covers is never also on a job PO or another suggestion.
+ * On receipt the job's share becomes a hold on the received stock under the
+ * deposit rules, and the job is costed for that share only, once.
+ */
+export const stockPoLinks = sqliteTable(
+  "stock_po_links",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    poId: integer("po_id").notNull().references(() => purchaseOrders.id, { onDelete: "cascade" }),
+    poLineId: integer("po_line_id").notNull(),
+    productId: integer("product_id").notNull().references(() => products.id, { onDelete: "restrict" }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    orderId: integer("order_id").references(() => stockOrders.id, { onDelete: "set null" }),
+    /** The short hold this covers. */
+    reservationId: integer("reservation_id").references(() => stockReservations.id, { onDelete: "set null" }),
+    jobMaterialId: integer("job_material_id").references(() => jobMaterials.id, { onDelete: "set null" }),
+    quoteItemId: integer("quote_item_id").references(() => quoteItems.id, { onDelete: "set null" }),
+    saleLineId: integer("sale_line_id"),
+    /** In the PO line's unit (the stock unit). */
+    qty: real("qty").notNull(),
+    receivedQty: real("received_qty").notNull().default(0),
+    /** open · received · cancelled (PO cancelled) · closed (rest will not come) */
+    status: text("status").notNull().default("open"),
+    note: text("note").notNull().default(""),
+    createdByName: text("created_by_name").notNull().default(""),
+    requestKey: text("request_key").notNull(),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("stock_po_links_key_uq").on(t.requestKey), index("stock_po_links_line_idx").on(t.poLineId), index("stock_po_links_job_idx").on(t.jobId)],
+);
+
+/**
+ * A2 (7D): the owner's explicit OK to send a quote or raise a sale while a
+ * container or stock-only product is short. Main admin only, with a note.
+ */
+export const stockSupplyApprovals = sqliteTable(
+  "stock_supply_approvals",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** quote · sale (the request key of the sale being raised) */
+    entityType: text("entity_type").notNull(),
+    entityKey: text("entity_key").notNull(),
+    productId: integer("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+    shortQty: real("short_qty").notNull(),
+    note: text("note").notNull(),
+    byName: text("by_name").notNull(),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("stock_supply_approvals_uq").on(t.entityType, t.entityKey, t.productId)],
 );

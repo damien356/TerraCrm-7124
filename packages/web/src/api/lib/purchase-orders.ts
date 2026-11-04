@@ -416,11 +416,22 @@ export async function writeLines(poId: number, lines: PricedLine[]) {
 export async function commitPo(poId: number, via: "email" | "other", to: string | null) {
   const [po] = await db.select().from(schema.purchaseOrders).where(eq(schema.purchaseOrders.id, poId));
   if (!po) throw new Error("PO not found");
+  // A2: a warehouse PO has no job. It costs no job until goods are issued or
+  // a job's share is received, and the forecast reads it straight off the PO.
+  if (po.jobId == null) {
+    await db
+      .update(schema.purchaseOrders)
+      .set({ status: po.status === "invoiced" ? "invoiced" : "sent", sentVia: via, sentTo: to, sentAt: new Date(), updatedAt: new Date() })
+      .where(eq(schema.purchaseOrders.id, poId));
+    await rebuildForecast();
+    return;
+  }
+  const jobId = po.jobId;
   const [sup] = await db.select({ name: schema.suppliers.name }).from(schema.suppliers).where(eq(schema.suppliers.id, po.supplierId));
   const today = todayISO();
   const terms = await termsForSupplier(po.supplierId);
   const cost = {
-    jobId: po.jobId,
+    jobId,
     kind: "materials",
     description: `${/^PO/i.test(po.number) ? po.number : `PO ${po.number}`} ${sup?.name ?? ""}`.trim(),
     supplierId: po.supplierId,
@@ -434,7 +445,7 @@ export async function commitPo(poId: number, via: "email" | "other", to: string 
   if (jobCostId) {
     await db.update(schema.jobCosts).set(cost).where(eq(schema.jobCosts.id, jobCostId));
   } else {
-    const expected = await expectedCostFor(po.jobId, po.supplierId);
+    const expected = await expectedCostFor(jobId, po.supplierId);
     if (expected) {
       await db
         .update(schema.jobCosts)
@@ -498,6 +509,15 @@ export async function cancelPo(poId: number, opts: { restoreExpected?: boolean }
     }
   }
   await db.update(schema.purchaseOrders).set({ status: "cancelled", jobCostId: null, updatedAt: new Date() }).where(eq(schema.purchaseOrders.id, poId));
+  // A2: job shares on a cancelled warehouse PO stop counting. The job's shortage shows again.
+  await db
+    .update(schema.stockPoLinks)
+    .set({ status: "cancelled", updatedAt: new Date() })
+    .where(and(eq(schema.stockPoLinks.poId, poId), eq(schema.stockPoLinks.status, "open")));
+  if (po.jobId == null) {
+    await rebuildForecast();
+    return;
+  }
   if (po.jobCostId) {
     await db.delete(schema.jobCosts).where(eq(schema.jobCosts.id, po.jobCostId));
     if (opts.restoreExpected ?? true) {

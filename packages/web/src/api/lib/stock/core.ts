@@ -25,7 +25,8 @@ export const r4 = (n: number) => Math.round((n + Number.EPSILON) * 10_000) / 10_
 /** Lengths are compared to the centimetre. */
 export const cm = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 export const money = (n: number) => `$${n.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-export const unitText = (u: string | null | undefined) => (u === "m2" ? "m²" : u === "lm" ? "m" : (u ?? ""));
+/** "unit", "ea" and "item" all read "each", so one screen never mixes "6 unit" with "8 each". */
+export const unitText = (u: string | null | undefined) => (u === "m2" ? "m²" : u === "lm" ? "m" : u === "unit" || u === "ea" || u === "item" ? "each" : (u ?? ""));
 export const qtyText = (n: number, unit: string | null | undefined) => `${r4(n)} ${unitText(unit)}`.trim();
 export const bad = (message: string) => new ORPCError("BAD_REQUEST", { message });
 export const forbid = (message: string) => new ORPCError("FORBIDDEN", { message });
@@ -112,8 +113,10 @@ export const SWITCHES = {
   s3: { label: "S3 Stock-backed sales", needs: ["s1", "s2"] as SwitchKey[] },
   s4: { label: "S4 Installation jobs", needs: ["s1", "s2"] as SwitchKey[] },
   s5: { label: "S5 Returns and leftovers", needs: ["s1"] as SwitchKey[] },
+  /** A2. Off by default. Off or paused: nothing new is suggested or sent; warehouse POs and what is owed on them stay visible. */
+  s6: { label: "S6 Low-stock alerts and warehouse orders", needs: ["s1"] as SwitchKey[] },
 } as const;
-export type SwitchKey = "s1" | "s2" | "s3" | "s4" | "s5";
+export type SwitchKey = "s1" | "s2" | "s3" | "s4" | "s5" | "s6";
 export type SwitchState = "off" | "on" | "paused";
 /** `since`: when it last went from off to on. Orders accepted before then need "Bring into stock workflow". */
 export type SwitchRow = { state: SwitchState; at: string | null; by: string | null; since?: string | null };

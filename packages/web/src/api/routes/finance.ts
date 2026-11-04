@@ -321,6 +321,8 @@ export const finance = {
           jobsMissingCosts: Number(gapRow?.jobs ?? 0),
           valueMissingCosts: money(Number(gapRow?.value ?? 0)),
         },
+        /** A2: warehouse orders left off the dated forecast because no payment date could be worked out. Never guessed. */
+        warehouseUndated: await (await import("../lib/stock/warehouse-cash")).warehouseUndated(),
       };
     }),
 

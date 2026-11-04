@@ -186,7 +186,7 @@ function totalsOf(lines: Priced[]) {
 
 /* -------------------------------- preview -------------------------------- */
 
-export async function previewSale(input: SaleInput) {
+export async function previewSale(input: SaleInput & { requestKey?: string | null }) {
   const buyer = await buyerOf(input.buyer);
   const lines = await priceLines(input.lines);
   const totals = totalsOf(lines);
@@ -198,7 +198,11 @@ export async function previewSale(input: SaleInput) {
   const depositBlank = (await stockSafeguardsOn()) && input.depositPercent == null && buyer.cardPercent == null;
   const email = await emailOf(buyer.billTo);
   const ordering = input.orderNeeded ? lines.filter((l) => l.toOrder > 0) : [];
+  // A2 (7D): shown before Confirm. Approval is per sale, so it is read again on raise.
+  const { supplyShorts } = await import("./stock/supply-check");
+  const supplyShort = await supplyShorts(lines.map((l) => ({ productId: l.productId, qty: l.qty, unit: l.unit })), null, input.requestKey ? { entityType: "sale", entityKey: input.requestKey } : null);
   return {
+    supplyShort,
     mode: input.mode,
     buyer: { kind: buyer.kind, name: buyer.name, billToName: buyer.billToName, email, cardPercent: buyer.cardPercent },
     salesCategory: buyer.salesCategory,
@@ -304,6 +308,12 @@ export async function raiseSale(input: SaleInput & { requestKey: string; expecte
     const buyer = await buyerOf(input.buyer);
     const lines = await priceLines(input.lines);
     const totals = totalsOf(lines);
+    // A2 (7D): raising it as an invoice commits the stock. A container or stock-only shortage needs the owner's OK first.
+    // A draft quote is internal and may be saved; its Send is checked instead.
+    if (input.mode === "invoice") {
+      const { assertSupplyOk } = await import("./stock/supply-check");
+      await assertSupplyOk(lines.map((l) => ({ productId: l.productId, qty: l.qty, unit: l.unit })), null, { entityType: "sale", entityKey: key });
+    }
     if (Math.abs(totals.total - r2(input.expectedTotal)) > 0.005) {
       throw bad(`The total is now ${money(totals.total)}, not the ${money(input.expectedTotal)} you saw. Check the preview again.`);
     }

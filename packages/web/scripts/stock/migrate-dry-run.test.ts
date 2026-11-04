@@ -22,6 +22,9 @@ function makeDb(name: string, extra = "") {
     create table product_sale_lines (id integer primary key);
     create table job_costs (id integer primary key, amount real);
     create table invoice_payments (id integer primary key, amount real);
+    create table purchase_orders (id integer primary key, number text, job_id integer, status text);
+    create table purchase_order_lines (id integer primary key, po_id integer, qty real);
+    insert into purchase_orders (number, job_id, status) values ('4113-A', 1, 'sent');
     create table stock_movements (id integer primary key, product_id integer, qty real);
     create table stock_reservations (id integer primary key, job_material_id integer, status text, qty real);
     create table stocktakes (id integer primary key, status text);
@@ -40,8 +43,9 @@ describe("migration dry run", () => {
     const before = hash(p);
     const out = dryRun(p);
     expect(out.ok).toBe(true);
-    expect(out.created!.length).toBe(7);
-    expect(out.addedColumns).toBe(24);
+    expect(out.created!.length).toBe(9);
+    // stage1 adds 24 columns; A2 adds 16 more (11 products, 3 purchase_orders, 2 purchase_order_lines)
+    expect(out.addedColumns).toBe(40);
     expect(out.countsUnchanged).toBe(true);
     expect(hash(p)).toBe(before);
   });

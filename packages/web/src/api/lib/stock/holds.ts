@@ -389,8 +389,21 @@ export async function releaseHold(holdId: number, reason: string, actor: Actor) 
   await need(actor, "allocate");
   if (reason.trim().length < 3) throw bad("Say why the hold is being released.");
   const h = await holdById(holdId);
-  if ((ENDED as string[]).includes(h.status) || h.status === "handed_over" || h.status === "issued") throw bad("That hold is already finished.");
+  // A2: a "short" row holds nothing, but it is demand on the Reorder list. It
+  // can be withdrawn when the job no longer needs it, unless it is on a
+  // warehouse order. A sent order is never changed from here.
+  const shortRow = h.status === "short";
+  if (!shortRow && ((ENDED as string[]).includes(h.status) || h.status === "handed_over" || h.status === "issued")) throw bad("That hold is already finished.");
   if (h.collectedQty > 0) throw bad("Part of it has gone out. Hand over or return the rest instead.");
+  if (shortRow) {
+    const [l] = await db
+      .select({ number: schema.purchaseOrders.number, status: schema.purchaseOrders.status })
+      .from(schema.stockPoLinks)
+      .innerJoin(schema.purchaseOrders, eq(schema.purchaseOrders.id, schema.stockPoLinks.poId))
+      .where(and(eq(schema.stockPoLinks.reservationId, h.id), eq(schema.stockPoLinks.status, "open")));
+    if (l?.status === "draft") throw bad(`This shortage is on draft ${l.number}. Take it off that draft on the Reorder list first.`);
+    if (l) throw bad(`This shortage is on ${l.number}, which has been sent. The order is not changed from here. Check with the supplier, then close or receive that line.`);
+  }
   await db
     .update(schema.stockReservations)
     .set({ status: "released", releasedAt: new Date(), releaseReason: `${actor.name}: ${reason.trim().slice(0, 300)}`, updatedAt: new Date() })

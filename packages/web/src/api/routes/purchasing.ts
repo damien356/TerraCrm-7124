@@ -94,6 +94,13 @@ async function deliveryFor(jobId: number, input: PoInput) {
   return input.deliveryAddress.trim() || (await siteAddressFor(jobId));
 }
 
+/** A2: a warehouse draft only goes out while S6 is on. One already sent stays as it is. */
+async function warehouseSendCheck(status: string) {
+  if (status !== "draft") return;
+  const { isOn } = await import("../lib/stock/core");
+  if (!(await isOn("s6"))) throw new ORPCError("BAD_REQUEST", { message: "Warehouse orders are paused (S6 is off). Turn S6 back on to send this draft." });
+}
+
 async function loadPo(id: number) {
   const [po] = await db.select().from(schema.purchaseOrders).where(eq(schema.purchaseOrders.id, id));
   if (!po) throw new ORPCError("NOT_FOUND", { message: "PO not found" });
@@ -102,7 +109,7 @@ async function loadPo(id: number) {
 
 async function pdfFor(poId: number) {
   const po = await loadPo(poId);
-  const [job] = await db.select({ number: jobNumberSql }).from(schema.jobs).where(eq(schema.jobs.id, po.jobId));
+  const [job] = po.jobId != null ? await db.select({ number: jobNumberSql }).from(schema.jobs).where(eq(schema.jobs.id, po.jobId)) : [];
   const [sup] = await db.select().from(schema.suppliers).where(eq(schema.suppliers.id, po.supplierId));
   const lines = await db.select().from(schema.purchaseOrderLines).where(eq(schema.purchaseOrderLines.poId, poId)).orderBy(asc(schema.purchaseOrderLines.sortOrder));
   const date = po.sentAt ? po.sentAt.toISOString().slice(0, 10) : todayISO();
@@ -111,7 +118,7 @@ async function pdfFor(poId: number) {
     date: auDate(date),
     supplierName: sup?.name ?? "Supplier",
     supplierAccount: sup?.accountNumber ?? null,
-    jobNumber: job?.number ?? 0,
+    jobNumber: po.jobId == null ? null : (job?.number ?? 0),
     deliverTo: po.deliverTo === "site" ? "site" : "warehouse",
     deliveryAddress: po.deliveryAddress,
     notes: po.notes,
@@ -130,13 +137,14 @@ async function pdfFor(poId: number) {
   return { po, sup, pdf, filename: `Terra PO ${po.number}.pdf` };
 }
 
-export function poEmailText(supplierName: string, number: string, jobNumber: number | string, deliverTo: string, address: string) {
+/** jobNumber null: a warehouse stock order (A2). Same PO number on the email, PDF and invoice. */
+export function poEmailText(supplierName: string, number: string, jobNumber: number | string | null, deliverTo: string, address: string) {
   return {
     subject: `Purchase order ${number}, Terra Flooring`,
     text: [
       `Hi ${supplierName},`,
       "",
-      `Please find attached purchase order ${number} for job ${jobNumber}.`,
+      jobNumber == null ? `Please find attached purchase order ${number} for warehouse stock.` : `Please find attached purchase order ${number} for job ${jobNumber}.`,
       "",
       `Deliver to: ${deliverTo === "site" ? `site, ${address}` : `our warehouse, ${address}`}`,
       "",
@@ -291,6 +299,8 @@ export const purchasing = {
   update: adminOnly.input(poInput.extend({ id: z.number() })).handler(async ({ input }) => {
     const po = await loadPo(input.id);
     if (po.status !== "draft") throw new ORPCError("BAD_REQUEST", { message: `PO ${po.number} has gone to the supplier. Cancel it and raise a new one.` });
+    if (po.jobId == null) throw new ORPCError("BAD_REQUEST", { message: `${po.number} is a warehouse order. Change it on the Reorder list.` });
+    const jobId = po.jobId;
     await assertDeliverable(input);
     const priced = await pricePo(pricingOf(input)).catch((e: Error) => {
       throw new ORPCError("BAD_REQUEST", { message: e.message });
@@ -300,7 +310,7 @@ export const purchasing = {
       .set({
         supplierId: input.supplierId,
         deliverTo: input.deliverTo,
-        deliveryAddress: await deliveryFor(po.jobId, input),
+        deliveryAddress: await deliveryFor(jobId, input),
         goodsExGst: priced.goodsExGst,
         chargesExGst: priced.chargesExGst,
         freightExGst: priced.freightExGst,
@@ -321,6 +331,8 @@ export const purchasing = {
     if (po.status !== "draft") throw new ORPCError("BAD_REQUEST", { message: "Only a draft can be deleted. Cancel it instead." });
     // Kept as cancelled, not deleted, so its letter is never handed out again. A printed draft can't clash.
     await db.update(schema.purchaseOrders).set({ status: "cancelled", notes: [po.notes, "Draft removed, never sent."].filter(Boolean).join(" "), updatedAt: new Date() }).where(eq(schema.purchaseOrders.id, po.id));
+    // A2: job shares on a removed warehouse draft stop counting.
+    await db.update(schema.stockPoLinks).set({ status: "cancelled", updatedAt: new Date() }).where(and(eq(schema.stockPoLinks.poId, po.id), eq(schema.stockPoLinks.status, "open")));
     await resolveAiActionsForPo(po.id, context.actor.name, "dismissed");
     return { ok: true };
   }),
@@ -349,9 +361,10 @@ export const purchasing = {
         await db.update(schema.suppliers).set({ email: to, updatedAt: new Date() }).where(eq(schema.suppliers.id, sup.id));
       }
 
-      const [job] = await db.select({ number: jobNumberSql }).from(schema.jobs).where(eq(schema.jobs.id, po.jobId));
+      if (po.jobId == null) await warehouseSendCheck(po.status);
+      const [job] = po.jobId != null ? await db.select({ number: jobNumberSql }).from(schema.jobs).where(eq(schema.jobs.id, po.jobId)) : [];
       const { pdf, filename } = await pdfFor(po.id);
-      const mail = poEmailText(sup?.name ?? "there", po.number, job?.number ?? 0, po.deliverTo, po.deliveryAddress);
+      const mail = poEmailText(sup?.name ?? "there", po.number, po.jobId == null ? null : (job?.number ?? 0), po.deliverTo, po.deliveryAddress);
       try {
         await sendAsTeam({ to, subject: mail.subject, text: mail.text, attachments: [{ filename, content: pdf, contentType: "application/pdf" }] });
       } catch (e) {
@@ -367,6 +380,7 @@ export const purchasing = {
   markSent: adminOnly.input(z.object({ id: z.number(), how: z.string().max(100).default("phoned") })).handler(async ({ input, context }) => {
     const po = await loadPo(input.id);
     if (po.status === "cancelled") throw new ORPCError("BAD_REQUEST", { message: "This PO is cancelled." });
+    if (po.jobId == null) await warehouseSendCheck(po.status);
     await commitPo(po.id, "other", input.how);
     await resolveAiActionsForPo(po.id, context.actor.name);
     return { ok: true };
@@ -395,7 +409,8 @@ export const purchasing = {
         jobTitle: schema.jobs.title,
       })
       .from(schema.purchaseOrders)
-      .innerJoin(schema.jobs, eq(schema.jobs.id, schema.purchaseOrders.jobId))
+      // Left join: a warehouse order (A2) has no job and must still be matchable.
+      .leftJoin(schema.jobs, eq(schema.jobs.id, schema.purchaseOrders.jobId))
       .where(and(eq(schema.purchaseOrders.supplierId, input.supplierId), ne(schema.purchaseOrders.status, "cancelled"), ne(schema.purchaseOrders.status, "draft")))
       .orderBy(desc(schema.purchaseOrders.createdAt))
       .limit(100);

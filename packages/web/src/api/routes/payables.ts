@@ -105,7 +105,7 @@ export const payables = {
         jobNumber: jobNumberSql,
       })
       .from(schema.purchaseOrders)
-      .innerJoin(schema.jobs, eq(schema.jobs.id, schema.purchaseOrders.jobId))
+      .leftJoin(schema.jobs, eq(schema.jobs.id, schema.purchaseOrders.jobId)) // A2: warehouse orders have no job
       .where(eq(schema.purchaseOrders.status, "sent"));
 
     type Row = {
@@ -269,7 +269,7 @@ export const payables = {
       ? await db
           .select({ po: schema.purchaseOrders, jobNumber: jobNumberSql, jobTitle: schema.jobs.title })
           .from(schema.purchaseOrders)
-          .innerJoin(schema.jobs, eq(schema.jobs.id, schema.purchaseOrders.jobId))
+          .leftJoin(schema.jobs, eq(schema.jobs.id, schema.purchaseOrders.jobId)) // A2: warehouse orders have no job
           .where(and(eq(schema.purchaseOrders.supplierId, sid), inArray(schema.purchaseOrders.status, ["sent", "invoiced"]), gte(schema.purchaseOrders.createdAt, since)))
           .orderBy(desc(schema.purchaseOrders.createdAt))
       : [];
@@ -280,7 +280,7 @@ export const payables = {
         ...(await db
           .select({ po: schema.purchaseOrders, jobNumber: jobNumberSql, jobTitle: schema.jobs.title })
           .from(schema.purchaseOrders)
-          .innerJoin(schema.jobs, eq(schema.jobs.id, schema.purchaseOrders.jobId))
+          .leftJoin(schema.jobs, eq(schema.jobs.id, schema.purchaseOrders.jobId)) // A2: warehouse orders have no job
           .where(inArray(schema.purchaseOrders.id, missingPoIds))),
       );
     }

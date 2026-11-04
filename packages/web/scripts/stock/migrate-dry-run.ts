@@ -6,7 +6,8 @@
  * 1. Opens the file read-only and stops (exit 1) if any of the four Terra Stock
  *    tables already has a row, or the migration looks applied already.
  * 2. Otherwise copies the file to a temporary folder, applies
- *    src/api/database/sql/2026-11-23-stock-stage1.sql to the copy, checks the
+ *    src/api/database/sql/2026-11-23-stock-stage1.sql and then
+ *    2026-11-24-stock-a2.sql (A2, supply settings and warehouse orders) to the copy, checks the
  *    new tables and columns are there and every old row count is unchanged,
  *    then deletes the copy.
  * The original file is never written to.
@@ -17,8 +18,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const OLD_STOCK = ["stock_movements", "stock_reservations", "stocktakes", "stocktake_lines"] as const;
-const NEW_TABLES = ["stock_locations", "stock_items", "stock_orders", "stock_counts", "stock_payment_confirmations", "stock_alerts", "stock_permissions"];
-const SQL_FILE = join(import.meta.dir, "../../src/api/database/sql/2026-11-23-stock-stage1.sql");
+const NEW_TABLES = [
+  "stock_locations",
+  "stock_items",
+  "stock_orders",
+  "stock_counts",
+  "stock_payment_confirmations",
+  "stock_alerts",
+  "stock_permissions",
+  // A2
+  "stock_po_links",
+  "stock_supply_approvals",
+];
+/** Applied in this order. A2 runs after Stage 1. */
+const SQL_FILES = ["2026-11-23-stock-stage1.sql", "2026-11-24-stock-a2.sql"].map((f) => join(import.meta.dir, "../../src/api/database/sql", f));
 
 export type DryRun = { ok: boolean; stopped?: string; rows?: Record<string, number>; created?: string[]; addedColumns?: number; countsUnchanged?: boolean };
 
@@ -49,12 +62,14 @@ export function dryRun(path: string): DryRun {
     const db = new Database(copy);
     const oldCounts = Object.fromEntries(have.filter((t) => !t.startsWith("sqlite_")).map((t) => [t, count(db, t)]));
     const cols = (t: string) => (db.query(`pragma table_info("${t}")`).all() as { name: string }[]).length;
-    const altered = ["stock_movements", "stock_reservations", "job_costs", "invoice_payments"];
+    const altered = ["stock_movements", "stock_reservations", "job_costs", "invoice_payments", "products", "purchase_orders", "purchase_order_lines"];
     const colsBefore = Object.fromEntries(altered.map((t) => [t, cols(t)]));
-    const statements = readFileSync(SQL_FILE, "utf8")
-      .split("--> statement-breakpoint")
-      .map((s) => s.trim())
-      .filter((s) => s.replace(/--.*$/gm, "").trim().length > 0);
+    const statements = SQL_FILES.flatMap((f) =>
+      readFileSync(f, "utf8")
+        .split("--> statement-breakpoint")
+        .map((s) => s.trim())
+        .filter((s) => s.replace(/--.*$/gm, "").trim().length > 0),
+    );
     db.exec("begin");
     for (const s of statements) db.exec(s);
     db.exec("commit");

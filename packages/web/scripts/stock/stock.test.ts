@@ -32,6 +32,7 @@ import {
   supplier,
   teardown,
 } from "./harness";
+import { registerA2 } from "./a2.cases";
 
 beforeAll(async () => {
   await setup();
@@ -1033,6 +1034,8 @@ describe("stock status wording", () => {
     expect(rs([h("reserved", 12), h("released", 8)])).toBe("Fully reserved");
   });
 });
+
+registerA2({ no, eq, facts, material });
 
 describe("isolation: nothing left the machine", () => {
   test("no network, no SMS, no job email, no customer or supplier email", async () => {

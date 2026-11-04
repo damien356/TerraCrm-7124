@@ -129,6 +129,7 @@ export default function CashflowPage() {
           </Card>
 
           {d.gaps.jobsMissingCosts > 0 ? <CostGap gaps={d.gaps} /> : null}
+          {d.warehouseUndated?.length ? <WarehouseUndated rows={d.warehouseUndated} /> : null}
 
           {/* ----------------------- what is coming/going --------------------- */}
           <div className="grid gap-3 lg:grid-cols-2">
@@ -311,6 +312,32 @@ function CostGap({ gaps }: { gaps: { jobsMissingCosts: number; valueMissingCosts
             out against it, so the low points above are kinder than reality. Enter material, installer and
             other direct costs on the job for the forecast to mean anything.
           </p>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/** A2: warehouse orders with no payment date. Left off the dated forecast, never guessed. */
+function WarehouseUndated({ rows }: { rows: Array<{ poId: number; number: string; supplier: string; part: string; amountIncGst: number; status: string; why: string }> }) {
+  return (
+    <Card className="border-[var(--warning)]/40 px-4 py-3">
+      <div className="flex items-start gap-2.5">
+        <TriangleAlert className="mt-0.5 size-4 shrink-0 text-[var(--warning)]" />
+        <div className="min-w-0">
+          <p className="text-[13px] font-semibold">
+            {rows.length} warehouse order amount{rows.length === 1 ? "" : "s"} not in the forecast: no payment date
+          </p>
+          <ul className="mt-1 space-y-0.5 text-xs leading-relaxed text-muted-foreground">
+            {rows.map((r) => (
+              <li key={`${r.poId}-${r.part}-${r.why}`}>
+                <Link href="/stock/reorder" className="font-medium text-foreground underline-offset-2 hover:underline">
+                  {r.number}
+                </Link>{" "}
+                {r.supplier}, {r.part}, {money(r.amountIncGst)} inc GST{r.status === "draft" ? " (planned, draft)" : ""}. {r.why}
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
     </Card>

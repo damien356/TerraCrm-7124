@@ -19,7 +19,8 @@ export type PoPdfInput = {
   date: string;
   supplierName: string;
   supplierAccount: string | null;
-  jobNumber: number | string;
+  /** Null: a warehouse stock order (A2), printed as "Warehouse stock". */
+  jobNumber: number | string | null;
   deliverTo: "warehouse" | "site";
   deliveryAddress: string;
   notes: string;
@@ -87,7 +88,7 @@ export async function renderPoPdf(po: PoPdfInput): Promise<Buffer> {
   y -= 24;
   right(`Date ${po.date}`, W - M, 10);
   y -= 13;
-  right(`Job ${po.jobNumber}`, W - M, 10);
+  right(po.jobNumber == null ? "Warehouse stock" : `Job ${po.jobNumber}`, W - M, 10);
   y = Math.min(y - 13, H - M - logoH) - 22;
 
   // The line that makes matching work.

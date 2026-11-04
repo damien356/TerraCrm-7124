@@ -99,6 +99,8 @@ export function poRefsIn(...texts: Array<string | null | undefined>) {
   for (const t of texts) {
     if (!t) continue;
     for (const m of t.matchAll(/(?<![A-Za-z])po\s*#?\s*(\d{3,9})\s*[-/ ]\s*(\d{1,2})(?![\d])/gi)) out.add(`PO${m[1]}-${Number(m[2])}`);
+    // A2 warehouse orders: "PO-W0001", "PO W0001", "pow0001".
+    for (const m of t.matchAll(/(?<![A-Za-z])po\s*#?\s*-?\s*w\s*(\d{4})(?!\d)/gi)) out.add(`PO-W${m[1]}`);
     for (const m of t.matchAll(/(?<![\dA-Za-z#-])(\d{6,9})\s*[-/]\s*(\d{1,2})(?![\d])/g)) out.add(`PO${m[1]}-${Number(m[2])}`);
     for (const m of t.matchAll(/(?<![\d])(\d{3,6})\s*[-/ ]?\s*([A-Za-z])(?![A-Za-z])/g)) out.add(`${m[1]}-${m[2]!.toUpperCase()}`);
   }
@@ -114,6 +116,7 @@ export function strictPoRefsIn(...texts: Array<string | null | undefined>) {
   const out = new Set<string>();
   for (const t of texts) {
     for (const m of (t ?? "").matchAll(/(?<![A-Za-z\d])po(\d{3,9})-(\d{1,2})(?![\d])/gi)) out.add(`PO${m[1]}-${Number(m[2])}`);
+    for (const m of (t ?? "").matchAll(/(?<![A-Za-z\d])po-?w(\d{4})(?![\d])/gi)) out.add(`PO-W${m[1]}`);
     for (const m of (t ?? "").matchAll(/(?<![\dA-Za-z])(\d{3,6})-([A-Za-z])(?![A-Za-z\d])/g)) out.add(`${m[1]}-${m[2]!.toUpperCase()}`);
   }
   return [...out];
@@ -212,7 +215,7 @@ export async function linkInvoice(inv: InvoiceRow): Promise<{ poId: number | nul
     const targets = await mergedTargets(found.map((j) => j.id));
     const jobs = targets.length ? await db.select({ id: schema.jobs.id, number: schema.jobs.number }).from(schema.jobs).where(inArray(schema.jobs.id, targets)) : [];
     const jobIds = new Set(jobs.map((j) => j.id));
-    const onJob = open.filter((p) => jobIds.has(p.jobId));
+    const onJob = open.filter((p) => p.jobId != null && jobIds.has(p.jobId));
     if (onJob.length === 1) return { poId: onJob[0]!.id, note: `No PO number, matched on job ${jobs.find((j) => j.id === onJob[0]!.jobId)?.number}.` };
   }
 
@@ -226,7 +229,7 @@ export async function linkInvoice(inv: InvoiceRow): Promise<{ poId: number | nul
       .leftJoin(schema.contacts, eq(schema.contacts.id, schema.jobs.contactId))
       .leftJoin(schema.companies, eq(schema.companies.id, schema.jobs.companyId))
       .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
-      .where(inArray(schema.jobs.id, [...new Set(open.map((p) => p.jobId))]));
+      .where(inArray(schema.jobs.id, [...new Set(open.map((p) => p.jobId).filter((x): x is number => x != null))]));
     const hits = who.filter((j) => {
       const keys = [j.last, j.company, (j.address ?? "").replace(/^\s*(unit\s*)?\d+[a-z]?\s*[/,]?\s*\d*\s*/i, "")]
         .map(squash)
@@ -302,6 +305,11 @@ export async function settlePo(poId: number) {
         updatedAt: new Date(),
       })
       .where(eq(schema.jobCosts.id, po.jobCostId));
+  }
+  // A2: a warehouse order has no job cost line. Its bills feed the forecast directly.
+  if (po.kind === "warehouse") {
+    const { rebuildForecast } = await import("./cashflow");
+    await rebuildForecast().catch((e) => console.error("[cashflow] rebuild after warehouse bill failed:", e));
   }
 }
 

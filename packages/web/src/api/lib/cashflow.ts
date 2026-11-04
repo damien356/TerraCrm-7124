@@ -632,6 +632,10 @@ export async function rebuildForecast(): Promise<RebuildResult> {
     });
   }
 
+  /* ---------------- warehouse stock orders (A2, no job) ---------------- */
+  const { warehouseCash } = await import("./stock/warehouse-cash");
+  events.push(...(await warehouseCash(now)).events);
+
   await db.delete(schema.cashEvents).where(eq(schema.cashEvents.actual, false));
   for (let i = 0; i < events.length; i += 200) {
     await db.insert(schema.cashEvents).values(events.slice(i, i + 200));

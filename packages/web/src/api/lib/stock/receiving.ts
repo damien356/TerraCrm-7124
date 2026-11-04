@@ -59,6 +59,7 @@ export async function receiveLine(input: { poLineId: number; pieces: ReceivePiec
   if (!po) throw notFound("PO not found");
   if (po.status === "cancelled") throw bad(`${poName(po.number)} is cancelled.`);
   if (po.status === "draft") throw bad(`${poName(po.number)} has not been sent yet.`);
+  if (line.closedAt) throw bad("This line was closed. The rest is not coming.");
   for (const p of input.pieces) if (!(p.qty > 0)) throw bad("Each piece needs a quantity over 0.");
 
   const roll = isRollLine(line.unit, input.pieces);
@@ -75,8 +76,9 @@ export async function receiveLine(input: { poLineId: number; pieces: ReceivePiec
     .returning();
   if (!claimed) throw bad("Someone else just received against this line. Refresh and check.");
 
-  const forJob = po.kind !== "warehouse";
-  const [job] = forJob ? await db.select({ number: schema.jobs.number }).from(schema.jobs).where(eq(schema.jobs.id, po.jobId)) : [];
+  // A warehouse PO has no job. Job-linked shares on it (A2 route B) are handled after the items exist.
+  const jobId = po.kind !== "warehouse" ? po.jobId : null;
+  const [job] = jobId != null ? await db.select({ number: schema.jobs.number }).from(schema.jobs).where(eq(schema.jobs.id, jobId)) : [];
   const costPer = roll ? (line.unit === "m2" ? "m2" : "lm") : "unit";
   const items: Item[] = [];
   const shortRolls: string[] = [];
@@ -100,29 +102,34 @@ export async function receiveLine(input: { poLineId: number; pieces: ReceivePiec
         costStatus: po.status === "invoiced" ? "final" : "provisional",
         poId: po.id,
         poLineId: line.id,
-        boughtForJobId: forJob ? po.jobId : null,
-        costOnJobId: forJob ? po.jobId : null,
-        note: forJob ? `Bought for Job ${job?.number ?? po.jobId} on ${poName(po.number)}.` : `Warehouse stock, ${poName(po.number)}.`,
+        boughtForJobId: jobId,
+        costOnJobId: jobId,
+        note: jobId != null ? `Bought for Job ${job?.number ?? jobId} on ${poName(po.number)}.` : `Warehouse stock, ${poName(po.number)}.`,
       },
       actor,
-      { status: "available", kind: "receive", requestKey: `${key}:${n}`, jobId: forJob ? po.jobId : null, note: `Received on ${poName(po.number)}.` },
+      { status: "available", kind: "receive", requestKey: `${key}:${n}`, jobId, note: `Received on ${poName(po.number)}.` },
     );
     items.push(made.item);
     if (roll && p.labelQty && p.qty < p.labelQty - 0.005) {
       shortRolls.push(made.item.code);
       await stockAlert(`short-roll:${made.item.id}`, "stock_short_roll", {
-        jobId: forJob ? po.jobId : null,
+        jobId,
         title: `Short roll on ${poName(po.number)}`,
         body: `${made.item.code}: label says ${cm(p.labelQty)} m, measured ${cm(p.qty)} m (${cm(p.labelQty - p.qty)} m short). Recorded at the measured length. Raise it with the supplier.`,
         path: `/stock/items/${made.item.id}`,
       });
     }
-    if (forJob) await holdForJob(made.item, po, line, key, n, actor);
+    if (jobId != null) await holdForJob(made.item, jobId, po, line, key, n, actor);
+  }
+  // A2 route B: job shares on a warehouse line become that job's holds now, at stock cost, once.
+  if (jobId == null) {
+    const { fillLinksFromReceipt } = await import("./warehouse-po");
+    await fillLinksFromReceipt(po, claimed, items, key, actor);
   }
   // Goods for a job's order: check the order now, so "Now fully reserved" goes out straight away (A1.6). Never stops the receipt.
-  if (forJob) {
+  if (jobId != null) {
     try {
-      const [order] = await db.select({ id: schema.stockOrders.id }).from(schema.stockOrders).where(eq(schema.stockOrders.jobId, po.jobId));
+      const [order] = await db.select({ id: schema.stockOrders.id }).from(schema.stockOrders).where(eq(schema.stockOrders.jobId, jobId));
       if (order) {
         const { recheckOrder } = await import("./recheck");
         await recheckOrder(order.id);
@@ -139,13 +146,13 @@ export async function receiveLine(input: { poLineId: number; pieces: ReceivePiec
  * free to anyone else. If the job's order is in the stock workflow, the hold
  * joins it, and any "short" row for that line is closed off.
  */
-async function holdForJob(it: Item, po: typeof schema.purchaseOrders.$inferSelect, line: typeof schema.purchaseOrderLines.$inferSelect, key: string, n: number, actor: Actor) {
-  const [order] = await db.select().from(schema.stockOrders).where(eq(schema.stockOrders.jobId, po.jobId));
+async function holdForJob(it: Item, jobId: number, po: typeof schema.purchaseOrders.$inferSelect, line: typeof schema.purchaseOrderLines.$inferSelect, key: string, n: number, actor: Actor) {
+  const [order] = await db.select().from(schema.stockOrders).where(eq(schema.stockOrders.jobId, jobId));
   await db
     .insert(schema.stockReservations)
     .values({
       productId: it.productId,
-      jobId: po.jobId,
+      jobId,
       orderId: order?.id ?? null,
       jobMaterialId: line.jobMaterialId,
       stockItemId: it.id,

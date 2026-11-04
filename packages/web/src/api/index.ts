@@ -70,6 +70,7 @@ import { clientInvoices } from "./routes/clientInvoices";
 import { delivery } from "./routes/delivery";
 import { productSales } from "./routes/productSales";
 import { stock } from "./routes/stock";
+import { stockSupply } from "./routes/stockSupply";
 import { siteFill } from "./routes/siteFill";
 import { emailCheck } from "./routes/emailCheck";
 import { productFind } from "./routes/productFind";
@@ -257,6 +258,8 @@ export const router = {
   productSales,
   /** Warehouse stock: register, holds, deposits for stock, returns. Switches S1 to S5 start off. */
   stock,
+  /** Low-stock alerts and warehouse orders (S6). Admin only. */
+  stockSupply,
   /** A quote with a delivery line and no site asks for one, and a job with no site offers one (188001 list item 12). */
   siteFill,
   emailCheck,

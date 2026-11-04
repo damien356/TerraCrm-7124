@@ -350,7 +350,7 @@ export const stock = {
   /* ------------------------------ settings ------------------------------- */
 
   setSwitch: adminOnly
-    .input(z.object({ key: z.enum(["s1", "s2", "s3", "s4", "s5"]), state: z.enum(["off", "on", "paused"]) }))
+    .input(z.object({ key: z.enum(["s1", "s2", "s3", "s4", "s5", "s6"]), state: z.enum(["off", "on", "paused"]) }))
     .handler(({ input, context }) => setSwitch(input.key, input.state, context.actor)),
   setCardCheck: adminOnly.input(z.object({ done: z.boolean(), note: z.string().trim().max(300) })).handler(({ input, context }) => setCardCheck(input.done, input.note, context.actor)),
   saveRules: adminOnly

@@ -93,6 +93,11 @@ async function handleCancel(o: Order): Promise<CheckResult> {
     .update(schema.stockReservations)
     .set({ status: "released", releasedAt: now, releaseReason: "Order cancelled before any deposit. Stock released.", updatedAt: now })
     .where(and(eq(schema.stockReservations.orderId, o.id), inArray(schema.stockReservations.status, [...WAITING, "short"])));
+  // A2: a job share on a warehouse order is let go too. The order itself is never changed: that quantity becomes general stock.
+  await db
+    .update(schema.stockPoLinks)
+    .set({ status: "cancelled", note: "Order cancelled before any deposit. The quantity stays on the warehouse order as general stock.", updatedAt: now })
+    .where(and(eq(schema.stockPoLinks.orderId, o.id), eq(schema.stockPoLinks.status, "open")));
   await db.update(schema.stockOrders).set({ status: "cancelled", updatedAt: now }).where(and(eq(schema.stockOrders.id, o.id), eq(schema.stockOrders.status, o.status)));
   await afterChange(o.jobId);
   return { orderId: o.id, firmed: 0, short: 0, state: "cancelled" };
@@ -140,7 +145,31 @@ async function checkOne(o0: Order): Promise<CheckResult> {
       }
     }
   }
+  if (shortNow.length) await paidWhileSupplyShort(o, shortNow).catch((e) => console.error("[stock] supply short check failed:", (e as Error).message));
   return { orderId: o.id, firmed, short, state: shortNow.length ? "short" : "confirmed" };
+}
+
+/**
+ * A2 (7D): the deposit is in and a container or stock-only product is short.
+ * The payment stays recorded as it is. No refund, no purchase, no message to
+ * the customer: the office is told once per order and product.
+ */
+async function paidWhileSupplyShort(o: Order, shortNow: Hold[]) {
+  const ids = [...new Set(shortNow.map((h) => h.productId))];
+  const prods = await db.select().from(schema.products).where(inArray(schema.products.id, ids));
+  const { modeOf, productName, SHORT_LABEL } = await import("./replenish");
+  for (const p of prods) {
+    const mode = modeOf(p);
+    if (mode !== "container" && mode !== "stock_only") continue;
+    const qty = r4(shortNow.filter((h) => h.productId === p.id).reduce((s, h) => s + (h.orderedQty ?? h.qty), 0));
+    await stockAlert(`paid-short:${o.id}:${p.id}`, "stock_paid_short", {
+      orderId: o.id,
+      jobId: o.jobId,
+      title: `Paid order short: ${productName(p)}`,
+      body: `${SHORT_LABEL[mode]}. The deposit is recorded and stays as it is. ${qty} short on this order. No refund or purchase has been made. Decide with the customer.`,
+      path: `/jobs/${o.jobId}`,
+    });
+  }
 }
 
 /** Check one order. Never throws: a failure is counted and, the third time running, alerted once. */
@@ -202,5 +231,11 @@ export async function recheckAll(now = new Date()) {
   for (const o of orders) results.push(await recheckOrder(o.id));
   const { resendUnsent } = await import("./alerts");
   const resent = await resendUnsent().catch(() => 0);
-  return { expired, warned, resent, results };
+  // A2: one low-stock alert per low spell, for products with alerts ticked (S6 on only).
+  const { checkLowAlerts } = await import("./replenish");
+  const low = await checkLowAlerts().catch((e) => {
+    console.error("[stock] low stock check failed:", (e as Error).message);
+    return { sent: 0, reset: 0 };
+  });
+  return { expired, warned, resent, results, low };
 }

@@ -31,7 +31,7 @@ import {
  * this kind of order is off and no order exists.
  */
 
-const unitText = (u: string | null | undefined) => (u === "m2" ? "m²" : u === "lm" ? "m" : (u ?? ""));
+const unitText = (u: string | null | undefined) => (u === "m2" ? "m²" : u === "lm" ? "m" : u === "unit" || u === "ea" || u === "item" ? "each" : (u ?? ""));
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function StockPanelCard({ jobId }: { jobId: number }) {
@@ -159,7 +159,8 @@ function HoldRow({ h, p, run }: { h: StockHold; p: Panel; run: Run }) {
   const extend = useExtendHold();
   const approveFree = useApproveFree();
   const declineFree = useDeclineFree();
-  const ended = ["released", "cancelled", "short", "issued", "handed_over"].includes(h.status);
+  // A2: a shortage row can be withdrawn when the job no longer needs it.
+  const ended = ["released", "cancelled", "issued", "handed_over"].includes(h.status);
   return (
     <div className="flex flex-wrap items-center gap-3 px-4 py-2">
       <span className="w-32 font-medium">{h.statusLabel}</span>

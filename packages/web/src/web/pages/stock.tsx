@@ -48,12 +48,17 @@ export default function StockPage() {
 
   return (
     <Page title="Warehouse stock" subtitle="What is on the shelf, what is held, and what is free. Nothing here sends a PO, an email or a text.">
-      <div className="mb-4 flex flex-wrap gap-2">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         {TABS.map((t) => (
           <Button key={t.id} size="sm" variant={tab === t.id ? "default" : "outline"} onClick={() => setTab(t.id)}>
             {t.label}
           </Button>
         ))}
+        {o?.perms.approve ? (
+          <Link href="/stock/reorder" className="ml-auto text-sm text-primary underline-offset-2 hover:underline">
+            Reorder list and warehouse orders
+          </Link>
+        ) : null}
       </div>
       {data.isLoading ? <Loading /> : data.error ? <p className="text-sm text-destructive">{data.error.message}</p> : null}
       {o ? <SwitchStrip o={o} /> : null}
