@@ -22,6 +22,7 @@ import {
   useToWarehouse,
 } from "../queries/stockSupply";
 import { SupplyReview, SupplySettingsTab } from "../components/stock-supply-settings";
+import { overlapOf, PoOverlapNotice } from "../components/po-overlap";
 
 /**
  * A2: LOW-STOCK ALERTS AND WAREHOUSE ORDERS (S6). Admin only.
@@ -181,7 +182,7 @@ function ProductRow({ p, s6On }: { p: ReorderProduct; s6On: boolean }) {
       <p className="mt-1 text-muted-foreground">
         {facts.join(" · ")}
         {p.reorderLevel != null ? ` · reorder level ${p.reorderLevel}` : ""}
-        {p.leadTimeDays != null ? ` · lead time ${p.leadTimeDays} business days` : " · lead time unknown"}
+        {p.leadTimeDays != null ? ` · lead time ${p.leadTimeDays} days (Monday to Friday only; public holidays not excluded)` : " · lead time unknown"}
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
         {p.state.lowNow ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-900">Low stock now</span> : null}
@@ -283,20 +284,32 @@ function OrderCard({ o, canSeeCosts, s6On }: { o: WarehouseOrder; canSeeCosts: b
   const refresh = useRefreshAll();
   const [msg, setMsg] = React.useState<string | null>(null);
   const [how, setHow] = React.useState("phoned");
+  const [overlap, setOverlap] = React.useState<{ lines: string[]; via: "send" | "mark" } | null>(null);
   const draft = o.status === "draft";
   const goods = o.lines.filter((l) => l.kind === "goods");
   const outstanding = goods.some((l) => !l.closedAt && l.qty - l.receivedQty > 0.0001);
 
-  async function act(f: () => Promise<unknown>, ok: string) {
+  async function act(f: () => Promise<unknown>, ok: string, via?: "send" | "mark") {
     setMsg(null);
     try {
       await f();
+      setOverlap(null);
       refresh();
       setMsg(ok);
     } catch (e) {
-      setMsg(errText(e));
+      const lines = overlapOf(e);
+      if (lines.length && via) setOverlap({ lines, via });
+      else setMsg(errText(e));
     }
   }
+  const sendIt = (reason?: string) =>
+    act(() => send.mutateAsync({ id: o.id, overlapOverride: reason ? { reason } : undefined }), `${o.number} emailed. It is now in the cash forecast and Suppliers owed.`, "send");
+  const markIt = (reason?: string) =>
+    act(
+      () => mark.mutateAsync({ id: o.id, how: how || "phoned", overlapOverride: reason ? { reason } : undefined }),
+      `${o.number} marked sent. It is now in the cash forecast and Suppliers owed.`,
+      "mark",
+    );
 
   return (
     <Card>
@@ -350,7 +363,7 @@ function OrderCard({ o, canSeeCosts, s6On }: { o: WarehouseOrder; canSeeCosts: b
               title={!o.supplierHasEmail ? "No email on file for this supplier" : !s6On ? "S6 is off" : undefined}
               onClick={() => {
                 if (!window.confirm(`Email ${o.number} to ${o.supplierName} now? The PDF goes from team@.`)) return;
-                act(() => send.mutateAsync({ id: o.id }), `${o.number} emailed. It is now in the cash forecast and Suppliers owed.`);
+                sendIt();
               }}
             >
               Send to supplier
@@ -362,7 +375,7 @@ function OrderCard({ o, canSeeCosts, s6On }: { o: WarehouseOrder; canSeeCosts: b
               disabled={!s6On || mark.isPending}
               onClick={() => {
                 if (!window.confirm(`Mark ${o.number} as sent (${how})? No email goes.`)) return;
-                act(() => mark.mutateAsync({ id: o.id, how: how || "phoned" }), `${o.number} marked sent. It is now in the cash forecast and Suppliers owed.`);
+                markIt();
               }}
             >
               Mark sent
@@ -375,6 +388,16 @@ function OrderCard({ o, canSeeCosts, s6On }: { o: WarehouseOrder; canSeeCosts: b
         ) : null}
         {msg ? <span className="text-sm">{msg}</span> : null}
       </div>
+      {overlap ? (
+        <div className="border-t border-border px-4 py-3">
+          <PoOverlapNotice
+            lines={overlap.lines}
+            action={overlap.via === "send" ? "sent" : "marked sent"}
+            busy={send.isPending || mark.isPending}
+            onOverride={(reason) => (overlap.via === "send" ? sendIt(reason) : markIt(reason))}
+          />
+        </div>
+      ) : null}
     </Card>
   );
 }

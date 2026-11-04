@@ -161,7 +161,9 @@ async function paidWhileSupplyShort(o: Order, shortNow: Hold[]) {
   for (const p of prods) {
     const mode = modeOf(p);
     if (mode !== "container" && mode !== "stock_only") continue;
-    const qty = r4(shortNow.filter((h) => h.productId === p.id).reduce((s, h) => s + (h.orderedQty ?? h.qty), 0));
+    const byUnit = new Map<string, number>();
+    for (const h of shortNow.filter((x) => x.productId === p.id)) byUnit.set(h.lineUnit ?? "", r4((byUnit.get(h.lineUnit ?? "") ?? 0) + (h.orderedQty ?? h.qty)));
+    const qty = [...byUnit].map(([u, q]) => qtyText(q, u)).join(" + ");
     await stockAlert(`paid-short:${o.id}:${p.id}`, "stock_paid_short", {
       orderId: o.id,
       jobId: o.jobId,

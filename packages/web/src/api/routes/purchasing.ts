@@ -101,10 +101,99 @@ async function warehouseSendCheck(status: string) {
   if (!(await isOn("s6"))) throw new ORPCError("BAD_REQUEST", { message: "Warehouse orders are paused (S6 is off). Turn S6 back on to send this draft." });
 }
 
+/** Send and Mark sent: the stock overlap check (A2 follow-up). Main admin may go past it with a reason. */
+const overrideInput = z.object({ reason: z.string().max(500) }).nullable().optional();
+async function overlapCheck(poId: number, how: "send" | "mark_sent", override: { reason: string } | null | undefined, actor: Parameters<typeof import("../lib/stock/po-send-gate").assertPoSendable>[3]) {
+  const { assertPoSendable } = await import("../lib/stock/po-send-gate");
+  return assertPoSendable(poId, how, override, actor);
+}
+
+async function logOverride(...a: Parameters<typeof import("../lib/stock/po-send-gate").logPoOverride>) {
+  const { logPoOverride } = await import("../lib/stock/po-send-gate");
+  return logPoOverride(...a);
+}
+
+/** One send per PO at a time, so a double press or a retry while the first is still going cannot email twice. */
+const sending = new Set<number>();
+
+/** The Send button. The email goes first; the PO only counts as sent once the email is accepted. */
+async function sendOne(input: { id: number; to?: string; saveEmail: boolean; overlapOverride?: { reason: string } | null }, actor: Parameters<typeof overlapCheck>[3]) {
+  const po = await loadPo(input.id);
+  if (po.status === "cancelled") throw new ORPCError("BAD_REQUEST", { message: "This PO is cancelled." });
+  if (po.totalExGst <= 0) throw new ORPCError("BAD_REQUEST", { message: "This PO is $0. Put the costs in first." });
+  const [sup] = await db.select().from(schema.suppliers).where(eq(schema.suppliers.id, po.supplierId));
+  const to = (input.to?.trim() || sup?.email || "").trim();
+  if (!to) throw new ORPCError("BAD_REQUEST", { message: `No email on file for ${sup?.name ?? "this supplier"}. Type one in, or add it on the Suppliers page.` });
+  if (!EMAIL.test(to)) throw new ORPCError("BAD_REQUEST", { message: `"${to}" is not an email address.` });
+  if (po.jobId == null) await warehouseSendCheck(po.status);
+  const overridden = await overlapCheck(po.id, "send", input.overlapOverride, actor);
+  // Saved only once the checks pass, so a refused send changes nothing.
+  if (input.saveEmail && sup && to !== sup.email) {
+    await db.update(schema.suppliers).set({ email: to, updatedAt: new Date() }).where(eq(schema.suppliers.id, sup.id));
+  }
+  const [job] = po.jobId != null ? await db.select({ number: jobNumberSql }).from(schema.jobs).where(eq(schema.jobs.id, po.jobId)) : [];
+  const { pdf, filename } = await pdfFor(po.id);
+  const mail = poEmailText(sup?.name ?? "there", po.number, po.jobId == null ? null : (job?.number ?? 0), po.deliverTo, po.deliveryAddress);
+  try {
+    await sendAsTeam({ to, subject: mail.subject, text: mail.text, attachments: [{ filename, content: pdf, contentType: "application/pdf" }] });
+  } catch (e) {
+    throw new ORPCError("BAD_GATEWAY", {
+      message: `Email did not go: ${(e as Error).message}. ${po.status === "draft" ? `${po.number} is still a draft, not sent, and nothing was ordered.` : `${po.number} was not emailed again.`} Press Send again once it is fixed.`,
+    });
+  }
+  await putObject(`purchase-orders/${po.number}.pdf`, pdf, "application/pdf", filename).catch(() => {});
+  try {
+    await commitPo(po.id, "email", to);
+    await logOverride(po.id, "send", input.overlapOverride, overridden, actor);
+  } catch (e) {
+    // The supplier has it. Do not invite a second email of the same order.
+    console.error("[po] sent but not saved as sent", po.number, (e as Error).message);
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: `The email to ${to} went, but ${po.number} could not be saved as sent. Do not press Send again. Use Mark sent (emailed from another inbox) instead.`,
+    });
+  }
+  await resolveAiActionsForPo(po.id, actor.name);
+  return { ok: true, to, overridden };
+}
+
+/** Send, one at a time per PO. Exported for the stock tests (scripts/stock). */
+export async function sendPoNow(input: Parameters<typeof sendOne>[0], actor: Parameters<typeof sendOne>[1]) {
+  if (sending.has(input.id)) throw new ORPCError("CONFLICT", { message: "This PO is already being sent. Wait a moment, then refresh." });
+  sending.add(input.id);
+  try {
+    return await sendOne(input, actor);
+  } finally {
+    sending.delete(input.id);
+  }
+}
+
+/** Mark sent: phoned through or put in on the supplier's portal. No email. Exported for the stock tests. */
+export async function markPoSentNow(input: { id: number; how: string; overlapOverride?: { reason: string } | null }, actor: Parameters<typeof sendOne>[1]) {
+  const po = await loadPo(input.id);
+  if (po.status === "cancelled") throw new ORPCError("BAD_REQUEST", { message: "This PO is cancelled." });
+  if (po.jobId == null) await warehouseSendCheck(po.status);
+  const overridden = await overlapCheck(po.id, "mark_sent", input.overlapOverride, actor);
+  await commitPo(po.id, "other", input.how);
+  await logOverride(po.id, "mark_sent", input.overlapOverride, overridden, actor);
+  await resolveAiActionsForPo(po.id, actor.name);
+  return { ok: true, overridden };
+}
+
 async function loadPo(id: number) {
   const [po] = await db.select().from(schema.purchaseOrders).where(eq(schema.purchaseOrders.id, id));
   if (!po) throw new ORPCError("NOT_FOUND", { message: "PO not found" });
   return po;
+}
+
+async function warehouseUnits(jobId: number | null, lines: { productId: number | null; unit: string }[]) {
+  const ids = jobId == null ? [...new Set(lines.filter((l) => l.unit === "unit" && l.productId != null).map((l) => l.productId!))] : [];
+  if (!ids.length) return (l: { unit: string }) => l.unit;
+  const { stockUnitText } = await import("../lib/stock/replenish");
+  const prods = await db.select().from(schema.products).where(inArray(schema.products.id, ids));
+  return (l: { productId: number | null; unit: string }) => {
+    const p = l.unit === "unit" ? prods.find((x) => x.id === l.productId) : undefined;
+    return p ? stockUnitText(p) : l.unit;
+  };
 }
 
 async function pdfFor(poId: number) {
@@ -113,6 +202,8 @@ async function pdfFor(poId: number) {
   const [sup] = await db.select().from(schema.suppliers).where(eq(schema.suppliers.id, po.supplierId));
   const lines = await db.select().from(schema.purchaseOrderLines).where(eq(schema.purchaseOrderLines.poId, poId)).orderBy(asc(schema.purchaseOrderLines.sortOrder));
   const date = po.sentAt ? po.sentAt.toISOString().slice(0, 10) : todayISO();
+  // A2 follow-up: a warehouse line is counted in "unit" inside Ops. The supplier sees the product's own stock unit (for example "pails"), never "unit".
+  const unitOf = await warehouseUnits(po.jobId, lines);
   const pdf = await renderPoPdf({
     number: po.number,
     date: auDate(date),
@@ -125,7 +216,7 @@ async function pdfFor(poId: number) {
     lines: lines.map((l) => ({
       description: l.description,
       qty: l.qty,
-      unit: l.unit,
+      unit: unitOf(l),
       unitCostExGst: l.unitCostExGst,
       totalExGst: l.totalExGst,
     })),
@@ -348,43 +439,13 @@ export const purchasing = {
    * address; `saveEmail` also puts it on the supplier so the next one just goes.
    */
   send: adminOnly
-    .input(z.object({ id: z.number(), to: z.string().max(200).optional(), saveEmail: z.boolean().default(false) }))
-    .handler(async ({ input, context }) => {
-      const po = await loadPo(input.id);
-      if (po.status === "cancelled") throw new ORPCError("BAD_REQUEST", { message: "This PO is cancelled." });
-      if (po.totalExGst <= 0) throw new ORPCError("BAD_REQUEST", { message: "This PO is $0. Put the costs in first." });
-      const [sup] = await db.select().from(schema.suppliers).where(eq(schema.suppliers.id, po.supplierId));
-      const to = (input.to?.trim() || sup?.email || "").trim();
-      if (!to) throw new ORPCError("BAD_REQUEST", { message: `No email on file for ${sup?.name ?? "this supplier"}. Type one in, or add it on the Suppliers page.` });
-      if (!EMAIL.test(to)) throw new ORPCError("BAD_REQUEST", { message: `"${to}" is not an email address.` });
-      if (input.saveEmail && sup && to !== sup.email) {
-        await db.update(schema.suppliers).set({ email: to, updatedAt: new Date() }).where(eq(schema.suppliers.id, sup.id));
-      }
-
-      if (po.jobId == null) await warehouseSendCheck(po.status);
-      const [job] = po.jobId != null ? await db.select({ number: jobNumberSql }).from(schema.jobs).where(eq(schema.jobs.id, po.jobId)) : [];
-      const { pdf, filename } = await pdfFor(po.id);
-      const mail = poEmailText(sup?.name ?? "there", po.number, po.jobId == null ? null : (job?.number ?? 0), po.deliverTo, po.deliveryAddress);
-      try {
-        await sendAsTeam({ to, subject: mail.subject, text: mail.text, attachments: [{ filename, content: pdf, contentType: "application/pdf" }] });
-      } catch (e) {
-        throw new ORPCError("BAD_GATEWAY", { message: `Email did not go: ${(e as Error).message}` });
-      }
-      await putObject(`purchase-orders/${po.number}.pdf`, pdf, "application/pdf", filename).catch(() => {});
-      await commitPo(po.id, "email", to);
-      await resolveAiActionsForPo(po.id, context.actor.name);
-      return { ok: true, to };
-    }),
+    .input(z.object({ id: z.number(), to: z.string().max(200).optional(), saveEmail: z.boolean().default(false), overlapOverride: overrideInput }))
+    .handler(({ input, context }) => sendPoNow(input, context.actor)),
 
   /** Phoned through, or put in on the supplier's portal. Same effect as sending, no email. */
-  markSent: adminOnly.input(z.object({ id: z.number(), how: z.string().max(100).default("phoned") })).handler(async ({ input, context }) => {
-    const po = await loadPo(input.id);
-    if (po.status === "cancelled") throw new ORPCError("BAD_REQUEST", { message: "This PO is cancelled." });
-    if (po.jobId == null) await warehouseSendCheck(po.status);
-    await commitPo(po.id, "other", input.how);
-    await resolveAiActionsForPo(po.id, context.actor.name);
-    return { ok: true };
-  }),
+  markSent: adminOnly
+    .input(z.object({ id: z.number(), how: z.string().max(100).default("phoned"), overlapOverride: overrideInput }))
+    .handler(({ input, context }) => markPoSentNow(input, context.actor)),
 
   cancel: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
     try {

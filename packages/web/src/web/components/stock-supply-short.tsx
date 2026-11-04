@@ -15,12 +15,15 @@ export function SupplyShortList({
   entityType,
   entityKey,
   onApproved,
+  afterSend,
 }: {
   shorts: SupplyShortRow[];
   canApprove: boolean;
   entityType: "quote" | "sale";
   entityKey: string | null;
   onApproved?: () => void;
+  /** The quote is already out: what stops now is accepting it. */
+  afterSend?: boolean;
 }) {
   if (!shorts.length) return null;
   const open = shorts.filter((s) => !s.approved);
@@ -28,7 +31,7 @@ export function SupplyShortList({
     <div className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="supply-short">
       <p className="font-semibold">
         {open.length
-          ? `${entityType === "quote" ? "This quote can not be sent" : "This sale can not be raised as an invoice"} until ${open.length === 1 ? "this line is" : "these lines are"} changed or the owner approves.`
+          ? `${entityType === "quote" ? (afterSend ? "This quote can not be accepted" : "This quote can not be sent") : "This sale can not be raised as an invoice"} until ${open.length === 1 ? "this line is" : "these lines are"} changed or the owner approves.`
           : "Shortage approved by the owner."}
       </p>
       <div className="mt-1 grid gap-2">
@@ -92,8 +95,8 @@ function ShortRow({
 }
 
 /** For the Send quote screen. Reads the quote as saved. */
-export function QuoteSupplyShort({ quoteId }: { quoteId: number }) {
+export function QuoteSupplyShort({ quoteId, afterSend }: { quoteId: number; afterSend?: boolean }) {
   const q = useQuoteSupply(quoteId);
   if (!q.data?.shorts.length) return null;
-  return <SupplyShortList shorts={q.data.shorts} canApprove={q.data.canApprove} entityType="quote" entityKey={String(quoteId)} onApproved={() => q.refetch()} />;
+  return <SupplyShortList shorts={q.data.shorts} canApprove={q.data.canApprove} entityType="quote" entityKey={String(quoteId)} afterSend={afterSend} onApproved={() => q.refetch()} />;
 }

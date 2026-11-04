@@ -36,6 +36,39 @@ const bad = (message: string) => new ORPCError("BAD_REQUEST", { message });
 
 export type AcceptActor = { name: string; role: string };
 
+/** What a customer sees when a container or stock-only product ran short after the quote went out. No stock details. */
+export const ACCEPT_SHORT_CUSTOMER =
+  "We could not accept this quote online just now because some of the material on it needs checking with our office. Nothing has been accepted or charged. We have let the office know and they will contact you.";
+
+/**
+ * A2 follow-up (Damien, 4 Nov): the container and stock-only check also runs
+ * when the quote is accepted, not only when it is sent. Stock that was there
+ * at send may have gone to another order since. The main admin's approval on
+ * this quote (made at send, or now) carries over. Nothing on the quote
+ * changes, nothing is ordered.
+ */
+async function acceptSupplyCheck(quote: typeof schema.quotes.$inferSelect, via: "staff" | "online") {
+  const { assertSupplyOk, quoteSupplyLines } = await import("./stock/supply-check");
+  try {
+    await assertSupplyOk(await quoteSupplyLines(quote.id), quote.jobId, { entityType: "quote", entityKey: String(quote.id) });
+  } catch (e) {
+    const open = ((e as { data?: { supplyShort?: { productId: number; text: string }[] } }).data?.supplyShort ?? []).filter(Boolean);
+    if (!open.length) throw e;
+    const { stockAlert } = await import("./stock/alerts");
+    const ref = await quoteRefOf(quote);
+    for (const s of open) {
+      await stockAlert(`accept-short:${quote.id}:${s.productId}`, "stock_accept_short", {
+        jobId: quote.jobId,
+        title: `${via === "online" ? "Customer tried to accept" : "Accept stopped"}: ${ref} is short`,
+        body: `${s.text} ${via === "online" ? "The customer was told the office will contact them." : "Staff pressed Accepted."} The quote is not accepted and was not changed. No invoice, no purchase. Change the quote, or the main admin approves the shortage on the quote, then accept again.`,
+        path: `/quotes/${quote.id}`,
+      }).catch((err) => console.error("[stock] accept-short alert failed:", (err as Error).message));
+    }
+    if (via === "online") throw bad(ACCEPT_SHORT_CUSTOMER);
+    throw e;
+  }
+}
+
 export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; via: "staff" | "online"; note?: string | null }) {
   const [quote] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, args.quoteId));
   if (!quote) throw new ORPCError("NOT_FOUND", { message: "Quote not found" });
@@ -49,6 +82,7 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     throw bad("This quote has passed its valid until date. Reply to our email and we will update it for you.");
   }
   await assertBillable(quote.jobId);
+  await acceptSupplyCheck(quote, args.via);
 
   // Lock it, only if nobody else got there first.
   const now = new Date();

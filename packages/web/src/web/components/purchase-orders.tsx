@@ -5,6 +5,7 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "./ui/field";
 import { Modal } from "./ui/modal";
+import { overlapOf, PoOverlapNotice } from "./po-overlap";
 import { moneyExact } from "../lib/money";
 import { isPackUnit, unitText } from "../../api/lib/pack-name";
 import { EmailInput } from "./email-input";
@@ -818,9 +819,35 @@ function SendPoModal({ po, supplier, onClose }: { po: Po; supplier: Supplier | n
   const [how, setHow] = React.useState(HOW[0]!);
   const [error, setError] = React.useState("");
   const [done, setDone] = React.useState("");
+  const [overlap, setOverlap] = React.useState<{ lines: string[]; via: "send" | "mark" } | null>(null);
   const send = useSendPo();
   const markSent = useMarkPoSent();
   const pdf = usePoPdf();
+
+  async function doSend(reason?: string) {
+    setError("");
+    try {
+      const r = await send.mutateAsync({ id: po.id, to: to.trim(), saveEmail, overlapOverride: reason ? { reason } : undefined });
+      setOverlap(null);
+      setDone(`Sent to ${r.to} from team@.`);
+    } catch (e) {
+      const lines = overlapOf(e);
+      if (lines.length) setOverlap({ lines, via: "send" });
+      else setError(errText(e));
+    }
+  }
+  async function doMark(reason?: string) {
+    setError("");
+    try {
+      await markSent.mutateAsync({ id: po.id, how, overlapOverride: reason ? { reason } : undefined });
+      setOverlap(null);
+      setDone(`Marked as ordered (${how}). No email went.`);
+    } catch (e) {
+      const lines = overlapOf(e);
+      if (lines.length) setOverlap({ lines, via: "mark" });
+      else setError(errText(e));
+    }
+  }
 
   return (
     <Modal
@@ -838,15 +865,7 @@ function SendPoModal({ po, supplier, onClose }: { po: Po; supplier: Supplier | n
             </Button>
             <Button
               disabled={!to.trim() || send.isPending}
-              onClick={async () => {
-                setError("");
-                try {
-                  const r = await send.mutateAsync({ id: po.id, to: to.trim(), saveEmail });
-                  setDone(`Sent to ${r.to} from team@.`);
-                } catch (e) {
-                  setError(errText(e));
-                }
-              }}
+              onClick={() => doSend()}
             >
               {send.isPending ? <Spinner className="border-white/40 border-t-white" /> : <Send />}
               Send from team@
@@ -895,21 +914,21 @@ function SendPoModal({ po, supplier, onClose }: { po: Po; supplier: Supplier | n
                 size="sm"
                 variant="secondary"
                 disabled={markSent.isPending}
-                onClick={async () => {
-                  setError("");
-                  try {
-                    await markSent.mutateAsync({ id: po.id, how });
-                    setDone(`Marked as ordered (${how}). No email went.`);
-                  } catch (e) {
-                    setError(errText(e));
-                  }
-                }}
+                onClick={() => doMark()}
               >
                 Mark as ordered
               </Button>
             </div>
             <p className="mt-1.5 text-xs text-muted-foreground">Tell them the PO number, {po.number}, so it ends up on their invoice.</p>
           </div>
+          {overlap ? (
+            <PoOverlapNotice
+              lines={overlap.lines}
+              action={overlap.via === "send" ? "sent" : "marked as ordered"}
+              busy={send.isPending || markSent.isPending}
+              onOverride={(reason) => (overlap.via === "send" ? doSend(reason) : doMark(reason))}
+            />
+          ) : null}
           {error ? (
             <p className="flex items-start gap-1.5 text-xs text-destructive">
               <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />

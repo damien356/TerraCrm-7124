@@ -33,6 +33,7 @@ import {
   teardown,
 } from "./harness";
 import { registerA2 } from "./a2.cases";
+import { registerA2b } from "./a2b.cases";
 
 beforeAll(async () => {
   await setup();
@@ -1036,6 +1037,7 @@ describe("stock status wording", () => {
 });
 
 registerA2({ no, eq, facts, material });
+registerA2b({ no, eq, facts, material });
 
 describe("isolation: nothing left the machine", () => {
   test("no network, no SMS, no job email, no customer or supplier email", async () => {
@@ -1045,6 +1047,8 @@ describe("isolation: nothing left the machine", () => {
     const all = JSON.stringify(outside.email.map((e) => e.to));
     expect(/c\d+@example\.invalid|pat@example\.invalid/.test(all)).toBe(false);
     expect(outside.email.every((e) => String(e.subject).startsWith("[Terra Ops] "))).toBe(true);
+    // A2 follow-up: purchase orders to suppliers only ever to .invalid test addresses, captured.
+    expect(outside.supplierMail.every((e) => /\.invalid$/.test(e.to))).toBe(true);
     facts.outside = { fetch: outside.fetch.length, sms: outside.sms.length, jobMail: outside.jobMail.length, officeEmails: outside.email.length, push: outside.push.length };
     await Bun.write(`${import.meta.dir}/../../../../../scratch-tmpdb/stock-facts.tmp.json`, JSON.stringify(facts, null, 2));
   });

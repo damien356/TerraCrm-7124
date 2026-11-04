@@ -47,6 +47,7 @@ export const ALERT_KINDS = {
   stock_low: { label: "Product at or below its reorder level", group: "Stock", urgent: false },
   stock_paid_short: { label: "Payment came in while a product is short", group: "Stock", urgent: true },
   stock_on_sent_po: { label: "Shortage already on a sent PO", group: "Stock", urgent: false },
+  stock_accept_short: { label: "Customer tried to accept while a product is short", group: "Stock", urgent: true },
 } as const;
 
 export type AlertKind = keyof typeof ALERT_KINDS;

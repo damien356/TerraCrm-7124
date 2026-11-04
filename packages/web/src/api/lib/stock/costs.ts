@@ -61,6 +61,23 @@ export async function stockAllocatedByMaterial(jobId: number) {
  * line per stock quantity, so a repeat check does not send it twice.
  */
 export async function flagPoOverlap(jobId: number): Promise<string[]> {
+  const found = await poOverlapLines(jobId);
+  const { stockAlert } = await import("./alerts");
+  for (const o of found) {
+    await stockAlert(`po-overlap:${o.lineId}:${o.stock}`, "stock_po_overlap", { jobId, title: o.title, body: o.text, path: `/jobs/${jobId}` }).catch((e) =>
+      console.error("[stock] PO overlap alert failed:", (e as Error).message),
+    );
+  }
+  return found.map((o) => o.text);
+}
+
+export type PoOverlap = { lineId: number; poId: number; number: string; status: string; stock: number; still: number; lineQty: number; text: string; title: string };
+
+/**
+ * The job PO lines that order more than the job still needs because stock now
+ * covers part of it. Reads only. `poId` limits it to one PO (the send check).
+ */
+export async function poOverlapLines(jobId: number, poId?: number): Promise<PoOverlap[]> {
   // Only warehouse stock counts here. A roll bought on this job's own PO
   // (costOnPo) is that PO arriving, not an overlap with it.
   const held = await db
@@ -81,30 +98,34 @@ export async function flagPoOverlap(jobId: number): Promise<string[]> {
       materialId: schema.purchaseOrderLines.jobMaterialId,
       materialQty: schema.jobMaterials.qty,
       description: schema.purchaseOrderLines.description,
+      poId: schema.purchaseOrders.id,
       number: schema.purchaseOrders.number,
       status: schema.purchaseOrders.status,
     })
     .from(schema.purchaseOrderLines)
     .innerJoin(schema.purchaseOrders, eq(schema.purchaseOrders.id, schema.purchaseOrderLines.poId))
     .innerJoin(schema.jobMaterials, eq(schema.jobMaterials.id, schema.purchaseOrderLines.jobMaterialId))
-    .where(and(eq(schema.purchaseOrders.jobId, jobId), inArray(schema.purchaseOrderLines.jobMaterialId, [...fromStock.keys()]), inArray(schema.purchaseOrders.status, ["draft", "sent", "invoiced"])));
-  const out: string[] = [];
-  const { stockAlert } = await import("./alerts");
+    .where(
+      and(
+        eq(schema.purchaseOrders.jobId, jobId),
+        inArray(schema.purchaseOrderLines.jobMaterialId, [...fromStock.keys()]),
+        inArray(schema.purchaseOrders.status, ["draft", "sent", "invoiced"]),
+        ...(poId != null ? [eq(schema.purchaseOrders.id, poId)] : []),
+      ),
+    );
+  const out: PoOverlap[] = [];
   for (const l of lines) {
     const stock = fromStock.get(l.materialId!) ?? 0;
     const still = Math.max(0, Math.round((l.materialQty - stock) * 10_000) / 10_000);
     if (l.lineQty <= still + 0.0001) continue;
     const u = unitText(l.unit);
     const need = still > 0 ? `Stock now covers ${stock} ${u}, so only ${still} ${u} is still needed.` : `Stock now covers all ${stock} ${u}, so this line is not needed.`;
-    const msg =
+    const text =
       l.status === "draft"
         ? `Draft ${l.number} still orders ${l.lineQty} ${u} of ${l.description}. ${need} Change the draft before sending it.`
         : `${l.number} was sent for ${l.lineQty} ${u} of ${l.description}. ${need} The PO was not changed. Decide with the supplier.`;
-    out.push(msg);
     const title = still > 0 ? `Check ${l.number}: stock now covers part of it` : `Check ${l.number}: stock now covers this line`;
-    await stockAlert(`po-overlap:${l.lineId}:${stock}`, "stock_po_overlap", { jobId, title, body: msg, path: `/jobs/${jobId}` }).catch((e) =>
-      console.error("[stock] PO overlap alert failed:", (e as Error).message),
-    );
+    out.push({ lineId: l.lineId, poId: l.poId, number: l.number, status: l.status, stock, still, lineQty: l.lineQty, text, title });
   }
   return out;
 }

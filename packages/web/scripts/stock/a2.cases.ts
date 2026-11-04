@@ -561,7 +561,7 @@ export function registerA2(h: Helpers) {
       expect(await r.leadFlag({ leadTimeDays: null }, s, sent)).toBe("Lead time unknown — confirm with supplier.");
       // No booked task: the job start is used.
       expect(await r.leadFlag({ leadTimeDays: 5 }, s, sent)).toBe(
-        "Material may arrive after the required date — check with supplier (about 2026-11-11, needed 2026-11-10, job start).",
+        "Material may arrive after the required date — check with supplier (about 2026-11-11, needed 2026-11-10, job start; lead time counts Monday to Friday only; public holidays not excluded).",
       );
       // A booked task wins over the job start. 20 Nov is after 11 Nov: no warning.
       await m().db.insert(schema.jobTasks).values({ jobId: j.job.id, title: "Install", scheduledDate: "2026-11-20", status: "booked" });

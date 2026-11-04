@@ -52,6 +52,7 @@ import { ReferralFeeRows } from "../components/referrals";
 import { QuoteFollowupsCard } from "../components/quote-followups";
 import { useSaleForJob } from "../queries/productSales";
 import { priceRecordText } from "../components/sale-job";
+import { QuoteSupplyShort } from "../components/stock-supply-short";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
 
@@ -977,6 +978,12 @@ export default function QuoteBuilderPage() {
       {error ? (
         <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
+        </div>
+      ) : null}
+      {/* A2 follow-up: a container or stock-only product that ran short after the quote went out. Accept stops until it is approved or changed. */}
+      {q.status === "sent" ? (
+        <div className="mb-3">
+          <QuoteSupplyShort quoteId={q.id} afterSend />
         </div>
       ) : null}
       {notice ? (

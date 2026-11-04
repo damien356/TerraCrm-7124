@@ -461,7 +461,7 @@ export async function leadFlag(p: Pick<Product, "leadTimeDays">, s: Shortage, se
   if (!need) return null;
   const from = sentAt ? new Date(sentAt.getTime() + 10 * 3600_000).toISOString().slice(0, 10) : brisbaneToday();
   const eta = addBusinessDays(from, p.leadTimeDays);
-  return eta > need.date ? `${LEAD_LATE_TEXT} (about ${eta}, needed ${need.date}, ${need.basis}).` : null;
+  return eta > need.date ? `${LEAD_LATE_TEXT} (about ${eta}, needed ${need.date}, ${need.basis}; lead time counts Monday to Friday only; public holidays not excluded).` : null;
 }
 
 export const qtyLine = (qty: number, p: Pick<Product, "stockUnitLabel" | "unit">) => `${cm(qty)} ${stockUnitText(p)}`.trim();

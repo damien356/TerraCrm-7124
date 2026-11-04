@@ -185,7 +185,7 @@ function SupplyForm({ productId, name, unit, initial }: { productId: number; nam
             <Field label="Order in multiples of (purchase units)" hint="Minimum 5 with multiple 4 orders 8.">
               <Input value={mult} onChange={(e) => setMult(e.target.value)} inputMode="decimal" />
             </Field>
-            <Field label="Lead time (business days)" hint="Blank: Lead time unknown — confirm with supplier.">
+            <Field label="Lead time (days, Monday to Friday only; public holidays not excluded)" hint="Blank: Lead time unknown — confirm with supplier.">
               <Input value={lead} onChange={(e) => setLead(e.target.value)} inputMode="numeric" />
             </Field>
           </>

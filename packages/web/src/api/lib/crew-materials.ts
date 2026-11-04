@@ -165,21 +165,24 @@ function productName(p: Product | null, fallback: string) {
 }
 
 const IN_WAREHOUSE = new Set(["reserved", "cut", "picked"]);
+const WHOLE = new Set(["each", "unit", "units", ""]);
+/** A hold's unit against the line's: "unit" and "each" are the same whole count. */
+const sameUnit = (a: string | null | undefined, b: string | null | undefined) => (a ?? "") === (b ?? "") || (WHOLE.has(a ?? "") && WHOLE.has(b ?? ""));
 
 /**
  * Stock held for these lines. Terra Stock owns the table, so it is read plainly
  * and an empty list comes back if it isn't there.
  */
-async function reservedFor(ids: number[]): Promise<{ jobMaterialId: number | null; status: string }[]> {
+async function reservedFor(ids: number[]): Promise<{ jobMaterialId: number | null; status: string; qty: number; lineUnit: string | null }[]> {
   if (ids.length === 0) return [];
   try {
-    const rows = await db.all<{ job_material_id: number | null; status: string }>(
-      sql`select job_material_id, status from stock_reservations where job_material_id in (${sql.join(
+    const rows = await db.all<{ job_material_id: number | null; status: string; qty: number | null; ordered_qty: number | null; line_unit: string | null }>(
+      sql`select job_material_id, status, qty, ordered_qty, line_unit from stock_reservations where job_material_id in (${sql.join(
         ids.map((i) => sql`${i}`),
         sql`, `,
       )})`,
     );
-    return rows.map((r) => ({ jobMaterialId: r.job_material_id, status: r.status }));
+    return rows.map((r) => ({ jobMaterialId: r.job_material_id, status: r.status, qty: Number(r.ordered_qty ?? r.qty ?? 0), lineUnit: r.line_unit }));
   } catch {
     return [];
   }
@@ -216,16 +219,32 @@ export async function crewMaterials(jobId: number, parentJobId: number | null): 
     : [];
   const onWarehousePo = new Set(linked.filter((l) => l.poStatus === "sent" || l.poStatus === "invoiced").map((l) => l.jobMaterialId!));
   // Only stock firmly held in the warehouse for the job. Planned, awaiting a deposit, temporary and short holds are not the crew's yet.
-  const held = new Set(reserved.filter((r) => IN_WAREHOUSE.has(r.status)).map((r) => r.jobMaterialId!));
+  const firm = reserved.filter((r) => IN_WAREHOUSE.has(r.status));
+  const held = new Set(firm.map((r) => r.jobMaterialId!));
+  /** How much of the line is firmly in the warehouse, in the line's unit. Null when a hold is in another unit and cannot be compared. */
+  const heldQty = (id: number, unit: string): number | null => {
+    const hs = firm.filter((r) => r.jobMaterialId === id);
+    if (hs.some((r) => !sameUnit(r.lineUnit, unit))) return null;
+    return r2(hs.reduce((a, r) => a + r.qty, 0));
+  };
 
   const out: CrewMaterial[] = rows.map(({ m, p }) => {
+    // Where the part not in the warehouse is: on order, on a warehouse order, or still to sort.
+    const rest: CrewWhere = m.status === "ordered" ? (deliverTo.get(m.id) === "site" ? "to_site" : "to_warehouse") : onWarehousePo.has(m.id) ? "to_warehouse" : "to_order";
+    const restLabel = rest === "to_order" ? shortLabel(p?.supplyMode) : WHERE_LABEL[rest];
     let where: CrewWhere;
+    let split: string | null = null;
     if (m.status === "installed") where = "installed";
     else if (m.status === "on_site") where = "on_site";
-    else if (held.has(m.id)) where = "warehouse";
-    else if (m.status === "ordered") where = deliverTo.get(m.id) === "site" ? "to_site" : "to_warehouse";
-    else if (onWarehousePo.has(m.id)) where = "to_warehouse";
-    else where = "to_order";
+    else if (held.has(m.id)) {
+      // Location and allocation kept apart: only the part firmly held is said to be in the warehouse.
+      const hq = heldQty(m.id, m.unit);
+      if (hq != null && hq < m.qty - 1e-6) {
+        where = rest;
+        // Two lines: the app's badge does not wrap, so one long line would be cut off on a phone.
+        split = `${WHERE_LABEL.warehouse}: ${crewQty(hq, m.unit, p).count}\n${restLabel}: ${crewQty(r2(m.qty - hq), m.unit, p).count}`;
+      } else where = "warehouse";
+    } else where = rest;
     const q = crewQty(m.qty, m.unit, p);
     const product = productName(p, m.description);
     const colour = (p?.colour ?? "").trim();
@@ -241,7 +260,7 @@ export async function crewMaterials(jobId: number, parentJobId: number | null): 
       count: q.count,
       m2: q.m2,
       where,
-      whereLabel: where === "to_order" ? shortLabel(p?.supplyMode) : WHERE_LABEL[where],
+      whereLabel: split ?? (where === "to_order" ? shortLabel(p?.supplyMode) : WHERE_LABEL[where]),
     };
   });
 

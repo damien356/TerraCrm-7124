@@ -23,6 +23,9 @@ export type StockPayInfo = {
   depositLine: string | null;
 };
 
+/** Proposed wording (A2 follow-up), for Damien to confirm: some lines are short, so the deposit cannot promise them. */
+export const PART_SHORT_LABEL = "The deposit holds the stock we have now. Some of this order is not in stock, and our office will contact you about it.";
+
 /** "$300" for whole dollars, "$300.50" otherwise, as in the approved wording. */
 const dollars = (n: number) => (Math.abs(n - Math.round(n)) < 0.005 ? `$${Math.round(n).toLocaleString("en-AU")}` : money(n));
 
@@ -39,6 +42,11 @@ export async function stockPayInfo(invoiceId: number, owing: number): Promise<St
     .from(schema.stockReservations)
     .where(and(eq(schema.stockReservations.orderId, o.id), inArray(schema.stockReservations.status, [...WAITING])));
   if (!waiting.length) return null;
+  // A2 follow-up: part of the order is already short. Do not say it is all held.
+  const short = await db
+    .select({ id: schema.stockReservations.id })
+    .from(schema.stockReservations)
+    .where(and(eq(schema.stockReservations.orderId, o.id), eq(schema.stockReservations.status, "short")));
   const dep = await depositState(o);
   if (dep.code === "awaiting_confirm") return { stockLabel: AWAITING_CONFIRM, depositOption: null, depositLine: null };
   if (dep.code !== "awaiting" || dep.percent == null || dep.required == null) return null;
@@ -47,7 +55,7 @@ export async function stockPayInfo(invoiceId: number, owing: number): Promise<St
   const offer = (await cardCheck()).done && amount > 0.005 && amount < owing - 0.005;
   const balance = r2(owing - amount);
   return {
-    stockLabel: "Stock is held for you once the deposit is paid.",
+    stockLabel: short.length ? PART_SHORT_LABEL : "Stock is held for you once the deposit is paid.",
     depositOption: offer ? { amount, percent: dep.percent, balance } : null,
     depositLine: amount > 0.005 && amount < owing - 0.005 ? `Deposit to secure stock: ${dollars(amount)} (${dep.percent}%). Balance ${dollars(balance)}.` : null,
   };

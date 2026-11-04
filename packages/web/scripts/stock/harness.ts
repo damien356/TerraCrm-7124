@@ -40,6 +40,12 @@ export const outside = {
   email: [] as { to: unknown; subject: unknown }[],
   sms: [] as { to: unknown }[],
   jobMail: [] as { to: string }[],
+  /** A2 follow-up: purchase orders "sent" to a test-only supplier address. Captured here, never sent. */
+  supplierMail: [] as { to: string; subject: string; text: string; attachments: { filename: string; content: string }[] }[],
+  /** Make the next N emails fail, as a relay outage would. */
+  failNext: 0,
+  /** Files the app tried to store. Never uploaded. */
+  stored: [] as string[],
 };
 
 const realFetch = globalThis.fetch;
@@ -71,9 +77,25 @@ async function load() {
   const realEmail = await import("../../src/api/lib/email");
   mock.module("../../src/api/lib/email", () => ({
     ...realEmail,
-    sendEmail: async (a: { to: unknown; subject: unknown }) => {
+    sendEmail: async (a: { to: unknown; subject: unknown; text?: string; attachments?: { filename: string; content: string }[] }) => {
+      if (outside.failNext > 0) {
+        outside.failNext--;
+        return { ok: false, reason: "Test relay is down (500)" };
+      }
+      if (/^Purchase order /.test(String(a.subject))) {
+        if (!/@[a-z0-9.-]+\.invalid$/i.test(String(a.to))) throw new Error(`Supplier mail in tests must go to a .invalid address, not ${String(a.to)}`);
+        outside.supplierMail.push({ to: String(a.to), subject: String(a.subject), text: a.text ?? "", attachments: a.attachments ?? [] });
+        return { ok: true, id: `test-po-${outside.supplierMail.length}` };
+      }
       outside.email.push({ to: a.to, subject: a.subject });
       return { ok: true, id: `test-${outside.email.length}` };
+    },
+  }));
+  const realS3 = await import("../../src/api/lib/s3");
+  mock.module("../../src/api/lib/s3", () => ({
+    ...realS3,
+    putObject: async (key: string) => {
+      outside.stored.push(key);
     },
   }));
   const realSms = await import("../../src/api/lib/sms");
@@ -122,6 +144,10 @@ async function load() {
     warehousePo: await import("../../src/api/lib/stock/warehouse-po"),
     warehouseCash: await import("../../src/api/lib/stock/warehouse-cash"),
     supplyCheck: await import("../../src/api/lib/stock/supply-check"),
+    purchasing: await import("../../src/api/routes/purchasing"),
+    poGate: await import("../../src/api/lib/stock/po-send-gate"),
+    quoteAccept: await import("../../src/api/lib/quote-accept"),
+    productSale: await import("../../src/api/lib/product-sale"),
     drizzle: await import("drizzle-orm"),
   };
 }
@@ -223,6 +249,9 @@ export async function job(args: {
   items?: { productId?: number | null; kind?: string; description: string; qty: number; unit?: string; unitCost?: number | null; chargeSupplierId?: number | null; lineType?: string }[];
 }) {
   const { db } = m();
+  // Accepting a quote in a test creates its own job at the next free number, so skip past any taken one.
+  const taken = new Set((await db.select({ n: schema.jobs.number }).from(schema.jobs)).map((r) => r.n));
+  while (taken.has(jobNo)) jobNo++;
   const number = jobNo++;
   const [contact] = await db
     .insert(schema.contacts)
