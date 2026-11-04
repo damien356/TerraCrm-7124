@@ -306,6 +306,13 @@ export async function settlePo(poId: number) {
       })
       .where(eq(schema.jobCosts.id, po.jobCostId));
   }
+  // Stock from this PO keeps the PO rate. A bill that differs marks it (and its remnants) for review. Never stops the match.
+  try {
+    const { applyBillToStock } = await import("./stock/bill-cost");
+    await applyBillToStock(poId);
+  } catch (e) {
+    console.error("[stock] bill check on stock failed:", (e as Error).message);
+  }
   // A2: a warehouse order has no job cost line. Its bills feed the forecast directly.
   if (po.kind === "warehouse") {
     const { rebuildForecast } = await import("./cashflow");

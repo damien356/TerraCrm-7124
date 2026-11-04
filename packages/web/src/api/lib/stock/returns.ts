@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "../../database";
 import * as schema from "../../database/schema";
-import { bad, cm, COST_UNKNOWN, forbid, money, need, needOn, notFound, type PermActor, productKind, r2, stockRules, unitText } from "./core";
+import { bad, cm, COST_UNKNOWN, forbid, inheritBillFlag, money, need, needOn, notFound, type PermActor, productKind, r2, stockRules, unitText } from "./core";
 import { stockCostLine } from "./costs";
 import { holdById } from "./holds";
 import { approveItem, costPerItemUnit, createItem, type Item, itemById, valueOf } from "./items";
@@ -69,6 +69,7 @@ export async function returnFromJob(
         costPer: src.costPer as "unit",
         unitCost: src.unitCost,
         costStatus: src.costStatus as "final",
+        purchaseCostNote: inheritBillFlag(src),
         parentItemId: src.id,
         originJobId: h.jobId,
         note: `Unopened, back from Job ${num} (hold #${h.id}). ${note}`.trim(),
@@ -98,7 +99,7 @@ export async function returnFromJob(
         costPer: "unit",
         unitCost: src.unitCost,
         costStatus: src.costStatus as "final",
-        purchaseCostNote: per == null ? COST_UNKNOWN : `Original purchase cost ${money(per)} per ${unitText(src.unit) || "unit"}. Cost already allocated to Job ${await jobNumber(costJob)}.`,
+        purchaseCostNote: inheritBillFlag(src, per == null ? COST_UNKNOWN : `Original purchase cost ${money(per)} per ${unitText(src.unit) || "unit"}. Cost already allocated to Job ${await jobNumber(costJob)}.`),
         parentItemId: src.id,
         originJobId: h.jobId,
         costOnJobId: costJob,
@@ -148,6 +149,7 @@ export async function returnFromJob(
       costPer: src.costPer as "lm" | "m2",
       unitCost: src.unitCost,
       costStatus: src.unitCost == null ? "unknown" : (src.costStatus as "final"),
+      purchaseCostNote: inheritBillFlag(src),
       parentItemId: src.id,
       originJobId: h.jobId,
       terraOwned: true,

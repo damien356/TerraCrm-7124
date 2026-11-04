@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray, isNotNull, lte, ne } from "drizzle-orm";
 import { db } from "../../database";
 import * as schema from "../../database/schema";
-import { BLOCKING, bad, cm, ENDED, FIRM, type HoldStage, need, needOn, notFound, type PermActor, r4, stockRules, unitText, WAITING } from "./core";
+import { BLOCKING, bad, cm, ENDED, FIRM, type HoldStage, inheritBillFlag, need, needOn, notFound, type PermActor, r4, stockRules, unitText, WAITING } from "./core";
 import { createItem, costPerItemUnit, type Item, itemById, move } from "./items";
 import { depositState, ensureOrder, orderById, type OrderKind, switchFor } from "./orders";
 
@@ -448,6 +448,7 @@ export async function cutHold(holdId: number, requestKey: string, actor: Actor) 
       costPer: roll.costPer as "lm" | "m2",
       unitCost: roll.unitCost,
       costStatus: roll.costStatus as "final",
+      purchaseCostNote: inheritBillFlag(roll),
       boughtForJobId: roll.boughtForJobId,
       note: `Cut from ${roll.code} for job hold #${h.id}.`,
     },

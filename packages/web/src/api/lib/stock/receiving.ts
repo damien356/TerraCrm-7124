@@ -2,7 +2,8 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../../database";
 import * as schema from "../../database/schema";
 import { stockAlert } from "./alerts";
-import { bad, cm, need, needOn, notFound, type PermActor, r4 } from "./core";
+import { billStateOf } from "./bill-cost";
+import { BILL_DIFFERS, bad, cm, need, needOn, notFound, type PermActor, r4 } from "./core";
 import { createItem, type Item } from "./items";
 import { assertSetUp, modeOf, unitWord } from "./replenish";
 
@@ -84,6 +85,10 @@ export async function receiveLine(input: { poLineId: number; pieces: ReceivePiec
   const jobId = po.kind !== "warehouse" ? po.jobId : null;
   const [job] = jobId != null ? await db.select({ number: schema.jobs.number }).from(schema.jobs).where(eq(schema.jobs.id, jobId)) : [];
   const costPer = roll ? (line.unit === "m2" ? "m2" : "lm") : "unit";
+  // Cost is the PO line rate. Final only once the bill agrees; a bill that differs marks it for review.
+  const bill = po.status === "invoiced" ? await billStateOf(po.id) : null;
+  const costStatus = bill === "matched" ? "final" : "provisional";
+  const purchaseCostNote = bill === "different" ? `${BILL_DIFFERS}.` : "";
   const items: Item[] = [];
   const shortRolls: string[] = [];
   for (const [n, p] of input.pieces.entries()) {
@@ -103,7 +108,8 @@ export async function receiveLine(input: { poLineId: number; pieces: ReceivePiec
         locationId: p.locationId ?? null,
         costPer,
         unitCost: line.unitCostExGst > 0 ? line.unitCostExGst : null,
-        costStatus: po.status === "invoiced" ? "final" : "provisional",
+        costStatus,
+        purchaseCostNote,
         poId: po.id,
         poLineId: line.id,
         boughtForJobId: jobId,

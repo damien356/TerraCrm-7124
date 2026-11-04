@@ -71,6 +71,18 @@ export const CONDITION_LABEL: Record<string, string> = {
 export const COST_UNKNOWN = "Cost unknown — review required";
 export const AWAITING_CONFIRM = "Payment recorded — awaiting admin confirmation";
 
+/**
+ * The supplier bill for the PO is not the PO amount. The item keeps the PO
+ * line rate (freight not included) and is marked for review. Rides on
+ * purchaseCostNote, so anything cut, opened or returned from it carries it.
+ */
+export const BILL_DIFFERS = "Cost provisional, bill differs from PO";
+export const hasBillFlag = (note: string | null | undefined) => (note ?? "").includes(BILL_DIFFERS);
+export const addBillFlag = (note: string | null | undefined) => (hasBillFlag(note) ? (note ?? "") : [(note ?? "").trim(), `${BILL_DIFFERS}.`].filter(Boolean).join(" "));
+export const dropBillFlag = (note: string | null | undefined) => (note ?? "").replace(`${BILL_DIFFERS}.`, "").replace(/\s+/g, " ").trim();
+/** A new item made from src: same flag as src, on top of its own note. */
+export const inheritBillFlag = (src: { purchaseCostNote: string | null }, note = "") => (hasBillFlag(src.purchaseCostNote) ? addBillFlag(note) : note);
+
 /* -------------------------------- settings -------------------------------- */
 
 async function readSetting(key: string) {

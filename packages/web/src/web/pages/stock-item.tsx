@@ -61,7 +61,7 @@ export default function StockItemPage() {
             <Fact label="Held (blocking)" value={`${Math.round(heldTotal * 100) / 100} ${item.unitLabel}`} />
             <Fact label="Free" value={`${item.available} ${item.unitLabel}`} strong />
             <Fact label="Status" value={`${item.status === "to_check" ? "To check" : item.status} · ${item.conditionLabel}`} />
-            {perms.viewCosts ? <Fact label="Cost" value={item.costLabel ?? ""} warn={item.costUnknown} /> : null}
+            {perms.viewCosts ? <Fact label="Cost" value={item.costLabel ?? ""} warn={item.costUnknown || item.costReview} /> : null}
             {item.conversion ? <Fact label="Bought as" value={item.conversion} /> : null}
           </div>
           {item.status === "to_check" && perms.approve ? (

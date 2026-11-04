@@ -135,7 +135,7 @@ function StockList({ o, q, setQ }: { o: StockOverview; q: string; setQ: (s: stri
                       {it.condition !== "good" ? ` · ${it.conditionLabel}` : ""}
                     </td>
                     <td className="px-4 py-2">{it.location ?? ""}</td>
-                    {o.perms.viewCosts ? <td className={`px-4 py-2 ${it.costUnknown ? "text-amber-700" : ""}`}>{it.costLabel}</td> : null}
+                    {o.perms.viewCosts ? <td className={`px-4 py-2 ${it.costUnknown || it.costReview ? "text-amber-700" : ""}`}>{it.costLabel}</td> : null}
                   </tr>
                 ))}
               </tbody>
