@@ -100,6 +100,19 @@ const FRIENDLY: Record<string, string> = {
   verify_caller: "Caller verified",
 };
 
+/** The outcome line for one done action. A quote the agent couldn't send went to the office, so it must not say "Quote resent". */
+export function friendlyOf(a: { name: string; result: string | null }) {
+  if (a.name === "resend_quote") {
+    try {
+      const r = JSON.parse(a.result || "{}") as { entity?: { type?: string } };
+      if (r.entity?.type !== "quote_send") return "Quote request passed to the office";
+    } catch {
+      return "Quote request passed to the office";
+    }
+  }
+  return FRIENDLY[a.name]!;
+}
+
 /**
  * One outcome per call: what was done, what still needs a person, and who
  * has it. Safe to run twice: the second run does nothing.
@@ -118,7 +131,7 @@ export async function finaliseCall(callId: number, opts: { analysis?: Record<str
   const acts = await actionsFor(callId);
   const writes = acts.filter((a) => FRIENDLY[a.name]);
 
-  const done = writes.filter((a) => a.status === "done").map((a) => FRIENDLY[a.name]!);
+  const done = writes.filter((a) => a.status === "done").map(friendlyOf);
   const notDone: string[] = [];
   const failures: string[] = [];
   for (const a of acts) {

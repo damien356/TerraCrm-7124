@@ -691,3 +691,13 @@ describe("the real endpoints Retell calls", () => {
     }
   });
 });
+
+describe("the call outcome wording", () => {
+  test("a quote the agent passed to the office does not say it was resent", () => {
+    const { friendlyOf } = m().webhook;
+    expect(friendlyOf({ name: "resend_quote", result: JSON.stringify({ ok: true, entity: { type: "followup", id: 2 } }) })).toBe("Quote request passed to the office");
+    expect(friendlyOf({ name: "resend_quote", result: "{}" })).toBe("Quote request passed to the office");
+    expect(friendlyOf({ name: "resend_quote", result: JSON.stringify({ ok: true, entity: { type: "quote_send", id: 9 } }) })).toBe("Quote resent");
+    expect(friendlyOf({ name: "add_call_note", result: "{}" })).toBe("Note added to the job");
+  });
+});
