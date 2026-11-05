@@ -2,8 +2,8 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../../database";
 import * as schema from "../../database/schema";
 import { stockAlert } from "./alerts";
-import { billStateOf } from "./bill-cost";
-import { BILL_DIFFERS, bad, cm, need, needOn, notFound, type PermActor, r4 } from "./core";
+import { billStateOf, extrasOnPo } from "./bill-cost";
+import { addFreightFlag, BILL_DIFFERS, bad, cm, need, needOn, notFound, type PermActor, r4 } from "./core";
 import { createItem, type Item } from "./items";
 import { assertSetUp, modeOf, unitWord } from "./replenish";
 
@@ -85,10 +85,12 @@ export async function receiveLine(input: { poLineId: number; pieces: ReceivePiec
   const jobId = po.kind !== "warehouse" ? po.jobId : null;
   const [job] = jobId != null ? await db.select({ number: schema.jobs.number }).from(schema.jobs).where(eq(schema.jobs.id, jobId)) : [];
   const costPer = roll ? (line.unit === "m2" ? "m2" : "lm") : "unit";
-  // Cost is the PO line rate. Final only once the bill agrees; a bill that differs marks it for review.
+  // Cost is the PO line rate. Final only once the bill agrees and the PO has no freight or charges;
+  // a bill that differs, or freight not in the stock cost, marks it for the manual cost review.
   const bill = po.status === "invoiced" ? await billStateOf(po.id) : null;
-  const costStatus = bill === "matched" ? "final" : "provisional";
-  const purchaseCostNote = bill === "different" ? `${BILL_DIFFERS}.` : "";
+  const extras = await extrasOnPo(po.id);
+  const costStatus = bill === "matched" && extras <= 0 ? "final" : "provisional";
+  const purchaseCostNote = extras > 0 ? addFreightFlag(bill === "different" ? `${BILL_DIFFERS}.` : "") : bill === "different" ? `${BILL_DIFFERS}.` : "";
   const items: Item[] = [];
   const shortRolls: string[] = [];
   for (const [n, p] of input.pieces.entries()) {

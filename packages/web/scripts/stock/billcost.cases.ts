@@ -11,6 +11,8 @@
  *  - The job credit for a remnant is at the PO rate, once.
  *  - An Admin who sets the cost by hand clears the mark, and a later bill
  *    check leaves that item alone.
+ *  - Freight or charges on the PO: stock stays provisional and marked for the
+ *    manual cost review even when the bill agrees (release, Damien 5 Nov).
  *
  * Nothing leaves the machine. Run from packages/web:  bun test scripts/stock
  */
@@ -49,6 +51,15 @@ export function registerBillCost(h: Helpers) {
     return { sup, p, jb, ...made };
   };
   const receive = async (lineId: number) => (await m().receiving.receiveLine({ poLineId: lineId, pieces: [{ qty: 15, widthM: 4 }], requestKey: rk("bc-recv") }, people.office)).items[0]!;
+
+  const FREIGHT = "Cost provisional, freight or charges on the PO not in the stock cost";
+  /** The same PO with $80 freight on its own line, so the PO total is $1,280. */
+  const withFreight = async (label: string) => {
+    const c = await received(label);
+    await db().insert(schema.purchaseOrderLines).values({ poId: c.po.id, kind: "freight", description: "Freight", qty: 1, unit: "each", unitCostExGst: 80, totalExGst: 80, sortOrder: 99 });
+    await db().update(schema.purchaseOrders).set({ totalExGst: 1280, freightExGst: 80 }).where(eq(schema.purchaseOrders.id, c.po.id));
+    return c;
+  };
 
   describe("stock cost when the bill differs from the PO", () => {
     test("bill $1,250 on a $1,200 PO: roll and remnant provisional at the PO rate, marked; credit once at the PO rate", async () => {
@@ -137,6 +148,61 @@ export function registerBillCost(h: Helpers) {
       await m().match.settlePo(c.po.id);
       const again = await row(roll.id);
       expect([again.costStatus, again.unitCost, again.purchaseCostNote.includes(FLAG)]).toEqual(["final", 20.83, false]);
+    });
+
+    test("PO with $80 freight: provisional and marked on receipt, stays provisional when the bill agrees, remnant carries it, Admin review clears it", async () => {
+      const c = await withFreight("freight");
+      const roll = await receive(c.lines[0]!.id);
+      expect([roll.costStatus, roll.unitCost]).toEqual(["provisional", 20]);
+      expect(roll.purchaseCostNote).toContain(FREIGHT);
+      await bill(c.po.id, c.sup.id, 1280);
+      const [si] = await db().select().from(schema.supplierInvoices).where(eq(schema.supplierInvoices.poId, c.po.id));
+      expect(si!.matchStatus).toBe("matched");
+      const r1 = await row(roll.id);
+      expect([r1.costStatus, r1.unitCost]).toEqual(["provisional", 20]);
+      expect(r1.purchaseCostNote).toContain(FREIGHT);
+      expect(r1.purchaseCostNote).not.toContain(FLAG);
+      // Already marked on receipt, so the bill check adds no note; running it again adds none either.
+      await m().match.settlePo(c.po.id);
+      expect((await reviews(roll.id)).length).toBe(0);
+
+      const [hold] = (await db().select().from(schema.stockReservations).where(eq(schema.stockReservations.jobId, c.jb.id))).filter((x) => x.stockItemId === roll.id);
+      await m().holds.takeOut(hold!.id, 15, rk("bcf-out"), people.office);
+      const rem = (await m().returns.returnFromJob({ holdId: hold!.id, kind: "leftover", qty: 3, widthM: 4, terraOwned: true, requestKey: rk("bcf-ret") }, people.office)).item!;
+      expect([rem.costStatus, rem.unitCost]).toEqual(["provisional", 20]);
+      expect(rem.purchaseCostNote).toContain(FREIGHT);
+      await m().returns.approveReturn(rem.id, people.main);
+      // The job credit stays at the PO rate, freight not added.
+      expect((await costsOf(c.jb.id)).filter((x) => x.stockRef === `return:${rem.id}`).map((x) => x.amount)).toEqual([-240]);
+
+      await m().items.setItemCost(rem.id, { unitCost: 21.33, costStatus: "final", note: "Freight $80 over 60 m2 added" }, people.main);
+      const done = await row(rem.id);
+      expect([done.costStatus, done.unitCost, done.purchaseCostNote.includes(FREIGHT)]).toEqual(["final", 21.33, false]);
+      await m().match.settlePo(c.po.id);
+      expect((await row(rem.id)).costStatus).toBe("final");
+      expect((await row(roll.id)).costStatus).toBe("provisional");
+      facts.freightReview = { roll: r1.costStatus, remnant: rem.costStatus, afterReview: done.costStatus };
+    });
+
+    test("PO with freight, bill received first and agreeing: received provisional and marked, not final", async () => {
+      const c = await withFreight("freight-first");
+      await bill(c.po.id, c.sup.id, 1280);
+      const r = await receive(c.lines[0]!.id);
+      expect(r.costStatus).toBe("provisional");
+      expect(r.purchaseCostNote).toContain(FREIGHT);
+      expect(r.purchaseCostNote).not.toContain(FLAG);
+    });
+
+    test("PO with freight and a bill that differs: both marks, one note", async () => {
+      const c = await withFreight("freight-differs");
+      const roll = await receive(c.lines[0]!.id);
+      await bill(c.po.id, c.sup.id, 1350);
+      const r = await row(roll.id);
+      expect(r.costStatus).toBe("provisional");
+      expect(r.purchaseCostNote).toContain(FLAG);
+      expect(r.purchaseCostNote).toContain(FREIGHT);
+      await m().match.settlePo(c.po.id);
+      expect((await reviews(roll.id)).length).toBe(1);
     });
   });
 }

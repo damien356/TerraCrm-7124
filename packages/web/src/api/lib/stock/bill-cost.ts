@@ -1,7 +1,7 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import { db } from "../../database";
 import * as schema from "../../database/schema";
-import { addBillFlag, BILL_DIFFERS, dropBillFlag, hasBillFlag, money } from "./core";
+import { addBillFlag, addFreightFlag, BILL_DIFFERS, dropBillFlag, dropFreightFlag, hasBillFlag, hasFreightFlag, money } from "./core";
 import { type Item, noteMovement } from "./items";
 
 /* ---------------------------------------------------------------------------
@@ -13,7 +13,11 @@ import { type Item, noteMovement } from "./items";
  *  - Bill differs from the PO: every item from that PO, and everything cut,
  *    opened or returned from them (remnants too), is "provisional" and
  *    marked "Cost provisional, bill differs from PO" for Damien's review.
- *  - Bill agrees: the mark comes off and the cost is final.
+ *  - Bill agrees: the mark comes off and the cost is final, unless the PO
+ *    carries freight or charges. Those are not spread onto the stock cost,
+ *    so the stock stays provisional, marked "Cost provisional, freight or
+ *    charges on the PO not in the stock cost", for the manual cost review
+ *    (release, Damien 5 Nov).
  *  - An item whose cost an Admin already set by hand is left alone.
  *  - Job charges and credits are not touched. They stay at the PO rate.
  * ------------------------------------------------------------------------- */
@@ -44,6 +48,15 @@ async function familyOf(poId: number) {
   return all;
 }
 
+/** Freight and charge lines on the PO (ex GST). Not spread onto the stock cost. */
+export async function extrasOnPo(poId: number): Promise<number> {
+  const lines = await db
+    .select({ total: schema.purchaseOrderLines.totalExGst })
+    .from(schema.purchaseOrderLines)
+    .where(and(eq(schema.purchaseOrderLines.poId, poId), ne(schema.purchaseOrderLines.kind, "goods")));
+  return Math.round(lines.reduce((a, l) => a + (l.total > 0 ? l.total : 0), 0) * 100) / 100;
+}
+
 /** Run after the PO's bills are compared. Safe to run again: an item already right is skipped. */
 export async function applyBillToStock(poId: number) {
   const state = await billStateOf(poId);
@@ -51,6 +64,7 @@ export async function applyBillToStock(poId: number) {
   if (!state) return out;
   const fam = await familyOf(poId);
   if (!fam.length) return out;
+  const extras = await extrasOnPo(poId);
   const byHand = new Set(
     (await db.select({ id: schema.stockMovements.stockItemId, kind: schema.stockMovements.kind }).from(schema.stockMovements).where(inArray(schema.stockMovements.stockItemId, fam.map((i) => i.id))))
       .filter((m) => m.kind === "cost_adjust")
@@ -58,15 +72,23 @@ export async function applyBillToStock(poId: number) {
   );
   for (const it of fam) {
     if (it.unitCost == null || it.costStatus === "unknown" || it.costStatus === "estimate" || byHand.has(it.id)) continue;
+    // Only touch the note where a mark goes on or comes off, so nothing else in it is rewritten.
+    const was = it.purchaseCostNote ?? "";
+    const withBill = state === "different" ? addBillFlag(was) : hasBillFlag(was) ? dropBillFlag(was) : was;
+    const note = extras > 0 ? addFreightFlag(withBill) : hasFreightFlag(withBill) ? dropFreightFlag(withBill) : withBill;
+    const status = state === "different" || extras > 0 ? "provisional" : "final";
+    if (status === it.costStatus && note === was) continue;
+    if (status === "final" && it.costStatus !== "provisional") continue;
+    await db.update(schema.stockItems).set({ costStatus: status, purchaseCostNote: note, updatedAt: new Date() }).where(eq(schema.stockItems.id, it.id));
+    const rate = `${money(it.unitCost)} per ${it.costPer}`;
     if (state === "different") {
-      if (it.costStatus === "provisional" && hasBillFlag(it.purchaseCostNote)) continue;
-      await db.update(schema.stockItems).set({ costStatus: "provisional", purchaseCostNote: addBillFlag(it.purchaseCostNote), updatedAt: new Date() }).where(eq(schema.stockItems.id, it.id));
-      await noteMovement(it, "cost_review", `${BILL_DIFFERS}. Kept at the PO rate, ${money(it.unitCost)} per ${it.costPer}, freight not included. For review.`, BY);
+      await noteMovement(it, "cost_review", `${BILL_DIFFERS}. Kept at the PO rate, ${rate}, freight not included. For review.`, BY);
+      out.flagged++;
+    } else if (extras > 0) {
+      await noteMovement(it, "cost_review", `Bill agrees with the PO. Cost kept provisional at the PO rate, ${rate}: freight or charges of ${money(extras)} on the PO are not in the stock cost. For review.`, BY);
       out.flagged++;
     } else {
-      if (it.costStatus !== "provisional") continue;
-      await db.update(schema.stockItems).set({ costStatus: "final", purchaseCostNote: dropBillFlag(it.purchaseCostNote), updatedAt: new Date() }).where(eq(schema.stockItems.id, it.id));
-      await noteMovement(it, "cost_review", `Bill agrees with the PO. Cost final at the PO rate, ${money(it.unitCost)} per ${it.costPer}.`, BY);
+      await noteMovement(it, "cost_review", `Bill agrees with the PO. Cost final at the PO rate, ${rate}.`, BY);
       out.finalised++;
     }
   }

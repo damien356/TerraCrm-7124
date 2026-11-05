@@ -10,6 +10,8 @@ import {
   COST_UNKNOWN,
   CONDITION_LABEL,
   hasBillFlag,
+  hasCostFlag,
+  hasFreightFlag,
   need,
   needOn,
   saveStockRules,
@@ -68,10 +70,10 @@ async function itemView(it: typeof schema.stockItems.$inferSelect, showCost: boo
     conditionLabel: CONDITION_LABEL[it.condition] ?? it.condition,
     location: loc?.name ?? null,
     terraOwned: it.terraOwned,
-    costLabel: showCost ? (it.costStatus === "unknown" ? COST_UNKNOWN : it.unitCost != null ? `$${it.unitCost.toFixed(2)} per ${it.costPer === "unit" ? singular(unitWord(p ?? null, it.unit)) : it.costPer} (${it.costStatus}${hasBillFlag(it.purchaseCostNote) ? ", bill differs from PO" : ""})` : null) : null,
+    costLabel: showCost ? (it.costStatus === "unknown" ? COST_UNKNOWN : it.unitCost != null ? `$${it.unitCost.toFixed(2)} per ${it.costPer === "unit" ? singular(unitWord(p ?? null, it.unit)) : it.costPer} (${it.costStatus}${hasBillFlag(it.purchaseCostNote) ? ", bill differs from PO" : ""}${hasFreightFlag(it.purchaseCostNote) ? ", freight not included" : ""})` : null) : null,
     costUnknown: it.costStatus === "unknown",
-    /** The supplier bill is not the PO amount. Kept at the PO rate, for review. */
-    costReview: hasBillFlag(it.purchaseCostNote),
+    /** The supplier bill is not the PO amount, or PO freight is not in the cost. Kept at the PO rate, for review. */
+    costReview: hasCostFlag(it.purchaseCostNote),
   };
 }
 

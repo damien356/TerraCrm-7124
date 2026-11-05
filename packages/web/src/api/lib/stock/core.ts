@@ -77,11 +77,29 @@ export const AWAITING_CONFIRM = "Payment recorded — awaiting admin confirmatio
  * purchaseCostNote, so anything cut, opened or returned from it carries it.
  */
 export const BILL_DIFFERS = "Cost provisional, bill differs from PO";
-export const hasBillFlag = (note: string | null | undefined) => (note ?? "").includes(BILL_DIFFERS);
-export const addBillFlag = (note: string | null | undefined) => (hasBillFlag(note) ? (note ?? "") : [(note ?? "").trim(), `${BILL_DIFFERS}.`].filter(Boolean).join(" "));
-export const dropBillFlag = (note: string | null | undefined) => (note ?? "").replace(`${BILL_DIFFERS}.`, "").replace(/\s+/g, " ").trim();
-/** A new item made from src: same flag as src, on top of its own note. */
-export const inheritBillFlag = (src: { purchaseCostNote: string | null }, note = "") => (hasBillFlag(src.purchaseCostNote) ? addBillFlag(note) : note);
+/** Release (Damien 5 Nov): freight or charges on the PO are not spread onto the stock cost,
+ *  so stock from that PO stays provisional for the manual cost review, even when the bill agrees. */
+export const FREIGHT_REVIEW = "Cost provisional, freight or charges on the PO not in the stock cost";
+type Note = string | null | undefined;
+const hasFlag = (note: Note, f: string) => (note ?? "").includes(f);
+const addFlag = (note: Note, f: string) => (hasFlag(note, f) ? (note ?? "") : [(note ?? "").trim(), `${f}.`].filter(Boolean).join(" "));
+const dropFlag = (note: Note, f: string) => (note ?? "").replace(`${f}.`, "").replace(/\s+/g, " ").trim();
+export const hasBillFlag = (note: Note) => hasFlag(note, BILL_DIFFERS);
+export const addBillFlag = (note: Note) => addFlag(note, BILL_DIFFERS);
+export const dropBillFlag = (note: Note) => dropFlag(note, BILL_DIFFERS);
+export const hasFreightFlag = (note: Note) => hasFlag(note, FREIGHT_REVIEW);
+export const addFreightFlag = (note: Note) => addFlag(note, FREIGHT_REVIEW);
+export const dropFreightFlag = (note: Note) => dropFlag(note, FREIGHT_REVIEW);
+/** Either review mark. An Admin setting the cost by hand is the review and clears both. */
+export const hasCostFlag = (note: Note) => hasBillFlag(note) || hasFreightFlag(note);
+export const dropCostFlags = (note: Note) => dropFreightFlag(dropBillFlag(note));
+/** A new item made from src: same marks as src, on top of its own note. */
+export const inheritBillFlag = (src: { purchaseCostNote: string | null }, note = "") => {
+  let out = note;
+  if (hasBillFlag(src.purchaseCostNote)) out = addBillFlag(out);
+  if (hasFreightFlag(src.purchaseCostNote)) out = addFreightFlag(out);
+  return out;
+};
 
 /* -------------------------------- settings -------------------------------- */
 

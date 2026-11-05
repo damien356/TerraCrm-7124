@@ -2,7 +2,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../../database";
 import * as schema from "../../database/schema";
 import { todayLocal } from "../local-date";
-import { bad, cm, COST_UNKNOWN, dropBillFlag, forbid, inheritBillFlag, money, need, needOn, notFound, type PermActor, r2, r4, unitText } from "./core";
+import { bad, cm, COST_UNKNOWN, dropCostFlags, forbid, inheritBillFlag, money, need, needOn, notFound, type PermActor, r2, r4, unitText } from "./core";
 
 /* ---------------------------------------------------------------------------
  * Stock items and movements. Every physical change is a movement row with
@@ -376,8 +376,8 @@ export async function setItemCost(
   const it = await itemById(itemId);
   await db
     .update(schema.stockItems)
-    // An Admin setting the cost is the review, so the "bill differs" mark comes off.
-    .set({ unitCost: input.unitCost, costStatus: input.unitCost == null ? "unknown" : input.costStatus, purchaseCostNote: dropBillFlag(it.purchaseCostNote), updatedAt: new Date() })
+    // An Admin setting the cost is the review, so the "bill differs" and freight marks come off.
+    .set({ unitCost: input.unitCost, costStatus: input.unitCost == null ? "unknown" : input.costStatus, purchaseCostNote: dropCostFlags(it.purchaseCostNote), updatedAt: new Date() })
     .where(eq(schema.stockItems.id, it.id));
   await noteMovement(
     it,
