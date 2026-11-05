@@ -64,16 +64,21 @@ const isWithheld = (n: string | null | undefined) => !phoneKey(n) || /anonymous|
 export async function upsertCall(c: RetellCall): Promise<CallRow> {
   const [found] = await db.select().from(schema.phoneCalls).where(eq(schema.phoneCalls.retellCallId, c.call_id));
   if (found) return found;
-  const withheld = c.direction === "outbound" ? false : isWithheld(c.from_number);
-  const matched = withheld ? [] : await contactsByNumber(c.from_number);
+  // fromNumber is always the customer's side. On an outbound call (Terra's number ringing someone,
+  // such as the test call from the Retell dashboard) that is the number rung, not Terra's own.
+  const outbound = c.direction === "outbound";
+  const customerNo = outbound ? c.to_number : c.from_number;
+  const ourNo = outbound ? c.from_number : c.to_number;
+  const withheld = outbound ? false : isWithheld(customerNo);
+  const matched = withheld ? [] : await contactsByNumber(customerNo);
   await db
     .insert(schema.phoneCalls)
     .values({
       retellCallId: c.call_id,
       agentId: c.agent_id ?? null,
-      direction: c.direction === "outbound" ? "outbound" : "inbound",
-      fromNumber: withheld ? null : (c.from_number ?? null),
-      toNumber: c.to_number ?? null,
+      direction: outbound ? "outbound" : "inbound",
+      fromNumber: withheld ? null : (customerNo ?? null),
+      toNumber: ourNo ?? null,
       withheld,
       startedAt: c.start_timestamp ? new Date(c.start_timestamp) : new Date(),
       matchedContactIds: JSON.stringify(matched),

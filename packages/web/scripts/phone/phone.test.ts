@@ -73,6 +73,17 @@ describe("1. who is calling", () => {
     expect(note.status).toBe("refused");
   });
 
+  test("an outbound call (Terra's number ringing out) treats the number rung as the caller's", async () => {
+    const c = call("+61756905370", { direction: "outbound", to_number: "+61411111111" });
+    const id = await run("identify_caller", c);
+    expect(id.data).toMatchObject({ number_known: true, shared_number: true, number_withheld: false });
+    const row = await callRow(c);
+    expect(row.direction).toBe("outbound");
+    expect(row.from_number).toBe("+61411111111");
+    expect(row.to_number).toBe("+61756905370");
+    expect(row.withheld).toBe(0);
+  });
+
   test("customer A: caller ID + surname + street verifies, and their one job is picked", async () => {
     const c = call("+61411111111");
     const v = await run("verify_caller", c, { last_name: "Anders", first_name: "Alice", street_address: "12 Smith St" });
