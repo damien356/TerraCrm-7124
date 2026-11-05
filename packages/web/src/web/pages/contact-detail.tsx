@@ -3,6 +3,7 @@ import { ClientQuotesCard } from "../components/quote-copy";
 import { SalesCard } from "../components/sell-products";
 import { ReferrerSection } from "../components/referrals";
 import { useBootstrap } from "../queries/settings";
+import { ContactPhoneCard } from "../components/phone-calls";
 import { Link, useParams } from "wouter";
 import { ArrowLeft, Building2, Mail, MapPin, Phone, Trash2 } from "lucide-react";
 import { Page } from "../components/layout";
@@ -277,6 +278,8 @@ export default function ContactDetailPage() {
           </Card>
 
           <ClientQuotesCard contactId={c.id} />
+
+          <ContactPhoneCard contactId={c.id} />
 
           <SalesCard buyer={{ kind: "contact", contactId: c.id }} buyerName={`${c.firstName} ${c.lastName}`.trim()} />
 

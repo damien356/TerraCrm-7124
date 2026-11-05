@@ -5603,3 +5603,194 @@ export const stockSupplyApprovals = sqliteTable(
   },
   (t) => [uniqueIndex("stock_supply_approvals_uq").on(t.entityType, t.entityKey, t.productId)],
 );
+
+/* ---------------------------------------------------------------------------
+ * AI phone calls (Retell, 5 Nov). 2026-11-25-phone-calls.sql. New tables only:
+ * nothing existing changes shape, so this code can ship before the SQL is run
+ * and every other screen keeps working. The phone screens say the tables are
+ * missing until then. Routing settings live in settings key phone_ai_config.
+ * ------------------------------------------------------------------------- */
+
+/** One phone call the AI agent took. Made by the first webhook or the first tool call, whichever comes first. */
+export const phoneCalls = sqliteTable(
+  "phone_calls",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** Retell's call_id. One row per call, for ever. */
+    retellCallId: text("retell_call_id").notNull(),
+    agentId: text("agent_id"),
+    /** inbound · outbound */
+    direction: text("direction").notNull().default("inbound"),
+    fromNumber: text("from_number"),
+    toNumber: text("to_number"),
+    /** No caller ID came through (private or withheld). */
+    withheld: integer("withheld", { mode: "boolean" }).notNull().default(false),
+    /** live · ended · finalised */
+    status: text("status").notNull().default("live"),
+    startedAt: integer("started_at", { mode: "timestamp" }),
+    endedAt: integer("ended_at", { mode: "timestamp" }),
+    durationSec: integer("duration_sec"),
+    disconnectionReason: text("disconnection_reason"),
+    /** JSON number[]: cards whose mobile or phone matches the caller ID. A match is never permission. */
+    matchedContactIds: text("matched_contact_ids").notNull().default("[]"),
+    /** The person the caller proved they are. Null until verify_caller passes. */
+    verifiedContactId: integer("verified_contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    /** What they proved it with, e.g. "caller ID + site address". */
+    verifyMethod: text("verify_method"),
+    verifyAttempts: integer("verify_attempts").notNull().default(0),
+    verifiedAt: integer("verified_at", { mode: "timestamp" }),
+    /** The card the call is about (verified, or the new enquiry's person). */
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    /** A new enquiry was made on this call. */
+    newEnquiry: integer("new_enquiry", { mode: "boolean" }).notNull().default(false),
+    /** enquiry · measure · existing_job · booking · accounts · complaint · urgent · failure · other */
+    callType: text("call_type").notNull().default("other"),
+    /** normal · high · urgent */
+    priority: text("priority").notNull().default("normal"),
+    summary: text("summary").notNull().default(""),
+    /** Plain line: what was done on the call. */
+    outcome: text("outcome").notNull().default(""),
+    /** What still needs a person, or empty. */
+    needsPerson: text("needs_person").notNull().default(""),
+    sentiment: text("sentiment"),
+    /** Staff with transcript permission only. */
+    transcript: text("transcript"),
+    recordingUrl: text("recording_url"),
+    /** pending · done · failed · missing (no analysis came, finalised by the sweep) */
+    analysisState: text("analysis_state").notNull().default("pending"),
+    /** Who the outcome went to. */
+    ownerProfileId: integer("owner_profile_id").references(() => profiles.id, { onDelete: "set null" }),
+    finalisedAt: integer("finalised_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("phone_calls_retell_uq").on(t.retellCallId),
+    index("phone_calls_job_idx").on(t.jobId),
+    index("phone_calls_contact_idx").on(t.contactId),
+    index("phone_calls_status_idx").on(t.status, t.createdAt),
+  ],
+);
+
+/**
+ * Every action the agent asked for. `idemKey` makes a repeated request (Retell
+ * retries, the caller asking twice) return the first answer instead of doing
+ * it again.
+ */
+export const phoneCallActions = sqliteTable(
+  "phone_call_actions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    callId: integer("call_id").notNull().references(() => phoneCalls.id, { onDelete: "cascade" }),
+    /** The tool name, e.g. book_visit. */
+    name: text("name").notNull(),
+    idemKey: text("idem_key").notNull(),
+    args: text("args").notNull().default("{}"),
+    /** running · done · refused · failed · uncertain */
+    status: text("status").notNull().default("running"),
+    /** JSON returned to the agent. */
+    result: text("result").notNull().default("{}"),
+    error: text("error"),
+    /** What it wrote, for the call record and the audit. */
+    entityType: text("entity_type"),
+    entityId: integer("entity_id"),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    finishedAt: integer("finished_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("phone_call_actions_idem_uq").on(t.idemKey), index("phone_call_actions_call_idx").on(t.callId)],
+);
+
+/** Work a call left for a person. One accountable owner; everyone else only sees it. */
+export const phoneFollowups = sqliteTable(
+  "phone_followups",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    callId: integer("call_id").references(() => phoneCalls.id, { onDelete: "set null" }),
+    jobId: integer("job_id").references(() => jobs.id, { onDelete: "set null" }),
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    callType: text("call_type").notNull().default("other"),
+    title: text("title").notNull().default(""),
+    detail: text("detail").notNull().default(""),
+    /** normal · high · urgent */
+    priority: text("priority").notNull().default("normal"),
+    /** new · assigned · in_progress · resolved. Separate from whether a notification was read. */
+    status: text("status").notNull().default("new"),
+    ownerProfileId: integer("owner_profile_id").references(() => profiles.id, { onDelete: "set null" }),
+    ownerName: text("owner_name").notNull().default(""),
+    /** Team key it waits in when nobody owns it. */
+    queueKey: text("queue_key").notNull().default(""),
+    /** How the owner was picked, in plain words. */
+    routedVia: text("routed_via").notNull().default(""),
+    dueAt: integer("due_at", { mode: "timestamp" }),
+    remindedAt: integer("reminded_at", { mode: "timestamp" }),
+    escalatedAt: integer("escalated_at", { mode: "timestamp" }),
+    escalationLevel: integer("escalation_level").notNull().default(0),
+    /** Stops one call (or a retried webhook) making the same follow-up twice. */
+    dedupeKey: text("dedupe_key").notNull(),
+    resolvedAt: integer("resolved_at", { mode: "timestamp" }),
+    resolvedByName: text("resolved_by_name"),
+    resolution: text("resolution"),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("phone_followups_dedupe_uq").on(t.dedupeKey),
+    index("phone_followups_open_idx").on(t.status, t.dueAt),
+    index("phone_followups_owner_idx").on(t.ownerProfileId, t.status),
+    index("phone_followups_job_idx").on(t.jobId),
+  ],
+);
+
+/** Each notification a call or follow-up sent, per person and channel, so a failure is visible. */
+export const phoneNotifications = sqliteTable(
+  "phone_notifications",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    callId: integer("call_id").references(() => phoneCalls.id, { onDelete: "cascade" }),
+    followupId: integer("followup_id").references(() => phoneFollowups.id, { onDelete: "cascade" }),
+    profileId: integer("profile_id").references(() => profiles.id, { onDelete: "set null" }),
+    /** outcome · new_owner · reminder · escalation · urgent · fallback */
+    reason: text("reason").notNull(),
+    /** in_app · push · email */
+    channel: text("channel").notNull(),
+    /** sent · failed · no_device · not_connected · skipped */
+    status: text("status").notNull(),
+    detail: text("detail").notNull().default(""),
+    alertId: integer("alert_id").references(() => alerts.id, { onDelete: "set null" }),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(now),
+  },
+  (t) => [index("phone_notifications_followup_idx").on(t.followupId), index("phone_notifications_call_idx").on(t.callId)],
+);
+
+/**
+ * Leave cover and permanent delegation. While a row is active, work routed to
+ * `profileId` goes to `coverProfileId`. A delegation has no end date.
+ */
+export const staffCover = sqliteTable(
+  "staff_cover",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    profileId: integer("profile_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+    coverProfileId: integer("cover_profile_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+    /** leave · delegation */
+    kind: text("kind").notNull().default("leave"),
+    /** YYYY-MM-DD, Brisbane. */
+    fromDate: text("from_date").notNull(),
+    /** Null for a permanent delegation. */
+    toDate: text("to_date"),
+    reason: text("reason").notNull().default(""),
+    createdByName: text("created_by_name").notNull().default(""),
+    cancelledAt: integer("cancelled_at", { mode: "timestamp" }),
+    cancelledByName: text("cancelled_by_name"),
+    ...timestamps,
+  },
+  (t) => [index("staff_cover_profile_idx").on(t.profileId, t.fromDate)],
+);
+
+/** The person managing a job, for calls about an existing job. Optional; no row means the job has none. */
+export const jobManagers = sqliteTable("job_managers", {
+  jobId: integer("job_id").primaryKey().references(() => jobs.id, { onDelete: "cascade" }),
+  profileId: integer("profile_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+  setByName: text("set_by_name").notNull().default(""),
+  ...timestamps,
+});

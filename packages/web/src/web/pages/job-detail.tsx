@@ -46,6 +46,7 @@ import { CreateQuoteButton } from "../components/create-quote";
 import { jobText, quoteRef, taskRef } from "../../api/lib/refs";
 import { useCreateTask, useRemoveTask } from "../queries/tasks";
 import { useBootstrap } from "../queries/settings";
+import { JobPhoneCard } from "../components/phone-calls";
 import { sourceName } from "../../api/lib/lead-codes";
 import { JobPeopleCard } from "../components/job-people";
 import { DispatchWork, MergeDispatchesModal, SplitDispatchModal } from "../components/dispatch-split";
@@ -770,6 +771,7 @@ export default function JobDetailPage() {
         {/* right rail */}
         <div className="grid min-w-0 grid-cols-1 gap-4">
           {isCallback || productSale ? null : <CallbacksListCard jobId={j.id} />}
+          {productSale ? null : <JobPhoneCard jobId={j.id} />}
           {isCallback && isAdmin ? <ReworkCostCard jobId={j.id} /> : null}
 
           <Card>

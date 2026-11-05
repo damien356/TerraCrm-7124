@@ -194,6 +194,196 @@ async function suggestDays(taskId: number) {
   };
 }
 
+export const createTaskInput = z.object({
+  jobId: z.number(),
+  skillId: z.number().nullable().optional(),
+  title: z.string().min(1),
+  description: z.string().nullable().optional(),
+  areaM2: z.number().nullable().optional(),
+  scheduledDate: z.string().nullable().optional(),
+  /** Date window the work can land in — the installer picks the day. */
+  scheduledFrom: z.string().nullable().optional(),
+  scheduledTo: z.string().nullable().optional(),
+  tenderMode: z.boolean().optional(),
+  startTime: z.string().nullable().optional(),
+  durationHours: z.number().default(4),
+  crewSize: z.number().int().min(1).max(2).default(1),
+  payType: z.enum(["per_m2", "hourly", "per_job", "day_rate"]).default("per_job"),
+  payAmount: z.number().nullable().optional(),
+});
+
+export async function createTask(input: z.infer<typeof createTaskInput>, actor: Actor) {
+  const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, input.jobId));
+  if (!job) throw new ORPCError("NOT_FOUND", { message: "Job not found" });
+  // Client prep (notes 18.56): no install date until the property type and furniture are answered.
+  if (input.scheduledDate) {
+    const block = await bookingBlockNew(input.jobId, input.skillId, input.title);
+    if (block) throw new ORPCError("BAD_REQUEST", { message: block });
+  }
+
+  const [maxSeq] = await db
+    .select({ max: sql<number>`coalesce(max(${schema.jobTasks.seq}), 0)` })
+    .from(schema.jobTasks)
+    .where(eq(schema.jobTasks.jobId, input.jobId));
+
+  // Furniture on site forces a 2-man crew — the office can't undercut it.
+  const crewSize = job.furnitureOnSite ? Math.max(2, input.crewSize) : input.crewSize;
+
+  const [row] = await db
+    .insert(schema.jobTasks)
+    .values({ ...input, crewSize, seq: Number(maxSeq?.max ?? 0) + 1 })
+    .returning();
+
+  await db.insert(schema.activityLog).values({
+    jobId: input.jobId,
+    taskId: row!.id,
+    entityType: "task",
+    entityId: row!.id,
+    action: "task_created",
+    detail: `${input.title}${crewSize > input.crewSize ? " (crew forced to 2, furniture on site)" : ""}`,
+    actorName: actor.name,
+    actorRole: actor.role,
+  });
+
+  return row;
+}
+
+export const bookTaskInput = z.object({
+  taskId: z.number(),
+  installerId: z.number(),
+  secondInstallerId: z.number().nullable().optional(),
+  /** The exact days, already worked out by planBooking. */
+  dates: z.array(z.string()).min(1).max(30),
+  /** Same window every day unless a day overrides it below. */
+  arrivalStart: z.string().nullable().optional(),
+  arrivalEnd: z.string().nullable().optional(),
+  /** Following days are left for the installer and the site to sort out. */
+  coordinateAfterFirst: z.boolean().default(false),
+  /** Per-day overrides: window, or a different installer for that day. */
+  perDay: z
+    .array(
+      z.object({
+        date: z.string(),
+        arrivalStart: z.string().nullable().optional(),
+        arrivalEnd: z.string().nullable().optional(),
+        coordinate: z.boolean().optional(),
+        installerId: z.number().nullable().optional(),
+      }),
+    )
+    .default([]),
+  durationHours: z.number().nullable().optional(),
+  payAmount: z.number().nullable().optional(),
+  /** Why the office booked over a clash. Stored on the affected days. */
+  overrideNote: z.string().nullable().optional(),
+  /**
+   * Day count the office put in themselves. Stored on the task so it
+   * beats the rate-based recommendation from here on, including on a
+   * later drag. Null leaves the recommendation in charge.
+   */
+  manualDays: z.number().int().min(1).max(30).nullable().optional(),
+  calendarOverride,
+});
+
+export async function bookTask(input: z.infer<typeof bookTaskInput>, actor: Actor) {
+  const dates = [...new Set(input.dates)].sort();
+  // Client prep (notes 18.56): an install can't be booked until the property type and furniture are answered.
+  const block = await bookingBlock(input.taskId);
+  if (block) throw new ORPCError("BAD_REQUEST", { message: block });
+  const { task, job, installer } = await assertAssignable(input.taskId, input.installerId, 1);
+
+  const needsTwo = task.crewSize > 1;
+  const bringsOwn = installer.crewCapacity === "own_offsider";
+  if (needsTwo && !bringsOwn && !input.secondInstallerId && !task.secondInstallerId) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: `This is a 2-man task${job.furnitureOnSite ? " (furniture on site)" : ""} and ${installer.name} doesn't bring an offsider. Pick a second installer.`,
+    });
+  }
+  if (input.secondInstallerId) await assertAssignable(input.taskId, input.secondInstallerId, 1);
+  // A day handed to someone else still has to be someone ticked for the work.
+  for (const d of input.perDay) {
+    if (d.installerId) await assertAssignable(input.taskId, d.installerId, 1);
+  }
+
+  const overrides = new Map(input.perDay.map((d) => [d.date, d]));
+  const first = dates[0]!;
+
+  const newRows = dates.map((date, i) => {
+    const o = overrides.get(date);
+    const coordinate = o?.coordinate ?? (i > 0 ? input.coordinateAfterFirst : false);
+    return {
+      taskId: input.taskId,
+      date,
+      seq: i + 1,
+      arrivalStart: coordinate ? null : (o?.arrivalStart ?? input.arrivalStart ?? null),
+      arrivalEnd: coordinate ? null : (o?.arrivalEnd ?? input.arrivalEnd ?? null),
+      coordinate,
+      installerId: o?.installerId ?? null,
+      status: "booked",
+      overrideNote: input.overrideNote ?? null,
+    };
+  });
+  // A calendar-checked person's own time. Refused before anything is written.
+  await calGuard({
+    taskId: input.taskId,
+    rows: newRows,
+    crew: [input.installerId, input.secondInstallerId !== undefined ? input.secondInstallerId : task.secondInstallerId],
+    // The length has to be given with the booking for a checked person, not
+    // left at the task's default, so a missing one reads as "no time".
+    durationHours: input.durationHours ?? null,
+    actor: actor,
+    override: input.calendarOverride,
+    source: "book",
+  });
+
+  // Replace the run rather than add to it, so re-booking is idempotent.
+  await db.delete(schema.taskDays).where(eq(schema.taskDays.taskId, input.taskId));
+  await db.insert(schema.taskDays).values(newRows);
+
+  const [row] = await db
+    .update(schema.jobTasks)
+    .set({
+      assignedInstallerId: input.installerId,
+      ...(input.secondInstallerId !== undefined ? { secondInstallerId: input.secondInstallerId } : {}),
+      status: "assigned",
+      scheduledDate: first,
+      scheduledFrom: first,
+      scheduledTo: dates[dates.length - 1]!,
+      startTime: input.arrivalStart ?? task.startTime,
+      ...(input.durationHours != null ? { durationHours: input.durationHours } : {}),
+      ...(input.payAmount != null ? { payAmount: input.payAmount } : {}),
+      ...(input.manualDays !== undefined ? { manualDays: input.manualDays } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.jobTasks.id, input.taskId))
+    .returning();
+
+  // Outstanding offers are moot: it's booked.
+  await db
+    .update(schema.taskOffers)
+    .set({ status: "withdrawn", provisionalUntil: null, respondedAt: new Date(), updatedAt: new Date() })
+    .where(
+      and(eq(schema.taskOffers.taskId, input.taskId), inArray(schema.taskOffers.status, ["pending", "provisional"])),
+    );
+
+  // Lock the labour at today's rates, same as any other assignment.
+  await lockTaskLabour({ taskId: input.taskId, installerId: input.installerId, assignment: task.assignedInstallerId !== input.installerId });
+
+  const span = dates.length === 1 ? sayDate(first) : `${sayDate(first)} → ${sayDate(dates[dates.length - 1]!)}`;
+  await db.insert(schema.activityLog).values({
+    jobId: task.jobId,
+    taskId: input.taskId,
+    entityType: "task",
+    entityId: input.taskId,
+    action: "booked",
+    detail: `${task.title} → ${installer.name}, ${dates.length === 1 ? "1 day" : `${dates.length} days`} ${span}${input.overrideNote ? ` (override: ${input.overrideNote})` : ""}`,
+    actorName: actor.name,
+    actorRole: actor.role,
+  });
+
+  await syncJobForTask(input.taskId, actor);
+  return { ...row, dates };
+}
+
 export const tasks = {
   /** The dispatch board feed: every task in a date window, plus the unassigned queue. */
   board: staffOnly
@@ -380,61 +570,7 @@ export const tasks = {
     };
   }),
 
-  create: staffOnly
-    .input(
-      z.object({
-        jobId: z.number(),
-        skillId: z.number().nullable().optional(),
-        title: z.string().min(1),
-        description: z.string().nullable().optional(),
-        areaM2: z.number().nullable().optional(),
-        scheduledDate: z.string().nullable().optional(),
-        /** Date window the work can land in — the installer picks the day. */
-        scheduledFrom: z.string().nullable().optional(),
-        scheduledTo: z.string().nullable().optional(),
-        tenderMode: z.boolean().optional(),
-        startTime: z.string().nullable().optional(),
-        durationHours: z.number().default(4),
-        crewSize: z.number().int().min(1).max(2).default(1),
-        payType: z.enum(["per_m2", "hourly", "per_job", "day_rate"]).default("per_job"),
-        payAmount: z.number().nullable().optional(),
-      }),
-    )
-    .handler(async ({ input, context }) => {
-      const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, input.jobId));
-      if (!job) throw new ORPCError("NOT_FOUND", { message: "Job not found" });
-      // Client prep (notes 18.56): no install date until the property type and furniture are answered.
-      if (input.scheduledDate) {
-        const block = await bookingBlockNew(input.jobId, input.skillId, input.title);
-        if (block) throw new ORPCError("BAD_REQUEST", { message: block });
-      }
-
-      const [maxSeq] = await db
-        .select({ max: sql<number>`coalesce(max(${schema.jobTasks.seq}), 0)` })
-        .from(schema.jobTasks)
-        .where(eq(schema.jobTasks.jobId, input.jobId));
-
-      // Furniture on site forces a 2-man crew — the office can't undercut it.
-      const crewSize = job.furnitureOnSite ? Math.max(2, input.crewSize) : input.crewSize;
-
-      const [row] = await db
-        .insert(schema.jobTasks)
-        .values({ ...input, crewSize, seq: Number(maxSeq?.max ?? 0) + 1 })
-        .returning();
-
-      await db.insert(schema.activityLog).values({
-        jobId: input.jobId,
-        taskId: row!.id,
-        entityType: "task",
-        entityId: row!.id,
-        action: "task_created",
-        detail: `${input.title}${crewSize > input.crewSize ? " (crew forced to 2, furniture on site)" : ""}`,
-        actorName: context.actor.name,
-        actorRole: context.actor.role,
-      });
-
-      return row;
-    }),
+  create: staffOnly.input(createTaskInput).handler(({ input, context }) => createTask(input, context.actor)),
 
   update: staffOnly
     .input(
@@ -999,143 +1135,7 @@ export const tasks = {
    * system doesn't know about, so the warning is loud in the panel and the
    * override is recorded here rather than the booking being refused.
    */
-  book: staffOnly
-    .input(
-      z.object({
-        taskId: z.number(),
-        installerId: z.number(),
-        secondInstallerId: z.number().nullable().optional(),
-        /** The exact days, already worked out by planBooking. */
-        dates: z.array(z.string()).min(1).max(30),
-        /** Same window every day unless a day overrides it below. */
-        arrivalStart: z.string().nullable().optional(),
-        arrivalEnd: z.string().nullable().optional(),
-        /** Following days are left for the installer and the site to sort out. */
-        coordinateAfterFirst: z.boolean().default(false),
-        /** Per-day overrides: window, or a different installer for that day. */
-        perDay: z
-          .array(
-            z.object({
-              date: z.string(),
-              arrivalStart: z.string().nullable().optional(),
-              arrivalEnd: z.string().nullable().optional(),
-              coordinate: z.boolean().optional(),
-              installerId: z.number().nullable().optional(),
-            }),
-          )
-          .default([]),
-        durationHours: z.number().nullable().optional(),
-        payAmount: z.number().nullable().optional(),
-        /** Why the office booked over a clash. Stored on the affected days. */
-        overrideNote: z.string().nullable().optional(),
-        /**
-         * Day count the office put in themselves. Stored on the task so it
-         * beats the rate-based recommendation from here on, including on a
-         * later drag. Null leaves the recommendation in charge.
-         */
-        manualDays: z.number().int().min(1).max(30).nullable().optional(),
-        calendarOverride,
-      }),
-    )
-    .handler(async ({ input, context }) => {
-      const dates = [...new Set(input.dates)].sort();
-      // Client prep (notes 18.56): an install can't be booked until the property type and furniture are answered.
-      const block = await bookingBlock(input.taskId);
-      if (block) throw new ORPCError("BAD_REQUEST", { message: block });
-      const { task, job, installer } = await assertAssignable(input.taskId, input.installerId, 1);
-
-      const needsTwo = task.crewSize > 1;
-      const bringsOwn = installer.crewCapacity === "own_offsider";
-      if (needsTwo && !bringsOwn && !input.secondInstallerId && !task.secondInstallerId) {
-        throw new ORPCError("BAD_REQUEST", {
-          message: `This is a 2-man task${job.furnitureOnSite ? " (furniture on site)" : ""} and ${installer.name} doesn't bring an offsider. Pick a second installer.`,
-        });
-      }
-      if (input.secondInstallerId) await assertAssignable(input.taskId, input.secondInstallerId, 1);
-      // A day handed to someone else still has to be someone ticked for the work.
-      for (const d of input.perDay) {
-        if (d.installerId) await assertAssignable(input.taskId, d.installerId, 1);
-      }
-
-      const overrides = new Map(input.perDay.map((d) => [d.date, d]));
-      const first = dates[0]!;
-
-      const newRows = dates.map((date, i) => {
-        const o = overrides.get(date);
-        const coordinate = o?.coordinate ?? (i > 0 ? input.coordinateAfterFirst : false);
-        return {
-          taskId: input.taskId,
-          date,
-          seq: i + 1,
-          arrivalStart: coordinate ? null : (o?.arrivalStart ?? input.arrivalStart ?? null),
-          arrivalEnd: coordinate ? null : (o?.arrivalEnd ?? input.arrivalEnd ?? null),
-          coordinate,
-          installerId: o?.installerId ?? null,
-          status: "booked",
-          overrideNote: input.overrideNote ?? null,
-        };
-      });
-      // A calendar-checked person's own time. Refused before anything is written.
-      await calGuard({
-        taskId: input.taskId,
-        rows: newRows,
-        crew: [input.installerId, input.secondInstallerId !== undefined ? input.secondInstallerId : task.secondInstallerId],
-        // The length has to be given with the booking for a checked person, not
-        // left at the task's default, so a missing one reads as "no time".
-        durationHours: input.durationHours ?? null,
-        actor: context.actor,
-        override: input.calendarOverride,
-        source: "book",
-      });
-
-      // Replace the run rather than add to it, so re-booking is idempotent.
-      await db.delete(schema.taskDays).where(eq(schema.taskDays.taskId, input.taskId));
-      await db.insert(schema.taskDays).values(newRows);
-
-      const [row] = await db
-        .update(schema.jobTasks)
-        .set({
-          assignedInstallerId: input.installerId,
-          ...(input.secondInstallerId !== undefined ? { secondInstallerId: input.secondInstallerId } : {}),
-          status: "assigned",
-          scheduledDate: first,
-          scheduledFrom: first,
-          scheduledTo: dates[dates.length - 1]!,
-          startTime: input.arrivalStart ?? task.startTime,
-          ...(input.durationHours != null ? { durationHours: input.durationHours } : {}),
-          ...(input.payAmount != null ? { payAmount: input.payAmount } : {}),
-          ...(input.manualDays !== undefined ? { manualDays: input.manualDays } : {}),
-          updatedAt: new Date(),
-        })
-        .where(eq(schema.jobTasks.id, input.taskId))
-        .returning();
-
-      // Outstanding offers are moot: it's booked.
-      await db
-        .update(schema.taskOffers)
-        .set({ status: "withdrawn", provisionalUntil: null, respondedAt: new Date(), updatedAt: new Date() })
-        .where(
-          and(eq(schema.taskOffers.taskId, input.taskId), inArray(schema.taskOffers.status, ["pending", "provisional"])),
-        );
-
-      // Lock the labour at today's rates, same as any other assignment.
-      await lockTaskLabour({ taskId: input.taskId, installerId: input.installerId, assignment: task.assignedInstallerId !== input.installerId });
-
-      const span = dates.length === 1 ? sayDate(first) : `${sayDate(first)} → ${sayDate(dates[dates.length - 1]!)}`;
-      await db.insert(schema.activityLog).values({
-        jobId: task.jobId,
-        taskId: input.taskId,
-        entityType: "task",
-        entityId: input.taskId,
-        action: "booked",
-        detail: `${task.title} → ${installer.name}, ${dates.length === 1 ? "1 day" : `${dates.length} days`} ${span}${input.overrideNote ? ` (override: ${input.overrideNote})` : ""}`,
-        actorName: context.actor.name,
-        actorRole: context.actor.role,
-      });
-
-      await syncJobForTask(input.taskId, context.actor);
-      return { ...row, dates };
-    }),
+  book: staffOnly.input(bookTaskInput).handler(({ input, context }) => bookTask(input, context.actor)),
 
   /**
    * "It needs another day." One click, one write, on a run that is already

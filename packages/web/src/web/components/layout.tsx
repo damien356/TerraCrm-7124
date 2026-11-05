@@ -47,6 +47,7 @@ import {
   X,
   Clock,
   Package,
+  PhoneCall,
 } from "lucide-react";
 import { authClient } from "../lib/auth";
 import { hasAppMenu, isPhoneApp } from "../lib/phone-app";
@@ -153,6 +154,7 @@ const NAV: NavEntry[] = [
     icon: SettingsIcon,
     children: [
       { to: "/ai-tray", label: "Waiting for you", icon: Inbox },
+      { to: "/phone-calls", label: "AI phone calls", icon: PhoneCall },
       { to: "/settings", label: "Settings", icon: SettingsIcon },
       { to: "/products", label: "Price book", icon: Tags },
       { to: "/team", label: "People", icon: KeyRound },
@@ -212,6 +214,7 @@ const PHONE_PATHS = [
   "/finance/invoices",
   "/finance/callbacks",
   "/terra-ai",
+  "/phone-calls",
 ];
 
 /** Set up screens that sit under a phone path but still belong on the website. */

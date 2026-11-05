@@ -107,6 +107,12 @@ import { handleInboundSms, inboundSecretOk } from "./lib/sms-inbound";
 import { takeLead, type LeadFile } from "./lib/lead-intake";
 import { bootTimberRepair } from "./lib/timber-repair";
 import { bootAbnRecheck } from "./lib/abn-recheck";
+import { phoneCalls } from "./routes/phoneCalls";
+import { bootPhoneSweep } from "./lib/phone/sweep";
+import { handleRetellEvent, type RetellEvent } from "./lib/phone/webhook";
+import { runTool } from "./lib/phone/functions";
+import { FAILED_SAY, phoneTablesMissing, type RetellCall } from "./lib/phone/calls";
+import { agentAllowed, checkSignature, retellConfigured } from "./lib/phone/signature";
 import { abnCheck } from "./routes/abnCheck";
 import { leads } from "./routes/leads";
 import { timber } from "./routes/timber";
@@ -279,6 +285,8 @@ export const router = {
   publicPages,
   jobCancel,
   jobMerge,
+  /** AI phone calls (Retell): call records, follow-ups, leave cover, and the routing settings. */
+  phoneCalls,
 };
 
 export type AppRouter = typeof router;
@@ -404,6 +412,57 @@ app.post("/api/webhooks/stripe", async (c) => {
   }
 });
 
+// Retell, the AI phone agent (5 Nov). Both are signed with the Retell key (X-Retell-Signature)
+// and refused without it. 503 until RETELL_API_KEY is set, 401 on a bad signature.
+// Webhooks: a 500 makes Retell retry, and every step is idempotent, so that is safe.
+app.post("/api/webhooks/retell", async (c) => {
+  if (!retellConfigured()) return c.json({ ok: false, error: "not configured" }, 503);
+  const raw = await c.req.text();
+  const sig = checkSignature(raw, c.req.header("x-retell-signature"));
+  if (!sig.ok) return c.json({ ok: false, error: "unauthorised" }, 401);
+  let body: RetellEvent;
+  try {
+    body = JSON.parse(raw) as RetellEvent;
+  } catch {
+    return c.json({ ok: false, error: "bad json" }, 400);
+  }
+  // Another agent on the same Retell account: not ours, acknowledged and ignored.
+  if (!agentAllowed(body.call?.agent_id)) return c.json({ ok: true, ignored: "other agent" }, 200);
+  try {
+    if ((await phoneTablesMissing()).length) return c.json({ ok: false, error: "phone tables not set up" }, 503);
+    const out = await handleRetellEvent(body);
+    return c.json({ ok: true, ...out }, 200);
+  } catch (e) {
+    console.error("[phone] webhook failed", (e as Error).message);
+    return c.json({ ok: false }, 500);
+  }
+});
+
+// The agent's custom functions: /api/retell/fn/<tool name>. Always answers 200 with a line the
+// agent can say, so a hiccup is never read out as an error. Nothing is confirmed unless saved.
+app.post("/api/retell/fn/:name", async (c) => {
+  if (!retellConfigured()) return c.json({ ok: false, error: "not configured" }, 503);
+  const raw = await c.req.text();
+  const sig = checkSignature(raw, c.req.header("x-retell-signature"));
+  if (!sig.ok) return c.json({ ok: false, error: "unauthorised" }, 401);
+  let body: { name?: string; call?: RetellCall; args?: Record<string, unknown> };
+  try {
+    body = JSON.parse(raw) as typeof body;
+  } catch {
+    return c.json({ ok: false, error: "bad json" }, 400);
+  }
+  const name = c.req.param("name");
+  if (body.name && body.name !== name) return c.json({ ok: false, error: "tool name does not match the URL" }, 400);
+  if (!agentAllowed(body.call?.agent_id)) return c.json({ ok: false, error: "unknown agent" }, 403);
+  try {
+    if ((await phoneTablesMissing()).length) return c.json({ ok: false, status: "failed", say: FAILED_SAY }, 200);
+    return c.json(await runTool(name, body), 200);
+  } catch (e) {
+    console.error(`[phone] function ${name} failed`, (e as Error).message);
+    return c.json({ ok: false, status: "failed", say: FAILED_SAY }, 200);
+  }
+});
+
 // Google sends the mailbox sign-in back here. Checks happen in finishConnect: fresh state,
 // the right account, and no scope beyond read (and send for team@).
 app.get("/api/mail/oauth/callback", async (c) => {
@@ -506,5 +565,7 @@ bootXeroSync();
 bootTimberRepair();
 // The monthly ABN recheck on installer cards (notes 18.64). Same gate.
 bootAbnRecheck();
+// AI phone calls: unfinished actions, calls with no report, follow-up reminders and escalation, every minute. Same gate.
+bootPhoneSweep();
 
 export default app;

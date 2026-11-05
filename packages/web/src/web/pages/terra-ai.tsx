@@ -1,6 +1,10 @@
-import { Activity, Bot, ClipboardCheck, MessageCircleQuestion, Mic, Sparkles } from "lucide-react";
+import { Link } from "wouter";
+import { Activity, Bot, ClipboardCheck, MessageCircleQuestion, Mic, PhoneCall, Sparkles } from "lucide-react";
 import { Page } from "../components/layout";
 import { Card } from "../components/ui/card";
+import { Button } from "../components/ui/button";
+import { PhoneSetupNotes } from "../components/phone-calls";
+import { usePhoneStatus } from "../queries/phoneCalls";
 
 /**
  * The Terra AI shell. The section exists in the sidebar from today so the
@@ -35,6 +39,34 @@ const PLANNED = [
   },
 ];
 
+/** The one AI piece that exists: the phone agent. Its real state, not a promise. */
+function PhoneAgentCard() {
+  const s = usePhoneStatus();
+  const on = !!s.data?.enabled && !s.data.tablesMissing.length && s.data.retellKeySet;
+  return (
+    <Card className="px-6 py-6">
+      <div className="flex flex-wrap items-start gap-4">
+        <span className="grid size-11 shrink-0 place-items-center rounded-lg bg-primary/10">
+          <PhoneCall className="size-5 text-primary" />
+        </span>
+        <div className="min-w-0 max-w-2xl flex-1">
+          <h2 className="text-base font-semibold">AI phone agent {s.data ? (on ? "is on" : "is not live yet") : ""}</h2>
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            Answers calls through Retell, looks up jobs, takes enquiries, books measures and callbacks, and leaves a follow-up for the right person
+            when something still needs doing.
+          </p>
+          <div className="mt-3">
+            <PhoneSetupNotes />
+          </div>
+        </div>
+        <Button asChild size="sm" variant="outline">
+          <Link to="/phone-calls">Open AI phone calls</Link>
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 export default function TerraAiPage() {
   return (
     <Page
@@ -47,14 +79,18 @@ export default function TerraAiPage() {
             <Sparkles className="size-5 text-primary" />
           </span>
           <div className="max-w-2xl">
-            <h2 className="text-base font-semibold">Nothing is switched on yet</h2>
+            <h2 className="text-base font-semibold">The rest is still to come</h2>
             <p className="mt-1.5 text-sm text-muted-foreground">
-              Terra AI is the next thing being built. The section is here now so the rest of the app is
-              arranged around it, but no agent is reading your data or changing records at this stage.
+              Apart from the phone agent below, nothing here is built yet. No other agent is reading your data or
+              changing records.
             </p>
           </div>
         </div>
       </Card>
+
+      <div className="mt-4">
+        <PhoneAgentCard />
+      </div>
 
       <p className="mt-7 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
         What goes in here

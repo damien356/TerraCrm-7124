@@ -48,6 +48,11 @@ export const ALERT_KINDS = {
   stock_paid_short: { label: "Payment came in while a product is short", group: "Stock", urgent: true },
   stock_on_sent_po: { label: "Shortage already on a sent PO", group: "Stock", urgent: false },
   stock_accept_short: { label: "Customer tried to accept while a product is short", group: "Stock", urgent: true },
+  phone_call: { label: "AI phone call finished", group: "Phone", urgent: false },
+  phone_followup: { label: "Phone follow-up assigned to someone", group: "Phone", urgent: false },
+  phone_urgent: { label: "Urgent phone call or complaint", group: "Phone", urgent: true },
+  phone_failure: { label: "AI phone call or action failed", group: "Phone", urgent: true },
+  phone_escalated: { label: "Phone follow-up overdue and escalated", group: "Phone", urgent: true },
 } as const;
 
 export type AlertKind = keyof typeof ALERT_KINDS;
