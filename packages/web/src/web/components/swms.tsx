@@ -253,7 +253,7 @@ function JobTemplates({ jobId }: { jobId: number }) {
         {addable.length ? (
           <Select
             aria-label="Add a SWMS section"
-            className="h-7 w-auto text-xs"
+            className="h-7 w-auto max-w-full text-xs"
             value=""
             disabled={pin.isPending}
             onChange={(e) => e.target.value && pin.mutate({ jobId, templateKey: e.target.value, pinned: true })}

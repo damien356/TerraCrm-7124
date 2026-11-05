@@ -388,7 +388,7 @@ export default function JobDetailPage() {
                 {j.materials.map((m) => (
                   <li key={m.id} className="flex items-center gap-3 px-4 py-2.5">
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm">{m.description}</p>
+                      <p className="text-sm break-words">{m.description}</p>
                       <p className="text-xs text-muted-foreground">
                         {m.qty} {m.unit}
                       </p>
@@ -539,8 +539,8 @@ export default function JobDetailPage() {
         </div>
       ) : null}
 
-      <div className={tab === "job" ? "grid gap-4 lg:grid-cols-[1fr_340px]" : "hidden"}>
-        <div className="grid gap-4">
+      <div className={tab === "job" ? "grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]" : "hidden"}>
+        <div className="grid min-w-0 grid-cols-1 gap-4">
           {isCallback ? <CallbackBanner job={j} /> : null}
           {productSale ? null : <SwmsRedCards jobId={j.id} />}
 
@@ -768,7 +768,7 @@ export default function JobDetailPage() {
         </div>
 
         {/* right rail */}
-        <div className="grid gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-4">
           {isCallback || productSale ? null : <CallbacksListCard jobId={j.id} />}
           {isCallback && isAdmin ? <ReworkCostCard jobId={j.id} /> : null}
 
