@@ -19,6 +19,7 @@ import { PriceListTools } from "../components/price-import";
 import { DeleteConfirmModal, ProductDeleteTools } from "../components/product-delete";
 import { QuoteEmailCard } from "../components/quote-email-settings";
 import { UnderlayUpgradesCard } from "../components/underlay-upgrades-card";
+import { CarpetDisposalCard } from "../components/carpet-disposal-card";
 import { QUOTE_EMAIL_BODY_KEY, QUOTE_EMAIL_SUBJECT_KEY } from "../../api/lib/quote-email-template";
 import { useOpeningBalance, useSetOpeningBalance } from "../queries/finance";
 import { longDate, moneyExact } from "../lib/money";
@@ -37,6 +38,7 @@ import {
 } from "../queries/settings";
 import { useCreateSupplier, useSuppliers } from "../queries/suppliers";
 import { SUPPLIER_CHARGES_MARKUP_DEFAULT, SUPPLIER_CHARGES_MARKUP_KEY } from "../../api/lib/charge-fold";
+import { DISPOSAL_COST_KEY, DISPOSAL_MARKUP_KEY } from "../../api/lib/quote-default-rules";
 import { UNDERLAY_UPGRADES_KEY } from "../../api/lib/underlay-pairs";
 import { autoSoldAs, boxM2Of, FLOOR_TYPE_LABELS, FLOOR_TYPES, wastageKey } from "../../api/lib/flooring-qty";
 import { PACK_LABELS, PACK_NAMES, packNameOf, type PackName } from "../../api/lib/pack-name";
@@ -1503,6 +1505,8 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
         </div>
       </Card>
 
+      <CarpetDisposalCard draft={draft} setDraft={setDraft} commit={commit} tick={tick} />
+
       <Card>
         <CardHeader title="Supervisors" subtitle="When a supervisor counts as gone quiet." />
         <div className="space-y-4 px-4 py-4">
@@ -1649,6 +1653,9 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
                   QUOTE_EMAIL_BODY_KEY,
                   // Edited on the Supplier charges card.
                   SUPPLIER_CHARGES_MARKUP_KEY,
+                  // Edited on the Carpet disposal card.
+                  DISPOSAL_COST_KEY,
+                  DISPOSAL_MARKUP_KEY,
                   // Edited on the Underlay upgrades card.
                   UNDERLAY_UPGRADES_KEY,
                 ].includes(k) && !k.startsWith("wastage_pct_"),

@@ -152,7 +152,7 @@ export function ProductPicker({ quoteId, context }: { quoteId: number; context?:
     setDone(null);
     try {
       const r = await add.mutateAsync({ quoteId, productId: chosen.id, qty: Number(qty) || 1, ...area.submit() });
-      const bits = [r.qtyNote, r.labour ? `${r.labour.description} added underneath.` : null, r.item?.flagged ? r.item.flagReason : null];
+      const bits = [r.qtyNote, r.labour ? `${r.labour.description} added underneath.` : null, r.defaultsNote, r.item?.flagged ? r.item.flagReason : null];
       setDone(bits.filter(Boolean).join(" ") || null);
       setChosen(null);
       setQty("1");

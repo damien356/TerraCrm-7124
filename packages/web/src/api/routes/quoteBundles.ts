@@ -76,6 +76,7 @@ async function clientLines(quoteId: number) {
       chargeSupplierId: schema.quoteItems.chargeSupplierId,
       labourForItemId: schema.quoteItems.labourForItemId,
       followsItemId: schema.quoteItems.followsItemId,
+      defaultForItemId: schema.quoteItems.defaultForItemId,
       // Pack name (2 Nov): itemised rows can show this line in sheets.
       clientPacks: schema.quoteItems.clientPacks,
       packName: schema.products.packName,
@@ -105,6 +106,7 @@ export async function bundleLinesFor(quoteId: number): Promise<BundleLine[]> {
     productCategory: bundleCategoryOf(i.productCategory, i.soldAs),
     labourForItemId: i.labourForItemId,
     followsItemId: i.followsItemId,
+    defaultForItemId: i.defaultForItemId,
   }));
 }
 

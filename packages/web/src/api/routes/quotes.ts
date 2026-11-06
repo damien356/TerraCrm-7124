@@ -3,7 +3,7 @@ import { convertQuoteToJob, createJobForQuote, fillJobFromQuote } from "../lib/q
 import { acceptQuote } from "../lib/quote-accept";
 import { latestQuoteOnJob, quoteDefaultsForJob, quoteStartForJob } from "../lib/quote-for-job";
 import { rebuildForecast } from "../lib/cashflow";
-import { DELIVERY, isDeliveryText, lineTypeOfKind } from "../lib/line-kinds";
+import { DELIVERY, INTERNAL_CHARGE, isDeliveryText, lineTypeOfKind } from "../lib/line-kinds";
 import { quoteNumberFor, quoteRefById, quoteRefOf } from "../lib/quote-number";
 import { parseQuoteRef, quoteRef } from "../lib/refs";
 import { jobNumberSql } from "../lib/job-ref";
@@ -55,6 +55,17 @@ import {
 } from "../lib/quote-labour";
 import { floorLineFor, followsAFloor, followUnderlay, lineSizes, refollow, sizeFlag, startLine, wholeUnits } from "../lib/quote-sizes";
 import { ensurePackInstall, followPackLabour } from "../lib/pack-lines";
+import {
+  afterLineEdit,
+  applyFloorDefaults,
+  applyTrimLabour,
+  copyDefaultLinks,
+  ensureDisposal,
+  fillDisposalRates,
+  followDefaults,
+  removeDefaultsOf,
+} from "../lib/quote-defaults";
+import { isTrimProduct } from "../lib/quote-default-rules";
 import { isSheetUnderlay } from "../lib/pack-name";
 import { isUnderlayCategory, underlayName } from "../lib/order-sizes";
 import { foldForClient, quoteFreightView, refreshQuoteFreight, supplierChargesMarkupPct } from "../lib/quote-freight";
@@ -165,6 +176,8 @@ export async function recordPriceHistory(quote: typeof schema.quotes.$inferSelec
 export async function recalc(quoteId: number, rollLines: (number | null | undefined)[] | "all" = []) {
   // Roll and cut carpet (2 Nov 2026): a line just added, or with a new qty or product, gets the roll or cut price first.
   await repriceRollCuts(quoteId, rollLines);
+  // Quote defaults: a disposal put on before Settings had its rate gets priced once it has one.
+  await fillDisposalRates(quoteId);
   // Notes 18.33: the supplier charge lines (freight and fees) are put right first.
   await refreshQuoteFreight(quoteId);
   const items = await db
@@ -565,6 +578,8 @@ export async function reviseQuoteRecord(
           .where(eq(schema.quoteItems.id, self));
       }
     }
+    // Quote defaults: each default stays with its own line, and one removed stays removed.
+    await copyDefaultLinks(items, newIdFor);
   }
 
   await copyBundles(quote.id, row.id);
@@ -1072,11 +1087,20 @@ export const quotes = {
         [item = row] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, row.id));
       }
 
-      const totals = await recalc(input.quoteId, [row?.id]);
+      // Quote defaults (6 Nov): a measured floor with its install ticked brings its standard items, a trim or scotia its install.
+      const defaults = res && input.labour !== null ? await applyFloorDefaults(row.id, product) : null;
+      const trim = input.labour !== null && isTrimProduct(product) ? await applyTrimLabour(row.id, product) : null;
+      const added = [...(defaults?.added ?? []), ...(trim?.added ?? [])];
+      if (defaults || trim) [item = row] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, row.id));
+
+      const totals = await recalc(input.quoteId, [row?.id, ...added.map((a) => a.id)]);
+      const defaultsNote = [...(defaults?.notes ?? []), ...(trim?.notes ?? [])].join(" ") || null;
       return {
         item: hideCost(item, context.actor),
         labour: hideCost(labour, context.actor),
         qtyNote: res?.note ?? start?.note ?? null,
+        defaultsNote,
+        defaultsAdded: added.length,
         totals,
       };
     }),
@@ -1120,6 +1144,8 @@ export const quotes = {
         if (!product) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
         const row = await addLinkedLabour(productLine, product, input.itemId);
         if (!row) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "The install line did not save." });
+        // Quote defaults: a Carpet uplift brings Terra's disposal allowance with it.
+        await ensureDisposal(row.id);
         const totals = await recalc(input.quoteId);
         const showCost = context.actor.canSeeCosts;
         return {
@@ -1170,6 +1196,8 @@ export const quotes = {
           rateItemId: item.id,
         })
         .returning();
+      // Quote defaults: a Carpet uplift added by hand brings Terra's disposal allowance with it.
+      if (row) await ensureDisposal(row.id);
 
       const totals = await recalc(input.quoteId);
       const showCost = context.actor.canSeeCosts;
@@ -1278,6 +1306,11 @@ export const quotes = {
       const freightReset = fields.unitCost !== undefined ? { freightUnitCost: null } : {};
       const setMarkup = context.actor.role === "admin" ? markupIn : undefined;
 
+      // Quote defaults: the carpet disposal allowance stays Internal, and nothing else becomes Internal by hand.
+      if (before.kind === INTERNAL_CHARGE || fields.kind === INTERNAL_CHARGE) {
+        delete fields.kind;
+        delete fields.lineType;
+      }
       if (fields.kind !== undefined && fields.lineType === undefined) fields.lineType = lineTypeOf(fields.kind);
       // A delivery line is always Delivery, never tagged Material or Labour (188001 list item 6).
       const kindNow = fields.kind ?? before.kind;
@@ -1434,10 +1467,23 @@ export const quotes = {
         }
       }
 
+      // Quote defaults: the lines put on with a floor follow its new area, an uplift's disposal follows the uplift.
+      if (row) {
+        if (areaTouched && product) {
+          await followDefaults(before, row, product);
+          // Measured for the first time, with its install on: its defaults go on now.
+          const hasInstall = labour || (await db.select({ id: schema.quoteItems.id }).from(schema.quoteItems).where(eq(schema.quoteItems.labourForItemId, row.id)))[0];
+          if (before.measuredM2 == null && row.measuredM2 != null && (addInstall || hasInstall)) await applyFloorDefaults(row.id, product);
+        }
+        await afterLineEdit(before, row, { qty: input.qty, unitPrice: input.unitPrice, unitCost: input.unitCost });
+      }
+
       // Roll and cut carpet: only a new qty or product prices the line again. Wording and price edits leave it.
       const rollTouched = sizeTouched || (rest.productId !== undefined && rest.productId !== before.productId);
       const totals = await recalc(before.quoteId, rollTouched ? [before.id] : []);
-      return { item: hideCost(row, context.actor), labour: hideCost(labour, context.actor), totals };
+      // Re-read: a default's flag may have cleared, or the line moved down.
+      const [fresh = row] = row ? await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, row.id)) : [row];
+      return { item: hideCost(fresh, context.actor), labour: hideCost(labour, context.actor), totals };
     }),
 
   /**
@@ -1722,6 +1768,8 @@ export const quotes = {
         message: "This line is worked out from the supplier's charges and comes back on its own. Type over the qty or price to change it, or set the price to 0.",
       });
     }
+    // Quote defaults: the lines put on with it go too. A carpet disposal stays, flagged for review.
+    const defaults = await removeDefaultsOf(input.id);
     // Item 8: the install added with a product line goes with it.
     const linked = await db
       .delete(schema.quoteItems)
@@ -1734,7 +1782,7 @@ export const quotes = {
       .returning({ id: schema.quoteItems.id });
     await db.delete(schema.quoteItems).where(eq(schema.quoteItems.id, input.id));
     const totals = await recalc(before.quoteId);
-    return { totals, removedLabour: linked.length, removedUnderlay: underlay.length };
+    return { totals, removedLabour: linked.length, removedUnderlay: underlay.length, ...defaults };
   }),
 
   /** Drag-reorder the lines on a quote. */

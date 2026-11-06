@@ -60,6 +60,8 @@ export async function rateItemsFor(ids: number[]) {
 
 /** An install line: linked to a floor, or priced under a floor trade. */
 export function isInstall(line: WorkLine, items: Map<number, RateItem>) {
+  // A line put on by default under a floor (skim, coving, uplift) is extra work, not the install: it does not name the dispatch or add to its m².
+  if (line.defaultForItemId != null) return false;
   if (line.labourForItemId) return true;
   const item = line.rateItemId ? items.get(line.rateItemId) : undefined;
   if (item) return item.kind === "work" && !SIDE_GROUPS.has(item.groupName);

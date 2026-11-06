@@ -7,6 +7,7 @@ import { adminOnly } from "../middleware/auth";
 import { isWholeGroup, rateBook } from "./labour";
 import { crewOutputPerDay } from "../lib/day-estimate";
 import { exGst } from "../lib/gst";
+import { INTERNAL_CHARGE } from "../lib/line-kinds";
 import { quoteThatCounts } from "../lib/job-value";
 import { jobText, quoteRef, taskRef } from "../lib/refs";
 import { hourlySettings, jobHourlyCosting, termsOn } from "../lib/hourly";
@@ -427,7 +428,8 @@ export const costing = {
        */
       const revenue = exGst(job.value);
       // Delivery (fix list item 11) is a cost of the goods too, so it stays in here.
-      const goods = (k: string) => k === "supply" || k === "accessory" || k === "delivery" || k === "supplier_charge";
+      // So is Terra's carpet disposal allowance (quote defaults, 6 Nov): a job cost, never installer pay.
+      const goods = (k: string) => k === "supply" || k === "accessory" || k === "delivery" || k === "supplier_charge" || k === INTERNAL_CHARGE;
       let materials = round2(
         quoteItems
           .filter((i) => goods(i.kind))

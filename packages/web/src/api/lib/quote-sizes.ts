@@ -111,10 +111,20 @@ export async function floorLineFor(quoteId: number, up: Product, askedId?: numbe
 /** Sort order straight under a floor line and the installs linked to it. Moves the lines below down one. */
 export async function slotUnder(floor: Line) {
   const lines = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, floor.quoteId));
-  const after = Math.max(
-    floor.sortOrder,
-    ...lines.filter((l) => l.labourForItemId === floor.id || l.followsItemId === floor.id).map((l) => l.sortOrder),
-  );
+  // Everything hanging off this line, all the way down (an uplift's disposal under a carpet's uplift, too).
+  const under = new Set<number>([floor.id]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const l of lines) {
+      if (under.has(l.id)) continue;
+      const parent = [l.labourForItemId, l.followsItemId, l.defaultForItemId].find((p) => p != null && under.has(p));
+      if (parent != null) {
+        under.add(l.id);
+        grew = true;
+      }
+    }
+  }
+  const after = Math.max(floor.sortOrder, ...lines.filter((l) => under.has(l.id)).map((l) => l.sortOrder));
   await db
     .update(schema.quoteItems)
     .set({ sortOrder: sql`${schema.quoteItems.sortOrder} + 1` })

@@ -1,0 +1,653 @@
+/**
+ * Quote defaults (Damien's brief, 6 Nov 2026). Writes the lines. What goes
+ * on with what lives in quote-default-rules.ts.
+ *
+ *  - A measured floor line on an installation quote gets its defaults put
+ *    on underneath it, selected: underlay, uplift, skim, coving and the rest.
+ *  - A scotia or trim line gets Install trims/scotia under it, unless one is
+ *    already on the quote, which then covers it (no second charge).
+ *  - A Carpet uplift line, put on by default or by hand, gets the Terra
+ *    carpet disposal allowance under it (kind internal_charge).
+ *
+ * Each default is linked to its line by default_for_item_id, never by
+ * labour_for_item_id, so the install's own qty rule never moves it. The keys
+ * put on are kept on the parent line (defaults_applied), so a default
+ * removed by hand is never put back.
+ *
+ * Nothing here runs on a supply only sale, on an unticked install (supply
+ * only line), or on a quote that is locked. Nothing is backfilled.
+ */
+import { and, eq, inArray } from "drizzle-orm";
+import { db } from "../database";
+import * as schema from "../database/schema";
+import { boxM2Of, floorTypeOf } from "./flooring-qty";
+import { INTERNAL_CHARGE } from "./line-kinds";
+import { liveSellFor } from "./live-sell";
+import { isUnderlayCategory, underlayName } from "./order-sizes";
+import { markupOf, sellAtMarkup } from "./pricing";
+import {
+  appliedOf,
+  coveredKey,
+  DEFAULT_FLAG_PREFIX,
+  DISPOSAL_COST_KEY,
+  DISPOSAL_DESCRIPTION,
+  DISPOSAL_KEY,
+  DISPOSAL_MARKUP_KEY,
+  DISPOSAL_NO_QTY_FLAG,
+  DISPOSAL_NO_RATE_FLAG,
+  DISPOSAL_ORPHAN_FLAG,
+  enterFlag,
+  FLOOR_DEFAULTS,
+  isDefaultFlag,
+  isTrimProduct,
+  RATE,
+  settingNumber,
+  SUPPLY_ONLY_SOURCES,
+  TRIM_FLAG,
+  TRIM_KEY,
+  UPLIFT_NO_WIDTH_FLAG,
+  type FloorDefault,
+  type QtyRule,
+} from "./quote-default-rules";
+import { qtyForLine, standardLabour } from "./quote-labour";
+import { slotUnder, startLine } from "./quote-sizes";
+
+type Product = typeof schema.products.$inferSelect;
+type Line = typeof schema.quoteItems.$inferSelect;
+
+const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+const r4 = (n: number) => Math.round(n * 10_000) / 10_000;
+const same = (a: number, b: number) => Math.abs(a - b) <= 0.0005;
+const norm = (s: string | null | undefined) =>
+  (s ?? "").trim().toLowerCase().replace(/\s+/g, " ").replace(/\.$/, "");
+
+/** "Carpetmate Super Green underlay", "Hurford's CD Non-Structural Pine Plywood". Same as quotes.productLineName. */
+function lineName(p: Product) {
+  if (isUnderlayCategory(p.category)) return underlayName(p);
+  const named = [p.brand, p.range].filter(Boolean).join(" ");
+  return (p.colour ? (named ? `${named} in ${p.colour}` : p.colour) : named) || p.sku || "Product";
+}
+
+async function lineOf(id: number) {
+  const [l] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, id));
+  return l ?? null;
+}
+
+async function productOf(id: number | null | undefined) {
+  if (id == null) return null;
+  const [p] = await db.select().from(schema.products).where(eq(schema.products.id, id));
+  return p ?? null;
+}
+
+/** True on the quote of a product sale or a materials invoice: supply only, nothing gets put on. */
+export async function supplyOnlyQuote(quoteId: number) {
+  const [q] = await db.select({ jobId: schema.quotes.jobId }).from(schema.quotes).where(eq(schema.quotes.id, quoteId));
+  if (!q?.jobId) return false;
+  const [j] = await db.select({ source: schema.jobs.source }).from(schema.jobs).where(eq(schema.jobs.id, q.jobId));
+  return (SUPPLY_ONLY_SOURCES as readonly string[]).includes(j?.source ?? "");
+}
+
+/**
+ * Only a quote still being written (draft, or back for review) gets defaults.
+ * A sent or accepted quote is never changed by this, and nor is a supply only sale.
+ */
+export async function takesDefaults(quoteId: number) {
+  const [q] = await db.select({ status: schema.quotes.status }).from(schema.quotes).where(eq(schema.quotes.id, quoteId));
+  if (!q || (q.status !== "draft" && q.status !== "needs_review")) return false;
+  return !(await supplyOnlyQuote(quoteId));
+}
+
+/** The rate book item behind a default, only when it is still the same item: id, name, switched on. */
+async function liveRate(r: { id: number; name: string }) {
+  const [row] = await db.select().from(schema.labourRateItems).where(eq(schema.labourRateItems.id, r.id));
+  if (!row) return { ok: false as const, why: `"${r.name}" is not in the rate book.` };
+  if (norm(row.name) !== norm(r.name)) {
+    return { ok: false as const, why: `Rate book item ${r.id} is now "${row.name}", not "${r.name}", so it was left off.` };
+  }
+  if (!row.active) return { ok: false as const, why: `"${r.name}" is switched off in the rate book.` };
+  return { ok: true as const, row };
+}
+
+/** The price book product behind a default, only when it is still the same product: id, SKU, switched on. */
+async function liveProduct(p: { id: number; sku: string; name: string }) {
+  const row = await productOf(p.id);
+  if (!row) return { ok: false as const, why: `${p.name} (${p.sku}) is not in the price book.` };
+  if (norm(row.sku) !== norm(p.sku)) {
+    return { ok: false as const, why: `Price book product ${p.id} now has SKU ${row.sku || "none"}, not ${p.sku}, so it was left off.` };
+  }
+  if (!row.active) return { ok: false as const, why: `${p.name} (${p.sku}) is switched off in the price book.` };
+  return { ok: true as const, row };
+}
+
+/** Remember which defaults have been put on for a line, so none comes back once removed. */
+async function addApplied(lineId: number, keys: string[]) {
+  if (!keys.length) return;
+  const l = await lineOf(lineId);
+  if (!l) return;
+  const now = [...new Set([...appliedOf(l.defaultsApplied), ...keys])];
+  await db.update(schema.quoteItems).set({ defaultsApplied: JSON.stringify(now) }).where(eq(schema.quoteItems.id, lineId));
+}
+
+/** Flag a line, keeping a flag already on it. */
+async function flagLine(lineId: number, reason: string) {
+  const l = await lineOf(lineId);
+  if (!l) return;
+  const text = l.flagged && l.flagReason ? (l.flagReason.includes(reason) ? l.flagReason : `${l.flagReason} ${reason}`) : reason;
+  await db.update(schema.quoteItems).set({ flagged: true, flagReason: text, updatedAt: new Date() }).where(eq(schema.quoteItems.id, lineId));
+}
+
+/** Insert a default line straight under its parent and the lines already under it. */
+async function insertUnder(parent: Line, key: string, values: Omit<typeof schema.quoteItems.$inferInsert, "quoteId">) {
+  const sortOrder = await slotUnder(parent);
+  const [row] = await db
+    .insert(schema.quoteItems)
+    .values({
+      ...values,
+      quoteId: parent.quoteId,
+      floorCategory: values.floorCategory ?? parent.floorCategory,
+      defaultForItemId: parent.id,
+      defaultKey: key,
+      sortOrder,
+    })
+    .returning();
+  return row ?? null;
+}
+
+/** m2 in one plywood sheet: the sheet's own m2, else the box sum. */
+const sheetM2 = (p: Product | null) => (p ? (p.unitM2 && p.unitM2 > 0 ? p.unitM2 : boxM2Of(p)) : null);
+
+/**
+ * The qty a default starts at off its floor line, or null when it does not
+ * follow the floor (typed in, or underlay, which follows by its own rule).
+ */
+export function autoQty(rule: QtyRule, floor: Line, floorProduct: Product, defProduct?: Product | null): number | null {
+  const measured = floor.measuredM2;
+  if (measured == null) return null;
+  switch (rule) {
+    case "measured_m2":
+      return r4(measured);
+    case "uplift_lm": {
+      // Measured over the roll width, no wastage, up to the next 0.1 lm (the same as carpet lm).
+      const w = qtyForLine(floorProduct, floor)?.widthM ?? null;
+      return w ? Math.ceil((measured / w) * 10 - 1e-9) / 10 : 0;
+    }
+    case "sheets": {
+      const m2 = sheetM2(defProduct ?? null);
+      return m2 ? Math.ceil(measured / m2 - 1e-9) : 0;
+    }
+    default:
+      return null;
+  }
+}
+
+/** The floor rule behind a default line, off its key. */
+function ruleOf(floorProduct: Product, key: string | null): FloorDefault | null {
+  const t = floorTypeOf(floorProduct);
+  return (t && FLOOR_DEFAULTS[t]?.find((d) => d.key === key)) || null;
+}
+
+export type DefaultsAdded = { added: Line[]; notes: string[] };
+
+/**
+ * A measured floor line has just gone on an installation quote with its
+ * install ticked: put its defaults on underneath. Each default once only.
+ */
+export async function applyFloorDefaults(floorId: number, product: Product): Promise<DefaultsAdded> {
+  const out: DefaultsAdded = { added: [], notes: [] };
+  const t = floorTypeOf(product);
+  const defs = t ? FLOOR_DEFAULTS[t] : undefined;
+  const start = await lineOf(floorId);
+  if (!defs?.length || !start || start.measuredM2 == null) return out;
+  if (!(await takesDefaults(start.quoteId))) return out;
+
+  const done = new Set(appliedOf(start.defaultsApplied));
+  const applied: string[] = [];
+  const missing: string[] = [];
+  for (const d of defs) {
+    if (done.has(d.key)) continue;
+    // Read fresh each time: every insert moves the lines below down one.
+    const floor = await lineOf(floorId);
+    if (!floor) break;
+
+    if (d.type === "product") {
+      const got = await liveProduct({ id: d.productId, sku: d.sku, name: d.name });
+      if (!got.ok) {
+        missing.push(got.why);
+        continue;
+      }
+      const p = got.row;
+      if (d.qty === "underlay") {
+        // An underlay already following this floor stays as picked.
+        const [has] = await db.select({ id: schema.quoteItems.id }).from(schema.quoteItems).where(eq(schema.quoteItems.followsItemId, floor.id));
+        if (has) {
+          applied.push(d.key);
+          continue;
+        }
+        const s = await startLine(floor.quoteId, p, 1, floor.id);
+        const unitPrice = await liveSellFor(p);
+        const [row] = await db
+          .insert(schema.quoteItems)
+          .values({
+            quoteId: floor.quoteId,
+            productId: p.id,
+            kind: "supply",
+            lineType: "material",
+            description: lineName(p),
+            qty: s.qty,
+            unit: p.unit,
+            unitPrice,
+            unitCost: p.costPrice ?? null,
+            markupPercent: markupOf(p.costPrice, unitPrice),
+            total: r2(s.qty * unitPrice),
+            sortOrder: s.sortOrder ?? (await slotUnder(floor)),
+            followsItemId: s.followsItemId ?? floor.id,
+            flagged: Boolean(s.flag),
+            flagReason: s.flag,
+            floorCategory: floor.floorCategory,
+            defaultForItemId: floor.id,
+            defaultKey: d.key,
+          })
+          .returning();
+        if (row) out.added.push(row);
+      } else {
+        const qty = autoQty(d.qty, floor, product, p) ?? 0;
+        const unitPrice = await liveSellFor(p);
+        const flag = qty > 0 ? null : enterFlag(`number of ${lineName(p)} sheets`);
+        const row = await insertUnder(floor, d.key, {
+          productId: p.id,
+          kind: "supply",
+          lineType: "material",
+          description: lineName(p),
+          qty,
+          unit: p.unit,
+          unitPrice,
+          unitCost: p.costPrice ?? null,
+          markupPercent: markupOf(p.costPrice, unitPrice),
+          total: r2(qty * unitPrice),
+          flagged: Boolean(flag),
+          flagReason: flag,
+        });
+        if (row) out.added.push(row);
+      }
+      applied.push(d.key);
+      continue;
+    }
+
+    const rate = await liveRate({ id: d.itemId, name: d.name });
+    if (!rate.ok) {
+      missing.push(rate.why);
+      continue;
+    }
+    let qty = 0;
+    let flag: string | null = null;
+    if (d.qty === "enter") flag = enterFlag(d.what ?? d.name);
+    else {
+      qty = autoQty(d.qty, floor, product) ?? 0;
+      if (d.qty === "uplift_lm" && qty <= 0) flag = UPLIFT_NO_WIDTH_FLAG;
+      else if (qty <= 0) flag = enterFlag(d.what ?? `${d.name} qty`);
+    }
+    // Trims and scotia already have their install on this quote (added with a trim): say so, so it is not typed in twice.
+    if (d.itemId === RATE.trimInstall.id) {
+      const [other] = await db
+        .select({ id: schema.quoteItems.id })
+        .from(schema.quoteItems)
+        .where(and(eq(schema.quoteItems.quoteId, floor.quoteId), eq(schema.quoteItems.rateItemId, RATE.trimInstall.id)));
+      if (other) flag = `${DEFAULT_FLAG_PREFIX} Install trims/scotia is already on this quote. Enter only the length it does not cover, or remove this line.`;
+    }
+    let priced;
+    try {
+      priced = await standardLabour(d.itemId, qty);
+    } catch (e) {
+      missing.push(`${d.name} not put on. ${e instanceof Error ? e.message : ""}`.trim());
+      continue;
+    }
+    const row = await insertUnder(floor, d.key, {
+      ...priced.values,
+      flagged: Boolean(flag),
+      flagReason: flag,
+      checkRequired: d.qty === "uplift_lm",
+    });
+    if (!row) continue;
+    out.added.push(row);
+    applied.push(d.key);
+    if (d.itemId === RATE.carpetUplift.id) {
+      const disposal = await ensureDisposal(row.id);
+      if (disposal) out.added.push(disposal);
+    }
+  }
+  await addApplied(floorId, applied);
+  if (missing.length) {
+    // On the line's flag, which the picker shows, so not in the notes as well.
+    await flagLine(floorId, `Not put on by default: ${missing.join(" ")}`);
+  }
+  if (out.added.length) out.notes.unshift(`${out.added.length} default line${out.added.length === 1 ? "" : "s"} put on underneath. Remove any that are not needed.`);
+  return out;
+}
+
+/**
+ * A scotia or trim line has just gone on: Install trims/scotia goes under it
+ * at 0 lm, flagged, unless the quote already has that install on (the
+ * laminate or hybrid default, one typed in by hand, or another trim's). Then
+ * that line covers it, and nothing is added.
+ */
+export async function applyTrimLabour(trimId: number, product: Product): Promise<DefaultsAdded> {
+  const out: DefaultsAdded = { added: [], notes: [] };
+  const trim = await lineOf(trimId);
+  if (!trim || !isTrimProduct(product)) return out;
+  if (appliedOf(trim.defaultsApplied).includes(TRIM_KEY)) return out;
+  if (!(await takesDefaults(trim.quoteId))) return out;
+
+  const installs = (await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, trim.quoteId)))
+    .filter((l) => l.rateItemId === RATE.trimInstall.id && l.id !== trim.id)
+    .sort((a, b) => b.sortOrder - a.sortOrder);
+  if (installs.length) {
+    // The nearest one above the trim: the area it was added in.
+    const cover = installs.find((l) => l.sortOrder < trim.sortOrder) ?? installs[0]!;
+    await addApplied(trim.id, [TRIM_KEY, coveredKey(cover.id)]);
+    out.notes.push(`Install covered by the "${cover.description}" line already on the quote. Its length should include this.`);
+    return out;
+  }
+  const rate = await liveRate(RATE.trimInstall);
+  let priced;
+  try {
+    if (!rate.ok) throw new Error(rate.why);
+    priced = await standardLabour(RATE.trimInstall.id, 0);
+  } catch (e) {
+    const why = `Install trims/scotia not put on. ${e instanceof Error ? e.message : ""}`.trim();
+    await flagLine(trim.id, why);
+    return out;
+  }
+  const row = await insertUnder(trim, TRIM_KEY, { ...priced.values, flagged: true, flagReason: TRIM_FLAG });
+  await addApplied(trim.id, [TRIM_KEY]);
+  if (row) {
+    out.added.push(row);
+    out.notes.push(`${row.description} put on underneath. Enter its length.`);
+  }
+  return out;
+}
+
+/* ------------------------------ carpet disposal ----------------------------- */
+
+async function disposalRate() {
+  const rows = await db
+    .select()
+    .from(schema.settings)
+    .where(inArray(schema.settings.key, [DISPOSAL_COST_KEY, DISPOSAL_MARKUP_KEY]));
+  const kv = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  const cost = settingNumber(kv[DISPOSAL_COST_KEY]);
+  const pct = settingNumber(kv[DISPOSAL_MARKUP_KEY]);
+  return cost != null && pct != null ? { cost, pct, sell: sellAtMarkup(cost, pct) } : null;
+}
+
+const widthOf = (fp: Product, floor: Line) => qtyForLine(fp, floor)?.widthM ?? fp.widthM ?? floor.rollWidthM ?? null;
+
+/**
+ * The roll width an uplift is measured off: its own carpet's, when it was put
+ * on with one (by default, or as that carpet's install). One typed in on its
+ * own takes the quote's carpet width, but only when every carpet on the
+ * quote is the one width. Otherwise null, and the disposal is flagged.
+ */
+async function upliftWidth(uplift: Line): Promise<number | null> {
+  const parentId = uplift.defaultForItemId ?? uplift.labourForItemId;
+  if (parentId != null) {
+    const floor = await lineOf(parentId);
+    const fp = floor ? await productOf(floor.productId) : null;
+    return floor && fp ? widthOf(fp, floor) : null;
+  }
+  const lines = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, uplift.quoteId));
+  const widths = new Set<number>();
+  for (const l of lines) {
+    if (l.measuredM2 == null || l.productId == null) continue;
+    const fp = await productOf(l.productId);
+    if (!fp || floorTypeOf(fp) !== "carpet") continue;
+    const w = widthOf(fp, l);
+    if (w == null) return null;
+    widths.add(r4(w));
+  }
+  return widths.size === 1 ? [...widths][0]! : null;
+}
+
+/** Disposal m2 = uplift lm x the roll width. Null when there is no width to work from. */
+const disposalM2 = (upliftQty: number, width: number | null) => (width ? r2(upliftQty * width) : null);
+
+/**
+ * A Carpet uplift line is on: its disposal allowance goes under it, once.
+ * Its own line per uplift, so separate areas each carry their own m2.
+ * No rate in Settings or no m2 to work from: on at 0, flagged, so the quote
+ * cannot go out with it unnoticed.
+ */
+export async function ensureDisposal(upliftId: number): Promise<Line | null> {
+  const uplift = await lineOf(upliftId);
+  if (!uplift || uplift.rateItemId !== RATE.carpetUplift.id) return null;
+  if (appliedOf(uplift.defaultsApplied).includes(DISPOSAL_KEY)) return null;
+  const [has] = await db
+    .select({ id: schema.quoteItems.id })
+    .from(schema.quoteItems)
+    .where(and(eq(schema.quoteItems.defaultForItemId, uplift.id), eq(schema.quoteItems.defaultKey, DISPOSAL_KEY)));
+  if (has) return null;
+  if (!(await takesDefaults(uplift.quoteId))) return null;
+
+  const rate = await disposalRate();
+  const m2 = disposalM2(uplift.qty, await upliftWidth(uplift));
+  const qty = m2 ?? 0;
+  const flag = !rate ? DISPOSAL_NO_RATE_FLAG : !m2 ? DISPOSAL_NO_QTY_FLAG : null;
+  const unitPrice = rate?.sell ?? 0;
+  const row = await insertUnder(uplift, DISPOSAL_KEY, {
+    kind: INTERNAL_CHARGE,
+    lineType: "material",
+    description: DISPOSAL_DESCRIPTION,
+    qty,
+    unit: "m2",
+    unitPrice,
+    unitCost: rate?.cost ?? null,
+    markupPercent: rate?.pct ?? null,
+    priceBy: rate ? "markup" : "",
+    total: r2(qty * unitPrice),
+    flagged: Boolean(flag),
+    flagReason: flag,
+  });
+  await addApplied(uplift.id, [DISPOSAL_KEY]);
+  return row;
+}
+
+/** The uplift lm moved: its disposal m2 follows, unless someone typed over the disposal. */
+export async function followDisposal(upliftId: number) {
+  const uplift = await lineOf(upliftId);
+  if (!uplift) return 0;
+  const width = await upliftWidth(uplift);
+  const m2 = disposalM2(uplift.qty, width);
+  if (m2 == null) return 0;
+  const kids = await db
+    .select()
+    .from(schema.quoteItems)
+    .where(and(eq(schema.quoteItems.defaultForItemId, uplift.id), eq(schema.quoteItems.defaultKey, DISPOSAL_KEY)));
+  let moved = 0;
+  for (const k of kids) {
+    if (k.disposalTyped) continue;
+    const flag =
+      k.flagReason === DISPOSAL_NO_RATE_FLAG ? { flagged: true, flagReason: k.flagReason }
+      : m2 > 0 ? (k.flagReason === DISPOSAL_NO_QTY_FLAG ? { flagged: false, flagReason: null } : {})
+      : !k.flagged ? { flagged: true, flagReason: DISPOSAL_NO_QTY_FLAG }
+      : {};
+    if (same(k.qty, m2) && !("flagged" in flag)) continue;
+    await db
+      .update(schema.quoteItems)
+      .set({ qty: m2, total: r2(m2 * k.unitPrice), ...flag, updatedAt: new Date() })
+      .where(eq(schema.quoteItems.id, k.id));
+    moved++;
+  }
+  return moved;
+}
+
+/**
+ * A floor line's area, wastage or width changed: the defaults under it that
+ * follow the area (skim, sanding, uplift, plywood) move with it. One someone
+ * typed over (it no longer matches what the old figures gave) stays put.
+ */
+export async function followDefaults(before: Line, after: Line, product: Product) {
+  const kids = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.defaultForItemId, after.id));
+  let moved = 0;
+  for (const k of kids) {
+    const rule = ruleOf(product, k.defaultKey);
+    if (!rule || rule.qty === "enter" || rule.qty === "underlay") continue;
+    const dp = rule.type === "product" ? await productOf(k.productId) : null;
+    const was = autoQty(rule.qty, before, product, dp);
+    const now = autoQty(rule.qty, after, product, dp);
+    if (now == null || was == null || !same(k.qty, was) || same(k.qty, now)) continue;
+    const clear = now > 0 && isDefaultFlag(k.flagReason) ? { flagged: false, flagReason: null } : {};
+    await db
+      .update(schema.quoteItems)
+      .set({ qty: now, total: r2(now * k.unitPrice), ...clear, updatedAt: new Date() })
+      .where(eq(schema.quoteItems.id, k.id));
+    moved++;
+    if (k.rateItemId === RATE.carpetUplift.id) await followDisposal(k.id);
+  }
+  // An uplift put on at 0 for want of a roll width is "what the old figures gave", so it moves once the width is in.
+  // An uplift added as this carpet's install moved with it already (followLinkedLabour): its disposal follows.
+  const asInstall = await db
+    .select({ id: schema.quoteItems.id })
+    .from(schema.quoteItems)
+    .where(and(eq(schema.quoteItems.labourForItemId, after.id), eq(schema.quoteItems.rateItemId, RATE.carpetUplift.id)));
+  for (const u of asInstall) moved += await followDisposal(u.id);
+  return moved;
+}
+
+/**
+ * After a line was edited by hand:
+ *  - a default's own "enter the length" flag clears once it has a qty;
+ *  - a disposal typed over stops following its uplift;
+ *  - an uplift's new lm moves its disposal.
+ */
+export async function afterLineEdit(before: Line, row: Line, typed: { qty?: number; unitPrice?: number; unitCost?: number | null }) {
+  const qtyTyped = typed.qty !== undefined && !same(typed.qty, before.qty);
+  const priceTyped =
+    (typed.unitPrice !== undefined && typed.unitPrice !== before.unitPrice) ||
+    (typed.unitCost !== undefined && typed.unitCost !== before.unitCost);
+
+  if (row.defaultKey === DISPOSAL_KEY && row.kind === INTERNAL_CHARGE) {
+    if (!qtyTyped && !priceTyped) return;
+    const set: Partial<typeof schema.quoteItems.$inferInsert> = { disposalTyped: true };
+    // A typed price or qty is what fills the gap the flag was about.
+    if (row.flagReason === DISPOSAL_NO_RATE_FLAG && row.unitPrice > 0) {
+      set.flagged = row.qty > 0 ? false : true;
+      set.flagReason = row.qty > 0 ? null : DISPOSAL_NO_QTY_FLAG;
+    } else if (row.flagReason === DISPOSAL_NO_QTY_FLAG && row.qty > 0) {
+      set.flagged = false;
+      set.flagReason = null;
+    }
+    await db.update(schema.quoteItems).set(set).where(eq(schema.quoteItems.id, row.id));
+    return;
+  }
+  if (qtyTyped && row.qty > 0 && row.flagged && isDefaultFlag(row.flagReason)) {
+    await db.update(schema.quoteItems).set({ flagged: false, flagReason: null }).where(eq(schema.quoteItems.id, row.id));
+  }
+  if (qtyTyped && row.rateItemId === RATE.carpetUplift.id) await followDisposal(row.id);
+}
+
+/**
+ * A line is being removed. The defaults put on for it go with it, all the
+ * way down, except a disposal allowance: that is left on, unlinked and
+ * flagged, so nobody misses it. The key stays on its parent, so a removed
+ * default never comes back.
+ */
+export async function removeDefaultsOf(lineId: number) {
+  const gone: number[] = [];
+  const flagged: number[] = [];
+  let parents = [lineId];
+  const seen = new Set<number>(parents);
+  while (parents.length) {
+    const kids = await db
+      .select()
+      .from(schema.quoteItems)
+      .where(inArray(schema.quoteItems.defaultForItemId, parents));
+    // Installs and underlay go with the line already (removeItem). An uplift added as one still leaves its disposal flagged.
+    const linked = await db
+      .select()
+      .from(schema.quoteItems)
+      .where(inArray(schema.quoteItems.labourForItemId, parents));
+    const next: number[] = [];
+    for (const k of [...kids, ...linked]) {
+      if (seen.has(k.id)) continue;
+      seen.add(k.id);
+      if (k.defaultKey === DISPOSAL_KEY && k.kind === INTERNAL_CHARGE) {
+        flagged.push(k.id);
+        continue;
+      }
+      if (kids.includes(k)) gone.push(k.id);
+      next.push(k.id);
+    }
+    parents = next;
+  }
+  if (flagged.length) {
+    await db
+      .update(schema.quoteItems)
+      .set({ defaultForItemId: null, flagged: true, flagReason: DISPOSAL_ORPHAN_FLAG, updatedAt: new Date() })
+      .where(inArray(schema.quoteItems.id, flagged));
+  }
+  if (gone.length) await db.delete(schema.quoteItems).where(inArray(schema.quoteItems.id, gone));
+  return { removedDefaults: gone.length, disposalFlagged: flagged.length };
+}
+
+/**
+ * A new version or a copy of a quote: every default stays linked to its own
+ * parent on the new lines, keeps which defaults were put on (so removed ones
+ * stay removed), and keeps its "enter the length" flag.
+ */
+export async function copyDefaultLinks(items: Line[], newIdFor: Map<number, number | undefined>) {
+  const remapKey = (k: string) => {
+    const m = /^(trim:covered:)(\d+)$/.exec(k);
+    if (!m) return k;
+    const to = newIdFor.get(Number(m[2]));
+    return to ? `${m[1]}${to}` : null;
+  };
+  for (const i of items) {
+    const self = newIdFor.get(i.id);
+    if (!self) continue;
+    const parent = i.defaultForItemId != null ? newIdFor.get(i.defaultForItemId) : undefined;
+    const applied = appliedOf(i.defaultsApplied)
+      .map(remapKey)
+      .filter((k): k is string => k != null);
+    const keepFlag = i.flagged && (isDefaultFlag(i.flagReason) || i.flagReason === DISPOSAL_ORPHAN_FLAG);
+    const set: Partial<typeof schema.quoteItems.$inferInsert> = {};
+    if (parent) set.defaultForItemId = parent;
+    if (i.defaultKey) set.defaultKey = i.defaultKey;
+    if (applied.length) set.defaultsApplied = JSON.stringify(applied);
+    if (i.disposalTyped) set.disposalTyped = true;
+    if (keepFlag) {
+      set.flagged = true;
+      set.flagReason = i.flagReason;
+    }
+    if (Object.keys(set).length) await db.update(schema.quoteItems).set(set).where(eq(schema.quoteItems.id, self));
+  }
+}
+
+/**
+ * Settings filled in after a disposal went on with no rate: price the
+ * disposal lines still waiting on it, on quotes that can still change.
+ */
+export async function fillDisposalRates(quoteId: number) {
+  const waiting = await db
+    .select()
+    .from(schema.quoteItems)
+    .where(and(eq(schema.quoteItems.quoteId, quoteId), eq(schema.quoteItems.flagReason, DISPOSAL_NO_RATE_FLAG)));
+  const lines = waiting.filter((l) => l.kind === INTERNAL_CHARGE && !l.disposalTyped);
+  if (!lines.length || !(await takesDefaults(quoteId))) return 0;
+  const rate = await disposalRate();
+  if (!rate) return 0;
+  for (const l of lines) {
+    await db
+      .update(schema.quoteItems)
+      .set({
+        unitPrice: rate.sell,
+        unitCost: rate.cost,
+        markupPercent: rate.pct,
+        priceBy: "markup",
+        total: r2(l.qty * rate.sell),
+        flagged: l.qty > 0 ? false : true,
+        flagReason: l.qty > 0 ? null : DISPOSAL_NO_QTY_FLAG,
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.quoteItems.id, l.id));
+  }
+  return lines.length;
+}

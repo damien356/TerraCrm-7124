@@ -22,6 +22,7 @@ import { linkedQty, qtyFlag, qtyForLine, standardLabour, wastageDefaultFor } fro
 import { followsAFloor, refollow, wholeUnits } from "./quote-sizes";
 import { isCountedPack } from "./pack-name";
 import { isChargeLine } from "./charge-fold";
+import { copyDefaultLinks } from "./quote-defaults";
 import { LEGACY_SOURCE_NAMES } from "./lead-codes";
 import { parseQuoteRef } from "./refs";
 import { quoteRefOf } from "./quote-number";
@@ -267,7 +268,7 @@ export async function copyPreview(quoteId: number) {
       missing,
       canReplace: l.productId != null,
       productId: l.productId,
-      linkedTo: l.labourForItemId ?? l.followsItemId ?? null,
+      linkedTo: l.labourForItemId ?? l.followsItemId ?? l.defaultForItemId ?? null,
       checkRequired: needsCheck(l),
       keepsOldPrice: l.productId == null && l.rateItemId == null,
     });
@@ -483,6 +484,8 @@ export async function copyCreate(input: CopyCreateInput, actor: Actor) {
     const p = productFor.get(l.id);
     if (floor && p && followsAFloor(p)) underlays.push(self);
   }
+  // Quote defaults: each stays linked to its own line, and one removed before stays removed.
+  await copyDefaultLinks(lines, newIdFor);
   // Underlay works its qty out off its copied floor, as on any quote.
   for (const id of underlays) await refollow(id);
 

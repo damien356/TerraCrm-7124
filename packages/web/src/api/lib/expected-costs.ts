@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { lineTypeOfKind } from "./line-kinds";
+import { INTERNAL_CHARGE, lineTypeOfKind } from "./line-kinds";
 import { quoteRefById } from "./quote-number";
 
 /* ---------------------------------------------------------------------------
@@ -94,6 +94,8 @@ export async function expectedFromQuote(quoteId: number, fromStock: Map<number, 
   for (const i of items) {
     const type = lineTypeOfKind(i.kind);
     if (type === "delivery") continue;
+    // Carpet disposal is its own Other cost already (lib/disposal-cost.ts), so it is not counted twice.
+    if (i.kind === INTERNAL_CHARGE) continue;
     if (i.charge && i.supplierId && allFromStock.has(i.supplierId)) continue;
     if (type !== "labour" && !i.charge && i.supplierId && allFromStock.has(i.supplierId)) continue;
     const kind = type === "labour" ? "installer" : "materials";

@@ -53,6 +53,8 @@ export type BundleLine = {
   labourForItemId?: number | null;
   /** Items 2 and 3: an underlay that follows a floor line goes in that line's bundle. */
   followsItemId?: number | null;
+  /** Quote defaults (6 Nov): skim, coving, plywood put on with a floor go in that floor's bundle. Uplift and disposal still go in prep and removal. */
+  defaultForItemId?: number | null;
   total: number;
   sortOrder?: number;
 };
@@ -102,7 +104,8 @@ export function assignCategories(lines: BundleLine[]): Map<number, { key: string
 
   const handSet = (l: BundleLine) => !!l.floorCategory && (LINE_CATEGORIES as readonly string[]).includes(l.floorCategory);
   // Installs linked to a product line wait until that line is placed.
-  const parentOf = (l: BundleLine) => l.labourForItemId ?? l.followsItemId ?? null;
+  const parentOf = (l: BundleLine) =>
+    l.labourForItemId ?? l.followsItemId ?? (l.defaultForItemId != null && !PREP_REMOVAL.test(l.description) ? l.defaultForItemId : null);
   const linked = lines.filter((l) => parentOf(l) != null && !handSet(l));
   const place = (l: BundleLine) => {
     if (handSet(l)) {

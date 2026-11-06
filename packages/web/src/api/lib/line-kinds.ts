@@ -18,6 +18,15 @@ export const DELIVERY = "delivery";
  */
 export const SUPPLIER_CHARGE = "supplier_charge";
 
+/**
+ * Quote defaults (Damien, 6 Nov 2026). A Terra cost the client pays for in
+ * the price, today only carpet disposal through the shop skip bin
+ * (lib/quote-defaults.ts). Not installer pay, not a material to order, no PO,
+ * no supplier bill. Its cost goes to Money out as an Other cost on accept
+ * (lib/disposal-cost.ts), the same way delivery does.
+ */
+export const INTERNAL_CHARGE = "internal_charge";
+
 /** Labour, prep and removal are labour. Delivery is delivery. Everything else is material. */
 export function lineTypeOfKind(kind: string): "labour" | "material" | "delivery" {
   if (kind === "labour" || kind === "prep" || kind === "removal") return "labour";
@@ -38,4 +47,5 @@ export const KIND_LABELS: Record<string, string> = {
   delivery: "Delivery",
   other: "Other",
   supplier_charge: "Supplier charge",
+  internal_charge: "Internal",
 };

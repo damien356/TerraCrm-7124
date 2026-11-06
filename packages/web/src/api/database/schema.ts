@@ -1746,7 +1746,7 @@ export const quoteItems = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     quoteId: integer("quote_id").notNull().references(() => quotes.id, { onDelete: "cascade" }),
     productId: integer("product_id").references(() => products.id, { onDelete: "set null" }),
-    /** supply · labour · prep · removal · accessory · delivery · other */
+    /** supply · labour · prep · removal · accessory · delivery · other · supplier_charge · internal_charge */
     kind: text("kind").notNull().default("supply"),
     description: text("description").notNull(),
     qty: real("qty").notNull().default(1),
@@ -1833,6 +1833,25 @@ export const quoteItems = sqliteTable(
     chargeKey: text("charge_key"),
     /** Someone typed over the line. Recalc leaves it as typed. */
     chargeTyped: integer("charge_typed", { mode: "boolean" }).notNull().default(false),
+    /**
+     * Quote defaults (Damien's brief, 6 Nov 2026). On a line put on by
+     * default: the line it was put on for. A floor line's skim, coving,
+     * underlay or plywood, a trim's install, an uplift's disposal. Its own
+     * link, so an install's qty rule (labourForItemId) never moves it. The
+     * parent going takes this line with it, except a disposal, which is
+     * flagged for review. No FK on purpose, same as labourForItemId.
+     */
+    defaultForItemId: integer("default_for_item_id"),
+    /** Which default this line is: "floor:109", "product:9912", "trim", "disposal". */
+    defaultKey: text("default_key"),
+    /**
+     * On the parent line: a JSON list of the default keys already put on for
+     * it. A default removed by hand stays removed: save, reopen, recalc or
+     * picking the same product again never puts it back.
+     */
+    defaultsApplied: text("defaults_applied"),
+    /** On a disposal line: someone typed over its qty or price, so it no longer follows the uplift. */
+    disposalTyped: integer("disposal_typed", { mode: "boolean" }).notNull().default(false),
     ...timestamps,
   },
   (t) => [index("quote_items_quote_idx").on(t.quoteId)],

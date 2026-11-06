@@ -369,6 +369,27 @@ export function LineAreaStrip({ item, locked }: { item: AreaLine; locked: boolea
   );
 }
 
+/** Quote defaults (6 Nov): on a line put on by default under another line. */
+export function DefaultMark({ defaultKey, disposalTyped }: { defaultKey?: string | null; disposalTyped?: boolean }) {
+  const text =
+    defaultKey === "disposal"
+      ? disposalTyped
+        ? "Terra disposal for the uplift above. Typed over, so it stays as typed."
+        : "Terra disposal for the uplift above. Follows its lm × roll width until you type over it."
+      : defaultKey === "trim"
+        ? "Install for the trim above. Enter its length."
+        : "Put on by default with the line above. Edit it, or remove it if not needed.";
+  const title =
+    defaultKey === "disposal"
+      ? "Terra's own cost for the shop skip bin. Not installer pay, not a material to order, no PO or bill. It goes to Money out as an estimate when the quote is accepted."
+      : "Put on by default. Removing it keeps it off: it is not put back.";
+  return (
+    <span className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground" title={title}>
+      <Wrench className="size-3" /> {text}
+    </span>
+  );
+}
+
 /** On an install line added with a product line. */
 export function LinkedInstallMark() {
   return (

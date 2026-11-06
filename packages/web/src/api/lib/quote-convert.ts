@@ -4,6 +4,7 @@ import * as schema from "../database/schema";
 import { depositSplit, quotePercent } from "./deposits";
 import { billToFields, quoteBillTo } from "./bill-to";
 import { syncDeliveryCosts } from "./delivery-cost";
+import { syncDisposalCosts } from "./disposal-cost";
 import { syncExpectedCosts } from "./expected-costs";
 import { insertDispatchForLines } from "./dispatch-build";
 import { carryQuotePeopleToJob } from "./job-people";
@@ -81,6 +82,8 @@ export async function buildWorkFromQuote(quoteId: number, jobId: number, opts: {
   }
   // Fix list item 11: delivery lines are an Other cost, never a material.
   const delivery = await syncDeliveryCosts(jobId, quoteId);
+  // Quote defaults: Terra's carpet disposal allowance is an estimated Other cost too, never installer pay.
+  await syncDisposalCosts(jobId, quoteId);
   // Item 16: Money out gets the quote's expected costs.
   const expected = await syncExpectedCosts(jobId, quoteId);
   return { tasksCreated, materialsCreated: supply.length, deliveryCosts: delivery.added, expectedCosts: expected.added };

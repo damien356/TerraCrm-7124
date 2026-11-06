@@ -12,13 +12,13 @@ import { Checkbox, Field, Input, Select, Textarea } from "../components/ui/field
 import { cn } from "@/lib/utils";
 import { Modal } from "../components/ui/modal";
 import { LabourPicker, ProductPicker } from "../components/quote-pickers";
-import { LineAreaStrip, LinkedInstallMark, type LineArea } from "../components/floor-area";
+import { DefaultMark, LineAreaStrip, LinkedInstallMark, type LineArea } from "../components/floor-area";
 import { SupervisorPicker } from "../components/supervisor-picker";
 import { JobPeopleCard, QuotePeopleCard } from "../components/job-people";
 import { useJob } from "../queries/jobs";
 import { QuoteCustomerPanel } from "../components/quote-customer";
 import { QuoteBundlesCard } from "../components/quote-bundles";
-import { DELIVERY, KIND_LABELS, SUPPLIER_CHARGE } from "../../api/lib/line-kinds";
+import { DELIVERY, INTERNAL_CHARGE, KIND_LABELS, SUPPLIER_CHARGE } from "../../api/lib/line-kinds";
 import { QuoteAgentCard } from "../components/quote-agent";
 import { EmailQuoteButton, QuoteLinkCard } from "../components/quote-email";
 import { QuoteSendsCard } from "../components/quote-send-parts";
@@ -128,6 +128,11 @@ type Item = {
   clientPacks?: boolean;
   /** Same carpet colour on more than one line. Each line is priced on its own qty. */
   rollFlag?: string | null;
+  /** Quote defaults (6 Nov). The line this was put on by default under, and which default it is. */
+  defaultForItemId?: number | null;
+  defaultKey?: string | null;
+  /** A carpet disposal typed over: it stops following its uplift. */
+  disposalTyped?: boolean;
 };
 
 type LineSize = {
@@ -363,9 +368,12 @@ function LineRow({
   onNotice,
   lastQuoted,
   places,
+  copied = false,
 }: {
   item: Item;
   locked: boolean;
+  /** The quote was copied from another one: its check flags came from the copy. */
+  copied?: boolean;
   /** Decimal places per number column, the same for every row. */
   places: Places;
   /** Item 18: the range's last quoted price. Undefined for anyone who can't see costs. */
@@ -414,6 +422,11 @@ function LineRow({
             <span className="block text-xs font-medium">Supplier charge</span>
             <span className="block text-[11px] text-muted-foreground">{item.chargeTyped ? "Typed over" : "Worked out"}</span>
           </div>
+        ) : item.kind === INTERNAL_CHARGE ? (
+          <div className="w-[104px]" title="Terra's own cost. Not installer pay, not a material to order, no PO or bill.">
+            <span className="block text-xs font-medium">Internal</span>
+            <span className="block text-[11px] text-muted-foreground">Terra cost</span>
+          </div>
         ) : (
         <>
         <Select
@@ -449,7 +462,10 @@ function LineRow({
       <td className="min-w-[240px] px-2 py-1.5">
         {item.checkRequired ? (
           <span className="mb-1 flex flex-wrap items-center gap-2 text-xs font-medium text-[#8A6A00]">
-            <AlertTriangle className="size-3.5" /> Check required: copied from an old quote. Check the measure and price.
+            <AlertTriangle className="size-3.5" />{" "}
+            {item.defaultForItemId != null && !copied
+              ? "Check required: worked out from the measure and roll width. Check the length."
+              : "Check required: copied from an old quote. Check the measure and price."}
             {locked ? null : (
               <button
                 type="button"
@@ -494,6 +510,7 @@ function LineRow({
         {changing ? <ChangeProduct item={item} onClose={() => setChanging(false)} /> : null}
         {item.area ? <LineAreaStrip item={item} locked={locked} /> : null}
         {item.labourForItemId != null ? <LinkedInstallMark /> : null}
+        {item.defaultForItemId != null || item.kind === INTERNAL_CHARGE ? <DefaultMark defaultKey={item.defaultKey} disposalTyped={item.disposalTyped} /> : null}
         {item.size ? <LineSizeStrip item={item} locked={locked} /> : null}
         {charge ? (
           <p className="mt-1 text-[11px] text-muted-foreground">
@@ -595,10 +612,17 @@ function LineRow({
             onClick={() =>
               remove.mutateAsync({ id: item.id }).then((r) => {
                 const went = r.removedLabour + (r.removedUnderlay ?? 0);
+                const notes: string[] = [];
                 if (went > 0)
-                  onNotice(
+                  notes.push(
                     `${item.description} deleted, and the ${r.removedUnderlay ? (r.removedLabour ? "install and underlay" : "underlay") : "install"} added with it went too (${went} line${went === 1 ? "" : "s"}).`,
                   );
+                // Quote defaults: what was put on with it went too. A carpet disposal stays, flagged.
+                if (r.removedDefaults > 0)
+                  notes.push(`${r.removedDefaults} line${r.removedDefaults === 1 ? "" : "s"} put on by default with it went too.`);
+                if (r.disposalFlagged > 0)
+                  notes.push("The carpet disposal line is still on the quote. Check it, and remove it if the uplift is not needed.");
+                if (notes.length) onNotice(notes.join(" "));
               })
             }
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
@@ -1082,6 +1106,7 @@ export default function QuoteBuilderPage() {
                       onNotice={setLineNotice}
                       lastQuoted={item.productId != null ? lastQuoted.data?.[item.productId] : undefined}
                       places={places}
+                      copied={Boolean(q.copiedFrom)}
                     />
                   ))}
                 </tbody>

@@ -1,4 +1,5 @@
 import { FLOOR_CATEGORIES } from "./bundleCatalog";
+import { INTERNAL_CHARGE } from "./line-kinds";
 import { isUnderlayCategory } from "./order-sizes";
 
 /**
@@ -165,6 +166,8 @@ export function checkQuote(input: CheckInput): { ok: boolean; items: CheckItem[]
       // Supplier charge lines are set by the Settings markup, and 0 is how a
       // typed-over one is switched off, so they are not margin checked.
       if (l.kind === "supplier_charge") continue;
+      // Carpet disposal is priced off the Settings cost and markup (quote defaults), so it is not margin checked either.
+      if (l.kind === INTERNAL_CHARGE) continue;
       if (l.unitCost == null || l.unitCost <= 0 || l.qty <= 0) continue;
       if (l.unitPrice < l.unitCost) add("stop", "below_cost", `${short(l.description)} sells below cost.`, [l.id]);
       else if ((l.unitPrice - l.unitCost) / l.unitCost < 0.15 && !isRemoval(l)) {
