@@ -20,7 +20,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { boxM2Of, floorTypeOf } from "./flooring-qty";
+import { boxM2Of, FLOOR_TYPE_LABELS, floorTypeOf } from "./flooring-qty";
 import { INTERNAL_CHARGE } from "./line-kinds";
 import { liveSellFor } from "./live-sell";
 import { isUnderlayCategory, underlayName } from "./order-sizes";
@@ -36,6 +36,7 @@ import {
   DISPOSAL_NO_QTY_FLAG,
   DISPOSAL_NO_RATE_FLAG,
   DISPOSAL_ORPHAN_FLAG,
+  changedFlag,
   enterFlag,
   FLOOR_DEFAULTS,
   isDefaultFlag,
@@ -510,6 +511,38 @@ export async function followDefaults(before: Line, after: Line, product: Product
     .where(and(eq(schema.quoteItems.labourForItemId, after.id), eq(schema.quoteItems.rateItemId, RATE.carpetUplift.id)));
   for (const u of asInstall) moved += await followDisposal(u.id);
   return moved;
+}
+
+/**
+ * A line's product was changed (Change product). Lines put on for the old
+ * product stay as they are, as they may have been filled in, but any the new
+ * product would not have had are flagged for review. The new floor type's own
+ * defaults go on, except one already put on or removed before. A line that
+ * has just become a trim or scotia gets its install as if added new.
+ */
+export async function afterProductChange(lineId: number, oldProduct: Product | null, product: Product) {
+  const line = await lineOf(lineId);
+  if (!line || !(await takesDefaults(line.quoteId))) return;
+  const oldType = oldProduct ? floorTypeOf(oldProduct) : null;
+  const newType = floorTypeOf(product);
+  const wasTrim = Boolean(oldProduct && isTrimProduct(oldProduct));
+  const nowTrim = isTrimProduct(product);
+  const keep = new Set((newType ? (FLOOR_DEFAULTS[newType] ?? []) : []).map((d) => d.key));
+  if (nowTrim) keep.add(TRIM_KEY);
+  if (oldType !== newType || wasTrim !== nowTrim) {
+    const was = oldType ? FLOOR_TYPE_LABELS[oldType].toLowerCase() : wasTrim ? "trim or scotia" : "old product";
+    const now = newType ? FLOOR_TYPE_LABELS[newType].toLowerCase() : nowTrim ? "trim or scotia" : lineName(product);
+    const kids = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.defaultForItemId, lineId));
+    for (const k of kids) {
+      if (k.defaultKey && !keep.has(k.defaultKey))
+        await db
+          .update(schema.quoteItems)
+          .set({ flagged: true, flagReason: changedFlag(was, now), updatedAt: new Date() })
+          .where(eq(schema.quoteItems.id, k.id));
+    }
+  }
+  if (newType && oldType !== newType) await applyFloorDefaults(lineId, product);
+  if (nowTrim && !wasTrim) await applyTrimLabour(lineId, product);
 }
 
 /**

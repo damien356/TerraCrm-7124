@@ -412,6 +412,55 @@ describe("check 2: trims and scotia bring Install trims/scotia, never twice", ()
   });
 });
 
+describe("check 5b: Change product keeps what was done and flags what no longer fits", () => {
+  const changeProduct = (id: number, productId: number) => run<{ id: number; productId: number }, unknown>(m.quotes.changeProduct, { id, productId });
+
+  test("laminate changed to hybrid: cutting gyprock is flagged, trims and skirting stay once, nothing doubles", async () => {
+    const qid = await newQuote();
+    const r = await addProduct({ quoteId: qid, productId: P.laminate, measuredM2: 40 });
+    const skirting = (await linesOf(qid)).find((l) => l.rateItemId === 65)!;
+    await updateItem({ id: skirting.id, qty: 22 });
+    await changeProduct(r.item.id, P.hybrid);
+    const ls = await linesOf(qid);
+    expect(ls.filter((l) => l.rateItemId === 111)).toHaveLength(1);
+    expect(ls.filter((l) => l.rateItemId === 65)).toHaveLength(1);
+    expect(ls.find((l) => l.rateItemId === 65)!.qty).toBe(22);
+    const gyprock = ls.find((l) => l.rateItemId === 120)!;
+    expect(gyprock.flagged).toBe(true);
+    expect(gyprock.flagReason).toContain("Product changed from laminate to hybrid");
+  });
+
+  test("carpet changed to laminate: underlay and uplift are flagged, laminate's defaults go on", async () => {
+    const qid = await newQuote();
+    const r = await addProduct({ quoteId: qid, productId: P.carpet, measuredM2: 30 });
+    await changeProduct(r.item.id, P.laminate);
+    const ls = await linesOf(qid);
+    const uplift = ls.find((l) => l.rateItemId === 7)!;
+    expect(uplift.flagReason).toContain("Product changed from carpet to laminate");
+    expect(ls.find((l) => l.productId === 9912)!.flagReason).toContain("Product changed from carpet to laminate");
+    for (const id of [120, 111, 65]) expect(ls.filter((l) => l.rateItemId === id)).toHaveLength(1);
+    // The disposal stays with the uplift, for the office to decide with it.
+    expect(ls.filter((l) => l.kind === "internal_charge")).toHaveLength(1);
+  });
+
+  test("a removed default is not put back by changing to a product of the same type", async () => {
+    const qid = await newQuote();
+    const r = await addProduct({ quoteId: qid, productId: P.laminate, measuredM2: 40 });
+    const gyprock = (await linesOf(qid)).find((l) => l.rateItemId === 120)!;
+    await removeItem(gyprock.id);
+    await changeProduct(r.item.id, P.laminate);
+    expect((await linesOf(qid)).filter((l) => l.rateItemId === 120)).toHaveLength(0);
+  });
+
+  test("a scotia changed to a glue: its install is flagged", async () => {
+    const qid = await newQuote();
+    const r = await addProduct({ quoteId: qid, productId: P.scotia, qty: 10 });
+    await changeProduct(r.item.id, P.accGlue);
+    const install = (await linesOf(qid)).find((l) => l.rateItemId === 111)!;
+    expect(install.flagReason).toContain("Product changed from trim or scotia");
+  });
+});
+
 describe("check 3: carpet uplift brings the disposal allowance", () => {
   test("uplift added by hand: disposal at uplift lm x the quote's carpet width", async () => {
     const qid = await newQuote();
@@ -636,6 +685,13 @@ describe("check 6: accepted, the disposal is a job cost, not labour, a PO or a m
     console.log("accepted job:", JSON.stringify({ costs, mats, tasks: tasks.map((t) => t.title ?? t.name ?? t.id) }));
     expect(JSON.stringify(tasks)).not.toMatch(/Carpet disposal - Terra/);
     expect(JSON.stringify(tasks)).not.toMatch(/Carpet disposal and tip run/);
+    // The installer is still paid the uplift, on the task's pay lines, and never item 86.
+    const pay = await q("select l.item_id, l.qty from task_labour_lines l join job_tasks t on t.id = l.task_id where t.job_id = ?", [out.jobId]);
+    console.log("task pay lines:", JSON.stringify(pay));
+    expect(pay.some((x) => Number(x.item_id) === 7 && Number(x.qty) === uplift.qty)).toBe(true);
+    expect(pay.some((x) => Number(x.item_id) === 86)).toBe(false);
+    const offers = await q("select count(*) n from task_offers o join job_tasks t on t.id = o.task_id where t.job_id = ?", [out.jobId]);
+    expect(Number(offers[0].n)).toBe(0);
   });
 });
 

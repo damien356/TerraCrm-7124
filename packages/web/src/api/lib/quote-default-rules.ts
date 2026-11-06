@@ -139,6 +139,9 @@ export const DISPOSAL_NO_RATE_FLAG =
   "Disposal rate not set. Put the carpet disposal cost and markup in Settings, or remove the line.";
 export const DISPOSAL_NO_QTY_FLAG = `${DEFAULT_FLAG_PREFIX} Enter the disposal m² (uplift lm times the roll width), or remove the line.`;
 export const DISPOSAL_ORPHAN_FLAG = "Carpet uplift removed. Review or remove this disposal allowance.";
+/** A default left over from the product the line was before it was changed. */
+export const changedFlag = (was: string, now: string) =>
+  `Product changed from ${was} to ${now}. This was put on for the ${was}. Check it is still needed, or remove it.`;
 
 /** A flag this feature set, so it can clear it once the line is filled in. */
 export function isDefaultFlag(reason: string | null | undefined) {

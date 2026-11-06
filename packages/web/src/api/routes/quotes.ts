@@ -57,6 +57,7 @@ import { floorLineFor, followsAFloor, followUnderlay, lineSizes, refollow, sizeF
 import { ensurePackInstall, followPackLabour } from "../lib/pack-lines";
 import {
   afterLineEdit,
+  afterProductChange,
   applyFloorDefaults,
   applyTrimLabour,
   copyDefaultLinks,
@@ -1726,6 +1727,9 @@ export const quotes = {
           }
         }
       }
+
+      // Quote defaults: the old product's are flagged if the new one would not have them, the new one's go on.
+      if (row) await afterProductChange(row.id, oldProduct ?? null, product);
 
       const totals = await recalc(before.quoteId, [before.id]);
 
