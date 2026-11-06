@@ -40,20 +40,20 @@ export function useCalendarOverrides(installerId?: number) {
   return useQuery(orpc.calendar.overrides.queryOptions({ input: { installerId }, staleTime: 30_000 }));
 }
 
-function useCalMutation(name: "makeBookable" | "connectUrl" | "setCalendars" | "setBuffers" | "refresh" | "disconnect" | "stopChecking") {
+/** After any calendar change: calendar data and the installers list (bookable flags) are read again. */
+function useCalInvalidate() {
   const qc = useQueryClient();
-  return orpc.calendar[name].mutationOptions({
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: orpc.calendar.key() });
-      qc.invalidateQueries({ queryKey: orpc.installers.key() });
-    },
-  });
+  return () => {
+    qc.invalidateQueries({ queryKey: orpc.calendar.key() });
+    qc.invalidateQueries({ queryKey: orpc.installers.key() });
+  };
 }
 
-export const useMakeBookable = () => useMutation(useCalMutation("makeBookable"));
-export const useCalendarConnectUrl = () => useMutation(useCalMutation("connectUrl"));
-export const useSetCalendars = () => useMutation(useCalMutation("setCalendars"));
-export const useSetBuffers = () => useMutation(useCalMutation("setBuffers"));
-export const useRefreshCalendar = () => useMutation(useCalMutation("refresh"));
-export const useDisconnectCalendar = () => useMutation(useCalMutation("disconnect"));
-export const useStopCalendar = () => useMutation(useCalMutation("stopChecking"));
+// One line per procedure so each hook keeps its own input and output types.
+export const useMakeBookable = () => useMutation(orpc.calendar.makeBookable.mutationOptions({ onSuccess: useCalInvalidate() }));
+export const useCalendarConnectUrl = () => useMutation(orpc.calendar.connectUrl.mutationOptions({ onSuccess: useCalInvalidate() }));
+export const useSetCalendars = () => useMutation(orpc.calendar.setCalendars.mutationOptions({ onSuccess: useCalInvalidate() }));
+export const useSetBuffers = () => useMutation(orpc.calendar.setBuffers.mutationOptions({ onSuccess: useCalInvalidate() }));
+export const useRefreshCalendar = () => useMutation(orpc.calendar.refresh.mutationOptions({ onSuccess: useCalInvalidate() }));
+export const useDisconnectCalendar = () => useMutation(orpc.calendar.disconnect.mutationOptions({ onSuccess: useCalInvalidate() }));
+export const useStopCalendar = () => useMutation(orpc.calendar.stopChecking.mutationOptions({ onSuccess: useCalInvalidate() }));
