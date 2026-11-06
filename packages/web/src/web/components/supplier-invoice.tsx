@@ -66,6 +66,7 @@ export function InvoicePanel({ id, onClose }: { id: number; onClose: () => void 
   }
 
   const title = inv ? `${inv.docType === "credit" ? "Credit" : "Invoice"} ${inv.invoiceNumber}` : "Invoice";
+  const cmp = inv?.comparison ?? null;
   const pair = inv ? (PAIR_META[inv.pair] ?? PAIR_META.no_po!) : null;
 
   return (
@@ -135,8 +136,14 @@ export function InvoicePanel({ id, onClose }: { id: number; onClose: () => void 
               <p className="border-b border-border px-3 py-2 text-xs font-semibold">On the invoice</p>
               <div className="space-y-1 px-3 py-2 text-xs">
                 <KV k="Order ref printed" v={inv.poRefRaw || "none"} />
-                {inv.goodsExGst != null ? <KV k="Goods ex GST" v={moneyExact(inv.goodsExGst)} /> : null}
-                {inv.freightExGst != null ? <KV k="Freight ex GST" v={moneyExact(inv.freightExGst)} /> : null}
+                {cmp ? (
+                  <GroupTotals groups={cmp.invoice} rows={cmp.rows} side="invoice" />
+                ) : (
+                  <>
+                    {inv.goodsExGst != null ? <KV k="Goods ex GST, as read" v={moneyExact(inv.goodsExGst)} /> : null}
+                    {inv.freightExGst != null ? <KV k="Freight ex GST, as read" v={moneyExact(inv.freightExGst)} /> : null}
+                  </>
+                )}
                 <KV k="Total ex GST" v={moneyExact(inv.exGst)} strong />
               </div>
               {inv.lines.length ? (
@@ -164,9 +171,15 @@ export function InvoicePanel({ id, onClose }: { id: number; onClose: () => void 
               {inv.po ? (
                 <>
                   <div className="space-y-1 px-3 py-2 text-xs">
-                    <KV k="Goods ex GST" v={moneyExact(inv.po.goodsExGst)} />
-                    {inv.po.chargesExGst ? <KV k="Charges ex GST" v={moneyExact(inv.po.chargesExGst)} /> : null}
-                    <KV k="Freight ex GST" v={moneyExact(inv.po.freightExGst)} />
+                    {cmp?.po ? (
+                      <GroupTotals groups={cmp.po} rows={cmp.rows} side="po" />
+                    ) : (
+                      <>
+                        <KV k="Goods ex GST" v={moneyExact(inv.po.goodsExGst)} />
+                        {inv.po.chargesExGst ? <KV k="Charges ex GST" v={moneyExact(inv.po.chargesExGst)} /> : null}
+                        <KV k="Freight ex GST" v={moneyExact(inv.po.freightExGst)} />
+                      </>
+                    )}
                     <KV k="Total ex GST" v={moneyExact(inv.po.totalExGst)} strong />
                     {inv.diffExGst != null && Math.abs(inv.diffExGst) >= 0.01 ? (
                       <p className={inv.diffExGst > 0 ? "pt-1 font-semibold text-[var(--warning)]" : "pt-1 font-semibold text-[var(--success)]"}>
@@ -194,6 +207,8 @@ export function InvoicePanel({ id, onClose }: { id: number; onClose: () => void 
               )}
             </div>
           </div>
+
+          {cmp?.po ? <LineByLine rows={cmp.rows} poNumber={cmp.po.number} linesDisagree={cmp.linesDisagree} /> : null}
 
           {inv.docType !== "credit" ? <InvoicePriceChecks invoiceId={inv.id} /> : null}
 
@@ -279,6 +294,96 @@ export function InvoicePanel({ id, onClose }: { id: number; onClose: () => void 
         </div>
       )}
     </Modal>
+  );
+}
+
+type Comparison = NonNullable<NonNullable<ReturnType<typeof useSupplierInvoice>["data"]>["comparison"]>;
+type CmpRow = Comparison["rows"][number];
+
+const GROUP_ORDER: Record<string, number> = { goods: 0, charges: 1, freight: 2 };
+const qtyRate = (x: { qty: number | null; unit: string | null; rate: number | null; total: number }) =>
+  x.qty != null && x.rate != null ? `${Number(x.qty.toFixed(3))} ${x.unit ?? ""} × ${moneyExact(x.rate)}` : "";
+
+/**
+ * Goods, charges (fuel, levies) and handling / freight, each counted once,
+ * from the same line by line comparison as the match note. The charges and the
+ * freight are never added together and called freight.
+ */
+function GroupTotals({ groups, rows, side }: { groups: { goods: number; charges: number; freight: number }; rows: CmpRow[]; side: "invoice" | "po" }) {
+  const names = (g: string) => [...new Set(rows.filter((r) => r.group === g && r[side]).map((r) => r.label))];
+  const charges = names("charges");
+  const freight = names("freight");
+  const extras = Math.round((groups.charges + groups.freight) * 100) / 100;
+  return (
+    <>
+      <KV k="Goods ex GST" v={moneyExact(groups.goods)} />
+      {groups.charges || charges.length ? (
+        <div>
+          <KV k="Charges ex GST" v={moneyExact(groups.charges)} />
+          {charges.length ? <p className="text-[11px] text-muted-foreground/80">{charges.join(", ")}</p> : null}
+        </div>
+      ) : null}
+      {groups.freight || freight.length ? <KV k={`${freight.length === 1 ? freight[0] : "Handling and freight"} ex GST`} v={moneyExact(groups.freight)} /> : null}
+      {groups.charges && groups.freight ? <KV k="Additional charges total" v={moneyExact(extras)} /> : null}
+    </>
+  );
+}
+
+const STATUS: Record<CmpRow["status"], { label: string; colour: string }> = {
+  match: { label: "Matches", colour: "#3F7D3A" },
+  variance: { label: "Differs", colour: "#D08A1E" },
+  not_on_po: { label: "Not on the PO", colour: "#C0603F" },
+  not_billed: { label: "Not billed", colour: "#4A7FA5" },
+  review: { label: "Check which charge", colour: "#C0603F" },
+};
+
+/** Every line, invoice against the saved PO line it is the same thing as. */
+function LineByLine({ rows, poNumber, linesDisagree }: { rows: CmpRow[]; poNumber: string; linesDisagree: boolean }) {
+  const sorted = [...rows].sort((a, b) => (GROUP_ORDER[a.group] ?? 9) - (GROUP_ORDER[b.group] ?? 9));
+  return (
+    <div className="rounded-md border border-border">
+      <p className="border-b border-border px-3 py-2 text-xs font-semibold">Line by line against {poNumber}</p>
+      <ul className="divide-y divide-border">
+        {sorted.map((r) => {
+          // "Matches" only to the cent. A few cents out is still fine, but it says so and shows the difference.
+          const exact = Math.abs(r.diff) < 0.005;
+          const st = r.status === "match" && !exact ? { ...STATUS.match, label: "Within 5c" } : STATUS[r.status];
+          const printed = r.invoice?.lines.filter((t) => t !== r.label) ?? [];
+          return (
+            <li key={r.key} className="px-3 py-2 text-xs">
+              <div className="flex flex-wrap items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium">
+                    {r.label}
+                    {printed.length ? <span className="font-normal text-muted-foreground"> · printed "{printed.join(", ")}"</span> : null}
+                  </p>
+                  <p className="text-muted-foreground">
+                    PO: {r.po ? `${qtyRate(r.po)} = ${moneyExact(r.po.total)}` : "not on the PO"} · Invoice:{" "}
+                    {r.invoice ? `${qtyRate(r.invoice) ? `${qtyRate(r.invoice)} = ` : ""}${moneyExact(r.invoice.total)}` : "not billed"}
+                  </p>
+                  {r.status !== "match" || !exact ? <p className="mt-0.5 text-muted-foreground">{r.note}</p> : null}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Badge colour={st.colour}>{st.label}</Badge>
+                  {!exact ? (
+                    <span className={r.diff > 0 ? "tabular font-semibold text-[var(--warning)]" : "tabular font-semibold text-[var(--success)]"}>
+                      {r.diff > 0 ? "+" : "-"}
+                      {moneyExact(Math.abs(r.diff))}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {linesDisagree ? (
+        <p className="flex items-start gap-1.5 border-t border-border px-3 py-2 text-xs text-[var(--warning)]">
+          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+          The invoice lines do not add up to the invoice total. Check the PDF.
+        </p>
+      ) : null}
+    </div>
   );
 }
 

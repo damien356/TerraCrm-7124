@@ -6,6 +6,7 @@ import { settleDate } from "./cashflow";
 import { termsForSupplier } from "./supplier-terms";
 import { INVOICES_TO } from "./gmail";
 import { checkInvoicePrices } from "./price-check";
+import { compareInvoice } from "./invoice-compare";
 import { notifyOffice } from "./notify";
 import { mergedTargets } from "./job-redirect";
 import { logAiAction } from "./ai-actions";
@@ -264,47 +265,84 @@ export async function settlePo(poId: number) {
   const tol = tolerance(po.totalExGst);
   const agrees = Math.abs(diff) <= tol;
   const under = !agrees && diff < 0;
-  const status = !invs.length ? null : agrees ? "matched" : "different";
+  // One invoice with its lines read: compare it line by line with the PO lines
+  // saved when the PO went out (charge-match.ts). Each charge is matched to its
+  // own PO line, so a lower total never hides a line billed higher, and the
+  // note says what differs instead of guessing why (Karndean CI155812, 6 Nov).
+  const bills = invs.filter((i) => i.docType !== "credit");
+  const cmp = invs.length === 1 && bills.length === 1 ? await compareInvoice(bills[0]!) : null;
+  const lined = cmp && cmp.hasLines && cmp.poId === po.id ? cmp : null;
+  const status = !invs.length ? null : agrees && !lined?.hasIncrease ? "matched" : "different";
 
-  const freightBilled = invs.reduce((a, i) => a + (i.docType === "credit" ? 0 : (i.freightExGst ?? 0)), 0);
   const notes: string[] = [];
-  if (status === "matched") notes.push(`Agrees with PO ${po.number}.`);
-  if (status === "different" && !under) notes.push(`$${diff.toFixed(2)} ex GST more than PO ${po.number}.`);
-  if (status === "different" && under) notes.push(`$${Math.abs(diff).toFixed(2)} ex GST less than PO ${po.number}. A part delivery, or a better price.`);
-  if (freightBilled - po.freightExGst > 0.5) notes.push(`Freight $${round2(freightBilled - po.freightExGst).toFixed(2)} charged that is not on the PO.`);
-
-  for (const i of invs) {
-    await db
-      .update(schema.supplierInvoices)
-      .set({ matchStatus: status ?? "needs_you", diffExGst: diff, jobId: po.jobId, matchNote: [i.matchNote.split(" | ")[0], ...notes].filter(Boolean).join(" | "), updatedAt: new Date() })
-      .where(eq(schema.supplierInvoices.id, i.id));
+  if (lined) notes.push(lined.summary);
+  else {
+    // No lines to compare: the totals are all there is. The extracted "freight" figure is not used,
+    // because a reader can put fuel and levies in it too.
+    if (status === "matched") notes.push(`Agrees with PO ${po.number}.`);
+    if (status === "different" && !under) notes.push(`$${diff.toFixed(2)} ex GST more than PO ${po.number}.`);
+    if (status === "different" && under) notes.push(`$${Math.abs(diff).toFixed(2)} ex GST less than PO ${po.number}.`);
   }
 
-  await db
-    .update(schema.purchaseOrders)
-    .set({ status: invs.length ? "invoiced" : po.status === "invoiced" ? "sent" : po.status, updatedAt: new Date() })
-    .where(eq(schema.purchaseOrders.id, poId));
+  for (const i of invs) {
+    const matchNote = [i.matchNote.split(" | ")[0], ...notes].filter(Boolean).join(" | ");
+    const matchStatus = status ?? "needs_you";
+    // Written only when something moved, so a recheck that finds the same answer leaves the record alone.
+    if (i.matchStatus !== matchStatus || i.diffExGst !== diff || i.jobId !== po.jobId || i.matchNote !== matchNote) {
+      await db
+        .update(schema.supplierInvoices)
+        .set({ matchStatus, diffExGst: diff, jobId: po.jobId, matchNote, updatedAt: new Date() })
+        .where(eq(schema.supplierInvoices.id, i.id));
+    }
+    // A recheck that changes an earlier comparison is never silent: the old one goes in the log.
+    const was = i.matchNote.split(" | ").slice(1).join(" | ");
+    if (was && (was !== notes.join(" | ") || i.matchStatus !== matchStatus)) {
+      await db.insert(schema.activityLog).values({
+        entityType: "supplier_invoice",
+        entityId: i.id,
+        action: "match_rechecked",
+        detail: `Invoice ${i.invoiceNumber} compared with ${po.number} again. Was ${i.matchStatus}: "${was}". Now ${matchStatus}: "${notes.join(" | ")}".`.slice(0, 2000),
+        actorName: "Invoice matching",
+        actorRole: "system",
+      });
+    }
+  }
+
+  const poStatus = invs.length ? "invoiced" : po.status === "invoiced" ? "sent" : po.status;
+  if (poStatus !== po.status) {
+    await db.update(schema.purchaseOrders).set({ status: poStatus, updatedAt: new Date() }).where(eq(schema.purchaseOrders.id, poId));
+  }
 
   if (po.jobCostId) {
-    const [line] = await db.select({ dueDateLocked: schema.jobCosts.dueDateLocked }).from(schema.jobCosts).where(eq(schema.jobCosts.id, po.jobCostId));
+    const [line] = await db.select().from(schema.jobCosts).where(eq(schema.jobCosts.id, po.jobCostId));
     const allPaid = invs.length > 0 && invs.every((i) => i.payState === "paid");
     const terms = await termsForSupplier(po.supplierId);
     const due = invs
       .map((i) => i.dueDate ?? (i.invoiceDate ? settleDate(i.invoiceDate, terms.days, terms.eom) : null))
       .filter(Boolean)
       .sort()[0];
-    await db
-      .update(schema.jobCosts)
-      .set({
-        state: !invs.length ? "committed" : allPaid && !under ? "paid" : "invoiced",
-        amount: invs.length && !under ? billed : po.totalExGst,
-        invoiceRef: invs.map((i) => i.invoiceNumber).join(", ") || null,
-        // A date a person typed stays put. Everything else follows the invoices.
-        ...(due && !line?.dueDateLocked ? { dueDate: due } : {}),
-        paidAt: allPaid && !under ? new Date() : null,
-        updatedAt: new Date(),
-      })
-      .where(eq(schema.jobCosts.id, po.jobCostId));
+    const next = {
+      state: !invs.length ? "committed" : allPaid && !under ? "paid" : "invoiced",
+      amount: invs.length && !under ? billed : po.totalExGst,
+      invoiceRef: invs.map((i) => i.invoiceNumber).join(", ") || null,
+      // A date a person typed stays put. Everything else follows the invoices.
+      ...(due && !line?.dueDateLocked ? { dueDate: due } : {}),
+    };
+    const paid = allPaid && !under;
+    // Nothing moved (a recheck with the same answer): leave the line and its paid date alone.
+    const same =
+      !!line &&
+      line.state === next.state &&
+      line.amount === next.amount &&
+      line.invoiceRef === next.invoiceRef &&
+      (next.dueDate === undefined || line.dueDate === next.dueDate) &&
+      (paid ? line.paidAt != null : line.paidAt == null);
+    if (!same) {
+      await db
+        .update(schema.jobCosts)
+        .set({ ...next, paidAt: paid ? new Date() : null, updatedAt: new Date() })
+        .where(eq(schema.jobCosts.id, po.jobCostId));
+    }
   }
   // Stock from this PO keeps the PO rate. A bill that differs marks it (and its remnants) for review. Never stops the match.
   try {
@@ -460,19 +498,24 @@ export async function placeInvoice(invoiceId: number, forcePoId?: number | null)
     : labelChanged
       ? { labelSource: label.source, labelNote: label.note, labelledAt: new Date(), labelledBy: "Invoice matching" }
       : {};
-  await db
-    .update(schema.supplierInvoices)
-    .set({
-      poId,
-      supplierId,
-      dedupeKey: dedupe,
-      matchNote: note,
-      matchStatus: poId ? inv.matchStatus : label!.status,
-      ...labelCols,
-      diffExGst: poId ? inv.diffExGst : null,
-      updatedAt: new Date(),
-    })
-    .where(eq(schema.supplierInvoices.id, invoiceId));
+  const linkCols = {
+    poId,
+    supplierId,
+    dedupeKey: dedupe,
+    // The comparison part stays until settlePo redoes it, so a change to it is logged there.
+    matchNote: poId ? [note, ...inv.matchNote.split(" | ").slice(1)].join(" | ") : note,
+    matchStatus: poId ? inv.matchStatus : label!.status,
+    ...labelCols,
+    diffExGst: poId ? inv.diffExGst : null,
+  };
+  // Written only when something moved, so a recheck that finds the same PO leaves the record alone.
+  const same = (a: unknown, b: unknown) => (a instanceof Date || b instanceof Date ? (a as Date | null)?.getTime?.() === (b as Date | null)?.getTime?.() : a === b);
+  if (Object.entries(linkCols).some(([k, v]) => !same(v, inv[k as keyof typeof inv]))) {
+    await db
+      .update(schema.supplierInvoices)
+      .set({ ...linkCols, updatedAt: new Date() })
+      .where(eq(schema.supplierInvoices.id, invoiceId));
+  }
   if (poId) await settlePo(poId);
   if (before && before !== poId) await settlePo(before);
   // Every rate on it against the price list. Flags only, never a price change.

@@ -22,6 +22,6 @@ function usePriceRefresh() {
   };
 }
 
-export const useApproveFlag = () => useMutation(orpc.priceChecks.approve.mutationOptions({ onSuccess: usePriceRefresh() }));
+export const useApproveFlag = () => useMutation(orpc.priceChecks.approve.mutationOptions({ onSettled: usePriceRefresh() }));
 export const useIgnoreFlag = () => useMutation(orpc.priceChecks.ignore.mutationOptions({ onSuccess: usePriceRefresh() }));
 export const useRecheckInvoice = () => useMutation(orpc.priceChecks.recheck.mutationOptions({ onSuccess: usePriceRefresh() }));

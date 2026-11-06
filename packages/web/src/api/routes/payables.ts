@@ -11,6 +11,7 @@ import { dedupeKey, invoiceExGst, markPaid, placeInvoice, round2, safeJson, squa
 import { AUTO_SEND_KEY, ingestPdf, sendInvoiceRequest } from "../lib/mail-agent";
 import { gmailLink } from "../lib/gmail";
 import { signGet } from "../lib/s3";
+import { compareInvoice } from "../lib/invoice-compare";
 
 /**
  * SUPPLIERS OWED. What Terra owes each supplier, built from the invoices the
@@ -363,6 +364,8 @@ export const payables = {
         .where(eq(schema.mailMessages.id, i.mailMessageId));
       if (m) link = gmailLink(m.address, m.gmailId);
     }
+    // Line by line against the saved PO lines, grouped the same way as the match note and the price checks.
+    const cmp = await compareInvoice(i);
     return {
       ...i,
       lines: safeJson<Array<{ description: string; qty: number | null; unit: string | null; unitPriceExGst: number | null; totalExGst: number | null }>>(i.lines, []),
@@ -370,6 +373,10 @@ export const payables = {
       due: dueOf(i, tm),
       pair: pairState(i),
       po: po ? { id: po.id, number: po.number, totalExGst: po.totalExGst, goodsExGst: po.goodsExGst, freightExGst: po.freightExGst, chargesExGst: po.chargesExGst, lines: poLines } : null,
+      comparison:
+        cmp && cmp.hasLines
+          ? { rows: cmp.rows, invoice: cmp.invoice, po: cmp.po, diff: cmp.diff, hasIncrease: cmp.hasIncrease, linesDisagree: cmp.linesDisagree, summary: cmp.summary }
+          : null,
       pdfUrl: i.pdfKey ? await signGet(i.pdfKey).catch(() => null) : null,
       gmailLink: link,
     };

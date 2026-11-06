@@ -155,7 +155,7 @@ export async function saleCosts(jobId: number): Promise<SaleCosts | null> {
   const poViews: SaleCostPo[] = pos.map((p) => {
     const mine = poBills.filter((b) => b.poId === p.id);
     const billed = mine.length ? round2(mine.reduce((a, b) => a + signed(b), 0)) : null;
-    // Same rule as settlePo: bills that fall short are a part delivery, so the PO still stands.
+    // Same rule as settlePo: while the bills fall short of the PO, the PO still stands.
     const covers = billed != null && billed >= p.totalExGst - tolerance(p.totalExGst);
     return {
       id: p.id,

@@ -433,7 +433,7 @@ function SaleCostLines({ jobId, sale }: { jobId: number; sale: SaleCostsView }) 
             <li key={p.id}>
               <span className="font-medium">{p.number}</span> ({p.status}): expected {dollars(p.expected)} ex GST with charges and freight.{" "}
               {p.bills
-                ? `Supplier bills ${dollars(p.billed)} matched to it. ${p.countsAs === "bills" ? "The bills count, not the PO." : "Less than the PO, so the PO still counts. A part delivery, or a better price."}`
+                ? `Supplier bills ${dollars(p.billed)} matched to it. ${p.countsAs === "bills" ? "The bills count, not the PO." : "Less than the PO, so the PO still counts."}`
                 : "No supplier bill matched yet, so it counts as expected."}
             </li>
           ))}

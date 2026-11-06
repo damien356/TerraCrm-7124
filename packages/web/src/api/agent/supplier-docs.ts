@@ -51,7 +51,10 @@ const docSchema = z.object({
   invoiceDate: z.string().nullable().describe("YYYY-MM-DD"),
   dueDate: z.string().nullable().describe("YYYY-MM-DD"),
   goodsExGst: z.number().nullable().describe("Goods only, ex GST, before freight."),
-  freightExGst: z.number().nullable().describe("Freight, delivery or cartage ex GST. 0 if printed as nil."),
+  freightExGst: z
+    .number()
+    .nullable()
+    .describe("Freight, delivery, handling or cartage ex GST only. Never fuel surcharges, levies or other charges, and never a header 'Total charges' that adds them together. 0 if printed as nil."),
   totalExGst: z.number().nullable(),
   gst: z.number().nullable(),
   totalIncGst: z.number().nullable().describe("Positive number, even on a credit note."),

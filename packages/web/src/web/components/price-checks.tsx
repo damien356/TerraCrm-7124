@@ -26,6 +26,8 @@ const KIND: Record<string, { label: string; colour: string }> = {
   fee_basis: { label: "Surcharge", colour: "#D08A1E" },
   freight: { label: "Freight", colour: "#C0603F" },
   new_charge: { label: "New charge", colour: "#C0603F" },
+  charge_mapping: { label: "Charge wording", colour: "#4A7FA5" },
+  charge_review: { label: "Which charge?", colour: "#C0603F" },
   missing_charge: { label: "No surcharge", colour: "#4A7FA5" },
 };
 export const flagKind = (k: string) => KIND[k] ?? { label: "Price", colour: "#D08A1E" };
@@ -78,12 +80,18 @@ export function PriceFlagRow({ f, showWhere = true, onInvoice }: { f: PriceFlag;
                 </span>
               )
             ) : null}
-            {f.status === "approved" ? <Badge colour="#3F7D3A">Updated</Badge> : f.status === "ignored" ? <Badge colour="#A9A29B">Ignored</Badge> : null}
+            {f.status === "approved" ? (
+              <Badge colour="#3F7D3A">Updated</Badge>
+            ) : f.status === "ignored" ? (
+              <Badge colour="#A9A29B">Ignored</Badge>
+            ) : f.status === "withdrawn" ? (
+              <Badge colour="#A9A29B">Withdrawn</Badge>
+            ) : null}
           </div>
-          <p className="mt-1 text-sm font-medium">{f.title}</p>
+          <p className={f.status === "withdrawn" ? "mt-1 text-sm font-medium text-muted-foreground line-through" : "mt-1 text-sm font-medium"}>{f.title}</p>
           <p className="text-xs text-muted-foreground">{f.status === "open" ? f.detail : f.outcome}</p>
         </div>
-        <Impact n={f.impactExGst} />
+        {f.status === "withdrawn" ? null : <Impact n={f.impactExGst} />}
       </div>
       {f.status === "open" ? (
         <div className="mt-2 flex flex-wrap items-center gap-2">

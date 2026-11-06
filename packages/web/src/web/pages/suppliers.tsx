@@ -207,6 +207,7 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
   const create = useCreateSupplierFee();
   const [form, setForm] = React.useState({
     name: "",
+    invoiceNames: "",
     kind: "fuel",
     basis: "lm",
     amount: "",
@@ -230,6 +231,7 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
     await create.mutateAsync({
       supplierId,
       name: form.name,
+      invoiceNames: form.invoiceNames,
       kind: form.kind as "fuel",
       basis: form.basis as "lm",
       amount: isPercent ? null : Number(form.amount || 0),
@@ -348,6 +350,9 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
         </Field>
         <Field label="When it applies" hint="Plain English. This is what shows next to the tickbox on an order.">
           <Input value={form.condition} onChange={(e) => setForm({ ...form, condition: e.target.value })} />
+        </Field>
+        <Field label="On their invoices as" hint='What they print for it, if it is not the name above. Comma separated, e.g. "FUELSURCH". Used to match invoice lines only.'>
+          <Input value={form.invoiceNames} onChange={(e) => setForm({ ...form, invoiceNames: e.target.value })} />
         </Field>
         <Field label="Notes" hint="What their letter or price list actually said.">
           <Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
@@ -1045,6 +1050,19 @@ export default function SuppliersPage() {
                             {windowLapsed(f.effectiveUntil) ? <Badge colour="#B4342A">lapsed</Badge> : null}
                           </div>
                           {f.condition ? <ClampText text={f.condition} className="mt-0.5 text-xs" /> : null}
+                          <div className="mt-1.5 max-w-[320px]">
+                            <Field label="On their invoices as" hint="Comma separated. Used to match invoice lines only.">
+                              <Input
+                                className="h-8"
+                                placeholder={f.name}
+                                defaultValue={f.invoiceNames ?? ""}
+                                onBlur={(e) => {
+                                  const v = e.target.value.trim();
+                                  if (v !== (f.invoiceNames ?? "")) feeUpdate.mutate({ id: f.id, invoiceNames: v });
+                                }}
+                              />
+                            </Field>
+                          </div>
                           <div className="mt-1.5 max-w-[320px]">
                             <Field label="Goes on">
                               <Select

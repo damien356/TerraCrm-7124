@@ -12,6 +12,8 @@ import * as s from "./schema";
 
 type Fee = {
   name: string;
+  /** The supplier's own wording on an invoice, comma separated. */
+  invoiceNames?: string;
   kind: string;
   basis: string;
   amount?: number | null;
@@ -1314,6 +1316,8 @@ const SUPPLIERS: SupplierSeed[] = [
     fees: [
       {
         name: "Fuel Surcharge",
+        // What Karndean print for it on an invoice (CI155812, 6 Nov 2026).
+        invoiceNames: "FUELSURCH",
         kind: "fuel",
         // PER m2, not a percentage. Terramater's levy is a percent of the
         // order and Chaparral's is per lineal metre; this one is per square
@@ -1331,6 +1335,7 @@ const SUPPLIERS: SupplierSeed[] = [
       },
       {
         name: "Resiloop recycling levy",
+        invoiceNames: "RESILOOP",
         // A LEVY, NOT A FUEL SURCHARGE. Own kind so it can be seen and argued
         // separately on a quote, and so the Tarkett contrast stays legible.
         kind: "levy",
@@ -1345,7 +1350,12 @@ const SUPPLIERS: SupplierSeed[] = [
         sortOrder: 20,
       },
       {
-        name: "Delivery to Gold Coast warehouse",
+        // Karndean bill this as "HANDLING", $80 an order (CI154416 and
+        // CI155812). Renamed from "Delivery to Gold Coast warehouse" on
+        // 6 Nov 2026; the old name stays as an invoice name so a PO raised
+        // before the rename still finds it.
+        name: "Handling / Freight",
+        invoiceNames: "HANDLING, Delivery to Gold Coast warehouse",
         kind: "delivery",
         basis: "order",
         amount: 80,
@@ -1354,7 +1364,7 @@ const SUPPLIERS: SupplierSeed[] = [
         // supplier, so the charge engine lets a delivery-kind fee through.
         autoApply: true,
         condition:
-          "AUTOMATIC ON EVERY ORDER, $80 ex GST flat, confirmed by Damien. Karndean deliver to Terra's warehouse themselves. Flat per order regardless of size, so it is worth consolidating Karndean orders rather than ordering a box at a time.",
+          "AUTOMATIC ON EVERY ORDER, $80 ex GST flat, confirmed by Damien. Karndean deliver to Terra's Gold Coast warehouse themselves and print it on the invoice as HANDLING. Flat per order regardless of size, so it is worth consolidating Karndean orders rather than ordering a box at a time.",
         notes:
           "Genuinely Terra's cost, unlike the delivery rows on Chaparral and Floor Distributors, which are held back because Terra pays its own carrier for that leg instead. Karndean is the supplier to look at when checking that the deliversDirect guard has not been applied too widely.",
         sortOrder: 30,

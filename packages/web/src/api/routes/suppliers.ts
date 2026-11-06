@@ -59,6 +59,8 @@ const dateOnly = z
 
 const feeInput = z.object({
   name: z.string().min(1),
+  /** The supplier's own wording for it on an invoice, comma separated, e.g. "FUELSURCH". Invoice matching only. */
+  invoiceNames: z.string().max(500).default(""),
   kind: z.enum(FEE_KINDS).default("other"),
   basis: z.enum(FEE_BASES).default("order"),
   amount: z.number().nullable().default(null),
@@ -86,6 +88,7 @@ const feeInput = z.object({
  */
 const feePatch = z.object({
   name: z.string().min(1).optional(),
+  invoiceNames: z.string().max(500).optional(),
   kind: z.enum(FEE_KINDS).optional(),
   basis: z.enum(FEE_BASES).optional(),
   amount: z.number().nullable().optional(),

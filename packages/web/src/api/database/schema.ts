@@ -1167,6 +1167,14 @@ export const supplierFeeRules = sqliteTable(
       .references(() => suppliers.id, { onDelete: "cascade" }),
     /** What the supplier calls it, e.g. "Fuel Surcharge", "Baling Charge". */
     name: text("name").notNull(),
+    /**
+     * Other wording the supplier prints for this same charge on an invoice,
+     * comma separated. Karndean print "FUELSURCH" for Fuel Surcharge and
+     * "HANDLING" for Handling / Freight. Also holds a former name, so a PO
+     * raised before a rename still finds its charge. Read by invoice matching
+     * only (2026-11-26-fee-rule-invoice-names.sql).
+     */
+    invoiceNames: text("invoice_names").notNull().default(""),
     /** fuel · delivery · handling · baling · storage · cutting · premium · levy · reschedule · credit · other */
     kind: text("kind").notNull().default("other"),
     /**
@@ -4129,8 +4137,10 @@ export const priceFlags = sqliteTable(
      * fee_amount      flat or per-unit charge differs (can approve)
      * fee_percent     percentage differs (can approve)
      * fee_basis       same percentage, worked out on a different base (can approve)
-     * freight         freight billed that Ops did not expect (info)
-     * new_charge      a charge Ops has no rule for (info)
+     * freight         freight billed that is not on the PO and not a charge in Ops (info)
+     * new_charge      a charge Ops has no rule for and the PO did not have (info)
+     * charge_mapping  on the PO, but Ops does not know the supplier's wording for it (info)
+     * charge_review   a line that could be two different charges, for a person to say (info)
      * missing_charge  an Ops surcharge the invoice did not bill (info)
      */
     kind: text("kind").notNull(),
@@ -4150,7 +4160,7 @@ export const priceFlags = sqliteTable(
     detail: text("detail").notNull().default(""),
     /** JSON of what Approve would change. Null when there is nothing to change. */
     change: text("change"),
-    /** open · approved · ignored */
+    /** open · approved · ignored · withdrawn (a recheck no longer finds it; kept, never deleted) */
     status: text("status").notNull().default("open"),
     decidedAt: integer("decided_at", { mode: "timestamp" }),
     decidedBy: text("decided_by"),
