@@ -461,9 +461,36 @@ export const labourRateItems = sqliteTable(
      * charge" is the first: one row, one price, every carpet skill.
      */
     wholeGroup: integer("whole_group", { mode: "boolean" }).notNull().default(false),
+    /**
+     * Per contractor only (2026-12-02-installer-allocation.sql): the day rates.
+     * Nobody gets the item on their card, in the app or in an export unless
+     * it is switched on for them in installer_rate_item_access.
+     */
+    restricted: integer("restricted", { mode: "boolean" }).notNull().default(false),
     ...timestamps,
   },
   (t) => [index("rate_items_group_idx").on(t.groupName), index("rate_items_skill_idx").on(t.skillId)],
+);
+
+/**
+ * Which contractors have a restricted rate item (a day rate) on their card.
+ * Never edited in place: each switch on or off is a new row from a date, and
+ * the latest row that has started is the one in force. History stays.
+ */
+export const installerRateItemAccess = sqliteTable(
+  "installer_rate_item_access",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    installerId: integer("installer_id").notNull().references(() => installers.id, { onDelete: "cascade" }),
+    itemId: integer("item_id").notNull().references(() => labourRateItems.id, { onDelete: "cascade" }),
+    enabled: integer("enabled", { mode: "boolean" }).notNull(),
+    /** YYYY-MM-DD the switch takes effect. */
+    effectiveFrom: text("effective_from").notNull(),
+    note: text("note"),
+    createdByName: text("created_by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [index("rate_item_access_idx").on(t.installerId, t.itemId, t.effectiveFrom)],
 );
 
 /** One priced version of one item. Null installer = Terra's standard rate. */
@@ -860,6 +887,15 @@ export const jobTasks = sqliteTable(
     /** Office plan for hourly work: hours and vehicle days. Null = not planned. */
     plannedHours: real("planned_hours"),
     plannedVehicleDays: real("planned_vehicle_days"),
+    /*
+     * The hourly rate agreed for THIS allocation (2026-12-02-installer-allocation.sql),
+     * copied from his pay terms when the work is given to him at an hourly
+     * rate. Approval pays approved hours at this rate, so a later change to
+     * his terms never rewrites work already agreed. Null = not hourly, or
+     * agreed before this existed (then the terms on the day are used, as before).
+     */
+    agreedHourlyRate: real("agreed_hourly_rate"),
+    agreedTermsId: integer("agreed_terms_id"),
     ...timestamps,
   },
   (t) => [

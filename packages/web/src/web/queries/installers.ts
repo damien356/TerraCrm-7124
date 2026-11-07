@@ -15,11 +15,16 @@ export function useInstaller(id: number | null) {
  * Who can actually take this task: ticked for the skill, and flagged for
  * clashes, unavailability and whether they can cover a 2-man task alone.
  */
-export function useEligible(skillId: number | null, date?: string, crewSize = 1) {
+/**
+ * Everyone who could be booked, eligible first. With a task, the skills come
+ * from its work lines (or the ticked ones), so nobody is dropped for the first
+ * line's trade. People who can't take it come back with their reasons.
+ */
+export function useEligible(skillId: number | null, date?: string, crewSize = 1, task?: { taskId: number; itemIds?: number[] } | null) {
   return useQuery(
     orpc.installers.eligible.queryOptions({
-      input: { skillId: skillId ?? 0, date, crewSize },
-      enabled: skillId !== null,
+      input: { skillId: skillId ?? null, taskId: task?.taskId, itemIds: task?.itemIds, date, crewSize },
+      enabled: skillId !== null || Boolean(task?.taskId),
       staleTime: 5_000,
     }),
   );

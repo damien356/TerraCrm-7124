@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { ORPCError } from "@orpc/server";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, authed, installerOnly } from "../middleware/auth";
 import { sellExGstWithMarkup } from "../lib/pricing";
 import { hourlyRateCard } from "../lib/hourly-crew";
+import { accessHistory, accessOn, itemOpenTo } from "../lib/rate-access";
 
 /**
  * THE LABOUR RATE BOOK.
@@ -456,6 +458,41 @@ export const labour = {
     }),
 
   /**
+   * Switch a per-contractor item (a day rate) on or off for one installer,
+   * from a date. Admin only, like every other rate. A new row each time, so
+   * the history stays; switching off never changes pay already agreed.
+   */
+  setItemAccess: adminOnly
+    .input(
+      z.object({
+        installerId: z.number(),
+        itemId: z.number(),
+        enabled: z.boolean(),
+        effectiveFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        note: z.string().trim().max(300).nullable().default(null),
+      }),
+    )
+    .handler(async ({ input, context }) => {
+      const [item] = await db.select().from(schema.labourRateItems).where(eq(schema.labourRateItems.id, input.itemId));
+      if (!item) throw new ORPCError("NOT_FOUND", { message: "No such rate item." });
+      if (!item.restricted) throw new ORPCError("BAD_REQUEST", { message: `${item.name} is on every card already. Only per-contractor items are switched on one by one.` });
+      const [who] = await db.select({ id: schema.installers.id }).from(schema.installers).where(eq(schema.installers.id, input.installerId));
+      if (!who) throw new ORPCError("NOT_FOUND", { message: "No such installer." });
+      const [row] = await db
+        .insert(schema.installerRateItemAccess)
+        .values({
+          installerId: input.installerId,
+          itemId: input.itemId,
+          enabled: input.enabled,
+          effectiveFrom: input.effectiveFrom ?? today(),
+          note: input.note,
+          createdByName: context.actor.name,
+        })
+        .returning();
+      return row!;
+    }),
+
+  /**
    * Drop an installer's override so he goes back to following Terra's default.
    * The history stays: the old row is closed off, not deleted.
    */
@@ -537,14 +574,21 @@ export const labour = {
 
       const ticked = new Set(ticks.map((t) => t.skillId));
       const tickedGroups = await groupsOf(ticked);
+      // Day rates are per contractor: on his card only once Damien switches them on for him.
+      const access = await accessOn([input.installerId], on);
+      const open = (i: (typeof items)[number]) => itemOpenTo(i, input.installerId, access);
       const rows = items
         // Surcharges and allowances aren't tied to a trade, so they always show.
-        .filter((i) => input.allItems || itemForTicks(i, ticked, tickedGroups))
+        .filter((i) => input.allItems || (itemForTicks(i, ticked, tickedGroups) && open(i)))
         .map((i) => {
           const standard = pick(rates, i.id, null, on);
           const mine = pick(rates, i.id, input.installerId, on);
           return {
             itemId: i.id,
+            /** Per contractor only (a day rate). */
+            restricted: i.restricted,
+            /** For a restricted item: switched on for him. Always true otherwise. */
+            enabled: open(i),
             name: i.name,
             groupName: i.groupName,
             kind: i.kind,
@@ -571,14 +615,41 @@ export const labour = {
         ),
       ).sort();
 
+      const history = await accessHistory(input.installerId);
       return {
         installer: { id: installer.id, name: installer.name, active: installer.active },
         on,
         rows,
+        /** The per-contractor items and whether each is on his card, for the switches. */
+        restrictedItems: items
+          .filter((i) => i.restricted)
+          .map((i) => {
+            const last = [...history].reverse().find((h) => h.itemId === i.id && h.effectiveFrom <= on) ?? null;
+            return {
+              itemId: i.id,
+              name: i.name,
+              unit: i.unit,
+              enabled: open(i),
+              since: last?.effectiveFrom ?? null,
+              by: last?.createdByName ?? null,
+              rate: open(i) ? pick(rates, i.id, input.installerId, on).amount : null,
+            };
+          }),
         customCount: rows.filter((r) => r.custom).length,
         pricedCount: rows.filter((r) => r.rate != null).length,
         upcoming,
         acknowledged: acks.map((a) => ({ effectiveFrom: a.effectiveFrom, at: a.acknowledgedAt })),
+        /** Every on/off switch for his per-contractor items, newest first. */
+        accessLog: [...history].reverse().map((h) => ({
+          id: h.id,
+          itemId: h.itemId,
+          name: items.find((i) => i.id === h.itemId)?.name ?? `Item ${h.itemId}`,
+          enabled: h.enabled,
+          effectiveFrom: h.effectiveFrom,
+          note: h.note,
+          by: h.createdByName,
+          at: h.createdAt,
+        })),
       };
     }),
 
@@ -641,8 +712,12 @@ export const labour = {
         canDo.set(t.skillId, list);
       }
 
+      // A per-contractor item (a day rate) lists only the people it is switched on for.
+      const access = await accessOn(installerRows.map((r) => r.id), on);
+
       /** A whole group item can be laid by anyone ticked for a skill in the group. */
-      const tickedFor = (i: Coverable) => {
+      const tickedFor = (i: Coverable & { id: number; restricted: boolean }) => {
+        if (i.restricted) return installerRows.map((r) => r.id).filter((id) => itemOpenTo(i, id, access));
         if (i.skillId) return canDo.get(i.skillId) ?? [];
         if (!isWholeGroup(i)) return [];
         const ids = skillRows.filter((s) => s.groupName === i.groupName).flatMap((s) => canDo.get(s.id) ?? []);
@@ -755,8 +830,11 @@ export const labour = {
 
     const ticked = new Set(ticks.map((t) => t.skillId));
     const tickedGroups = await groupsOf(ticked);
+    // A day rate shows only when Damien has switched it on for him, never Terra's price otherwise.
+    const access = await accessOn([context.installerId], on);
+    const forHim = (i: (typeof items)[number]) => itemForTicks(i, ticked, tickedGroups) && itemOpenTo(i, context.installerId, access);
     const mine = items
-      .filter((i) => itemForTicks(i, ticked, tickedGroups))
+      .filter(forHim)
       .map((i) => ({ item: i, now: pick(rates, i.id, context.installerId, on) }))
       .filter((r) => r.now.amount != null);
 
@@ -773,7 +851,7 @@ export const labour = {
 
     const changes = pendingFrom
       ? items
-          .filter((i) => itemForTicks(i, ticked, tickedGroups))
+          .filter(forHim)
           .map((i) => ({ item: i, before: pick(rates, i.id, context.installerId, on), after: pick(rates, i.id, context.installerId, pendingFrom) }))
           .filter((r) => r.before.amount !== r.after.amount)
           .map((r) => ({

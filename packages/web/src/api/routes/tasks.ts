@@ -14,6 +14,8 @@ import { installerForStaff, taskForStaff } from "../lib/staff-view";
 import { jobText, taskLetter, taskRef } from "../lib/refs";
 import { bookingBlock, bookingBlockNew } from "../lib/prep";
 import { currentDays, guardAttendance, proposedDays } from "../lib/calendar-availability";
+import { checkOutsideHours, logOutsideHours } from "../lib/outside-hours";
+import { skillsForTask, workBarrier } from "../lib/task-skills";
 import type { Actor } from "../middleware/auth";
 
 /**
@@ -32,24 +34,10 @@ async function assertAssignable(taskId: number, installerId: number, _crewSize: 
     .where(eq(schema.jobTasks.id, taskId));
   if (!task) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
 
-  // Only installers ticked for this skill can ever be given the task.
-  if (task.task.skillId) {
-    const [tick] = await db
-      .select()
-      .from(schema.installerSkills)
-      .where(
-        and(
-          eq(schema.installerSkills.installerId, installerId),
-          eq(schema.installerSkills.skillId, task.task.skillId),
-        ),
-      );
-    if (!tick) {
-      const [skill] = await db.select().from(schema.skills).where(eq(schema.skills.id, task.task.skillId));
-      throw new ORPCError("BAD_REQUEST", {
-        message: `That installer isn't ticked for ${skill?.name ?? "this skill"}.`,
-      });
-    }
-  }
+  // Only installers ticked for every skill the task's own lines need can be given it.
+  // And never a per-contractor item (a day rate) that isn't switched on for him.
+  const barrier = await workBarrier(taskId, installerId);
+  if (barrier) throw new ORPCError("BAD_REQUEST", { message: barrier, data: { reason: "not_eligible" } });
 
   const [installer] = await db.select().from(schema.installers).where(eq(schema.installers.id, installerId));
   if (!installer) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
@@ -282,6 +270,13 @@ export const bookTaskInput = z.object({
    */
   manualDays: z.number().int().min(1).max(30).nullable().optional(),
   calendarOverride,
+  /** The office pressed "Confirm outside-hours booking" (before 6:00 am or after 6:00 pm). */
+  confirmOutsideHours: z.boolean().optional(),
+  /**
+   * The task is booked to someone else and the office has reviewed taking it
+   * off them. Without it a booking never quietly replaces another installer.
+   */
+  replaceInstaller: z.boolean().optional(),
 });
 
 export async function bookTask(input: z.infer<typeof bookTaskInput>, actor: Actor) {
@@ -290,6 +285,9 @@ export async function bookTask(input: z.infer<typeof bookTaskInput>, actor: Acto
   const block = await bookingBlock(input.taskId);
   if (block) throw new ORPCError("BAD_REQUEST", { message: block });
   const { task, job, installer } = await assertAssignable(input.taskId, input.installerId, 1);
+
+  // Never a silent swap: booked to someone else means the office reviews it first.
+  const { previous, previousName } = await replaceGuard(task, installer, input.replaceInstaller);
 
   const needsTwo = task.crewSize > 1;
   const bringsOwn = installer.crewCapacity === "own_offsider";
@@ -314,13 +312,21 @@ export async function bookTask(input: z.infer<typeof bookTaskInput>, actor: Acto
       taskId: input.taskId,
       date,
       seq: i + 1,
-      arrivalStart: coordinate ? null : (o?.arrivalStart ?? input.arrivalStart ?? null),
-      arrivalEnd: coordinate ? null : (o?.arrivalEnd ?? input.arrivalEnd ?? null),
+      // A blank time is no time, never a silent midnight.
+      arrivalStart: coordinate ? null : (o?.arrivalStart || input.arrivalStart || null),
+      arrivalEnd: coordinate ? null : (o?.arrivalEnd || input.arrivalEnd || null),
       coordinate,
       installerId: o?.installerId ?? null,
       status: "booked",
       overrideNote: input.overrideNote ?? null,
     };
+  });
+  // Before 6:00 am or after 6:00 pm needs the office's confirm. It never waves through a clash below.
+  const outside = checkOutsideHours({
+    days: newRows,
+    durationHours: input.durationHours ?? task.durationHours,
+    confirmed: input.confirmOutsideHours,
+    actor,
   });
   // A calendar-checked person's own time. Refused before anything is written.
   await calGuard({
@@ -348,7 +354,7 @@ export async function bookTask(input: z.infer<typeof bookTaskInput>, actor: Acto
       scheduledDate: first,
       scheduledFrom: first,
       scheduledTo: dates[dates.length - 1]!,
-      startTime: input.arrivalStart ?? task.startTime,
+      startTime: input.arrivalStart || task.startTime,
       ...(input.durationHours != null ? { durationHours: input.durationHours } : {}),
       ...(input.payAmount != null ? { payAmount: input.payAmount } : {}),
       ...(input.manualDays !== undefined ? { manualDays: input.manualDays } : {}),
@@ -379,9 +385,56 @@ export async function bookTask(input: z.infer<typeof bookTaskInput>, actor: Acto
     actorName: actor.name,
     actorRole: actor.role,
   });
+  if (previous) {
+    await logReplaced({ jobId: task.jobId, taskId: input.taskId, title: task.title, from: previousName!, to: installer.name, actor });
+  }
+  await logOutsideHours({ jobId: task.jobId, taskId: input.taskId, hits: outside, actor, source: "booking" });
 
   await syncJobForTask(input.taskId, actor);
   return { ...row, dates };
+}
+
+/**
+ * Never a silent swap (brief, 7 Nov 2026). A dispatch already assigned to one
+ * installer is only given to another once the office has reviewed and
+ * confirmed it; one already started can't be moved at all. Returns who had it,
+ * so the change goes on the job's history.
+ */
+async function replaceGuard(
+  task: { title: string; status: string; assignedInstallerId: number | null },
+  installer: { id: number; name: string },
+  confirmed: boolean | undefined,
+): Promise<{ previous: number | null; previousName: string | null }> {
+  const previous =
+    task.assignedInstallerId && task.assignedInstallerId !== installer.id && ["assigned", "in_progress"].includes(task.status)
+      ? task.assignedInstallerId
+      : null;
+  if (!previous) return { previous: null, previousName: null };
+  const [prev] = await db.select({ name: schema.installers.name }).from(schema.installers).where(eq(schema.installers.id, previous));
+  const previousName = prev?.name ?? "another installer";
+  if (task.status === "in_progress") {
+    throw new ORPCError("BAD_REQUEST", { message: `${task.title} is already started by ${previousName}, so it can't be given to someone else.` });
+  }
+  if (!confirmed) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: `${task.title} is booked to ${previousName}. Review the change and confirm taking it off ${previousName} before giving it to ${installer.name}.`,
+      data: { reason: "replace_installer", from: previousName },
+    });
+  }
+  return { previous, previousName };
+}
+
+async function logReplaced(args: { jobId: number; taskId: number; title: string; from: string; to: string; actor: Actor }) {
+  await db.insert(schema.activityLog).values({
+    jobId: args.jobId,
+    taskId: args.taskId,
+    entityType: "task",
+    entityId: args.taskId,
+    action: "allocation_changed",
+    detail: `${args.title}: taken off ${args.from} and given to ${args.to} after review. Same dispatch, so it is paid once.`,
+    actorName: args.actor.name,
+    actorRole: args.actor.role,
+  });
 }
 
 export const tasks = {
@@ -648,6 +701,10 @@ export const tasks = {
         startTime: z.string().nullable().optional(),
         installerId: z.number().nullable().optional(),
         calendarOverride,
+        /** The office pressed "Confirm outside-hours booking". */
+        confirmOutsideHours: z.boolean().optional(),
+        /** The office reviewed taking it off the installer it is assigned to. */
+        replaceInstaller: z.boolean().optional(),
       }),
     )
     .handler(async ({ input, context }) => {
@@ -660,9 +717,11 @@ export const tasks = {
         if (block) throw new ORPCError("BAD_REQUEST", { message: block });
       }
 
+      let replaced: { previous: number | null; previousName: string | null; to: string } | null = null;
       if (input.installerId) {
         const { task, job } = await assertAssignable(input.id, input.installerId, existing.crewSize, true);
         const [installer] = await db.select().from(schema.installers).where(eq(schema.installers.id, input.installerId));
+        replaced = { ...(await replaceGuard(existing, installer!, input.replaceInstaller)), to: installer!.name };
         // A 2-man task can't be covered by one person unless they bring their own offsider.
         if (task.crewSize > 1 && installer!.crewCapacity !== "own_offsider" && !task.secondInstallerId) {
           throw new ORPCError("BAD_REQUEST", {
@@ -684,7 +743,9 @@ export const tasks = {
       const runInstaller = input.installerId ?? existing.assignedInstallerId;
       // Who attends after this move, for the personal calendar check.
       const crewAfter = input.installerId === null ? [] : [runInstaller, existing.secondInstallerId];
+      let outside: { date: string; from: string; to: string }[] = [];
       const guardRows = async (rows: DayRow[]) => {
+        outside = checkOutsideHours({ days: rows, durationHours: existing.durationHours, confirmed: input.confirmOutsideHours, actor: context.actor });
         await calGuard({
           taskId: input.id,
           rows,
@@ -823,6 +884,10 @@ export const tasks = {
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
+      if (replaced?.previous) {
+        await logReplaced({ jobId: existing.jobId, taskId: input.id, title: existing.title, from: replaced.previousName!, to: replaced.to, actor: context.actor });
+      }
+      await logOutsideHours({ jobId: existing.jobId, taskId: input.id, hits: outside, actor: context.actor, source: "reschedule" });
 
       await syncJobForTask(input.id, context.actor);
       return { ...row, dates: moved, bookedDays };
@@ -837,10 +902,13 @@ export const tasks = {
         secondInstallerId: z.number().nullable().optional(),
         payAmount: z.number().nullable().optional(),
         calendarOverride,
+        /** The office reviewed taking it off the installer it is assigned to. */
+        replaceInstaller: z.boolean().optional(),
       }),
     )
     .handler(async ({ input, context }) => {
       const { task, job, installer } = await assertAssignable(input.id, input.installerId, 1);
+      const { previous, previousName } = await replaceGuard(task, installer, input.replaceInstaller);
 
       const needsTwo = task.crewSize > 1;
       const bringsOwn = installer.crewCapacity === "own_offsider";
@@ -896,6 +964,9 @@ export const tasks = {
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
+      if (previous) {
+        await logReplaced({ jobId: task.jobId, taskId: input.id, title: task.title, from: previousName!, to: installer.name, actor: context.actor });
+      }
       await syncJobForTask(input.id, context.actor);
 
       return row ? taskForStaff(row, context.actor) : row;
@@ -994,14 +1065,16 @@ export const tasks = {
       } else problems.push("No job number in that.");
 
       /* -------------------------- the installer -------------------------- */
-      // Matched against who is ticked for this skill when the task is known,
-      // so a name only has to be unique among the people who could do it.
-      const pool = taskRow?.task.skillId
+      // Matched against who is ticked for the work when the task is known, so
+      // a name only has to be unique among the people who could do it. The
+      // skills come from the dispatch's own lines, not only its first trade.
+      const needIds = taskRow ? (await skillsForTask(taskRow.task.id)).map((n) => n.id) : [];
+      const pool = needIds.length
         ? await db
-            .select({ id: schema.installers.id, name: schema.installers.name })
+            .selectDistinct({ id: schema.installers.id, name: schema.installers.name })
             .from(schema.installerSkills)
             .innerJoin(schema.installers, eq(schema.installers.id, schema.installerSkills.installerId))
-            .where(and(eq(schema.installerSkills.skillId, taskRow.task.skillId), eq(schema.installers.active, true)))
+            .where(and(inArray(schema.installerSkills.skillId, needIds), eq(schema.installers.active, true)))
         : await db
             .select({ id: schema.installers.id, name: schema.installers.name })
             .from(schema.installers)
@@ -1012,6 +1085,10 @@ export const tasks = {
         if (ambiguous.length > 1) problems.push(`Which one: ${ambiguous.map((a) => a.name).join(" or ")}?`);
         else if (parsed.nameWords.length) problems.push(`No installer matching "${parsed.nameWords.join(" ")}" is ticked for this work.`);
         else problems.push("No installer name in that.");
+      } else if (taskRow) {
+        // Ticked for some of the work but not all of it: say what, before Book.
+        const barrier = await workBarrier(taskRow.task.id, installer.id);
+        if (barrier) problems.push(barrier);
       }
 
       /* ---------------------------- the dates ---------------------------- */
@@ -1028,8 +1105,23 @@ export const tasks = {
 
       const checks =
         installer && taskRow
-          ? await checkDays({ installerId: installer.id, dates, exceptTaskId: taskRow.task.id })
-          : dates.map((date) => ({ date, status: "available" as const, reason: null, clashes: [] }));
+          ? await checkDays({
+              installerId: installer.id,
+              dates,
+              exceptTaskId: taskRow.task.id,
+              times: parsed.arrivalStart
+                ? {
+                    durationHours: taskRow.task.durationHours,
+                    days: dates.map((date, i) => ({
+                      date,
+                      arrivalStart: parsed.arrivalStart,
+                      arrivalEnd: parsed.arrivalEnd ?? null,
+                      coordinate: i > 0 && Boolean(parsed.coordinateAfterFirst),
+                    })),
+                  }
+                : null,
+            })
+          : dates.map((date) => ({ date, status: "available" as const, reason: null, clashes: [], sameDay: [] }));
 
       // Words that went nowhere are usually a mangled time. Loud, but not a
       // blocker: the preview shows the window it did read, so the office can
@@ -1093,6 +1185,15 @@ export const tasks = {
         skipNonWorking: z.boolean().default(true),
         /** Dates the office has ticked off the run by hand. */
         excludeDates: z.array(z.string()).default([]),
+        /**
+         * The window being booked. With it, another booking the same day at a
+         * time that doesn't overlap (buffers counted) is shown, not flagged.
+         */
+        arrivalStart: z.string().nullable().optional(),
+        arrivalEnd: z.string().nullable().optional(),
+        durationHours: z.number().nullable().optional(),
+        /** Days after the first left for the installer and site to sort out. */
+        coordinateAfterFirst: z.boolean().optional(),
       }),
     )
     .handler(async ({ input }) => {
@@ -1114,8 +1215,23 @@ export const tasks = {
       }
 
       const checks = input.installerId
-        ? await checkDays({ installerId: input.installerId, dates, exceptTaskId: input.taskId })
-        : dates.map((date) => ({ date, status: "available" as const, reason: null, clashes: [] }));
+        ? await checkDays({
+            installerId: input.installerId,
+            dates,
+            exceptTaskId: input.taskId,
+            times: input.arrivalStart
+              ? {
+                  durationHours: input.durationHours ?? null,
+                  days: dates.map((date, i) => ({
+                    date,
+                    arrivalStart: input.arrivalStart,
+                    arrivalEnd: input.arrivalEnd ?? null,
+                    coordinate: i > 0 && Boolean(input.coordinateAfterFirst),
+                  })),
+                }
+              : null,
+          })
+        : dates.map((date) => ({ date, status: "available" as const, reason: null, clashes: [], sameDay: [] }));
 
       return {
         dates,

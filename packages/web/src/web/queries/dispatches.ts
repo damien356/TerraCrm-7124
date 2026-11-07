@@ -28,3 +28,19 @@ export function useMergeDispatches() {
   const refresh = useRefresh();
   return useMutation(orpc.dispatches.merge.mutationOptions({ onSuccess: refresh }));
 }
+
+/* Allocate labour on a job (Damien's brief, 7 Nov 2026). */
+
+/** Each dispatch on a job with its status, lines, who has it, and what is not pay. */
+export function useJobAllocation(jobId: number) {
+  return useQuery(orpc.dispatches.allocation.queryOptions({ input: { jobId }, enabled: jobId > 0, staleTime: 5_000 }));
+}
+/** What an allocation would do: scope, recipient, clashes and anything stopping it. Writes nothing. */
+export function usePreviewAllocate() {
+  return useMutation(orpc.dispatches.previewAllocate.mutationOptions());
+}
+/** Book the ticked lines to one person as one visit. Sends no offer and no message. */
+export function useAllocate() {
+  const refresh = useRefresh();
+  return useMutation(orpc.dispatches.allocate.mutationOptions({ onSuccess: refresh }));
+}

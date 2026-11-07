@@ -13,6 +13,7 @@ import {
   useRateBook,
   useRateCard,
   useRateHistory,
+  useSetItemAccess,
   useSetRate,
   useUpdateRateItem,
 } from "../queries/labour";
@@ -876,6 +877,10 @@ export function InstallerRatesTab({ installerId }: { installerId: number }) {
         </Card>
       ) : null}
 
+      {card.data && card.data.restrictedItems.length > 0 ? (
+        <DayRateSwitches installerId={installerId} on={on} items={card.data.restrictedItems} log={card.data.accessLog} />
+      ) : null}
+
       {card.isLoading ? <Loading /> : null}
 
       <div className="space-y-4">
@@ -977,5 +982,81 @@ export function InstallerRatesTab({ installerId }: { installerId: number }) {
         onClose={() => setHistoryFor(null)}
       />
     </>
+  );
+}
+
+/**
+ * Day rates are per contractor (brief, 7 Nov 2026). Off for everyone unless
+ * switched on here, from the date above, and every switch stays on the record.
+ * Switching one off never touches pay already agreed or invoiced.
+ */
+function DayRateSwitches({
+  installerId,
+  on,
+  items,
+  log,
+}: {
+  installerId: number;
+  on: string;
+  items: { itemId: number; name: string; unit: string; enabled: boolean; since: string | null; by: string | null; rate: number | null }[];
+  log: { id: number; itemId: number; name: string; enabled: boolean; effectiveFrom: string; note: string | null; by: string; at: Date | string }[];
+}) {
+  const setAccess = useSetItemAccess();
+  const [showLog, setShowLog] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  return (
+    <Card className="mb-4">
+      <CardHeader
+        title="Day rates (per contractor)"
+        subtitle="Off unless switched on for him. He only sees the ones switched on, on his own card and in the app."
+      />
+      <div className="divide-y divide-border">
+        {items.map((i) => {
+          const pending = setAccess.isPending && setAccess.variables?.itemId === i.itemId;
+          return (
+            <label key={i.itemId} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-sm">
+              <Checkbox
+                checked={i.enabled}
+                disabled={setAccess.isPending}
+                onChange={(e) => {
+                  setError(null);
+                  setAccess.mutate(
+                    { installerId, itemId: i.itemId, enabled: e.target.checked, effectiveFrom: on, note: null },
+                    { onError: (err) => setError(err instanceof Error ? err.message : String(err)) },
+                  );
+                }}
+              />
+              <span className="min-w-[200px] flex-1">
+                {i.name}
+                <span className="ml-2 text-xs text-muted-foreground">
+                  {i.enabled ? `on${i.since ? ` from ${auDay(i.since)}` : ""}${i.by ? ` by ${i.by}` : ""}` : "off"}
+                  {i.enabled && i.rate == null ? " · no rate set, set his rate below" : ""}
+                </span>
+              </span>
+              {pending ? <Spinner /> : null}
+            </label>
+          );
+        })}
+      </div>
+      {error ? <p className="px-4 pb-2 text-xs text-[var(--destructive)]">{error}</p> : null}
+      {log.length > 0 ? (
+        <div className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
+          <button type="button" className="underline" onClick={() => setShowLog((v) => !v)}>
+            {showLog ? "Hide history" : `History (${log.length})`}
+          </button>
+          {showLog ? (
+            <ul className="mt-1.5 space-y-0.5">
+              {log.map((h) => (
+                <li key={h.id}>
+                  {h.name} switched {h.enabled ? "on" : "off"} from {auDay(h.effectiveFrom)}
+                  {h.by ? ` by ${h.by}` : ""}
+                  {h.note ? ` (${h.note})` : ""}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+    </Card>
   );
 }

@@ -188,7 +188,7 @@ export async function lockTaskLabour(args: { taskId: number; installerId?: numbe
    */
   const terms = installerId ? await termsOn(installerId, on) : null;
   if (terms?.defaultForNew && args.assignment && task.payAmount == null && task.status !== "complete") {
-    return lockHourly(task, on);
+    return lockHourly(task, on, terms);
   }
   if (task.payType === "hourly" && task.benchmarkPricedOn && !terms) {
     // Moved from an hourly man to a normal installer: back to the agreed lines.
@@ -228,7 +228,7 @@ export async function lockTaskLabour(args: { taskId: number; installerId?: numbe
 }
 
 /** Hourly: no labour frozen as pay; the Terra standard price of the lines frozen as the benchmark. */
-async function lockHourly(task: typeof schema.jobTasks.$inferSelect, on: string) {
+async function lockHourly(task: typeof schema.jobTasks.$inferSelect, on: string, terms: { id: number; baseRate: number }) {
   const [lines, itemRows, rates, settings] = await Promise.all([
     db.select().from(schema.taskLabourLines).where(eq(schema.taskLabourLines.taskId, task.id)),
     db.select().from(schema.labourRateItems),
@@ -242,6 +242,9 @@ async function lockHourly(task: typeof schema.jobTasks.$inferSelect, on: string)
     .update(schema.jobTasks)
     .set({
       payType: "hourly",
+      // The rate agreed for this allocation. Approval pays at it, whatever his terms say later.
+      agreedHourlyRate: terms.baseRate,
+      agreedTermsId: terms.id,
       labourCost: null,
       labourBreakdown: null,
       labourPricedOn: on,

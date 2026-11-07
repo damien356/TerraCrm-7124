@@ -940,7 +940,10 @@ function TermsTab() {
           {terms.isLoading ? (
             <Loading />
           ) : !terms.data?.length ? (
-            <p className="text-sm text-muted-foreground">No hourly terms. He is paid the usual way.</p>
+            <p className="text-sm text-muted-foreground">
+              Contractor labor - per hour: <span className="tabular">$0.00</span> <span className="font-medium text-warning">Rate not set</span>. He is paid the usual way,
+              and hourly work can't be offered, approved or invoiced for him until a rate is added below.
+            </p>
           ) : (
             <table className="w-full text-sm">
               <thead>

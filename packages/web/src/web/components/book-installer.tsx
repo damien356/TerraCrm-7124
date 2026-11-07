@@ -7,6 +7,7 @@ import { Checkbox, Field, Input, Select } from "./ui/field";
 import { useBookTask, usePlanBooking, useTask } from "../queries/tasks";
 import { useEligible } from "../queries/installers";
 import { useCalendarCheck } from "../queries/calendar";
+import { useBookingAsks } from "./outside-hours";
 
 /**
  * BOOK INSTALLER. The whole booking in one panel, not a wizard.
@@ -72,6 +73,37 @@ const longDate = (date: string) =>
 type Mode = "one" | "multi";
 type Following = "same" | "coordinate" | "each";
 
+type Pickable = { id: number; name: string; eligible: boolean; reasons: string[] };
+
+/**
+ * Who can't take this dispatch, and why (brief section 2). Nobody is left
+ * off the list without a reason: they show greyed out with what stops them.
+ */
+export function IneligibleNote({ people, picked }: { people: Pickable[] | undefined; picked?: string }) {
+  const out = (people ?? []).filter((p) => !p.eligible);
+  if (!out.length) return null;
+  const chosen = out.find((p) => String(p.id) === picked);
+  return (
+    <div className="mt-1 text-[11px] text-muted-foreground">
+      {chosen ? (
+        <p className="font-medium text-destructive">
+          {chosen.name} can't be booked on this: {chosen.reasons.join(", ")}.
+        </p>
+      ) : null}
+      <details>
+        <summary className="cursor-pointer">{out.length} {out.length === 1 ? "person" : "people"} can't take this. Why</summary>
+        <ul className="mt-1 space-y-0.5">
+          {out.map((p) => (
+            <li key={p.id}>
+              <span className="font-medium text-foreground">{p.name}</span>: {p.reasons.filter((r) => /ticked|switched on|rate not set/i.test(r)).join(", ") || p.reasons.join(", ")}
+            </li>
+          ))}
+        </ul>
+      </details>
+    </div>
+  );
+}
+
 export function BookInstallerPanel({
   taskId,
   onClose,
@@ -105,7 +137,8 @@ export function BookInstallerPanel({
   const [error, setError] = React.useState<string | null>(null);
   const [seeded, setSeeded] = React.useState(false);
 
-  const eligible = useEligible(t?.skillId ?? null, startDate, t?.crewSize ?? 1);
+  // Skills come from the dispatch's own work lines, so nobody is dropped for the first line's trade.
+  const eligible = useEligible(t?.skillId ?? null, startDate, t?.crewSize ?? 1, { taskId });
   const book = useBookTask();
   // True once the office has put the day count in themselves. That number then
   // sticks on the job and beats the rate-based recommendation next time, since
@@ -150,6 +183,11 @@ export function BookInstallerPanel({
     days,
     skipNonWorking: mode === "multi" && skipNonWorking,
     excludeDates: mode === "multi" ? dropped : [],
+    // With the times, another booking that day clear of this one (buffers counted) is not a clash.
+    arrivalStart: windowIdx === CUSTOM ? startAt : (WINDOWS[windowIdx]?.start ?? null),
+    arrivalEnd: windowIdx === CUSTOM ? finishAt : (WINDOWS[windowIdx]?.end ?? null),
+    durationHours: windowIdx === CUSTOM ? null : durationHours,
+    coordinateAfterFirst: mode === "multi" && following === "coordinate",
   });
 
   // Belt and braces on the server's rule: this booking's own days, or another
@@ -202,11 +240,11 @@ export function BookInstallerPanel({
   const calWho = [...new Set(calProblems.map((c) => c.name))].join(" and ");
   const calBlocked = calProblems.length > 0 && (calNoTime || !calMine || calReason.trim().length < 3);
 
-  function submit() {
-    if (!t || !installerId) return;
-    setError(null);
-    book
-      .mutateAsync({
+  const asks = useBookingAsks(
+    (flags) => {
+      if (!t || !installerId) return Promise.resolve();
+      return book.mutateAsync({
+        ...flags,
         taskId,
         installerId: Number(installerId),
         dates,
@@ -228,12 +266,21 @@ export function BookInstallerPanel({
           daysByHand || t.suggested?.basis === "manual" || (t.suggested != null && dates.length !== t.suggested.days)
             ? dates.length
             : null,
-      })
-      .then(() => {
+      }).then(() => {
         onBooked?.();
         onClose();
-      })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+      });
+    },
+    setError,
+  );
+
+  const chosen = eligible.data?.find((i) => String(i.id) === installerId);
+  const chosenBlocked = Boolean(chosen && !chosen.eligible);
+
+  function submit() {
+    if (!t || !installerId || chosenBlocked) return;
+    setError(null);
+    void asks.run();
   }
 
   if (task.isLoading || !t) {
@@ -274,13 +321,15 @@ export function BookInstallerPanel({
           <Select value={installerId} onChange={(e) => setInstallerId(e.target.value)}>
             <option value="">Pick someone…</option>
             {(eligible.data ?? []).map((i) => (
-              <option key={i.id} value={i.id}>
+              <option key={i.id} value={i.id} disabled={!i.eligible && String(i.id) !== installerId}>
                 {i.name}
-                {!i.canCoverAlone ? " · can't do 2-man alone" : ""}
+                {!i.eligible ? ` · can't: ${i.reasons.filter((r) => /ticked|switched on|rate not set/i.test(r)).join(", ")}` : ""}
+                {i.eligible && !i.canCoverAlone ? " · can't do 2-man alone" : ""}
               </option>
             ))}
           </Select>
         </Field>
+        <IneligibleNote people={eligible.data} picked={installerId} />
 
         {/* ---------------------------- booking type ---------------------------- */}
         <div className="mt-3">
@@ -430,6 +479,11 @@ export function BookInstallerPanel({
                           ? "Available"
                           : (d.reason ?? "Unavailable")}
                     </span>
+                    {d.clashes.length === 0 && d.sameDay?.length ? (
+                      <span className="text-[11px] text-muted-foreground">
+                        · also {d.sameDay.map((x) => `Job #${x.jobNumber} ${x.when}`).join(", ")}, clear of this time
+                      </span>
+                    ) : null}
                     {mode === "multi" && dates.length > 1 ? (
                       <button
                         type="button"
@@ -648,13 +702,14 @@ export function BookInstallerPanel({
         {error ? (
           <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</p>
         ) : null}
+        {asks.dialog}
       </div>
 
       {/* -------------------------------- book it -------------------------------- */}
       <div className="border-t border-border px-4 py-3">
         <Button
           className="h-11 w-full text-sm font-semibold"
-          disabled={!installerId || dates.length === 0 || book.isPending || customBad || calBlocked || (cal.isLoading && crew.length > 0)}
+          disabled={!installerId || dates.length === 0 || book.isPending || asks.pending || chosenBlocked || customBad || calBlocked || (cal.isLoading && crew.length > 0)}
           onClick={submit}
         >
           {book.isPending ? (

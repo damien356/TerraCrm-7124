@@ -133,7 +133,9 @@ async function hourlyInvoiceLines(taskId: number, installerId: number) {
     lines,
     sessionIds: billable.map((s) => s.id),
     gstRegistered: billable.length > 0 && billable.every((s) => s.gstRegistered === true),
-    block: waiting
+    block: billable.some((s) => !((s.rateBase ?? 0) > 0))
+      ? "Contractor labor - per hour: Rate not set ($0.00). Terra office must set the agreed hourly rate before this time can be invoiced."
+      : waiting
       ? `${waiting} time ${waiting === 1 ? "entry is" : "entries are"} still waiting for Terra office to approve. Invoice once they are approved.`
       : billable.length === 0
         ? "There is no approved time on this job to invoice yet."

@@ -26,6 +26,11 @@ export function usePlanBooking(input: {
   days: number;
   skipNonWorking: boolean;
   excludeDates: string[];
+  /** The window being booked: another booking that day at a time clear of it is shown, not flagged. */
+  arrivalStart?: string | null;
+  arrivalEnd?: string | null;
+  durationHours?: number | null;
+  coordinateAfterFirst?: boolean;
 }) {
   return useQuery(
     orpc.tasks.planBooking.queryOptions({
@@ -36,6 +41,10 @@ export function usePlanBooking(input: {
         days: input.days,
         skipNonWorking: input.skipNonWorking,
         excludeDates: input.excludeDates,
+        arrivalStart: input.arrivalStart ?? null,
+        arrivalEnd: input.arrivalEnd ?? null,
+        durationHours: input.durationHours ?? null,
+        coordinateAfterFirst: input.coordinateAfterFirst ?? false,
       },
       enabled: input.taskId !== null && Boolean(input.startDate),
       staleTime: 5_000,

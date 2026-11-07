@@ -83,3 +83,13 @@ export function useDeleteRateItem() {
   const onSuccess = useRefreshLabour();
   return useMutation(orpc.labour.itemDelete.mutationOptions({ onSuccess }));
 }
+
+/**
+ * Switch a per-contractor item (a day rate) on or off for one installer, from
+ * a date. Admin only on the server. Each switch is a new row, so the card keeps
+ * the history.
+ */
+export function useSetItemAccess() {
+  const onSuccess = useRefreshLabour();
+  return useMutation(orpc.labour.setItemAccess.mutationOptions({ onSuccess }));
+}

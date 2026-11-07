@@ -5,6 +5,10 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly } from "../middleware/auth";
 import { blockedInstallerIds } from "../lib/availability";
+import { namesFor, sayList, skillsForTask } from "../lib/task-skills";
+import { accessOn, itemOpenTo } from "../lib/rate-access";
+import { todayLocal } from "../lib/local-date";
+import { termsFor } from "../lib/hourly";
 import { mayWorkBetween, slotCols, workSlots } from "../lib/task-run";
 import { installerLogoKey, signGet, signPut } from "../lib/s3";
 import { taskForStaff } from "../lib/staff-view";
@@ -332,18 +336,56 @@ export const installers = {
       return { ok: true, enabled: true };
     }),
 
-  /** Who can legitimately be offered this skill, used by the dispatch pickers. */
+  /**
+   * Who can be given this work, used by the dispatch pickers. With a taskId
+   * the skills come from the task's own lines (or the chosen itemIds only),
+   * so one dispatch with carpet tiles and hybrid needs both, and a package of
+   * the hybrid lines needs only Hybrid. Everyone current is listed: people who
+   * can't take it come back with eligible false and the reasons, never left out.
+   */
   eligible: staffOnly
-    .input(z.object({ skillId: z.number(), date: z.string().optional(), crewSize: z.number().default(1) }))
+    .input(
+      z.object({
+        skillId: z.number().nullable().optional(),
+        taskId: z.number().optional(),
+        itemIds: z.array(z.number()).optional(),
+        date: z.string().optional(),
+        crewSize: z.number().default(1),
+      }),
+    )
     .handler(async ({ input, context }) => {
       // Installer rates are Admin only. Office books the person, not the price.
       const isAdmin = context.actor.role === "admin";
-      const rows = await db
-        .select({ installer: schema.installers, link: schema.installerSkills })
-        .from(schema.installerSkills)
-        .innerJoin(schema.installers, eq(schema.installers.id, schema.installerSkills.installerId))
-        .where(and(eq(schema.installerSkills.skillId, input.skillId), eq(schema.installers.active, true)))
+      const needs = input.taskId ? await skillsForTask(input.taskId, input.itemIds) : input.skillId ? await namesFor([input.skillId]) : [];
+      const people = await db
+        .select()
+        .from(schema.installers)
+        .where(and(eq(schema.installers.active, true), isNull(schema.installers.archivedAt)))
         .orderBy(asc(schema.installers.name));
+      const links = needs.length
+        ? await db.select().from(schema.installerSkills).where(inArray(schema.installerSkills.skillId, needs.map((n) => n.id)))
+        : [];
+      // Per-contractor lines on the work (a day rate): only people it is switched on for.
+      const restricted = input.taskId
+        ? (
+            await db
+              .select({ id: schema.labourRateItems.id, name: schema.labourRateItems.name, restricted: schema.labourRateItems.restricted })
+              .from(schema.taskLabourLines)
+              .innerJoin(schema.labourRateItems, eq(schema.labourRateItems.id, schema.taskLabourLines.itemId))
+              .where(and(eq(schema.taskLabourLines.taskId, input.taskId), eq(schema.labourRateItems.restricted, true)))
+          ).filter((i) => !input.itemIds?.length || input.itemIds.includes(i.id))
+        : [];
+      const access = restricted.length ? await accessOn(people.map((p) => p.id), todayLocal()) : new Map<string, boolean>();
+      // Hourly men with no agreed rate ($0.00) can't be given hourly work.
+      const hourlyTerms = await termsFor(people.map((p) => p.id), todayLocal());
+      const rows = people.map((installer) => {
+        const mine = links.filter((l) => l.installerId === installer.id);
+        const missing = needs.filter((n) => !mine.some((l) => l.skillId === n.id));
+        const locked = restricted.filter((i) => !itemOpenTo(i, installer.id, access));
+        const t = hourlyTerms.get(installer.id);
+        const noRate = Boolean(t?.defaultForNew && !(t.baseRate > 0));
+        return { installer, link: mine.find((l) => l.skillId === needs[0]?.id) ?? null, mine, missing, locked, noRate };
+      });
 
       // Busy means working that Brisbane date on any day of a run, not only on
       // the task's first date. A schedule nobody can read counts as maybe busy.
@@ -362,8 +404,16 @@ export const installers = {
       // Blackout dates and standing rules, both resolved server-side.
       const blocked = input.date ? await blockedInstallerIds(input.date) : new Set<number>();
 
-      return rows.map((r) => {
+      const out = rows.map((r) => {
         const off = blocked.has(r.installer.id);
+        const alone = input.crewSize < 2 || r.installer.crewCapacity === "own_offsider";
+        const reasons: string[] = [];
+        if (r.missing.length) reasons.push(`Not ticked for ${sayList(r.missing.map((m) => m.name))}`);
+        if (r.locked.length) reasons.push(`${sayList(r.locked.map((l) => l.name))} not switched on for them`);
+        if (r.noRate) reasons.push("Hourly rate not set ($0.00)");
+        if (off) reasons.push("Unavailable that day");
+        if (!alone) reasons.push("Needs a second person for a 2-man job");
+        if (busy.has(r.installer.id)) reasons.push(sureBusy.has(r.installer.id) ? "Already booked that day" : "Might be booked that day");
         return {
           id: r.installer.id,
           name: r.installer.name,
@@ -371,17 +421,24 @@ export const installers = {
           colour: r.installer.colour,
           crewCapacity: r.installer.crewCapacity,
           starRating: r.installer.starRating,
-          rateType: isAdmin ? r.link.rateType : null,
-          rate: isAdmin ? r.link.rate : null,
-          canLead: r.link.canLead,
+          rateType: isAdmin ? (r.link?.rateType ?? null) : null,
+          rate: isAdmin ? (r.link?.rate ?? null) : null,
+          canLead: needs.length === 0 || (r.mine.length > 0 && r.mine.every((l) => l.canLead)),
+          /** Ticked for every skill the work needs. Only these can be booked or offered it. */
+          eligible: r.missing.length === 0 && r.locked.length === 0 && !r.noRate,
+          /** Why someone can't take it, or what to watch for. Never a rate or anything private. */
+          reasons,
+          missingSkills: r.missing.map((m) => m.name),
           busyThatDay: busy.has(r.installer.id),
           /** Busy only because a schedule cannot be read, so it might be free. */
           busyScheduleIncomplete: busy.has(r.installer.id) && !sureBusy.has(r.installer.id),
           unavailableThatDay: off,
           /** A needs_partner installer can't cover a 2-man task on their own. */
-          canCoverAlone: input.crewSize < 2 || r.installer.crewCapacity === "own_offsider",
+          canCoverAlone: alone,
         };
       });
+      // Who can take it first, then everyone else with their reasons.
+      return out.sort((x, y) => Number(y.eligible) - Number(x.eligible) || x.name.localeCompare(y.name));
     }),
 
   /**

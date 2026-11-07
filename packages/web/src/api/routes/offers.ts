@@ -9,6 +9,7 @@ import { pushToInstaller } from "../lib/push";
 import { notifyOffice } from "../lib/notify";
 import { blockedReason } from "../lib/availability";
 import { bookingBlock } from "../lib/prep";
+import { workBarrier } from "../lib/task-skills";
 import { lockTaskLabour } from "./costing";
 import { isHourlyContractor } from "../lib/hourly";
 import { syncJobForTask } from "../lib/job-stage";
@@ -186,18 +187,9 @@ export async function sendDirectOffer(
     throw new ORPCError("BAD_REQUEST", { message: "This person is booked directly with a start time, not sent an offer. Use Book instead." });
   }
 
-  if (task.skillId) {
-    const [tick] = await db
-      .select()
-      .from(schema.installerSkills)
-      .where(
-        and(
-          eq(schema.installerSkills.installerId, input.installerId),
-          eq(schema.installerSkills.skillId, task.skillId),
-        ),
-      );
-    if (!tick) throw new ORPCError("BAD_REQUEST", { message: "That installer isn't ticked for this skill." });
-  }
+  // Every skill the task's own lines need, not only the first one.
+  const barrier = await workBarrier(input.taskId, input.installerId);
+  if (barrier) throw new ORPCError("BAD_REQUEST", { message: barrier });
 
   const expiresAt = new Date(Date.now() + OFFER_TTL_HOURS * 3600_000);
   const pay = input.payAmount ?? (await derivePay(input.taskId, input.installerId));
@@ -270,6 +262,8 @@ export const offers = {
       // A 2-man task can only be broadcast to people who can actually cover it.
       // Staff and calendar-checked people are left out, see offerOff.
       const off = await offerOff(candidates.map((c) => c.installer.id));
+      // Ticked for every skill the task's lines need, not only its headline one.
+      for (const c of candidates) if (await workBarrier(input.taskId, c.installer.id)) off.add(c.installer.id);
       const eligible = candidates.filter(
         (c) =>
           !off.has(c.installer.id) &&

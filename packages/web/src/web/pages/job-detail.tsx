@@ -50,6 +50,7 @@ import { JobPhoneCard } from "../components/phone-calls";
 import { sourceName } from "../../api/lib/lead-codes";
 import { JobPeopleCard } from "../components/job-people";
 import { DispatchWork, MergeDispatchesModal, SplitDispatchModal } from "../components/dispatch-split";
+import { AllocateLabourModal } from "../components/allocate-labour";
 import { CancelJobButton } from "../components/job-cancel";
 import { MergeJobButton } from "../components/job-merge";
 import { JobReferrerCard } from "../components/referrals";
@@ -342,6 +343,7 @@ export default function JobDetailPage() {
   const [measuring, setMeasuring] = React.useState<{ id: number; title: string } | null>(null);
   const [booking, setBooking] = React.useState<number | null>(null);
   const [splitting, setSplitting] = React.useState<number | null>(null);
+  const [allocating, setAllocating] = React.useState(false);
   const [merging, setMerging] = React.useState(false);
   const [note, setNote] = React.useState("");
   const [material, setMaterial] = React.useState({ description: "", qty: "", unit: "m2" });
@@ -647,6 +649,11 @@ export default function JobDetailPage() {
               subtitle="What gets sent to crew. One per job, split by trade when two crews do the work."
               action={
                 <div className="flex items-center gap-3">
+                  {j.tasks.some((t) => t.status !== "cancelled") ? (
+                    <button type="button" onClick={() => setAllocating(true)} className="text-xs font-medium text-primary hover:underline">
+                      Allocate labour
+                    </button>
+                  ) : null}
                   {j.tasks.filter((t) => t.status !== "cancelled").length > 1 ? (
                     <button type="button" onClick={() => setMerging(true)} className="text-xs font-medium text-primary hover:underline">
                       Merge
@@ -869,6 +876,7 @@ export default function JobDetailPage() {
       <NewTaskModal jobId={j.id} open={taskModal} onClose={() => setTaskModal(false)} furniture={j.furnitureOnSite} />
       <SplitDispatchModal jobId={j.id} jobRef={jobText(j)} taskId={splitting} open={splitting !== null} onClose={() => setSplitting(null)} />
       <MergeDispatchesModal jobId={j.id} jobRef={jobText(j)} open={merging} onClose={() => setMerging(false)} />
+      <AllocateLabourModal jobId={j.id} open={allocating} onClose={() => setAllocating(false)} />
       <MeasureUpModal
         taskId={measuring?.id ?? null}
         title={measuring?.title ?? ""}

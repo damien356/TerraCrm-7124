@@ -4,6 +4,7 @@ import { Spinner } from "./ui/card";
 import { Button } from "./ui/button";
 import { Input } from "./ui/field";
 import { useBookTask, useParseCommand } from "../queries/tasks";
+import { useBookingAsks } from "./outside-hours";
 
 /**
  * Book a job by saying it, not clicking it.
@@ -51,12 +52,12 @@ export function CommandBox({
     setNote("");
   }
 
-  function confirm() {
-    if (!p?.ready || !p.task || !p.installer) return;
-    setError(null);
+  const asks = useBookingAsks((flags) => {
+    if (!p?.ready || !p.task || !p.installer) return Promise.resolve();
     const installerName = p.installer.name;
-    book
+    return book
       .mutateAsync({
+        ...flags,
         taskId: p.task.id,
         installerId: p.installer.id,
         dates: p.dates,
@@ -77,8 +78,13 @@ export function CommandBox({
           installer: installerName,
         });
         reset();
-      })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+      });
+  }, setError);
+
+  function confirm() {
+    if (!p?.ready || !p.task || !p.installer) return;
+    setError(null);
+    void asks.run();
   }
 
   /** Swap the ambiguous job number for the exact dispatch the office picked. */
@@ -244,9 +250,10 @@ export function CommandBox({
           {error ? (
             <p className="mt-1.5 text-xs font-medium text-destructive">{error}</p>
           ) : null}
+          {asks.dialog}
 
           <div className="mt-2 flex items-center gap-2">
-            <Button size="sm" disabled={!p.ready || book.isPending} onClick={confirm}>
+            <Button size="sm" disabled={!p.ready || book.isPending || asks.pending} onClick={confirm}>
               {book.isPending ? "Booking…" : loud ? "Book it anyway" : "Book it"}
               <CornerDownLeft className="ml-1 size-3.5" />
             </Button>

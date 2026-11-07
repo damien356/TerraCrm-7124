@@ -155,6 +155,39 @@ export async function isHourlyContractor(installerId: number): Promise<boolean> 
   return Boolean(r);
 }
 
+/** The name the brief gives the hourly pay item on each contractor's record. */
+export const HOURLY_ITEM = "Contractor labor - per hour";
+
+/**
+ * Why this installer can't be given hourly work now, or null. Hourly work
+ * with no agreed rate, or a rate of $0.00, is never agreement to work for free.
+ */
+export async function hourlyRateBarrier(installerId: number, on: string = todayLocal()): Promise<string | null> {
+  const terms = await termsOn(installerId, on);
+  if (!terms || !terms.defaultForNew) return null;
+  if (terms.baseRate > 0) return null;
+  return `${HOURLY_ITEM}: Rate not set ($0.00). Set the agreed hourly rate before giving this person hourly work.`;
+}
+
+/** Each task's agreed hourly rate and pay basis, for the session views. */
+export async function taskPay(taskIds: number[]) {
+  const ids = [...new Set(taskIds.filter((t): t is number => t != null))];
+  if (!ids.length) return new Map<number, TaskPay>();
+  const rows = await db
+    .select({ id: schema.jobTasks.id, payType: schema.jobTasks.payType, labourCost: schema.jobTasks.labourCost, agreedHourlyRate: schema.jobTasks.agreedHourlyRate })
+    .from(schema.jobTasks)
+    .where(inArray(schema.jobTasks.id, ids));
+  return new Map(rows.map((r) => [r.id, r]));
+}
+export type TaskPay = { id: number; payType: string; labourCost: number | null; agreedHourlyRate: number | null };
+
+/** Terms as they apply to one session: the rate agreed for its allocation wins over the terms of the day. */
+export function termsForTask(terms: TermsRow | null, task: TaskPay | null | undefined): TermsRow | null {
+  if (!terms) return null;
+  if (task?.agreedHourlyRate != null) return { ...terms, baseRate: task.agreedHourlyRate };
+  return terms;
+}
+
 const termsOf = (t: Pick<TermsRow, "baseRate" | "weekendMultiplier" | "nightMultiplier">): Terms => ({
   baseRate: t.baseRate,
   weekendMultiplier: t.weekendMultiplier,
@@ -266,7 +299,9 @@ export type SessionView = ReturnType<typeof viewSession>;
  * corrected times, the breaks, the suggested band split and what is blocking
  * approval. `now` closes an open session for display only.
  */
-export function viewSession(s: Session, breaks: Break[], settings: HourlySettings, terms: TermsRow | null, now = Date.now()) {
+export function viewSession(s: Session, breaks: Break[], settings: HourlySettings, termsIn: TermsRow | null, now = Date.now(), task: TaskPay | null = null) {
+  // The rate agreed when this work was allocated wins over today's terms.
+  const terms = termsForTask(termsIn, task);
   const start = (s.adjStartedAt ?? s.startedAt).getTime();
   const endRaw = s.adjEndedAt ?? s.endedAt;
   const end = endRaw ? endRaw.getTime() : now;
@@ -306,6 +341,11 @@ export function viewSession(s: Session, breaks: Break[], settings: HourlySetting
   }
   if (catPay === "pending") blockers.push(`Not confirmed whether "${CATEGORY_LABEL[category]}" is paid.`);
   if (!terms) blockers.push("No hourly pay terms for this worker on this date.");
+  else if (!(terms.baseRate > 0)) blockers.push(`${HOURLY_ITEM}: Rate not set ($0.00). Set the agreed hourly rate before approving.`);
+  // No hourly pay on top of work already paid by its agreed unit-rate lines.
+  if (task && task.payType !== "hourly" && (task.labourCost ?? 0) > 0) {
+    blockers.push("This work is paid by its agreed lines, not by the hour. Approving hours on it would pay it twice.");
+  }
   const payableMinutes = suggestion.minutes;
   if (catPay !== "unpaid") {
     if (!confirmed && !settings.nightWindow) blockers.push("Rate band not confirmed. Night hours are not set, so the office confirms the band.");
@@ -383,9 +423,10 @@ export async function viewSessions(where: ReturnType<typeof and>, now = Date.now
   const settings = await hourlySettings();
   const { sessions, breaks } = await loadSessions(where);
   const out: SessionView[] = [];
+  const tasks = await taskPay(sessions.map((s) => s.taskId as number));
   for (const s of sessions) {
     const terms = await termsOn(s.installerId, s.workDate);
-    out.push(viewSession(s, breaks, settings, terms, now));
+    out.push(viewSession(s, breaks, settings, terms, now, s.taskId != null ? tasks.get(s.taskId) ?? null : null));
   }
   return out;
 }
@@ -400,7 +441,8 @@ export async function approveSession(id: number, actor: ActorLike, split?: Split
   if (s.status === "approved") return s;
   if (s.status !== "recorded") throw new ORPCError("BAD_REQUEST", { message: "Only finished time can be approved." });
   const settings = await hourlySettings();
-  const terms = await termsOn(s.installerId, s.workDate);
+  const task = s.taskId != null ? (await taskPay([s.taskId])).get(s.taskId) ?? null : null;
+  const terms = termsForTask(await termsOn(s.installerId, s.workDate), task);
 
   if (split) {
     for (const p of split) if (!BANDS.includes(p.band)) throw new ORPCError("BAD_REQUEST", { message: `Unknown band ${p.band}` });
@@ -412,7 +454,7 @@ export async function approveSession(id: number, actor: ActorLike, split?: Split
   }
   const [fresh] = await db.select().from(schema.workSessions).where(eq(schema.workSessions.id, id));
   const breaks = await db.select().from(schema.workBreaks).where(eq(schema.workBreaks.sessionId, id));
-  const v = viewSession(fresh!, breaks, settings, terms);
+  const v = viewSession(fresh!, breaks, settings, terms, Date.now(), task);
   if (v.blockers.length) throw new ORPCError("BAD_REQUEST", { message: v.blockers.join(" ") });
 
   // Undecided breaks take the office policy now, so the record says what was paid.

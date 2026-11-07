@@ -290,6 +290,14 @@ export async function splitDispatch(
   const movesFloor = movedItems.some((i) => i.kind === "work" && !SIDE_GROUPS.has(i.groupName));
   const floorStays = stayItems.some((i) => i.kind === "work" && !SIDE_GROUPS.has(i.groupName));
   const moveArea = movesFloor && !floorStays;
+  // Both keep a floor (carpet tiles stay, hybrid goes): the m² is shared out by the floor lines' own m².
+  const floorM2 = (ls: typeof lines) =>
+    ls.reduce((sum, l) => {
+      const i = items.get(l.itemId);
+      return i && i.kind === "work" && !SIDE_GROUPS.has(i.groupName) && i.unit === "m2" ? sum + l.qty : sum;
+    }, 0);
+  const movedM2 = floorM2(moving);
+  const shareArea = movesFloor && floorStays && movedM2 > 0 && task.areaM2 != null && task.areaM2 > movedM2;
 
   const [created] = await db
     .insert(schema.jobTasks)
@@ -299,7 +307,7 @@ export async function splitDispatch(
       skillId: newSkillId,
       title,
       status: "unassigned",
-      areaM2: moveArea ? task.areaM2 : null,
+      areaM2: moveArea ? task.areaM2 : shareArea ? Math.round(movedM2 * 100) / 100 : null,
       crewSize: job?.furnitureOnSite ? 2 : (newSkill?.defaultCrewSize ?? 1),
       tenderMode: task.tenderMode,
       durationHours: task.durationHours,
@@ -316,6 +324,7 @@ export async function splitDispatch(
   // The dispatch left behind keeps its skill unless none of its lines are done under it any more.
   const patch: Partial<typeof schema.jobTasks.$inferInsert> = { updatedAt: new Date() };
   if (moveArea) patch.areaM2 = null;
+  if (shareArea) patch.areaM2 = Math.round((task.areaM2! - movedM2) * 100) / 100;
   if (!stayItems.some((i) => i.skillId === task.skillId)) {
     const stillSkill = skillOfItems(stayItems);
     if (stillSkill) patch.skillId = stillSkill;

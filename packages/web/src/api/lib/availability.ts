@@ -4,6 +4,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { weekdayOf } from "./local-date";
 import { mayWorkBetween, slotCols, workSlots } from "./task-run";
+import { dayWindow, minToHm, sameDayOverlap } from "./work-hours";
 
 /**
  * The single source of truth for "can this installer work that day".
@@ -85,7 +86,19 @@ export type DayCheck = {
   /** Why the day is flagged, in the words the office wrote. */
   reason: string | null;
   /** Other work already on this installer that day. Never blocks, always shown. */
-  clashes: { taskId: number; jobId: number; jobNumber: number | string; title: string; suburb: string; scheduleIncomplete?: string | null }[];
+  clashes: { taskId: number; jobId: number; jobNumber: number | string; title: string; suburb: string; scheduleIncomplete?: string | null; when?: string | null; untimed?: boolean }[];
+  /**
+   * Other bookings the same day that do not overlap the times asked about
+   * (buffers counted). Shown as information, never as a clash. Only filled
+   * when the caller gives the booking's times.
+   */
+  sameDay?: { taskId: number; jobId: number; jobNumber: number | string; title: string; suburb: string; when: string }[];
+};
+
+/** The times a booking would use, so a same-day booking at another time is not a clash. */
+export type BookingTimes = {
+  durationHours: number | null | undefined;
+  days: { date: string; arrivalStart: string | null | undefined; arrivalEnd?: string | null; coordinate?: boolean | null }[];
 };
 
 /**
@@ -101,18 +114,27 @@ export async function checkDays(args: {
   dates: string[];
   /** The task being booked, so its own days don't read as a clash with itself. */
   exceptTaskId?: number | null;
+  /** The booking's own times. Without them every same-day booking is a clash, as before. */
+  times?: BookingTimes | null;
 }): Promise<DayCheck[]> {
   const { installerId, dates } = args;
   if (dates.length === 0) return [];
 
-  const [rules, legacy, clashes] = await Promise.all([
+  const [rules, legacy, clashes, link] = await Promise.all([
     db.select().from(schema.installerUnavailability).where(eq(schema.installerUnavailability.installerId, installerId)),
     db
       .select({ days: schema.installers.unavailableDays, weekends: schema.installers.worksWeekendDays })
       .from(schema.installers)
       .where(eq(schema.installers.id, installerId)),
     bookedDays({ installerId, dates, exceptTaskId: args.exceptTaskId ?? null }),
+    db
+      .select({ before: schema.calendarLinks.bufferBeforeMin, after: schema.calendarLinks.bufferAfterMin })
+      .from(schema.calendarLinks)
+      .where(eq(schema.calendarLinks.installerId, installerId)),
   ]);
+  // Travel time either side, where the person has set one (calendar link). Zero otherwise.
+  const before = link[0]?.before ?? 0;
+  const after = link[0]?.after ?? 0;
   const legacyOff = safeWeekdays(legacy[0]?.days);
   const weekendOff = legacy[0] ? weekendDaysOff(legacy[0].weekends) : [];
 
@@ -141,9 +163,36 @@ export async function checkDays(args: {
       }
     }
 
-    return { date, status, reason, clashes: clashes.filter((c) => c.date === date).map(({ date: _d, ...c }) => c) };
+    const onDate = clashes.filter((c) => c.date === date);
+    const mine = args.times ? args.times.days.find((d) => d.date === date) : undefined;
+    if (!args.times || !mine) {
+      return { date, status, reason, clashes: onDate.map(({ date: _d, win, ...c }) => ({ ...c, when: say(win), untimed: !win })) };
+    }
+    const myWin = mine.coordinate ? null : dayWindow(mine.arrivalStart, mine.arrivalEnd ?? null, args.times.durationHours);
+    const real: DayCheck["clashes"] = [];
+    const sameDay: NonNullable<DayCheck["sameDay"]> = [];
+    for (const { date: _d, win, ...c } of onDate) {
+      const verdict = c.scheduleIncomplete ? "maybe" : sameDayOverlap(myWin, win, before, after);
+      if (verdict === "clear") sameDay.push({ taskId: c.taskId, jobId: c.jobId, jobNumber: c.jobNumber, title: c.title, suburb: c.suburb, when: say(win)! });
+      else real.push({ ...c, when: say(win), untimed: !win || !myWin });
+    }
+    return { date, status, reason, clashes: real, sameDay };
   });
 }
+
+const say = (w: { from: number; to: number } | null) => (w ? `${minToHm(w.from)}-${minToHm(w.to)}` : null);
+
+type Booked = {
+  date: string;
+  taskId: number;
+  jobId: number;
+  jobNumber: number | string;
+  title: string;
+  suburb: string;
+  scheduleIncomplete: string | null;
+  /** The booked span that day in minutes, null when it has no time. */
+  win: { from: number; to: number } | null;
+};
 
 /**
  * Work already sitting on one installer across a set of dates. Every working
@@ -155,9 +204,7 @@ export async function bookedDays(args: {
   installerId: number;
   dates: string[];
   exceptTaskId?: number | null;
-}): Promise<
-  { date: string; taskId: number; jobId: number; jobNumber: number | string; title: string; suburb: string; scheduleIncomplete: string | null }[]
-> {
+}): Promise<Booked[]> {
   const { installerId, dates } = args;
   if (dates.length === 0) return [];
   const live = ["assigned", "in_progress"] as const;
@@ -172,17 +219,29 @@ export async function bookedDays(args: {
       jobNumber: jobNumberSql,
       title: schema.jobTasks.title,
       suburb: schema.sites.suburb,
+      startTime: schema.jobTasks.startTime,
+      durationHours: schema.jobTasks.durationHours,
     })
     .from(schema.jobTasks)
     .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
     .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
     .where(and(inArray(schema.jobTasks.status, [...live]), mayWorkBetween(from, to)));
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  // Each day's own window: the day row's arrival time, else the task's start time.
+  const dayTimes = tasks.length
+    ? await db
+        .select({ taskId: schema.taskDays.taskId, date: schema.taskDays.date, arrivalStart: schema.taskDays.arrivalStart, arrivalEnd: schema.taskDays.arrivalEnd, coordinate: schema.taskDays.coordinate })
+        .from(schema.taskDays)
+        .where(inArray(schema.taskDays.taskId, tasks.map((t) => t.id)))
+    : [];
+  const timeOf = new Map(dayTimes.map((r) => [`${r.taskId}:${r.date}`, r]));
   const rows = (await workSlots(tasks, from, to))
     .filter((sl) => sl.installerId === installerId && want.has(sl.date))
     .map((sl) => {
       const t = byId.get(sl.taskId)!;
-      return { date: sl.date, taskId: t.id, jobId: t.jobId, jobNumber: t.jobNumber, title: t.title, suburb: t.suburb, scheduleIncomplete: sl.incomplete };
+      const r = timeOf.get(`${sl.taskId}:${sl.date}`);
+      const win = r ? (r.coordinate ? null : dayWindow(r.arrivalStart, r.arrivalEnd, t.durationHours)) : dayWindow(t.startTime, null, t.durationHours);
+      return { date: sl.date, taskId: t.id, jobId: t.jobId, jobNumber: t.jobNumber, title: t.title, suburb: t.suburb, scheduleIncomplete: sl.incomplete, win };
     });
 
   // The booking being edited never clashes with itself, and nor does another
@@ -195,7 +254,7 @@ export async function bookedDays(args: {
   const ownJob = own?.jobId ?? null;
 
   const seen = new Set<string>();
-  const out: { date: string; taskId: number; jobId: number; jobNumber: number | string; title: string; suburb: string; scheduleIncomplete: string | null }[] = [];
+  const out: Booked[] = [];
   for (const r of rows) {
     if (!r.date) continue;
     if (exceptTask && Number(r.taskId) === exceptTask) continue;

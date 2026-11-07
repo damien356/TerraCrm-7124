@@ -441,7 +441,8 @@ export async function checkAttendance(args: {
       for (const o of ops) {
         if (o.installerId !== installerId || o.date !== d.date) continue;
         if (!o.win) clashes.push({ kind: "booking_untimed", when: "no time set", label: `${o.label} (booked that day with no time, so it can't be ruled out)` });
-        else if (o.win.startMs < win.endMs && o.win.endMs > win.startMs)
+        // Travel time counts between two of their own bookings too, not only around Google events.
+        else if (o.win.startMs - link.bufferBeforeMin * MIN < win.endMs && o.win.endMs + link.bufferAfterMin * MIN > win.startMs)
           clashes.push({ kind: "booking", when: sayRange(o.win.startMs, o.win.endMs, d.date), label: o.label });
       }
       const g = live.get(installerId);

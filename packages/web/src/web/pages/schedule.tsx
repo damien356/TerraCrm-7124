@@ -19,7 +19,9 @@ import {
 } from "lucide-react";
 import { Page } from "../components/layout";
 import { MemoButton } from "../components/voice-memo";
-import { BookInstallerPanel } from "../components/book-installer";
+import { BookInstallerPanel, IneligibleNote } from "../components/book-installer";
+import { useBookingAsks } from "../components/outside-hours";
+import { dayWindow, sameDayOverlap } from "../../api/lib/work-hours";
 import { CommandBox } from "../components/command-box";
 import { Loading, Spinner } from "../components/ui/card";
 import { Badge, TASK_STATUS_COLOUR, TASK_STATUS_LABEL, tintFor } from "../components/ui/badge";
@@ -245,17 +247,27 @@ function runsFor(tasks: any[], installerId: number, dates: string[]): Run[] {
   const to = dates[dates.length - 1]!;
   const found: Omit<Run, "lane">[] = [];
 
-  /** Which days this installer is on more than one live job for. */
-  const onPerDay = new Map<string, number>();
+  /**
+   * Which of this installer's live bookings overlap another of his on the
+   * same day. Two bookings at times that don't overlap (6 to 8 and 9 to 11)
+   * are not a clash; one with no time on it can't be told apart, so it is.
+   */
+  const onDay = new Map<string, { taskId: number; win: { from: number; to: number } | null }[]>();
   for (const task of tasks) {
     if (task.status === "complete" || task.status === "cancelled") continue;
     for (const date of (task.dates ?? []) as string[]) {
       const day = (task.days ?? []).find((d: any) => d.date === date);
       const lead = day?.installerId ?? task.assignedInstallerId;
       if (lead !== installerId && task.secondInstallerId !== installerId) continue;
-      onPerDay.set(date, (onPerDay.get(date) ?? 0) + 1);
+      const win = day?.coordinate ? null : dayWindow(day?.arrivalStart ?? task.startTime, day?.arrivalEnd ?? null, task.durationHours);
+      onDay.set(date, [...(onDay.get(date) ?? []), { taskId: task.id, win }]);
     }
   }
+  const clashOn = (taskId: number, date: string) => {
+    const all = onDay.get(date) ?? [];
+    const me = all.find((x) => x.taskId === taskId);
+    return all.some((x) => x.taskId !== taskId && sameDayOverlap(me?.win ?? null, x.win) !== "clear");
+  };
 
   for (const task of tasks) {
     const all: string[] = [...((task.dates ?? []) as string[])].sort();
@@ -288,7 +300,7 @@ function runsFor(tasks: any[], installerId: number, dates: string[]): Run[] {
         firstSeq: all.indexOf(firstDate) + 1,
         totalDays: all.length,
         window: day?.coordinate ? "rings the site" : start,
-        clashDates: live ? stretch.filter((d) => (onPerDay.get(d) ?? 0) > 1) : [],
+        clashDates: live ? stretch.filter((d) => clashOn(task.id, d)) : [],
       });
     };
 
@@ -498,7 +510,7 @@ function DispatchPanel({
   const [error, setError] = React.useState<string | null>(null);
 
   const t = task.data;
-  const eligible = useEligible(t?.skillId ?? null, t?.scheduledDate ?? undefined, t?.crewSize ?? 1);
+  const eligible = useEligible(t?.skillId ?? null, t?.scheduledDate ?? undefined, t?.crewSize ?? 1, { taskId });
 
   const sendDirect = useSendDirect();
   const broadcast = useBroadcast();
@@ -516,6 +528,16 @@ function DispatchPanel({
   }
 
   const pay = payOverride ? Number(payOverride) : null;
+
+  /** Assign now, with the "taken off someone else" review when it is already theirs. */
+  const assignAsks = useBookingAsks(
+    React.useCallback(
+      (flags) => assign.mutateAsync({ id: taskId, installerId: Number(directId), payAmount: pay, replaceInstaller: flags.replaceInstaller }),
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [assign.mutateAsync, taskId, directId, pay],
+    ),
+    React.useCallback((message: string) => setError(message), []),
+  );
 
   return (
     <aside className="w-[340px] shrink-0 border-l border-border bg-card">
@@ -611,16 +633,18 @@ function DispatchPanel({
 
             <Field label="Offer one installer" className="mt-2">
               <Select value={directId} onChange={(e) => setDirectId(e.target.value)}>
-                <option value="">Pick someone ticked for {t.skill?.name ?? "this skill"}…</option>
+                <option value="">Pick someone ticked for the work…</option>
                 {(eligible.data ?? []).map((i) => (
-                  <option key={i.id} value={i.id} disabled={!i.canCoverAlone}>
+                  <option key={i.id} value={i.id} disabled={!i.canCoverAlone || !i.eligible}>
                     {i.name}
+                    {!i.eligible ? ` · can't: ${i.reasons.filter((r) => /ticked|switched on|rate not set/i.test(r)).join(", ")}` : ""}
                     {i.busyThatDay ? (i.busyScheduleIncomplete ? " · maybe on a job (schedule incomplete)" : " · already on a job") : ""}
                     {i.unavailableThatDay ? " · not available" : ""}
                     {!i.canCoverAlone ? " · can't do 2-man alone" : ""}
                   </option>
                 ))}
               </Select>
+              <IneligibleNote people={eligible.data} picked={directId} />
             </Field>
 
             <div className="mt-2 grid grid-cols-2 gap-2">
@@ -644,11 +668,15 @@ function DispatchPanel({
                 size="sm"
                 variant="outline"
                 disabled={busy || !directId}
-                onClick={() => run(assign.mutateAsync({ id: t.id, installerId: Number(directId), payAmount: pay }))}
+                onClick={() => {
+                  setError(null);
+                  void assignAsks.run();
+                }}
               >
                 Assign now
               </Button>
             </div>
+            {assignAsks.dialog}
 
             <Button
               size="sm"
@@ -1067,22 +1095,37 @@ export default function SchedulePage() {
     setHover(null);
   }
 
+  /**
+   * The move being made, held while the office answers an outside-hours
+   * confirm, so "Confirm outside-hours booking" resends exactly that move.
+   */
+  const dropping = React.useRef<{ id: number; scheduledDate: string | null; installerId: number | null } | null>(null);
+  const dropAsks = useBookingAsks(
+    React.useCallback(
+      async (flags) => {
+        const move = dropping.current;
+        if (!move) return;
+        const r: any = await reschedule.mutateAsync({ ...move, confirmOutsideHours: flags.confirmOutsideHours });
+        // A one-day drag that booked a whole run says so, rather than the
+        // office finding three days on the board they didn't ask for.
+        if (r?.bookedDays > 1 && r.dates?.length) {
+          setDropNote({ id: move.id, days: r.bookedDays, from: r.dates[0], to: r.dates[r.dates.length - 1] });
+        }
+      },
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [reschedule.mutateAsync],
+    ),
+    React.useCallback((message: string) => setDropError(message), []),
+  );
+
   function drop(installerId: number | null, date: string | null) {
     setHover(null);
     if (dragId == null || isPhoneApp) return;
     const id = dragId;
     setDropError(null);
     setDropNote(null);
-    reschedule
-      .mutateAsync({ id, scheduledDate: date, installerId })
-      .then((r: any) => {
-        // A one-day drag that booked a whole run says so, rather than the
-        // office finding three days on the board they didn't ask for.
-        if (r?.bookedDays > 1 && r.dates?.length) {
-          setDropNote({ id, days: r.bookedDays, from: r.dates[0], to: r.dates[r.dates.length - 1] });
-        }
-      })
-      .catch((e: unknown) => setDropError(e instanceof Error ? e.message : String(e)));
+    dropping.current = { id, scheduledDate: date, installerId };
+    void dropAsks.run();
     setDragId(null);
   }
 
@@ -1206,6 +1249,7 @@ export default function SchedulePage() {
             </div>
           ) : null}
 
+          {dropAsks.dialog}
           {dropError ? (
             <div className="mb-3 flex items-start justify-between gap-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
               <span>{dropError}</span>
