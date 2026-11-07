@@ -2,6 +2,7 @@ import { jobNumberSql } from "../lib/job-ref";
 import { salesByCategory } from "../lib/sales-report";
 import { emailedAtFor } from "../lib/invoice-emailed";
 import { saleCosts } from "../lib/sale-costs";
+import { disposalTwice } from "../lib/disposal-cost";
 import { quoteRef } from "../lib/refs";
 import { z } from "zod";
 import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
@@ -682,6 +683,9 @@ export const finance = {
       }),
     )
     .handler(async ({ input }) => {
+      // Carpet disposal (7 Nov): the actual replaces the job's estimate row, never sits beside it.
+      const twice = await disposalTwice(input);
+      if (twice) throw new ORPCError("BAD_REQUEST", { message: twice });
       const { id, ...rest } = input;
       const paidAt = rest.state === "paid" ? new Date() : null;
       let row;

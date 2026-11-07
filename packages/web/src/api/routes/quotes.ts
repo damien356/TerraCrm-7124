@@ -63,10 +63,12 @@ import {
   copyDefaultLinks,
   ensureDisposal,
   fillDisposalRates,
+  flagUnclassified,
   followDefaults,
   removeDefaultsOf,
 } from "../lib/quote-defaults";
 import { isTrimProduct } from "../lib/quote-default-rules";
+import { assertDefaultsResolved } from "../lib/quote-default-gate";
 import { isSheetUnderlay } from "../lib/pack-name";
 import { isUnderlayCategory, underlayName } from "../lib/order-sizes";
 import { foldForClient, quoteFreightView, refreshQuoteFreight, supplierChargesMarkupPct } from "../lib/quote-freight";
@@ -267,6 +269,8 @@ export async function assertReadyToGoOut(quote: typeof schema.quotes.$inferSelec
       message: `${toCheck} copied line${toCheck === 1 ? "" : "s"} still say${toCheck === 1 ? "s" : ""} Check required. Confirm or edit each one first.`,
     });
   }
+  // Quote defaults (7 Nov): every warning they put on is filled in, marked reviewed, or the line removed.
+  await assertDefaultsResolved(quote.id);
   if (!quote.contactId && !quote.companyId) {
     throw new ORPCError("BAD_REQUEST", { message: "Pick who this quote is for first." });
   }
@@ -1091,8 +1095,10 @@ export const quotes = {
       // Quote defaults (6 Nov): a measured floor with its install ticked brings its standard items, a trim or scotia its install.
       const defaults = res && input.labour !== null ? await applyFloorDefaults(row.id, product) : null;
       const trim = input.labour !== null && isTrimProduct(product) ? await applyTrimLabour(row.id, product) : null;
+      // 7 Nov: a floor product with no Sold as in the price book is flagged, so its standard lines are not quietly missing.
+      const unclassified = input.labour !== null && !floorTypeOf(product) ? await flagUnclassified(row.id, product) : false;
       const added = [...(defaults?.added ?? []), ...(trim?.added ?? [])];
-      if (defaults || trim) [item = row] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, row.id));
+      if (defaults || trim || unclassified) [item = row] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, row.id));
 
       const totals = await recalc(input.quoteId, [row?.id, ...added.map((a) => a.id)]);
       const defaultsNote = [...(defaults?.notes ?? []), ...(trim?.notes ?? [])].join(" ") || null;

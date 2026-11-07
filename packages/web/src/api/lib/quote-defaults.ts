@@ -5,7 +5,8 @@
  *  - A measured floor line on an installation quote gets its defaults put
  *    on underneath it, selected: underlay, uplift, skim, coving and the rest.
  *  - A scotia or trim line gets Install trims/scotia under it, unless one is
- *    already on the quote, which then covers it (no second charge).
+ *    already on the quote, which then covers it (no second charge). Each
+ *    laminate or hybrid area has its own, for its own length (7 Nov).
  *  - A Carpet uplift line, put on by default or by hand, gets the Terra
  *    carpet disposal allowance under it (kind internal_charge).
  *
@@ -27,8 +28,9 @@ import { isUnderlayCategory, underlayName } from "./order-sizes";
 import { markupOf, sellAtMarkup } from "./pricing";
 import {
   appliedOf,
+  areaGoneFlag,
   coveredKey,
-  DEFAULT_FLAG_PREFIX,
+  coveredLineOf,
   DISPOSAL_COST_KEY,
   DISPOSAL_DESCRIPTION,
   DISPOSAL_KEY,
@@ -39,13 +41,22 @@ import {
   changedFlag,
   enterFlag,
   FLOOR_DEFAULTS,
+  isCommercialSheet,
   isDefaultFlag,
+  isDefaultWarning,
   isTrimProduct,
+  needsClassifying,
+  notCommercialFlag,
   RATE,
   settingNumber,
   SUPPLY_ONLY_SOURCES,
   TRIM_FLAG,
+  TRIM_INSTALL_GONE_FLAG,
   TRIM_KEY,
+  TRIM_PICK_FLAG,
+  trimOverlapFlag,
+  unclassifiedFlag,
+  withoutEnterFlag,
   UPLIFT_NO_WIDTH_FLAG,
   type FloorDefault,
   type QtyRule,
@@ -129,12 +140,18 @@ async function addApplied(lineId: number, keys: string[]) {
   await db.update(schema.quoteItems).set({ defaultsApplied: JSON.stringify(now) }).where(eq(schema.quoteItems.id, lineId));
 }
 
+/** A warning put on again needs reviewing again. */
+const NOT_REVIEWED = { defaultReviewedBy: null, defaultReviewedAt: null, defaultReviewNote: null };
+
 /** Flag a line, keeping a flag already on it. */
 async function flagLine(lineId: number, reason: string) {
   const l = await lineOf(lineId);
   if (!l) return;
   const text = l.flagged && l.flagReason ? (l.flagReason.includes(reason) ? l.flagReason : `${l.flagReason} ${reason}`) : reason;
-  await db.update(schema.quoteItems).set({ flagged: true, flagReason: text, updatedAt: new Date() }).where(eq(schema.quoteItems.id, lineId));
+  // A new warning on a line marked reviewed needs reviewing again.
+  const fresh = text !== l.flagReason || !l.flagged;
+  const review = fresh ? NOT_REVIEWED : {};
+  await db.update(schema.quoteItems).set({ flagged: true, flagReason: text, ...review, updatedAt: new Date() }).where(eq(schema.quoteItems.id, lineId));
 }
 
 /** Insert a default line straight under its parent and the lines already under it. */
@@ -200,6 +217,11 @@ export async function applyFloorDefaults(floorId: number, product: Product): Pro
   const start = await lineOf(floorId);
   if (!defs?.length || !start || start.measuredM2 == null) return out;
   if (!(await takesDefaults(start.quoteId))) return out;
+  // 7 Nov: coving and welding only on a roll the price book marks commercial. Any other sheet vinyl waits for a decision.
+  if (t === "sheet_vinyl" && !isCommercialSheet(product)) {
+    await flagLine(floorId, notCommercialFlag(product.tier));
+    return out;
+  }
 
   const done = new Set(appliedOf(start.defaultsApplied));
   const applied: string[] = [];
@@ -282,19 +304,22 @@ export async function applyFloorDefaults(floorId: number, product: Product): Pro
     let qty = 0;
     let flag: string | null = null;
     if (d.qty === "enter") flag = enterFlag(d.what ?? d.name);
+    if (d.itemId === RATE.trimInstall.id) {
+      // A trim already on with its own install: say so, so the same length is not typed on both (7 Nov).
+      const own = (await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, floor.quoteId))).filter(
+        (l) => l.rateItemId === RATE.trimInstall.id && l.defaultKey === TRIM_KEY,
+      );
+      if (own.length) {
+        const names = await Promise.all(own.map(areaNameOf));
+        flag = `${flag ?? ""} ${trimOverlapFlag(names)}`.trim();
+      }
+    }
     else {
       qty = autoQty(d.qty, floor, product) ?? 0;
       if (d.qty === "uplift_lm" && qty <= 0) flag = UPLIFT_NO_WIDTH_FLAG;
       else if (qty <= 0) flag = enterFlag(d.what ?? `${d.name} qty`);
     }
-    // Trims and scotia already have their install on this quote (added with a trim): say so, so it is not typed in twice.
-    if (d.itemId === RATE.trimInstall.id) {
-      const [other] = await db
-        .select({ id: schema.quoteItems.id })
-        .from(schema.quoteItems)
-        .where(and(eq(schema.quoteItems.quoteId, floor.quoteId), eq(schema.quoteItems.rateItemId, RATE.trimInstall.id)));
-      if (other) flag = `${DEFAULT_FLAG_PREFIX} Install trims/scotia is already on this quote. Enter only the length it does not cover, or remove this line.`;
-    }
+    // Install trims/scotia: this area's own line, for this area's length only (7 Nov). Another area's line is a different length.
     let priced;
     try {
       priced = await standardLabour(d.itemId, qty);
@@ -342,10 +367,14 @@ export async function applyTrimLabour(trimId: number, product: Product): Promise
     .filter((l) => l.rateItemId === RATE.trimInstall.id && l.id !== trim.id)
     .sort((a, b) => b.sortOrder - a.sortOrder);
   if (installs.length) {
-    // The nearest one above the trim: the area it was added in.
+    // The nearest one above the trim: the area it was added in. With more than one area, the office picks (7 Nov).
     const cover = installs.find((l) => l.sortOrder < trim.sortOrder) ?? installs[0]!;
     await addApplied(trim.id, [TRIM_KEY, coveredKey(cover.id)]);
-    out.notes.push(`Install covered by the "${cover.description}" line already on the quote. Its length should include this.`);
+    const area = await areaNameOf(cover);
+    if (installs.length > 1) {
+      await flagLine(trim.id, TRIM_PICK_FLAG);
+      out.notes.push(`Install covered by ${area}'s Install trims/scotia for now. More than one area has one, so pick the right area on the line.`);
+    } else out.notes.push(`Install covered by ${area}'s Install trims/scotia already on the quote. Its length should include this.`);
     return out;
   }
   const rate = await liveRate(RATE.trimInstall);
@@ -365,6 +394,73 @@ export async function applyTrimLabour(trimId: number, product: Product): Promise
     out.notes.push(`${row.description} put on underneath. Enter its length.`);
   }
   return out;
+}
+
+/** What an Install trims/scotia line is for: its floor area or trim, or the line itself when typed in on its own. */
+async function areaNameOf(install: Line) {
+  const parent = install.defaultForItemId != null ? await lineOf(install.defaultForItemId) : null;
+  return `"${(parent ?? install).description}"`;
+}
+
+/** The Install trims/scotia lines a trim on this quote can go with, each with the area it is for. */
+export async function trimInstallChoices(quoteId: number) {
+  const lines = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quoteId));
+  const byId = new Map(lines.map((l) => [l.id, l]));
+  return lines
+    .filter((l) => l.rateItemId === RATE.trimInstall.id)
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((l) => {
+      const parent = l.defaultForItemId != null ? byId.get(l.defaultForItemId) : undefined;
+      return { id: l.id, area: (parent ?? l).description, qty: l.qty };
+    });
+}
+
+/**
+ * The office picks which area's Install trims/scotia covers a trim (7 Nov).
+ * Only the link moves: no line is added, no qty changes, nothing is charged
+ * again. Clears the pick and install-removed warnings.
+ */
+export async function coverTrim(trimId: number, installId: number) {
+  const trim = await lineOf(trimId);
+  const install = await lineOf(installId);
+  if (!trim || !install || install.quoteId !== trim.quoteId || install.rateItemId !== RATE.trimInstall.id) {
+    throw new Error("Pick an Install trims/scotia line on this quote.");
+  }
+  const applied = appliedOf(trim.defaultsApplied);
+  if (!applied.includes(TRIM_KEY)) throw new Error("This line is not a trim or scotia with an install.");
+  const own = await db
+    .select({ id: schema.quoteItems.id })
+    .from(schema.quoteItems)
+    .where(and(eq(schema.quoteItems.defaultForItemId, trim.id), eq(schema.quoteItems.defaultKey, TRIM_KEY)));
+  if (own.length) throw new Error("This trim has its own Install trims/scotia line underneath it.");
+  const keys = [...applied.filter((k) => !k.startsWith(`${TRIM_KEY}:covered:`)), coveredKey(install.id)];
+  const left = stripWarnings(trim.flagReason, [TRIM_PICK_FLAG, TRIM_INSTALL_GONE_FLAG]);
+  await db
+    .update(schema.quoteItems)
+    .set({ defaultsApplied: JSON.stringify(keys), flagged: Boolean(left), flagReason: left, updatedAt: new Date() })
+    .where(eq(schema.quoteItems.id, trim.id));
+  return { area: await areaNameOf(install) };
+}
+
+/** A flag with some of its sentences taken out. Null when nothing is left. */
+function stripWarnings(reason: string | null, drop: string[]) {
+  let text = reason ?? "";
+  for (const d of drop) text = text.split(d).join(" ");
+  text = text.replace(/\s+/g, " ").trim();
+  return text || null;
+}
+
+/**
+ * A line just went on an installation quote with a product from a category
+ * Damien's table covers, but the price book does not say box or roll. Its
+ * defaults cannot be told, so it is flagged, not skipped quietly (7 Nov).
+ */
+export async function flagUnclassified(lineId: number, product: Product) {
+  if (!needsClassifying(product)) return false;
+  const line = await lineOf(lineId);
+  if (!line || !(await takesDefaults(line.quoteId))) return false;
+  await flagLine(lineId, unclassifiedFlag(lineName(product)));
+  return true;
 }
 
 /* ------------------------------ carpet disposal ----------------------------- */
@@ -495,7 +591,8 @@ export async function followDefaults(before: Line, after: Line, product: Product
     const was = autoQty(rule.qty, before, product, dp);
     const now = autoQty(rule.qty, after, product, dp);
     if (now == null || was == null || !same(k.qty, was) || same(k.qty, now)) continue;
-    const clear = now > 0 && isDefaultFlag(k.flagReason) ? { flagged: false, flagReason: null } : {};
+    const left = withoutEnterFlag(k.flagReason);
+    const clear = now > 0 && isDefaultFlag(k.flagReason) ? { flagged: Boolean(left), flagReason: left } : {};
     await db
       .update(schema.quoteItems)
       .set({ qty: now, total: r2(now * k.unitPrice), ...clear, updatedAt: new Date() })
@@ -537,12 +634,13 @@ export async function afterProductChange(lineId: number, oldProduct: Product | n
       if (k.defaultKey && !keep.has(k.defaultKey))
         await db
           .update(schema.quoteItems)
-          .set({ flagged: true, flagReason: changedFlag(was, now), updatedAt: new Date() })
+          .set({ flagged: true, flagReason: changedFlag(was, now), ...NOT_REVIEWED, updatedAt: new Date() })
           .where(eq(schema.quoteItems.id, k.id));
     }
   }
   if (newType && oldType !== newType) await applyFloorDefaults(lineId, product);
   if (nowTrim && !wasTrim) await applyTrimLabour(lineId, product);
+  if (!newType) await flagUnclassified(lineId, product);
 }
 
 /**
@@ -572,7 +670,9 @@ export async function afterLineEdit(before: Line, row: Line, typed: { qty?: numb
     return;
   }
   if (qtyTyped && row.qty > 0 && row.flagged && isDefaultFlag(row.flagReason)) {
-    await db.update(schema.quoteItems).set({ flagged: false, flagReason: null }).where(eq(schema.quoteItems.id, row.id));
+    // Only the "enter the length" part comes off. Any other warning on the line stays (7 Nov).
+    const left = withoutEnterFlag(row.flagReason);
+    await db.update(schema.quoteItems).set({ flagged: Boolean(left), flagReason: left }).where(eq(schema.quoteItems.id, row.id));
   }
   if (qtyTyped && row.rateItemId === RATE.carpetUplift.id) await followDisposal(row.id);
 }
@@ -586,6 +686,11 @@ export async function afterLineEdit(before: Line, row: Line, typed: { qty?: numb
 export async function removeDefaultsOf(lineId: number) {
   const gone: number[] = [];
   const flagged: number[] = [];
+  const self = await lineOf(lineId);
+  const quoteLines = self ? await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, self.quoteId)) : [];
+  // The trims each Install trims/scotia covers (7 Nov), so removing an area never takes away an install another trim still needs.
+  const coveredBy = (installId: number) => quoteLines.filter((l) => l.id !== lineId && coveredLineOf(appliedOf(l.defaultsApplied)) === installId);
+  const kept: { id: number; reason: string }[] = [];
   let parents = [lineId];
   const seen = new Set<number>(parents);
   while (parents.length) {
@@ -606,6 +711,12 @@ export async function removeDefaultsOf(lineId: number) {
         flagged.push(k.id);
         continue;
       }
+      const covers = k.rateItemId === RATE.trimInstall.id ? coveredBy(k.id) : [];
+      if (covers.length) {
+        const parent = quoteLines.find((l) => l.id === k.defaultForItemId) ?? self;
+        kept.push({ id: k.id, reason: areaGoneFlag(`"${parent?.description ?? "floor"}"`, covers.map((c) => `"${c.description}"`)) });
+        continue;
+      }
       if (kids.includes(k)) gone.push(k.id);
       next.push(k.id);
     }
@@ -614,11 +725,31 @@ export async function removeDefaultsOf(lineId: number) {
   if (flagged.length) {
     await db
       .update(schema.quoteItems)
-      .set({ defaultForItemId: null, flagged: true, flagReason: DISPOSAL_ORPHAN_FLAG, updatedAt: new Date() })
+      .set({ defaultForItemId: null, flagged: true, flagReason: DISPOSAL_ORPHAN_FLAG, ...NOT_REVIEWED, updatedAt: new Date() })
       .where(inArray(schema.quoteItems.id, flagged));
   }
+  for (const k of kept) {
+    await db.update(schema.quoteItems).set({ defaultForItemId: null, updatedAt: new Date() }).where(eq(schema.quoteItems.id, k.id));
+    await flagLine(k.id, k.reason);
+  }
+  // An Install trims/scotia removed by hand: the trims it covered are flagged, and moved to the nearest other install for now.
+  let trimsFlagged = 0;
+  if (self?.rateItemId === RATE.trimInstall.id) {
+    const others = quoteLines
+      .filter((l) => l.rateItemId === RATE.trimInstall.id && l.id !== lineId && !gone.includes(l.id))
+      .sort((a, b) => b.sortOrder - a.sortOrder);
+    for (const t of coveredBy(lineId)) {
+      if (gone.includes(t.id)) continue;
+      const next = others.find((o) => o.sortOrder < t.sortOrder) ?? others[0];
+      const keys = appliedOf(t.defaultsApplied).filter((k) => !k.startsWith(`${TRIM_KEY}:covered:`));
+      if (next) keys.push(coveredKey(next.id));
+      await db.update(schema.quoteItems).set({ defaultsApplied: JSON.stringify(keys) }).where(eq(schema.quoteItems.id, t.id));
+      await flagLine(t.id, TRIM_INSTALL_GONE_FLAG);
+      trimsFlagged++;
+    }
+  }
   if (gone.length) await db.delete(schema.quoteItems).where(inArray(schema.quoteItems.id, gone));
-  return { removedDefaults: gone.length, disposalFlagged: flagged.length };
+  return { removedDefaults: gone.length, disposalFlagged: flagged.length, installsKept: kept.length, trimsFlagged };
 }
 
 /**
@@ -640,12 +771,17 @@ export async function copyDefaultLinks(items: Line[], newIdFor: Map<number, numb
     const applied = appliedOf(i.defaultsApplied)
       .map(remapKey)
       .filter((k): k is string => k != null);
-    const keepFlag = i.flagged && (isDefaultFlag(i.flagReason) || i.flagReason === DISPOSAL_ORPHAN_FLAG);
+    const keepFlag = i.flagged && isDefaultWarning(i.flagReason);
     const set: Partial<typeof schema.quoteItems.$inferInsert> = {};
     if (parent) set.defaultForItemId = parent;
     if (i.defaultKey) set.defaultKey = i.defaultKey;
     if (applied.length) set.defaultsApplied = JSON.stringify(applied);
     if (i.disposalTyped) set.disposalTyped = true;
+    if (i.defaultReviewedBy) {
+      set.defaultReviewedBy = i.defaultReviewedBy;
+      set.defaultReviewedAt = i.defaultReviewedAt;
+      set.defaultReviewNote = i.defaultReviewNote;
+    }
     if (keepFlag) {
       set.flagged = true;
       set.flagReason = i.flagReason;

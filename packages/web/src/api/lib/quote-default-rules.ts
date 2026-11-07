@@ -65,6 +65,14 @@ const product = (p: { id: number; sku: string; name: string }, qty: QtyRule): Fl
 });
 
 /**
+ * Install trims/scotia on a laminate or hybrid floor (7 Nov): one line per
+ * floor area, each for that area's own length. Separate areas add up (10 lm
+ * of laminate and 15 lm of hybrid is 25 lm), and a trim or scotia added to
+ * an area is covered by that area's line, never charged again.
+ */
+export const AREA_TRIM_WHAT = "trim and scotia install length (lm) for this floor area only";
+
+/**
  * Damien's table. "carpet" is broadloom only: carpet tiles are their own
  * floor type and get nothing. Commercial vinyl rolls are every sheet vinyl
  * (his answer). Engineered timber gets nothing.
@@ -80,15 +88,34 @@ export const FLOOR_DEFAULTS: Partial<Record<FloorType, FloorDefault[]>> = {
   vinyl_plank: [labour(RATE.skim, "measured_m2")],
   laminate: [
     labour(RATE.cuttingGyprock, "enter", "gyprock cutting length (lm)"),
-    labour(RATE.trimInstall, "enter", "trim and scotia install length (lm)"),
+    labour(RATE.trimInstall, "enter", AREA_TRIM_WHAT),
     labour(RATE.skirting, "enter", "skirting length (lm)"),
   ],
   hybrid: [
-    labour(RATE.trimInstall, "enter", "trim and scotia install length (lm)"),
+    labour(RATE.trimInstall, "enter", AREA_TRIM_WHAT),
     labour(RATE.skirting, "enter", "skirting length (lm)"),
   ],
   solid_timber: [product(PRODUCT.plywood, "sheets"), labour(RATE.sanding, "measured_m2")],
 };
+
+/**
+ * Commercial vinyl rolls (7 Nov). Damien's 6 Nov answer was "All roll (sheet)
+ * vinyl", but the price book also has wall vinyl and 4 m ranges that may be
+ * residential. Until he confirms, only these price book tiers count as
+ * commercial and get skim, coving, corners and hot welding. Every other sheet
+ * vinyl gets nothing put on and is flagged for a decision.
+ */
+export const COMMERCIAL_SHEET_TIERS = ["Commercial Sheet", "Safety Sheet"] as const;
+export function isCommercialSheet(p: { tier?: string | null }) {
+  const t = (p.tier ?? "").trim().toLowerCase();
+  return COMMERCIAL_SHEET_TIERS.some((c) => c.toLowerCase() === t);
+}
+
+/** The price book categories Damien's table covers. One with no Sold as cannot be told apart, so nothing goes on. */
+export const DEFAULT_CATEGORIES = ["carpet", "vinyl", "laminate", "hybrid", "solid_timber"] as const;
+export function needsClassifying(p: { category: string | null; soldAs?: string | null }) {
+  return (DEFAULT_CATEGORIES as readonly string[]).includes(p.category ?? "") && p.soldAs !== "box" && p.soldAs !== "broadloom";
+}
 
 /**
  * Jobs made by the two sale forms (lib/product-sale.ts SALE_SOURCE and
@@ -135,13 +162,83 @@ export const DEFAULT_FLAG_PREFIX = "Put on by default.";
 export const enterFlag = (what: string) => `${DEFAULT_FLAG_PREFIX} Enter the ${what}, or remove the line if it is not needed.`;
 export const UPLIFT_NO_WIDTH_FLAG = `${DEFAULT_FLAG_PREFIX} Enter the uplift length. It works out once the carpet has a roll width.`;
 export const TRIM_FLAG = enterFlag("trim and scotia install length (lm)");
+/**
+ * 7 Nov: the $3.00 a m2 and 15% came from Damien's 6 Nov question form only,
+ * with no separate sign off, so nothing is filled in for him. Until an Admin
+ * puts them in Settings, every disposal line is on at $0 with this flag.
+ */
 export const DISPOSAL_NO_RATE_FLAG =
   "Disposal rate not set. Put the carpet disposal cost and markup in Settings, or remove the line.";
+/** What was proposed, shown on the Settings card while the figures are blank. Never used as a price. */
+export const DISPOSAL_PROPOSED = { cost: 3, markupPct: 15, from: "Damien's answers to the quote defaults questions, 6 Nov 2026" } as const;
 export const DISPOSAL_NO_QTY_FLAG = `${DEFAULT_FLAG_PREFIX} Enter the disposal m² (uplift lm times the roll width), or remove the line.`;
 export const DISPOSAL_ORPHAN_FLAG = "Carpet uplift removed. Review or remove this disposal allowance.";
 /** A default left over from the product the line was before it was changed. */
 export const changedFlag = (was: string, now: string) =>
   `Product changed from ${was} to ${now}. This was put on for the ${was}. Check it is still needed, or remove it.`;
+
+export const UNCLASSIFIED_MARK = "Not classified:";
+export const unclassifiedFlag = (name: string) =>
+  `${UNCLASSIFIED_MARK} ${name} has no Sold as (box or roll) in the price book, so its standard lines were not put on. Set Sold as on the product in Settings and add it again, or mark this reviewed.`;
+export const NOT_COMMERCIAL_MARK = "Sheet vinyl not marked commercial";
+export const notCommercialFlag = (tier: string | null | undefined) =>
+  `${NOT_COMMERCIAL_MARK} (price book tier ${tier?.trim() ? `"${tier.trim()}"` : "blank"}). Skim, coving, corners and hot welding were not put on. Add any that are needed, or mark this reviewed.`;
+export const TRIM_PICK_FLAG =
+  "More than one floor area has Install trims/scotia. Pick the area this goes with (Install with, on this line), or mark this reviewed.";
+export const TRIM_INSTALL_GONE_FLAG =
+  "The Install trims/scotia line that covered this was removed. Pick another area on this line, or mark this reviewed if no install is needed.";
+export const AREA_GONE_MARK = "area this install was for was removed";
+export const areaGoneFlag = (area: string, trims: string[]) =>
+  `The ${area} ${AREA_GONE_MARK}. It still covers ${trims.join(", ")}. Check the length is only for ${trims.length === 1 ? "that" : "those"}, or remove it.`;
+/**
+ * A laminate or hybrid area added after a trim already brought its own
+ * Install trims/scotia (7 Nov). Both lines start at 0 lm, so nothing is
+ * charged twice by itself, but the office must not type the same length on
+ * both. Stays on, and holds the send, until marked reviewed.
+ */
+export const TRIM_OVERLAP_MARK = "Also on this quote: Install trims/scotia under";
+export const trimOverlapFlag = (names: string[]) =>
+  `${TRIM_OVERLAP_MARK} ${names.join(", ")}. Count each length on one line only, then mark this reviewed.`;
+/** Ends of the "enter the length" flags, so a typed qty takes off that part only. */
+const ENTER_ENDS = ["or remove the line if it is not needed.", "once the carpet has a roll width."];
+/** The flag with its leading "Put on by default. Enter ..." part taken off. Null when nothing is left. */
+export function withoutEnterFlag(reason: string | null | undefined): string | null {
+  if (!reason) return null;
+  if (!reason.startsWith(DEFAULT_FLAG_PREFIX)) return reason;
+  const ends = ENTER_ENDS.map((e) => {
+    const i = reason.indexOf(e);
+    return i < 0 ? -1 : i + e.length;
+  }).filter((i) => i > 0);
+  if (!ends.length) return null;
+  const left = reason.slice(Math.min(...ends)).trim();
+  return left || null;
+}
+export const MISSING_MARK = "Not put on by default:";
+export const TRIM_MISSING_MARK = "Install trims/scotia not put on.";
+const CHANGED_MARK = "This was put on for the";
+
+/**
+ * The warnings this feature puts on a line. While any is on a line, the
+ * quote cannot be sent, accepted or made into a job (lib/quote-default-gate.ts).
+ * Each one is filled in, marked reviewed, or the line removed.
+ */
+export function isDefaultWarning(reason: string | null | undefined) {
+  if (!reason) return false;
+  return [
+    DEFAULT_FLAG_PREFIX,
+    DISPOSAL_NO_RATE_FLAG,
+    DISPOSAL_ORPHAN_FLAG,
+    MISSING_MARK,
+    TRIM_MISSING_MARK,
+    CHANGED_MARK,
+    UNCLASSIFIED_MARK,
+    NOT_COMMERCIAL_MARK,
+    TRIM_PICK_FLAG,
+    TRIM_INSTALL_GONE_FLAG,
+    AREA_GONE_MARK,
+    TRIM_OVERLAP_MARK,
+  ].some((m) => reason.includes(m));
+}
 
 /** A flag this feature set, so it can clear it once the line is filled in. */
 export function isDefaultFlag(reason: string | null | undefined) {

@@ -21,6 +21,7 @@ import { offers } from "./routes/offers";
 import { quotes } from "./routes/quotes";
 import { quoteBundles } from "./routes/quoteBundles";
 import { quoteCopy } from "./routes/quoteCopy";
+import { quoteDefaults } from "./routes/quoteDefaults";
 import { quotePacks } from "./routes/quotePacks";
 import { quoteAgent } from "./routes/quoteAgent";
 import { field } from "./routes/field";
@@ -147,6 +148,8 @@ export const router = {
   quoteBundles,
   /** Copy from previous job and Duplicate this quote (notes 18.46). */
   quoteCopy,
+  /** Quote defaults warnings: Mark reviewed, and which area's Install trims/scotia a trim goes with. */
+  quoteDefaults,
   quotePacks,
   /** The assistant in the quote builder: checks, answers, proposes. Only Apply changes the quote. */
   quoteAgent,

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Card, CardHeader } from "./ui/card";
 import { Field, Input } from "./ui/field";
-import { DISPOSAL_COST_KEY, DISPOSAL_MARKUP_KEY, settingNumber } from "../../api/lib/quote-default-rules";
+import { DISPOSAL_COST_KEY, DISPOSAL_MARKUP_KEY, DISPOSAL_PROPOSED, settingNumber } from "../../api/lib/quote-default-rules";
 import { sellAtMarkup } from "../../api/lib/pricing";
 
 /**
@@ -64,6 +64,12 @@ export function CarpetDisposalCard({
             ? `Quotes at $${sellAtMarkup(cost, pct).toFixed(2)} per m², ex GST.`
             : "Not set. Disposal lines go on at $0 and are flagged until this is filled in."}
         </p>
+        {cost == null || pct == null ? (
+          <p className="rounded-md bg-[#FFF4E0] px-3 py-2 text-xs text-[#8A5A00]">
+            Proposed, pending confirmation: ${DISPOSAL_PROPOSED.cost.toFixed(2)} per m² cost plus {DISPOSAL_PROPOSED.markupPct}% (from{" "}
+            {DISPOSAL_PROPOSED.from}). Not used until an Admin types the figures in here.
+          </p>
+        ) : null}
       </div>
     </Card>
   );

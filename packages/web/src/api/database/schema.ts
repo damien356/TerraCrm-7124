@@ -1852,6 +1852,15 @@ export const quoteItems = sqliteTable(
     defaultsApplied: text("defaults_applied"),
     /** On a disposal line: someone typed over its qty or price, so it no longer follows the uplift. */
     disposalTyped: integer("disposal_typed", { mode: "boolean" }).notNull().default(false),
+    /**
+     * 7 Nov: a default warning on this line (enter the length, record or rate
+     * missing, not classified, product changed, and the rest) was marked
+     * reviewed instead of filled in. Who, when, and the warning they read.
+     * Null on every line until then, so no existing quote changes.
+     */
+    defaultReviewedBy: text("default_reviewed_by"),
+    defaultReviewedAt: integer("default_reviewed_at", { mode: "timestamp" }),
+    defaultReviewNote: text("default_review_note"),
     ...timestamps,
   },
   (t) => [index("quote_items_quote_idx").on(t.quoteId)],

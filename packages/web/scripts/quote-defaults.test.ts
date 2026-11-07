@@ -4,14 +4,21 @@
  *   bun test scripts/quote-defaults.test.ts      (from packages/web)
  *
  * Runs the real quote routes (addProduct, addLabour, updateItem, removeItem,
- * revise, accept) on a throwaway SQLite file built from the schema. Sign in
- * is faked to one Admin profile, the office alerts are caught, and every
- * network call is blocked, so nothing leaves the machine. The rate book and
- * products are the live records Damien's table names (same ids, names, SKUs
- * and rates), plus one floor product of each type.
+ * revise, accept, send, the public quote page, Money out) on a throwaway
+ * SQLite file built from the schema. Sign in is faked: an Admin by default,
+ * switched to Office (no costs), Field crew or nobody for the permission
+ * tests. The office alerts are caught, and every network call is blocked, so
+ * nothing leaves the machine. The rate book and products are the live records
+ * Damien's table names (same ids, names, SKUs and rates), plus one floor
+ * product of each type.
+ *
+ * The carpet disposal figures ($3.00 a m2, 15%) are put in Settings here, as
+ * if an Admin had typed them in. The live database has none, and the tests
+ * marked "no disposal rate" take them out again to check that case.
  */
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createClient, type Client } from "@libsql/client";
@@ -32,10 +39,33 @@ const realFetch = globalThis.fetch;
 const blocked: string[] = [];
 const alerts: { kind: string; title: string }[] = [];
 const USER = "test-admin";
+/** Who is signed in. null is nobody, as on the public /q/ page. */
+type Who = { id: string; name: string; email: string } | null;
+const ADMIN: Who = { id: USER, name: "Test Admin", email: "admin@example.invalid" };
+const OFFICE: Who = { id: "test-office", name: "Test Office", email: "office@example.invalid" };
+const FIELD: Who = { id: "test-field", name: "Test Crew", email: "crew@example.invalid" };
+let who: Who = ADMIN;
+/** Run with someone else signed in, then back to the Admin. */
+async function as<T>(w: Who, fn: () => Promise<T>): Promise<T> {
+  who = w;
+  try {
+    return await fn();
+  } finally {
+    who = ADMIN;
+  }
+}
 
 type Mods = {
   db: typeof import("../src/api/database").db;
   quotes: typeof import("../src/api/routes/quotes").quotes;
+  quoteSend: typeof import("../src/api/routes/quoteSend").quoteSend;
+  quoteDefaults: typeof import("../src/api/routes/quoteDefaults").quoteDefaults;
+  publicPages: typeof import("../src/api/routes/publicPages").publicPages;
+  finance: typeof import("../src/api/routes/finance").finance;
+  costing: typeof import("../src/api/routes/costing").costing;
+  links: typeof import("../src/api/lib/quote-links");
+  gate: typeof import("../src/api/lib/quote-default-gate");
+  disposal: typeof import("../src/api/lib/disposal-cost");
   call: typeof import("@orpc/server").call;
   rules: typeof import("../src/api/lib/quote-default-rules");
   orm: typeof import("drizzle-orm");
@@ -59,15 +89,23 @@ beforeAll(async () => {
       alerts.push({ kind, title: msg.title });
     },
   }));
-  // Sign in: every call is the one Admin profile below.
+  // Sign in: whoever `who` is (the Admin unless a test switches it).
   mock.module("../src/api/auth", () => ({
     NO_LOGIN: "no login",
-    auth: { api: { getSession: async () => ({ user: { id: USER, name: "Test Admin", email: "admin@example.invalid" }, session: {} }) } },
+    auth: { api: { getSession: async () => (who ? { user: who, session: {} } : null) } },
   }));
 
   m = {
     db: (await import("../src/api/database")).db,
     quotes: (await import("../src/api/routes/quotes")).quotes,
+    quoteSend: (await import("../src/api/routes/quoteSend")).quoteSend,
+    quoteDefaults: (await import("../src/api/routes/quoteDefaults")).quoteDefaults,
+    publicPages: (await import("../src/api/routes/publicPages")).publicPages,
+    finance: (await import("../src/api/routes/finance")).finance,
+    costing: (await import("../src/api/routes/costing")).costing,
+    links: await import("../src/api/lib/quote-links"),
+    gate: await import("../src/api/lib/quote-default-gate"),
+    disposal: await import("../src/api/lib/disposal-cost"),
     call: (await import("@orpc/server")).call,
     rules: await import("../src/api/lib/quote-default-rules"),
     orm: await import("drizzle-orm"),
@@ -125,6 +163,8 @@ async function product(key: string, v: Partial<typeof schema.products.$inferInse
 async function seed() {
   const { db } = m;
   await db.insert(schema.profiles).values({ userId: USER, name: "Test Admin", email: "admin@example.invalid", role: "admin", isMainAdmin: true });
+  await db.insert(schema.profiles).values({ userId: OFFICE!.id, name: OFFICE!.name, email: OFFICE!.email, role: "office", canSeeCosts: false });
+  await db.insert(schema.profiles).values({ userId: FIELD!.id, name: FIELD!.name, email: FIELD!.email, role: "field" });
   for (const r of RATES) {
     await db.insert(schema.labourRateItems).values({ id: r.id, name: r.name, unit: r.unit, groupName: r.group, kind: "work", markupPercent: r.markup, active: true });
     await db.insert(schema.labourRates).values({ itemId: r.id, amount: r.amount, effectiveFrom: "2026-09-01" });
@@ -142,7 +182,16 @@ async function seed() {
   });
   await product("carpet", { brand: "Godfrey Hirst", range: "Andes Peak", colour: "Merida", sku: "CPT1", category: "carpet", soldAs: "broadloom", unit: "lm", widthM: 3.66 });
   await product("carpetNoWidth", { brand: "Feltex", range: "No Width", colour: "Grey", sku: "CPT2", category: "carpet", soldAs: "broadloom", unit: "lm", widthM: null });
-  await product("sheetVinyl", { brand: "Polyflor", range: "Expona", colour: "Oak", sku: "SV1", category: "vinyl", soldAs: "broadloom", unit: "m2", widthM: 2 });
+  await product("sheetVinyl", { brand: "Polyflor", range: "Expona", colour: "Oak", sku: "SV1", category: "vinyl", soldAs: "broadloom", unit: "m2", widthM: 2, tier: "Commercial Sheet" });
+  // 7 Nov: sheet vinyl the price book does not mark commercial, as on the live price book (blank tier, "Sheet Vinyl").
+  await product("sheetVinylBlank", { brand: "Tarkett", range: "Home", colour: "Beige", sku: "SV2", category: "vinyl", soldAs: "broadloom", unit: "m2", widthM: 4, tier: "" });
+  await product("sheetVinylPlain", { brand: "Airlay", range: "Loose", colour: "Grey", sku: "SV3", category: "vinyl", soldAs: "broadloom", unit: "m2", widthM: 2, tier: "Sheet Vinyl" });
+  // 7 Nov: no Sold as on file, as on 714 vinyl, 10 carpet and 495 solid timber products live.
+  await product("vinylUnsorted", { brand: "Unsorted", range: "Vinyl", colour: "X", sku: "UV1", category: "vinyl", soldAs: null, unit: "m2" });
+  await product("carpetUnsorted", { brand: "Unsorted", range: "Carpet", colour: "X", sku: "UC1", category: "carpet", soldAs: null, unit: "m2" });
+  await product("timberUnsorted", { brand: "Unsorted", range: "Timber", colour: "X", sku: "UT1", category: "solid_timber", soldAs: null, unit: "m2" });
+  // 7 Nov: 4.0 m broadloom, for Super Green 9912 (1.83 m) off a 4 m carpet.
+  await product("carpet4", { brand: "Godfrey Hirst", range: "Wide", colour: "Stone", sku: "CPT4", category: "carpet", soldAs: "broadloom", unit: "lm", widthM: 4 });
   await product("vinylPlank", { brand: "Karndean", range: "Van Gogh", colour: "Ash", sku: "VP1", category: "vinyl", soldAs: "box", unit: "m2", unitsPerPack: 10, unitM2: 0.2 });
   await product("laminate", { brand: "Quickstep", range: "Classic", colour: "Oak", sku: "LM1", category: "laminate", soldAs: "box", unit: "m2", unitsPerPack: 8, unitM2: 0.25 });
   await product("hybrid", { brand: "Woodland", range: "Hybrid", colour: "Spotted Gum", sku: "HY1", category: "hybrid", soldAs: "box", unit: "m2", unitsPerPack: 10, unitM2: 0.2 });
@@ -184,7 +233,7 @@ const addProduct = (input: Record<string, unknown>) =>
 const addLabour = (input: Record<string, unknown>) => run<Record<string, unknown>, { item: Item }>(m.quotes.addLabour, input);
 const updateItem = (input: Record<string, unknown>) => run<Record<string, unknown>, { item: Item }>(m.quotes.updateItem, input);
 const removeItem = (id: number) =>
-  run<{ id: number }, { removedLabour: number; removedDefaults: number; disposalFlagged: number }>(m.quotes.removeItem, { id });
+  run<{ id: number }, { removedLabour: number; removedDefaults: number; disposalFlagged: number; installsKept: number; trimsFlagged: number }>(m.quotes.removeItem, { id });
 
 const sell = (cost: number, pct: number | null) => {
   // The labour sell the rate book gives, read back off the route rather than worked out here.
@@ -394,13 +443,24 @@ describe("check 2: trims and scotia bring Install trims/scotia, never twice", ()
     expect(await linesOf(b)).toHaveLength(1);
   });
 
-  test("a hybrid added after a scotia: its 111 default says the install is already on", async () => {
+  test("a hybrid added after a scotia: the area gets its own 111, warned not to count the scotia's length twice", async () => {
     const qid = await newQuote();
     await addProduct({ quoteId: qid, productId: P.scotia, qty: 10 });
-    await addProduct({ quoteId: qid, productId: P.hybrid, measuredM2: 20 });
+    const hy = await addProduct({ quoteId: qid, productId: P.hybrid, measuredM2: 20 });
     const trims = (await linesOf(qid)).filter((l) => l.rateItemId === 111);
     expect(trims).toHaveLength(2);
-    expect(trims[1]!.flagReason).toContain("already on this quote");
+    const area = trims.find((l) => l.defaultForItemId === hy.item.id)!;
+    // Both start at 0 lm, so nothing is charged twice by itself.
+    expect(trims.every((l) => l.qty === 0 && l.total === 0)).toBe(true);
+    expect(area.flagReason).toContain(m.rules.AREA_TRIM_WHAT);
+    expect(area.flagReason).toContain(m.rules.TRIM_OVERLAP_MARK);
+    expect(area.flagReason).not.toContain("already on this quote");
+    // Typing the length takes off the "enter" part only. The overlap warning stays until reviewed.
+    await updateItem({ id: area.id, qty: 15 });
+    const typed = await lineOf(area.id);
+    expect(typed.flagged).toBe(true);
+    expect(typed.flagReason).toStartWith(m.rules.TRIM_OVERLAP_MARK);
+    expect(m.gate.openDefaultWarning(typed)).toBe(true);
   });
 
   test("removing the scotia takes its install, and it is not put back", async () => {
@@ -692,6 +752,476 @@ describe("check 6: accepted, the disposal is a job cost, not labour, a PO or a m
     expect(pay.some((x) => Number(x.item_id) === 86)).toBe(false);
     const offers = await q("select count(*) n from task_offers o join job_tasks t on t.id = o.task_id where t.job_id = ?", [out.jobId]);
     expect(Number(offers[0].n)).toBe(0);
+  });
+});
+
+/* ------------------------- Damien's review, 7 Nov 2026 ------------------------- */
+
+const r2t = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+const SIGNATURE = { w: 300, h: 100, strokes: [[0, 50, 40, 50, 80, 50, 120, 50, 160, 50, 200, 50, 240, 50, 280, 50]] };
+/** Who pays and the deposit, and no Check required left: what Send and Accept ask for besides the defaults. */
+async function readyToGo(qid: number) {
+  await q("update quotes set bill_to_type = 'contact', bill_to_contact_id = ?, deposit_percent = 0, deposit_source = 'quote' where id = ?", [contactId, qid]);
+  await q("update quote_items set check_required = 0 where quote_id = ?", [qid]);
+}
+const GATE = /put on by quote defaults still need/;
+const installsOf = async (qid: number) => (await linesOf(qid)).filter((l) => l.rateItemId === 111);
+const subtotalOf = async (qid: number) => Number((await q("select subtotal from quotes where id = ?", [qid]))[0].subtotal);
+const review = (itemId: number, note?: string) =>
+  run<{ itemId: number; note?: string }, { id: number; defaultReviewedBy: string | null; defaultReviewedAt: Date | null }>(m.quoteDefaults.review, { itemId, note });
+const cover = (itemId: number, installId: number) => run<{ itemId: number; installId: number }, { area: string }>(m.quoteDefaults.coverTrim, { itemId, installId });
+async function errorOf(p: Promise<unknown>) {
+  try {
+    await p;
+  } catch (e) {
+    return e as { message: string; code?: string; data?: { defaultWarnings?: number[] } };
+  }
+  throw new Error("expected it to be stopped");
+}
+
+describe("7 Nov 1: Install trims/scotia is per floor area, and a trim is never charged twice", () => {
+  test("10 lm of laminate and 15 lm of hybrid make 25 lm; a scotia added after is covered, nothing extra charged", async () => {
+    const qid = await newQuote();
+    const lam = await addProduct({ quoteId: qid, productId: P.laminate, measuredM2: 20 });
+    const hy = await addProduct({ quoteId: qid, productId: P.hybrid, measuredM2: 30 });
+    let installs = await installsOf(qid);
+    expect(installs).toHaveLength(2);
+    const lamInstall = installs.find((l) => l.defaultForItemId === lam.item.id)!;
+    const hyInstall = installs.find((l) => l.defaultForItemId === hy.item.id)!;
+    for (const l of [lamInstall, hyInstall]) expect(l.flagReason).toContain(m.rules.AREA_TRIM_WHAT);
+    await updateItem({ id: lamInstall.id, qty: 10 });
+    await updateItem({ id: hyInstall.id, qty: 15 });
+    installs = await installsOf(qid);
+    const rate = installs[0]!.unitPrice;
+    expect(installs.every((l) => l.unitPrice === rate && !l.flagged)).toBe(true);
+    expect(r2t(installs.reduce((a, l) => a + l.qty, 0))).toBe(25);
+    const installTotal = r2t(installs.reduce((a, l) => a + l.total, 0));
+    expect(installTotal).toBe(r2t(25 * rate));
+    const before = await subtotalOf(qid);
+
+    const sc = await addProduct({ quoteId: qid, productId: P.scotia, qty: 12 });
+    expect(sc.defaultsAdded).toBe(0);
+    const after = await installsOf(qid);
+    expect(after).toHaveLength(2);
+    expect(after.map((l) => [l.id, l.qty, l.total])).toEqual(installs.map((l) => [l.id, l.qty, l.total]));
+    // Only the scotia itself was added to the price.
+    expect(r2t((await subtotalOf(qid)) - before)).toBe(r2t((await lineOf(sc.item.id)).total));
+    const scLine = await lineOf(sc.item.id);
+    // Two areas have an install, so the office picks. Covered by the nearest above (the hybrid) for now.
+    expect(m.rules.coveredLineOf(m.rules.appliedOf(scLine.defaultsApplied))).toBe(hyInstall.id);
+    expect(scLine.flagReason).toContain(m.rules.TRIM_PICK_FLAG);
+
+    const choices = await run<{ quoteId: number }, { id: number; area: string; qty: number }[]>(m.quoteDefaults.trimChoices, { quoteId: qid });
+    expect(choices.map((c) => [c.id, c.qty])).toEqual([
+      [lamInstall.id, 10],
+      [hyInstall.id, 15],
+    ]);
+    expect(choices[0]!.area).toBe(lam.item.description);
+    await cover(sc.item.id, lamInstall.id);
+    const moved = await lineOf(sc.item.id);
+    expect(m.rules.coveredLineOf(m.rules.appliedOf(moved.defaultsApplied))).toBe(lamInstall.id);
+    // The pick warning is gone; the scotia's own length-size note stays, and it is not a default warning.
+    expect(moved.flagReason ?? "").not.toContain(m.rules.TRIM_PICK_FLAG);
+    expect(m.rules.isDefaultWarning(moved.flagReason)).toBe(false);
+    expect((await installsOf(qid)).map((l) => [l.id, l.qty, l.total])).toEqual(installs.map((l) => [l.id, l.qty, l.total]));
+    console.log("10 + 15 lm:", JSON.stringify(shape(await linesOf(qid))));
+  });
+
+  test("removing the laminate area keeps its install while a scotia still needs it, flagged", async () => {
+    const qid = await newQuote();
+    const lam = await addProduct({ quoteId: qid, productId: P.laminate, measuredM2: 20 });
+    const hy = await addProduct({ quoteId: qid, productId: P.hybrid, measuredM2: 30 });
+    const lamInstall = (await installsOf(qid)).find((l) => l.defaultForItemId === lam.item.id)!;
+    const hyInstall = (await installsOf(qid)).find((l) => l.defaultForItemId === hy.item.id)!;
+    await updateItem({ id: lamInstall.id, qty: 10 });
+    await updateItem({ id: hyInstall.id, qty: 15 });
+    const sc = await addProduct({ quoteId: qid, productId: P.scotia, qty: 8 });
+    await cover(sc.item.id, lamInstall.id);
+
+    const out = await removeItem(lam.item.id);
+    expect(out.installsKept).toBe(1);
+    const kept = await lineOf(lamInstall.id);
+    expect(kept).toBeDefined();
+    expect(kept.qty).toBe(10);
+    expect(kept.defaultForItemId).toBeNull();
+    expect(kept.flagReason).toContain(m.rules.AREA_GONE_MARK);
+    expect(kept.flagReason).toContain(sc.item.description);
+    expect(m.gate.openDefaultWarning(kept)).toBe(true);
+    // The hybrid area is untouched.
+    expect((await lineOf(hyInstall.id)).qty).toBe(15);
+    expect((await lineOf(hyInstall.id)).flagged).toBe(false);
+    // The laminate's own other defaults went with it.
+    expect((await linesOf(qid)).some((l) => l.rateItemId === 120)).toBe(false);
+  });
+
+  test("an area whose install covers nothing takes it with it", async () => {
+    const qid = await newQuote();
+    const lam = await addProduct({ quoteId: qid, productId: P.laminate, measuredM2: 20 });
+    const out = await removeItem(lam.item.id);
+    expect(out.installsKept).toBe(0);
+    expect(await installsOf(qid)).toHaveLength(0);
+  });
+
+  test("removing an Install trims/scotia line flags the trim it covered, moves it to the other area, and undoes its review", async () => {
+    const qid = await newQuote();
+    const lam = await addProduct({ quoteId: qid, productId: P.laminate, measuredM2: 20 });
+    const hy = await addProduct({ quoteId: qid, productId: P.hybrid, measuredM2: 30 });
+    const lamInstall = (await installsOf(qid)).find((l) => l.defaultForItemId === lam.item.id)!;
+    const hyInstall = (await installsOf(qid)).find((l) => l.defaultForItemId === hy.item.id)!;
+    const sc = await addProduct({ quoteId: qid, productId: P.scotia, qty: 8 });
+    const rv = await review(sc.item.id, "Goes with the hybrid");
+    expect(rv.defaultReviewedBy).toBe("Test Admin");
+    expect(m.gate.openDefaultWarning(await lineOf(sc.item.id))).toBe(false);
+
+    const out = await removeItem(hyInstall.id);
+    expect(out.trimsFlagged).toBe(1);
+    const t = await lineOf(sc.item.id);
+    expect(t.flagReason).toContain(m.rules.TRIM_INSTALL_GONE_FLAG);
+    expect(m.rules.coveredLineOf(m.rules.appliedOf(t.defaultsApplied))).toBe(lamInstall.id);
+    // A new warning on a reviewed line needs reviewing again.
+    expect(t.defaultReviewedAt).toBeNull();
+    expect(m.gate.openDefaultWarning(t)).toBe(true);
+  });
+
+  test("Install with only takes an Install trims/scotia line on the same quote", async () => {
+    const qid = await newQuote();
+    const lam = await addProduct({ quoteId: qid, productId: P.laminate, measuredM2: 20 });
+    const sc = await addProduct({ quoteId: qid, productId: P.scotia, qty: 8 });
+    await expect(cover(sc.item.id, lam.item.id)).rejects.toThrow("Pick an Install trims/scotia line on this quote.");
+  });
+});
+
+describe("7 Nov 2: no Sold as, and sheet vinyl not marked commercial", () => {
+  test("vinyl, carpet and solid timber with no Sold as: nothing put on, the line is flagged, and Send is stopped", async () => {
+    for (const key of ["vinylUnsorted", "carpetUnsorted", "timberUnsorted"]) {
+      const qid = await newQuote();
+      const r = await addProduct({ quoteId: qid, productId: P[key], measuredM2: 20 });
+      const ls = await linesOf(qid);
+      expect(ls.some((l) => l.defaultForItemId != null || l.kind === "internal_charge")).toBe(false);
+      const line = await lineOf(r.item.id);
+      expect(line.flagged).toBe(true);
+      expect(line.flagReason).toStartWith(m.rules.UNCLASSIFIED_MARK);
+      expect(line.flagReason).toContain("Set Sold as on the product in Settings and add it again");
+      await readyToGo(qid);
+      await expect(run(m.quotes.send, { id: qid })).rejects.toThrow(GATE);
+      console.log(`${key}:`, JSON.stringify(shape(ls)));
+    }
+  });
+
+  test("supply only (install unticked) is not flagged", async () => {
+    const qid = await newQuote();
+    const r = await addProduct({ quoteId: qid, productId: P.vinylUnsorted, measuredM2: 20, labour: null });
+    expect((await lineOf(r.item.id)).flagged).toBe(false);
+  });
+
+  test("sheet vinyl with a blank or plain Sheet Vinyl tier gets no skim, coving, corners or welding, and is flagged", async () => {
+    for (const [key, tier] of [
+      ["sheetVinylBlank", "blank"],
+      ["sheetVinylPlain", '"Sheet Vinyl"'],
+    ] as const) {
+      const qid = await newQuote();
+      const r = await addProduct({ quoteId: qid, productId: P[key], measuredM2: 20 });
+      const ls = await linesOf(qid);
+      expect(ls.some((l) => [109, 21, 102, 20].includes(l.rateItemId ?? 0))).toBe(false);
+      const line = await lineOf(r.item.id);
+      expect(line.flagReason).toStartWith(m.rules.NOT_COMMERCIAL_MARK);
+      expect(line.flagReason).toContain(`tier ${tier}`);
+      expect(m.gate.openDefaultWarning(line)).toBe(true);
+    }
+  });
+
+  test("Commercial Sheet and Safety Sheet are the only tiers that count", () => {
+    expect(m.rules.isCommercialSheet({ tier: "Commercial Sheet" })).toBe(true);
+    expect(m.rules.isCommercialSheet({ tier: " safety sheet " })).toBe(true);
+    for (const t of ["", null, "Sheet Vinyl", "Wall", "4m Residential"]) expect(m.rules.isCommercialSheet({ tier: t })).toBe(false);
+  });
+});
+
+describe("7 Nov 3: a warning stops the quote going out until it is filled in, reviewed or removed", () => {
+  test("Send, staff Accept, Convert to job and the send dialog are all stopped on the server", async () => {
+    const qid = await newQuote();
+    await addProduct({ quoteId: qid, productId: P.hybrid, measuredM2: 20 });
+    await readyToGo(qid);
+    const open = await m.gate.openDefaultWarnings(qid);
+    expect(open).toHaveLength(2); // Install trims/scotia and skirting at 0
+    const e = await errorOf(run(m.quotes.send, { id: qid }));
+    expect(e.message).toMatch(GATE);
+    expect(e.data?.defaultWarnings?.sort()).toEqual(open.map((o) => o.id).sort());
+    await expect(run(m.quotes.accept, { id: qid })).rejects.toThrow(GATE);
+    await expect(run(m.quotes.convertToJob, { id: qid })).rejects.toThrow(GATE);
+    await expect(run(m.quoteSend.send, { quoteId: qid, sendKey: `gate-test-${qid}`, to: "", subject: "", body: "" })).rejects.toThrow(GATE);
+    const [row] = await q("select status, job_id from quotes where id = ?", [qid]);
+    expect(row.status).toBe("draft");
+    expect(row.job_id).toBeNull();
+    expect(await q("select id from quote_sends where quote_id = ?", [qid])).toHaveLength(0);
+  });
+
+  test("a customer accepting online is stopped with a plain message, and nothing is accepted", async () => {
+    const qid = await newQuote();
+    await addProduct({ quoteId: qid, productId: P.hybrid, measuredM2: 20 });
+    await readyToGo(qid);
+    // Only possible on old data or a direct database edit: a quote can no longer be sent like this.
+    await q("update quotes set status = 'sent', sent_at = ? where id = ?", [Math.floor(Date.now() / 1000), qid]);
+    const { token } = await m.links.linkForQuote(qid);
+    const e = await as(null, () => errorOf(run(m.publicPages.quote.accept, { token, name: "Test Client", agreed: true, signature: SIGNATURE })));
+    expect(e.message).toBe(m.gate.DEFAULTS_OPEN_CUSTOMER);
+    expect(e.message).not.toMatch(/skirting|trims|\$/i);
+    expect((await q("select status from quotes where id = ?", [qid]))[0].status).toBe("sent");
+    expect(await q("select id from quote_signatures where quote_id = ?", [qid])).toHaveLength(0);
+  });
+
+  test("filled in and marked reviewed (who, when, logged): then it sends", async () => {
+    const qid = await newQuote();
+    await addProduct({ quoteId: qid, productId: P.hybrid, measuredM2: 20 });
+    await readyToGo(qid);
+    const ls = await linesOf(qid);
+    const skirting = ls.find((l) => l.rateItemId === 65)!;
+    const install = ls.find((l) => l.rateItemId === 111)!;
+    await updateItem({ id: skirting.id, qty: 22 });
+    expect((await lineOf(skirting.id)).flagged).toBe(false);
+    const t0 = Date.now() - 1000;
+    const rv = await review(install.id, "No trims on this job");
+    expect(rv.defaultReviewedBy).toBe("Test Admin");
+    expect(new Date(rv.defaultReviewedAt!).getTime()).toBeGreaterThanOrEqual(t0);
+    const kept = await lineOf(install.id);
+    // The warning text stays as history; it no longer holds the quote.
+    expect(kept.flagged).toBe(true);
+    expect(kept.flagReason).toContain(m.rules.AREA_TRIM_WHAT);
+    expect(kept.defaultReviewNote).toBe("No trims on this job");
+    const log = await q("select action, detail, actor_name from activity_log where entity_type = 'quote' and entity_id = ? and action = 'default_reviewed'", [qid]);
+    expect(log).toHaveLength(1);
+    expect(log[0].actor_name).toBe("Test Admin");
+    expect(String(log[0].detail)).toContain("No trims on this job");
+    expect(await m.gate.openDefaultWarnings(qid)).toHaveLength(0);
+    await run(m.quotes.send, { id: qid });
+    expect((await q("select status from quotes where id = ?", [qid]))[0].status).toBe("sent");
+  });
+
+  test("removed: then it can go", async () => {
+    const qid = await newQuote();
+    await addProduct({ quoteId: qid, productId: P.hybrid, measuredM2: 20 });
+    await readyToGo(qid);
+    for (const l of (await linesOf(qid)).filter((x) => x.flagged)) await removeItem(l.id);
+    expect(await m.gate.openDefaultWarnings(qid)).toHaveLength(0);
+    await run(m.quotes.send, { id: qid });
+  });
+
+  test("a changed product puts a new warning on a reviewed line, and it needs reviewing again", async () => {
+    const qid = await newQuote();
+    const hy = await addProduct({ quoteId: qid, productId: P.hybrid, measuredM2: 20 });
+    const install = (await installsOf(qid))[0]!;
+    await review(install.id);
+    expect(m.gate.openDefaultWarning(await lineOf(install.id))).toBe(false);
+    await run(m.quotes.changeProduct, { id: hy.item.id, productId: P.vinylPlank });
+    const after = await lineOf(install.id);
+    expect(after.flagReason).toContain("Product changed from hybrid");
+    expect(after.defaultReviewedAt).toBeNull();
+    expect(m.gate.openDefaultWarning(after)).toBe(true);
+  });
+
+  test("Mark reviewed needs an open warning, and is Admin or Office only", async () => {
+    const qid = await newQuote();
+    const r = await addProduct({ quoteId: qid, productId: P.vinylPlank, measuredM2: 10 });
+    await expect(review(r.item.id)).rejects.toThrow("no quote defaults warning waiting for review");
+    const skim = (await linesOf(qid)).find((l) => l.rateItemId === 109)!;
+    await q("update quote_items set flagged = 1, flag_reason = ? where id = ?", [m.rules.enterFlag("x"), skim.id]);
+    await expect(as(FIELD, () => review(skim.id))).rejects.toThrow("Office access required");
+    await expect(as(null, () => review(skim.id))).rejects.toThrow();
+    const rv = await as(OFFICE, () => review(skim.id));
+    expect(rv.defaultReviewedBy).toBe("Test Office");
+  });
+
+  test("an existing quote with older flags on it is not held", async () => {
+    const qid = await newQuote({ status: "sent" });
+    await m.db.insert(schema.quoteItems).values({
+      quoteId: qid, productId: P.hybrid, description: "Old hybrid line", qty: 10, unit: "m2", unitPrice: 40, total: 400, sortOrder: 0,
+      flagged: true, flagReason: "No boxes per pallet on file for Old hybrid line. Check the delivery.",
+    });
+    await readyToGo(qid);
+    expect(await m.gate.openDefaultWarnings(qid)).toHaveLength(0);
+    const out = await run<{ id: number }, { jobId: number }>(m.quotes.accept, { id: qid });
+    expect(out.jobId).toBeGreaterThan(0);
+  });
+});
+
+describe("7 Nov 4: no disposal rate in Settings (as live today)", () => {
+  test("the release SQL writes no Settings, only the 7 new columns", () => {
+    const sql = readFileSync(join(import.meta.dir, "../src/api/database/sql/2026-11-28-quote-defaults.sql"), "utf8");
+    const statements = sql.split("--> statement-breakpoint").map((s) => s.replace(/--.*$/gm, "").trim()).filter(Boolean);
+    expect(statements).toHaveLength(7);
+    expect(statements.every((s) => /^ALTER TABLE quote_items ADD COLUMN /.test(s))).toBe(true);
+    expect(statements.join("\n")).not.toMatch(/\b(insert|update|delete)\b/i);
+    expect(m.rules.DISPOSAL_PROPOSED).toMatchObject({ cost: 3, markupPct: 15 });
+  });
+
+  test("a carpet uplift's disposal goes on at $0, flagged, and holds Send until filled in or reviewed", async () => {
+    const saved = await q("select key, value from settings where key like 'carpet_disposal_%'");
+    await q("delete from settings where key like 'carpet_disposal_%'");
+    try {
+      const qid = await newQuote();
+      await addProduct({ quoteId: qid, productId: P.carpet, measuredM2: 30 });
+      await readyToGo(qid);
+      const d = (await linesOf(qid)).find((l) => l.kind === "internal_charge")!;
+      expect(d.unitPrice).toBe(0);
+      expect(d.total).toBe(0);
+      expect(d.unitCost).toBeNull();
+      expect(d.flagReason).toBe(m.rules.DISPOSAL_NO_RATE_FLAG);
+      await expect(run(m.quotes.send, { id: qid })).rejects.toThrow(GATE);
+      // The proposed $3 and 15% are never used as a price.
+      expect((await linesOf(qid)).some((l) => l.unitPrice === 3.45 || l.unitCost === 3)).toBe(false);
+    } finally {
+      for (const s of saved) await q("insert or replace into settings (key, value, updated_at) values (?, ?, 0)", [s.key, s.value]);
+    }
+  });
+});
+
+describe("7 Nov 5: disposal estimate and the real skip bin are counted once", () => {
+  test("the estimate row is edited into the actual; a second skip bin row is stopped; nothing is counted twice", async () => {
+    const qid = await newQuote();
+    await addProduct({ quoteId: qid, productId: P.carpet, measuredM2: 30 });
+    await readyToGo(qid);
+    const items = await linesOf(qid);
+    const disposal = items.find((l) => l.kind === "internal_charge")!;
+    const { jobId } = await run<{ id: number }, { jobId: number }>(m.quotes.accept, { id: qid });
+    type Budget = { costs: { id: number; kind: string; amount: number; state: string; source: string; description: string }[]; summary: { other: number } };
+    const budget = () => run<{ jobId: number }, Budget>(m.finance.jobBudget, { jobId });
+    let b = await budget();
+    const est = b.costs.filter((c) => c.source === m.disposal.DISPOSAL_SOURCE);
+    expect(est).toHaveLength(1);
+    expect(est[0]!.amount).toBe(r2t(disposal.qty * 3));
+    expect(b.summary.other).toBe(est[0]!.amount);
+
+    // A second skip bin row while the estimate is still a budget would count it twice.
+    for (const description of ["Skip bin share", "Tip run", "carpet disposal"]) {
+      await expect(run(m.finance.costSave, { jobId, kind: "other", description, amount: 40 })).rejects.toThrow(m.disposal.DISPOSAL_TWICE_MESSAGE);
+    }
+    // Something else is not stopped.
+    const parking = await run<Record<string, unknown>, { id: number }>(m.finance.costSave, { jobId, kind: "other", description: "Parking", amount: 12 });
+    void parking;
+
+    // The real cost: this job's share of the bin, on the estimate row, paid.
+    await run(m.finance.costSave, { id: est[0]!.id, jobId, kind: "other", description: "Carpet disposal, share of skip bin", amount: 55, state: "paid" });
+    b = await budget();
+    const mine = b.costs.filter((c) => c.source === m.disposal.DISPOSAL_SOURCE);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.amount).toBe(55);
+    expect(mine[0]!.state).toBe("paid");
+    expect(b.summary.other).toBe(r2t(55 + 12));
+    // A later quote version does not write over the actual.
+    const sync = await m.disposal.syncDisposalCosts(jobId, qid);
+    expect(sync.changed).toBe(0);
+    expect(sync.flags.join(" ")).toContain("paid at $55.00");
+    expect((await budget()).costs.filter((c) => c.source === m.disposal.DISPOSAL_SOURCE)[0]!.amount).toBe(55);
+
+    // What this job makes prices off the quote lines only: the disposal cost once, never the Money out rows on top.
+    const f = await run<{ jobId: number }, { materials: number }>(m.costing.forecast, { jobId });
+    const goods = items.filter((l) => ["supply", "accessory", "delivery", "supplier_charge", "internal_charge"].includes(l.kind));
+    expect(f.materials).toBe(r2t(goods.reduce((a, l) => a + (l.unitCost ?? 0) * l.qty, 0)));
+    console.log("disposal budget:", JSON.stringify({ estimate: est[0]!.amount, actual: 55, other: b.summary.other, forecastMaterials: f.materials }));
+  });
+});
+
+describe("7 Nov 6: who sees what", () => {
+  let qid = 0;
+  let token = "";
+  const COST = 13.57;
+
+  test("set up a sent installation quote with a cost only Admin should see", async () => {
+    await product("carpetCost", { brand: "Cost", range: "Check", colour: "Teal", sku: "CPT9", category: "carpet", soldAs: "broadloom", unit: "lm", widthM: 3.66, costPrice: COST, sellPrice: 41.23 });
+    qid = await newQuote();
+    await addProduct({ quoteId: qid, productId: P.carpetCost, measuredM2: 20 });
+    await readyToGo(qid);
+    await run(m.quotes.send, { id: qid });
+    token = (await m.links.linkForQuote(qid)).token;
+    expect((await linesOf(qid)).some((l) => l.unitCost === COST)).toBe(true);
+  });
+
+  test("Office without costs: no cost, markup or margin on any line, the disposal included", async () => {
+    const view = await as(OFFICE, () => run<{ id: number }, any>(m.quotes.get, { id: qid }));
+    expect(view.costsHidden).toBe(true);
+    expect(view.estimatedCost).toBeNull();
+    expect(view.estimatedMargin).toBeNull();
+    for (const i of view.items) {
+      expect(i.unitCost).toBeNull();
+      expect(i.markupPercent).toBeNull();
+    }
+    expect(view.items.some((i: any) => i.kind === "internal_charge")).toBe(true);
+    expect(JSON.stringify(view)).not.toContain(String(COST));
+    // The defaults tools work for Office, and show no cost either.
+    const open = await as(OFFICE, () => run<{ quoteId: number }, unknown[]>(m.quoteDefaults.open, { quoteId: qid }));
+    expect(JSON.stringify(open)).not.toContain(String(COST));
+  });
+
+  test("Field crew: no quote and none of the defaults tools", async () => {
+    await as(FIELD, async () => {
+      await expect(run(m.quotes.get, { id: qid })).rejects.toThrow("Office access required");
+      await expect(run(m.quoteDefaults.open, { quoteId: qid })).rejects.toThrow("Office access required");
+      await expect(run(m.quoteDefaults.trimChoices, { quoteId: qid })).rejects.toThrow("Office access required");
+      await expect(run(m.quoteDefaults.coverTrim, { itemId: 1, installId: 1 })).rejects.toThrow("Office access required");
+    });
+  });
+
+  test("the customer's /q/ page and PDF: sections, no cost, no markup", async () => {
+    const page = await as(null, () => run<{ token: string }, any>(m.publicPages.quote.get, { token }));
+    expect(page.state).toBe("open");
+    expect(page.layout).toBe("sections");
+    expect(page.items).toEqual([]);
+    expect(page.bundles.length).toBeGreaterThan(0);
+    const json = JSON.stringify(page);
+    expect(json).not.toContain(String(COST));
+    expect(json).not.toMatch(/unitCost|markup|"cost"/i);
+
+    const pdf = await as(null, () => run<{ token: string }, { filename: string; base64: string }>(m.publicPages.quote.pdf, { token }));
+    const file = join(dir, "sections.pdf");
+    writeFileSync(file, Buffer.from(pdf.base64, "base64"));
+    const text = spawnSync("pdftotext", ["-layout", file, "-"], { encoding: "utf8" }).stdout;
+    expect(text.length).toBeGreaterThan(100);
+    expect(text).not.toContain(String(COST));
+    expect(text).not.toMatch(/markup/i);
+    for (const b of page.bundles) expect(text).toContain(String(b.title).split("\n")[0]!.slice(0, 20));
+    console.log("sections PDF:", JSON.stringify({ bundles: page.bundles.map((b: any) => [b.title, b.total]), total: page.total, chars: text.length }));
+  });
+
+  test("itemised, if the office picks it: one row per line at the sell rate, still no cost", async () => {
+    await q("update quotes set layout = 'itemised' where id = ?", [qid]);
+    try {
+      const page = await as(null, () => run<{ token: string }, any>(m.publicPages.quote.get, { token }));
+      expect(page.layout).toBe("itemised");
+      const lines = await linesOf(qid);
+      expect(page.items).toHaveLength(lines.length);
+      for (const r of page.items) {
+        expect(Object.keys(r).sort()).toEqual(["description", "id", "qty", "rate", "total", "unit"]);
+        expect(r.rate).toBe(r2t(lines.find((l) => l.id === r.id)!.unitPrice));
+      }
+      expect(JSON.stringify(page)).not.toContain(String(COST));
+    } finally {
+      await q("update quotes set layout = 'auto' where id = ?", [qid]);
+    }
+  });
+});
+
+describe("7 Nov 7: 4.0 m carpet with Super Green (9912, 1.83 m)", () => {
+  test("underlay = carpet lm x 4.0 / 1.83, up to the next 0.1 lm; uplift and disposal off the 4 m width", async () => {
+    const qid = await newQuote();
+    const r = await addProduct({ quoteId: qid, productId: P.carpet4, measuredM2: 30, wastagePct: 10 });
+    const ls = await linesOf(qid);
+    const carpet = await lineOf(r.item.id);
+    // 30 m2 + 10% = 33 m2 / 4.0 = 8.25 -> 8.3 lm.
+    expect(carpet.qty).toBe(8.3);
+    const underlay = ls.find((l) => l.productId === 9912)!;
+    const want = Math.ceil(Math.round(((8.3 * 4) / 1.83) * 10_000) / 10_000 * 10 - 1e-9) / 10;
+    expect(want).toBe(18.2); // 33.2 / 1.83 = 18.14 -> 18.2
+    expect(underlay.qty).toBe(want);
+    expect(ls.find((l) => l.rateItemId === 7)!.qty).toBe(7.5); // 30 / 4.0, no wastage
+    expect(ls.find((l) => l.kind === "internal_charge")!.qty).toBe(30); // 7.5 lm x 4.0
+    console.log("4.0 m carpet:", JSON.stringify(shape(ls)));
+  });
+});
+
+describe("7 Nov 8: follow-ups, as they stand", () => {
+  test("a variation line cannot be an Internal disposal line", async () => {
+    const { LINE_KINDS } = await import("../src/api/lib/variations");
+    expect((LINE_KINDS as readonly string[]).includes("internal_charge")).toBe(false);
   });
 });
 

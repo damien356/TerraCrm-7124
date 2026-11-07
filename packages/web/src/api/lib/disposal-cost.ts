@@ -17,6 +17,11 @@ import { quoteRefById } from "./quote-number";
  * ------------------------------------------------------------------------- */
 
 export const DISPOSAL_COST_NOTE = "Estimated carpet disposal allowance, from the quote. Not a bill.";
+/**
+ * On the job cost row (job_costs.source), so it is still found when the
+ * office edits it into the actual (7 Nov). Editing never changes the source.
+ */
+export const DISPOSAL_SOURCE = "disposal";
 const NO_COST_NOTE = "Estimated carpet disposal allowance, from the quote. The line has no cost, so add the amount. Not a bill.";
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -27,7 +32,7 @@ const costOf = (l: Line) => (l.unitCost == null ? 0 : round2(l.unitCost * l.qty)
 const noteOf = (l: Line) => (l.unitCost == null ? NO_COST_NOTE : DISPOSAL_COST_NOTE);
 const m2Text = (l: Line) => `${Number(l.qty.toFixed(2))} ${l.unit === "m2" || !l.unit ? "m²" : l.unit}`;
 const descOf = (l: Line, ref: string) => `Carpet disposal (estimate), ${ref}: ${m2Text(l)}`.slice(0, 300);
-const isOurs = (notes: string) => notes === DISPOSAL_COST_NOTE || notes === NO_COST_NOTE;
+const isOurs = (r: { notes: string; source: string }) => r.source === DISPOSAL_SOURCE || r.notes === DISPOSAL_COST_NOTE || r.notes === NO_COST_NOTE;
 
 export async function disposalLinesOf(quoteId: number) {
   return db
@@ -41,7 +46,7 @@ export async function disposalLinesOf(quoteId: number) {
 export async function addDisposalCosts(jobId: number, lines: Line[], ref: string) {
   if (!lines.length) return 0;
   await db.insert(schema.jobCosts).values(
-    lines.map((l) => ({ jobId, kind: "other", description: descOf(l, ref), amount: costOf(l), state: "budget", notes: noteOf(l) })),
+    lines.map((l) => ({ jobId, kind: "other", description: descOf(l, ref), amount: costOf(l), state: "budget", notes: noteOf(l), source: DISPOSAL_SOURCE })),
   );
   return lines.length;
 }
@@ -60,7 +65,7 @@ export async function syncDisposalCosts(jobId: number, quoteId: number) {
       .from(schema.jobCosts)
       .where(and(eq(schema.jobCosts.jobId, jobId), eq(schema.jobCosts.kind, "other")))
       .orderBy(asc(schema.jobCosts.id))
-  ).filter((r) => isOurs(r.notes));
+  ).filter(isOurs);
   const flags: string[] = [];
   const now = new Date();
   let added = 0;
@@ -79,7 +84,7 @@ export async function syncDisposalCosts(jobId: number, quoteId: number) {
       await db.update(schema.jobCosts).set({ ...want, updatedAt: now }).where(eq(schema.jobCosts.id, r.id));
       changed += 1;
     } else if (l) {
-      await db.insert(schema.jobCosts).values({ jobId, kind: "other", description: descOf(l, ref), amount: costOf(l), state: "budget", notes: noteOf(l) });
+      await db.insert(schema.jobCosts).values({ jobId, kind: "other", description: descOf(l, ref), amount: costOf(l), state: "budget", notes: noteOf(l), source: DISPOSAL_SOURCE });
       added += 1;
     } else if (r) {
       if (r.state !== "budget") {
@@ -91,4 +96,26 @@ export async function syncDisposalCosts(jobId: number, quoteId: number) {
     }
   }
   return { added, changed, removed, flags };
+}
+
+/**
+ * One count per job (7 Nov). The estimate is the job's one carpet disposal
+ * row: when the skip bin is paid, the office edits that row to this job's
+ * share of the bin and sets it to Invoiced or Paid, and the actual replaces
+ * the estimate. A second skip bin or disposal row typed in while the
+ * estimate is still a budget would count the same disposal twice, so it is
+ * stopped with what to do instead. The shop's whole skip bin bill is never
+ * put on any job, and nothing here makes a supplier bill.
+ */
+export const DISPOSAL_TWICE_MESSAGE =
+  "This job already has a carpet disposal estimate in Money out. To record the real skip bin cost, edit that row: put in this job's share of the bin and set it to Invoiced or Paid. Then it is counted once.";
+const DISPOSAL_WORDS = /\b(skip|skips|disposal|dispose|tip|tip run)\b/i;
+
+export async function disposalTwice(input: { id?: number; jobId: number; kind: string; description: string }) {
+  if (input.id || input.kind !== "other" || !DISPOSAL_WORDS.test(input.description)) return null;
+  const rows = await db
+    .select()
+    .from(schema.jobCosts)
+    .where(and(eq(schema.jobCosts.jobId, input.jobId), eq(schema.jobCosts.kind, "other"), eq(schema.jobCosts.state, "budget")));
+  return rows.some(isOurs) ? DISPOSAL_TWICE_MESSAGE : null;
 }

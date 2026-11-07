@@ -9,6 +9,7 @@ import { carryQuotePeopleToJob } from "./job-people";
 import { moveJobForward } from "./job-stage";
 import { notifyOffice } from "./notify";
 import { buildWorkFromQuote, convertQuoteToJob } from "./quote-convert";
+import { assertDefaultsResolved } from "./quote-default-gate";
 import { quoteRefOf } from "./quote-number";
 import { doublesBeforeBuild, reworkJobForVersion, reworkSummary, workBaseQuoteId, type Rework } from "./quote-rework";
 import { jobText } from "./refs";
@@ -82,6 +83,8 @@ export async function acceptQuote(args: { quoteId: number; actor: AcceptActor; v
     throw bad("This quote has passed its valid until date. Reply to our email and we will update it for you.");
   }
   await assertBillable(quote.jobId);
+  // Quote defaults (7 Nov): an online accept does not go through assertReadyToGoOut, so the gate is here too.
+  await assertDefaultsResolved(quote.id, args.via);
   await acceptSupplyCheck(quote, args.via);
 
   // Lock it, only if nobody else got there first.

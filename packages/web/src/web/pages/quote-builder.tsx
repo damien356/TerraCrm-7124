@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { Modal } from "../components/ui/modal";
 import { LabourPicker, ProductPicker } from "../components/quote-pickers";
 import { DefaultMark, LineAreaStrip, LinkedInstallMark, type LineArea } from "../components/floor-area";
+import { DefaultWarningActions } from "../components/quote-default-actions";
 import { SupervisorPicker } from "../components/supervisor-picker";
 import { JobPeopleCard, QuotePeopleCard } from "../components/job-people";
 import { useJob } from "../queries/jobs";
@@ -133,6 +134,11 @@ type Item = {
   defaultKey?: string | null;
   /** A carpet disposal typed over: it stops following its uplift. */
   disposalTyped?: boolean;
+  /** Quote defaults (7 Nov). Which were put on, and who marked the warning reviewed. */
+  defaultsApplied?: string | null;
+  defaultReviewedBy?: string | null;
+  defaultReviewedAt?: Date | string | null;
+  defaultReviewNote?: string | null;
 };
 
 type LineSize = {
@@ -483,6 +489,7 @@ function LineRow({
             <AlertTriangle className="size-3.5" /> {item.flagReason ?? "Needs review"}
           </span>
         ) : null}
+        <DefaultWarningActions item={item} locked={locked} onNotice={onNotice} />
         <Input
           className="h-8"
           value={draft.description}
