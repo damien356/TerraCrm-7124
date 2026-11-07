@@ -51,6 +51,10 @@ import {
   installedOf,
   keepTrimAddedFor,
   isTrimProduct,
+  isNewSkirting,
+  SKIRTING_FLAG,
+  SKIRTING_KEY,
+  SKIRTING_MISSING_MARK,
   isWallVinyl,
   isDomesticSheet,
   needsClassifying,
@@ -421,6 +425,41 @@ export async function applyTrimLabour(trimId: number, product: Product, installe
   return out;
 }
 
+/**
+ * New skirting (Damien, 7 Nov): a Skirting product brings Install new
+ * skirting straight under it, at the lm installed, or at 0 flagged to fill
+ * in. One per skirting line, for that line's own run, so nothing is counted
+ * twice. Removed with the line, and never put back once removed by hand.
+ */
+export async function applySkirtingLabour(lineId: number, product: Product, installedLm: number | null = null): Promise<DefaultsAdded> {
+  const out: DefaultsAdded = { added: [], notes: [] };
+  const line = await lineOf(lineId);
+  if (!line || !isNewSkirting(product)) return out;
+  if (appliedOf(line.defaultsApplied).includes(SKIRTING_KEY)) return out;
+  if (!(await takesDefaults(line.quoteId))) return out;
+  const lm = installedLm != null && installedLm >= 0 ? r4(installedLm) : null;
+  const rate = await liveRate(RATE.newSkirting);
+  let priced;
+  try {
+    if (!rate.ok) throw new Error(rate.why);
+    priced = await standardLabour(RATE.newSkirting.id, lm ?? 0);
+  } catch (e) {
+    await flagLine(line.id, `${SKIRTING_MISSING_MARK} ${e instanceof Error ? e.message : ""}`.trim());
+    return out;
+  }
+  const row = await insertUnder(line, SKIRTING_KEY, {
+    ...priced.values,
+    flagged: lm == null,
+    flagReason: lm == null ? SKIRTING_FLAG : null,
+  });
+  await addApplied(line.id, [SKIRTING_KEY]);
+  if (row) {
+    out.added.push(row);
+    out.notes.push(lm != null ? `${row.description} put on underneath at ${lm} lm installed.` : `${row.description} put on underneath. Enter the installed length.`);
+  }
+  return out;
+}
+
 /** The trims an Install trims/scotia line is for: the trim it was put on under, and every trim it covers. */
 async function trimsOf(install: Line, exclude?: number) {
   const lines = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, install.quoteId));
@@ -742,9 +781,12 @@ export async function afterProductChange(lineId: number, oldProduct: Product | n
   const nowTrim = isTrimProduct(product);
   const keep = new Set((newType ? (FLOOR_DEFAULTS[newType] ?? []) : []).map((d) => d.key));
   if (nowTrim) keep.add(TRIM_KEY);
-  if (oldType !== newType || wasTrim !== nowTrim) {
-    const was = oldType ? FLOOR_TYPE_LABELS[oldType].toLowerCase() : wasTrim ? "trim or scotia" : "old product";
-    const now = newType ? FLOOR_TYPE_LABELS[newType].toLowerCase() : nowTrim ? "trim or scotia" : lineName(product);
+  const wasSkirting = Boolean(oldProduct && isNewSkirting(oldProduct));
+  const nowSkirting = isNewSkirting(product);
+  if (nowSkirting) keep.add(SKIRTING_KEY);
+  if (oldType !== newType || wasTrim !== nowTrim || wasSkirting !== nowSkirting) {
+    const was = oldType ? FLOOR_TYPE_LABELS[oldType].toLowerCase() : wasTrim ? "trim or scotia" : wasSkirting ? "new skirting" : "old product";
+    const now = newType ? FLOOR_TYPE_LABELS[newType].toLowerCase() : nowTrim ? "trim or scotia" : nowSkirting ? "new skirting" : lineName(product);
     const kids = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.defaultForItemId, lineId));
     for (const k of kids) {
       if (k.defaultKey && !keep.has(k.defaultKey))
@@ -756,6 +798,7 @@ export async function afterProductChange(lineId: number, oldProduct: Product | n
   }
   if (newType && oldType !== newType) await applyFloorDefaults(lineId, product);
   if (nowTrim && !wasTrim) await applyTrimLabour(lineId, product);
+  if (nowSkirting && !wasSkirting) await applySkirtingLabour(lineId, product);
   if (!newType) await flagUnclassified(lineId, product);
 }
 

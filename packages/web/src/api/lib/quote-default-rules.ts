@@ -24,6 +24,9 @@ export const RATE = {
   cuttingGyprock: { id: 120, name: "Cutting gyprock" },
   trimInstall: { id: 111, name: "Install trims/scotia" },
   skirting: { id: 65, name: "Skirting removal and refit" },
+  /** 7 Nov catalog answers: new skirting at $10 a lm installer rate, and removal only at $5 (sql/2026-12-01-skirting-labour.sql). */
+  newSkirting: { id: 121, name: "Install new skirting" },
+  skirtingRemovalOnly: { id: 122, name: "Skirting removal only" },
   sanding: { id: 114, name: "Sanding coating 1 coat Polyurethane and 1 coat 2 Pac." },
 } as const;
 
@@ -160,6 +163,20 @@ export function isTrimProduct(p: { category: string | null; brand?: string | nul
 }
 
 /**
+ * New skirting boards (Damien, 7 Nov): the price book's Skirting products,
+ * the Mitre 10 pine mouldings. Each brings Install new skirting under it at
+ * the lm installed, or flagged to fill in. Not a trim: no Install trims/scotia.
+ */
+export const SKIRTING_KEY = "skirting";
+export function isNewSkirting(p: { category: string | null }) {
+  return p.category === "skirting";
+}
+/** A trim, scotia or new skirting: takes the lm installed, and the supply is whole lengths off it. */
+export function takesInstalledLm(p: { category: string | null; brand?: string | null; range?: string | null; colour?: string | null }) {
+  return isTrimProduct(p) || isNewSkirting(p);
+}
+
+/**
  * 7 Nov (second brief): the installed lm typed in when a trim was added, kept
  * on the trim line as "trim:installed:<lm>". The supply is whole lengths off
  * it; the install is this, never the supplied metres.
@@ -223,6 +240,7 @@ export const DEFAULT_FLAG_PREFIX = "Put on by default.";
 export const enterFlag = (what: string) => `${DEFAULT_FLAG_PREFIX} Enter the ${what}, or remove the line if it is not needed.`;
 export const UPLIFT_NO_WIDTH_FLAG = `${DEFAULT_FLAG_PREFIX} Enter the uplift length. It works out once the carpet has a roll width.`;
 export const TRIM_FLAG = enterFlag("trim and scotia install length (lm)");
+export const SKIRTING_FLAG = enterFlag("new skirting install length (lm)");
 /**
  * 7 Nov: the $3.00 a m2 and 15% came from Damien's 6 Nov question form only,
  * with no separate sign off, so nothing is filled in for him. Until an Admin
@@ -319,6 +337,7 @@ export function withoutEnterFlag(reason: string | null | undefined): string | nu
 }
 export const MISSING_MARK = "Not put on by default:";
 export const TRIM_MISSING_MARK = "Install trims/scotia not put on.";
+export const SKIRTING_MISSING_MARK = "Install new skirting not put on.";
 const CHANGED_MARK = "This was put on for the";
 
 /**
@@ -334,6 +353,7 @@ export function isDefaultWarning(reason: string | null | undefined) {
     DISPOSAL_ORPHAN_FLAG,
     MISSING_MARK,
     TRIM_MISSING_MARK,
+    SKIRTING_MISSING_MARK,
     CHANGED_MARK,
     UNCLASSIFIED_MARK,
     NOT_COMMERCIAL_MARK,

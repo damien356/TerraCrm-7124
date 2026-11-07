@@ -144,6 +144,8 @@ const RATES: { id: number; name: string; unit: string; group: string; markup: nu
   { id: 111, name: "Install trims/scotia", unit: "lm", group: "resilient", markup: null, amount: 8 },
   { id: 114, name: "Sanding coating 1 coat Polyurethane and 1 coat 2 Pac.", unit: "m2", group: "timber", markup: 70, amount: 60 },
   { id: 120, name: "Cutting gyprock", unit: "lm", group: "resilient", markup: 60, amount: 4 },
+  { id: 121, name: "Install new skirting", unit: "lm", group: "trades", markup: 50, amount: 10 },
+  { id: 122, name: "Skirting removal only", unit: "lm", group: "trades", markup: 50, amount: 5 },
 ];
 
 const P: Record<string, number> = {};
@@ -1462,13 +1464,36 @@ describe("7 Nov catalog decisions: base plates, new skirting, Sunstar and Riverh
     expect([inst!.qty, inst!.flagged]).toEqual([23, false]);
   });
 
-  test("Mitre 10 pine moulding is new skirting: 5.4 m lengths, no trim install, no skirting removal", async () => {
+  test("Mitre 10 pine moulding is new skirting: 5.4 m lengths, Install new skirting flagged to fill in, no trim install, no skirting removal", async () => {
     const qid = await newQuote();
     const sk = await addProduct({ quoteId: qid, productId: P.m10Skirt, qty: 5 });
     expect(noteOf(sk)).toContain("5 lengths of 5.4 m (27 lm)");
-    expect(sk.defaultsAdded ?? 0).toBe(0);
-    const rates = (await linesOf(qid)).map((l) => l.rateItemId).filter((r) => r != null);
-    expect(rates).toEqual([]);
+    const rated = (await linesOf(qid)).filter((l) => l.rateItemId != null);
+    expect(rated.map((l) => [l.rateItemId, l.qty, l.flagged, l.defaultForItemId])).toEqual([[121, 0, true, sk.item.id]]);
+    expect(rated[0]!.flagReason).toBe(m.rules.SKIRTING_FLAG);
+  });
+
+  test("new skirting with 25 lm installed: 5 lengths of 5.4 m, Install new skirting at 25 lm, $10 a lm cost at 50% markup", async () => {
+    expect(m.rules.isNewSkirting({ category: "skirting" })).toBe(true);
+    expect(m.rules.takesInstalledLm({ category: "skirting" })).toBe(true);
+    const qid = await newQuote();
+    const sk = await addProduct({ quoteId: qid, productId: P.m10Skirt, installedLm: 25 });
+    const line = await lineOf(sk.item.id);
+    expect([line.qty, line.total]).toEqual([5, r2t(5 * 10.09)]);
+    const [inst] = (await linesOf(qid)).filter((l) => l.rateItemId != null);
+    expect([inst!.rateItemId, inst!.description, inst!.qty, inst!.unitCost, inst!.unitPrice, inst!.total, inst!.flagged]).toEqual([121, "Install new skirting", 25, 10, 15, 375, false]);
+    // Taken off with its skirting line, and the quote is clear.
+    await removeItem(sk.item.id);
+    expect((await linesOf(qid)).length).toBe(0);
+  });
+
+  test("typing the length on Install new skirting clears its fill-in flag", async () => {
+    const qid = await newQuote();
+    await addProduct({ quoteId: qid, productId: P.m10Skirt, qty: 4 });
+    const [inst] = (await linesOf(qid)).filter((l) => l.rateItemId === 121);
+    await updateItem({ id: inst!.id, qty: 20 });
+    const now = await lineOf(inst!.id);
+    expect([now.qty, now.flagged, now.total]).toEqual([20, false, 300]);
   });
 
   test("Armstrong Accolade Plus (Commercial Sheet) gets the commercial lines; MJS Trojan (Domestic Sheet) gets none and is not flagged", async () => {

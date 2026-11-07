@@ -9,7 +9,7 @@ import { ProductFinder, type LastQuotedContext } from "./product-finder";
 import { useRatePicker } from "../queries/labour";
 import { useAddQuoteLabour, useAddQuoteProduct } from "../queries/quotes";
 import { ProductAreaFields, useAreaDraft } from "./floor-area";
-import { isTrimProduct } from "../../api/lib/quote-default-rules";
+import { takesInstalledLm } from "../../api/lib/quote-default-rules";
 import { pieceLengthOf, supplyForInstalled } from "../../api/lib/order-sizes";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
@@ -134,10 +134,10 @@ export function ProductPicker({ quoteId, context }: { quoteId: number; context?:
   const add = useAddQuoteProduct();
   const [chosen, setChosen] = React.useState<FoundProduct | null>(null);
   const [qty, setQty] = React.useState("1");
-  // 7 Nov (second brief): a trim or scotia takes the installed lm; the supply is whole lengths off it.
+  // 7 Nov (second brief): a trim or scotia takes the installed lm; the supply is whole lengths off it. New skirting too (7 Nov catalog answers).
   const [installed, setInstalled] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
-  const trim = chosen != null && isTrimProduct(chosen);
+  const trim = chosen != null && takesInstalledLm(chosen);
   const installedLm = trim && installed.trim() !== "" && Number(installed) > 0 ? Number(installed) : null;
   const length = chosen ? pieceLengthOf(chosen) : null;
   const supply = chosen && installedLm != null ? supplyForInstalled(chosen, installedLm) : null;

@@ -60,6 +60,7 @@ import {
   afterProductChange,
   applyFloorDefaults,
   applyTrimLabour,
+  applySkirtingLabour,
   copyDefaultLinks,
   ensureDisposal,
   fillDisposalRates,
@@ -67,7 +68,7 @@ import {
   followDefaults,
   removeDefaultsOf,
 } from "../lib/quote-defaults";
-import { isTrimProduct } from "../lib/quote-default-rules";
+import { isNewSkirting, isTrimProduct, takesInstalledLm } from "../lib/quote-default-rules";
 import { assertDefaultsResolved } from "../lib/quote-default-gate";
 import { isSheetUnderlay } from "../lib/pack-name";
 import { isUnderlayCategory, lengthUnitPrice, supplyForInstalled, underlayName } from "../lib/order-sizes";
@@ -1023,7 +1024,7 @@ export const quotes = {
 
       // 7 Nov (second brief): a trim comes to whole lengths x the price of one length.
       const unitPrice = lengthUnitPrice(product, await liveSellFor(product));
-      const installedLm = isTrimProduct(product) && input.installedLm != null ? input.installedLm : null;
+      const installedLm = takesInstalledLm(product) && input.installedLm != null ? input.installedLm : null;
       const typedQty = input.qty ?? (installedLm != null ? supplyForInstalled(product, installedLm) : null) ?? 1;
       // Reads the way Damien says it out loud: "Andes Peak in Merida", not a
       // string of dashes. This line goes out on the customer's quote.
@@ -1101,13 +1102,15 @@ export const quotes = {
       // Quote defaults (6 Nov): a measured floor with its install ticked brings its standard items, a trim or scotia its install.
       const defaults = res && input.labour !== null ? await applyFloorDefaults(row.id, product) : null;
       const trim = input.labour !== null && isTrimProduct(product) ? await applyTrimLabour(row.id, product, installedLm) : null;
+      // 7 Nov catalog answers: new skirting brings Install new skirting at the lm installed.
+      const skirting = input.labour !== null && isNewSkirting(product) ? await applySkirtingLabour(row.id, product, installedLm) : null;
       // 7 Nov: a floor product with no Sold as in the price book is flagged, so its standard lines are not quietly missing.
       const unclassified = input.labour !== null && !floorTypeOf(product) ? await flagUnclassified(row.id, product) : false;
-      const added = [...(defaults?.added ?? []), ...(trim?.added ?? [])];
-      if (defaults || trim || unclassified) [item = row] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, row.id));
+      const added = [...(defaults?.added ?? []), ...(trim?.added ?? []), ...(skirting?.added ?? [])];
+      if (defaults || trim || skirting || unclassified) [item = row] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, row.id));
 
       const totals = await recalc(input.quoteId, [row?.id, ...added.map((a) => a.id)]);
-      const defaultsNote = [...(defaults?.notes ?? []), ...(trim?.notes ?? [])].join(" ") || null;
+      const defaultsNote = [...(defaults?.notes ?? []), ...(trim?.notes ?? []), ...(skirting?.notes ?? [])].join(" ") || null;
       return {
         item: hideCost(item, context.actor),
         labour: hideCost(labour, context.actor),
