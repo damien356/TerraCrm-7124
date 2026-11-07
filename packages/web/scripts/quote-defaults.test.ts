@@ -1411,6 +1411,78 @@ describe("7 Nov (second brief): trims and scotia by the length, install by the i
   });
 });
 
+describe("7 Nov catalog decisions: base plates, new skirting, Sunstar and Riverhill trims, domestic and commercial sheet", () => {
+  // Copies of the live records as 2026-11-30-catalog-decisions.sql leaves them.
+  test("set up the demo products", async () => {
+    await product("acBase", { brand: "Acouslime", range: "Universal Base Plate", colour: "Standard", sku: "D-UBP", category: "trim", unit: "each", pieceLengthM: 3.4, costPrice: 19, sellPrice: 36.6 });
+    await product("rhChannel", { brand: "Riverhill", range: "Elegant Hybrid 6.5mm", colour: "", sku: "Base Channel", category: "accessory", unit: "each", pieceLengthM: 2.4, costPrice: 1.5, sellPrice: 2.87 });
+    await product("ssTTrim", { brand: "Sunstar", range: "Vinyl Wrapped", colour: "", sku: "T-Trim", category: "trim", unit: "each", pieceLengthM: 2.4, costPrice: 22, sellPrice: 42.04 });
+    await product("m10Skirt", { brand: "Mitre 10", range: "Pine Moulding Bullnose", colour: "", sku: "D-B940745", category: "skirting", unit: "each", lengthMm: 5400, pieceLengthM: 5.4, costPrice: 5.3, sellPrice: 10.09 });
+    await product("armCommercial", { brand: "Armstrong", range: "Accolade Plus", colour: "Grey", sku: "D-AP", category: "vinyl", soldAs: "broadloom", unit: "m2", widthM: 2, tier: "Commercial Sheet" });
+    await product("mjsDomestic", { brand: "MJS Floorcoverings", range: "Trojan", colour: "Oak", sku: "D-TR", category: "vinyl", soldAs: "broadloom", unit: "m2", widthM: 4, tier: "Domestic Sheet" });
+  });
+
+  const noteOf = (r: unknown) => String((r as { qtyNote?: string | null }).qtyNote ?? "");
+
+  test("the rules: a base plate or base channel is an insert, not a trim; skirting is not a trim", () => {
+    expect(m.rules.isTrimProduct({ category: "trim", brand: "Acouslime", range: "Universal Base Plate", colour: "Standard" })).toBe(false);
+    expect(m.rules.isTrimProduct({ category: "accessory", brand: "Riverhill", range: "Universal base channel" })).toBe(false);
+    expect(m.rules.isTrimComponent({ range: "Universal Base Plate Plus 20mm" })).toBe(true);
+    expect(m.rules.isTrimProduct({ category: "trim", brand: "Sunstar", range: "Vinyl Wrapped" })).toBe(true);
+    expect(m.rules.isTrimProduct({ category: "skirting", brand: "Mitre 10", range: "Pine Moulding Bullnose" })).toBe(false);
+    expect(m.rules.isDomesticSheet({ tier: " domestic sheet " })).toBe(true);
+    expect(m.rules.isCommercialSheet({ tier: "Domestic Sheet" })).toBe(false);
+  });
+
+  test("a base plate is bought in 3.4 m lengths and brings no install of its own", async () => {
+    const qid = await newQuote();
+    const bp = await addProduct({ quoteId: qid, productId: P.acBase, qty: 7 });
+    expect(noteOf(bp)).toContain("7 lengths of 3.4 m (23.8 lm)");
+    expect((await lineOf(bp.item.id)).total).toBe(r2t(7 * 36.6));
+    expect(await installsOf(qid)).toHaveLength(0);
+  });
+
+  test("top cover and base plate on one hybrid run: the run's install is charged once", async () => {
+    const qid = await newQuote();
+    const hy = await addProduct({ quoteId: qid, productId: P.hybrid, measuredM2: 30 });
+    const area = (await installsOf(qid)).find((l) => l.defaultForItemId === hy.item.id)!;
+    await addProduct({ quoteId: qid, productId: P.acTop34, installedLm: 23 });
+    const bp = await addProduct({ quoteId: qid, productId: P.acBase, qty: 7 });
+    const installs = await installsOf(qid);
+    expect(installs.map((l) => [l.id, l.qty])).toEqual([[area.id, 23]]);
+    expect(installs[0]!.flagReason ?? "").not.toContain(bp.item.description);
+  });
+
+  test("a Sunstar T-Trim, now a trim: 23 lm installed is 10 lengths, install at 23 lm", async () => {
+    const qid = await newQuote();
+    const t = await addProduct({ quoteId: qid, productId: P.ssTTrim, installedLm: 23 });
+    const line = await lineOf(t.item.id);
+    expect([line.qty, line.total]).toEqual([10, r2t(10 * 42.04)]);
+    const [inst] = await installsOf(qid);
+    expect([inst!.qty, inst!.flagged]).toEqual([23, false]);
+  });
+
+  test("Mitre 10 pine moulding is new skirting: 5.4 m lengths, no trim install, no skirting removal", async () => {
+    const qid = await newQuote();
+    const sk = await addProduct({ quoteId: qid, productId: P.m10Skirt, qty: 5 });
+    expect(noteOf(sk)).toContain("5 lengths of 5.4 m (27 lm)");
+    expect(sk.defaultsAdded ?? 0).toBe(0);
+    const rates = (await linesOf(qid)).map((l) => l.rateItemId).filter((r) => r != null);
+    expect(rates).toEqual([]);
+  });
+
+  test("Armstrong Accolade Plus (Commercial Sheet) gets the commercial lines; MJS Trojan (Domestic Sheet) gets none and is not flagged", async () => {
+    const rateIds = async (qid: number) => (await linesOf(qid)).map((l) => l.rateItemId).filter((r) => r != null).sort((a, b) => a! - b!);
+    const com = await newQuote();
+    await addProduct({ quoteId: com, productId: P.armCommercial, measuredM2: 20 });
+    expect(await rateIds(com)).toEqual([19, 20, 21, 102, 109]);
+    const dom = await newQuote();
+    const d = await addProduct({ quoteId: dom, productId: P.mjsDomestic, measuredM2: 20 });
+    expect((await rateIds(dom)).filter((r) => [20, 21, 102, 109].includes(r!))).toEqual([]);
+    expect((await lineOf(d.item.id)).flagReason ?? "").not.toContain(m.rules.NOT_COMMERCIAL_MARK);
+  });
+});
+
 test("nothing was sent", () => {
   expect(blocked).toEqual([]);
 });

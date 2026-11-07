@@ -52,6 +52,7 @@ import {
   keepTrimAddedFor,
   isTrimProduct,
   isWallVinyl,
+  isDomesticSheet,
   needsClassifying,
   notCommercialFlag,
   RATE,
@@ -229,8 +230,8 @@ export async function applyFloorDefaults(floorId: number, product: Product): Pro
   if (!(await takesDefaults(start.quoteId))) return out;
   // 7 Nov: coving and welding only on a roll the price book marks commercial. Any other sheet vinyl waits for a decision.
   if (t === "sheet_vinyl" && !isCommercialSheet(product)) {
-    // 7 Nov (second brief): wall vinyl is a verified type with nothing put on, so it is not flagged.
-    if (!isWallVinyl(product)) await flagLine(floorId, notCommercialFlag(product.tier));
+    // 7 Nov (second brief): wall vinyl is a verified type with nothing put on, so it is not flagged. Domestic sheet too (catalog decisions).
+    if (!isWallVinyl(product) && !isDomesticSheet(product)) await flagLine(floorId, notCommercialFlag(product.tier));
     return out;
   }
 

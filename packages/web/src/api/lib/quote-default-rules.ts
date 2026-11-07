@@ -142,7 +142,17 @@ export const coveredLineOf = (applied: string[]) => {
  */
 const TRIM_WORDS = /scotia|trim|profile|channel|reducer|top cover/i;
 const NOT_TRIM_WORDS = /nosing|stair/i;
+/**
+ * Catalog decisions (Damien, 7 Nov): a base plate or base channel is an insert
+ * that goes under a top trim, not a finished trim. It is bought in lengths like
+ * one, but brings no install of its own: the top trim's install covers the run.
+ */
+const COMPONENT_WORDS = /base\s*plate|base\s*channel/i;
+export function isTrimComponent(p: { brand?: string | null; range?: string | null; colour?: string | null }) {
+  return COMPONENT_WORDS.test([p.brand, p.range, p.colour].filter(Boolean).join(" "));
+}
 export function isTrimProduct(p: { category: string | null; brand?: string | null; range?: string | null; colour?: string | null }) {
+  if (isTrimComponent(p)) return false;
   if (p.category === "scotia" || p.category === "trim") return true;
   if (p.category !== "accessory") return false;
   const name = [p.brand, p.range, p.colour].filter(Boolean).join(" ");
@@ -181,6 +191,16 @@ export const autoOf = (applied: string[]) => {
 export const WALL_VINYL_TIER = "Wall Vinyl";
 export function isWallVinyl(p: { tier?: string | null }) {
   return (p.tier ?? "").trim().toLowerCase() === WALL_VINYL_TIER.toLowerCase();
+}
+/**
+ * Catalog decisions (Damien, 7 Nov): sheet ranges he confirmed as domestic
+ * (MJS Easy Living, Inspire, Trojan, Trojan Plus). A verified type: the
+ * commercial skim, coving, corners and welding do not go on, and it is not
+ * flagged as an unclassified roll. Normal install and anything added by hand stay.
+ */
+export const DOMESTIC_SHEET_TIER = "Domestic Sheet";
+export function isDomesticSheet(p: { tier?: string | null }) {
+  return (p.tier ?? "").trim().toLowerCase() === DOMESTIC_SHEET_TIER.toLowerCase();
 }
 
 /* ------------------------------ carpet disposal ----------------------------- */
