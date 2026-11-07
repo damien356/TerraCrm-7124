@@ -20,6 +20,10 @@
  *   6  Day rates per contractor, off by default, history kept
  *   7  Contractor labor - per hour: $0.00 blocks, agreed rate kept, no double pay
  *   8  Nosing never paid on top of a stair rate; the migration file
+ *   9  $0.00 is "Rate not set" (Damien, 7 Nov): blocks the picker, offers,
+ *      booking, allocation and pay approval, never an hourly man's hourly
+ *      rate; and the job 4297 stairs line (sql/2026-12-04), 30 steps at the
+ *      installer's stair rate, nosing included, paid once
  */
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -739,6 +743,172 @@ describe("8. Nosing, stairs and the migration file", () => {
     expect((await client.execute(update)).rowsAffected).toBe(3);
     expect((await client.execute(update)).rowsAffected).toBe(0);
     expect(await q("SELECT id FROM labour_rate_items WHERE restricted = 1 ORDER BY id")).toEqual([{ id: 73 }, { id: 74 }, { id: 103 }] as any);
+  });
+});
+
+describe("9. $0.00 is Rate not set, and the job 4297 stairs line", () => {
+  const ZERO = 40; // a contractor whose own carpet tile rate was left at $0.00
+  let tilesTask = 0;
+
+  test("a line at his own $0.00 rate keeps him out of the picker, offers, booking and the allocation review", async () => {
+    await m.db.insert(schema.installers).values({ id: ZERO, name: "Zero Card", crewCapacity: "solo", active: true } as any);
+    await m.db.insert(schema.installerSkills).values({ installerId: ZERO, skillId: SK.tiles } as any);
+    await m.db.insert(schema.labourRates).values({ itemId: IT.tiles, installerId: ZERO, amount: 0, effectiveFrom: "2026-01-01" } as any);
+    const j = await newJob();
+    tilesTask = await newTask(j, "Tiles at $0", SK.tiles, [[IT.tiles, 10]]);
+
+    const rows = await run<any[]>(m.installers.eligible, { taskId: tilesTask });
+    const z = rows.find((r) => r.id === ZERO)!;
+    expect([z.eligible, z.reasons]).toEqual([false, ["Rate not set for Carpet tile install ($0.00)"]]);
+    // Terra's standard $10 is fine for anyone without his own row.
+    expect(rows.find((r) => r.id === PAUL)!.eligible).toBe(true);
+
+    const said = "Carpet tile install: Rate not set ($0.00). Set the agreed rate on this person's rate card before giving this person this work.";
+    expect((await failure(run(m.offers.sendDirect, { taskId: tilesTask, installerId: ZERO }))).message).toBe(said);
+    expect((await failure(run(m.tasksRoute.tasks.assign, { id: tilesTask, installerId: ZERO }))).message).toBe(said);
+    const review = await run<any>(m.dispatches.previewAllocate, { taskId: tilesTask, itemIds: [IT.tiles], installerId: ZERO, dates: [THU], arrivalStart: "07:00" });
+    expect(review.stops).toContain(said);
+    expect(await q("SELECT count(*) n FROM task_offers WHERE task_id = ?", [tilesTask])).toEqual([{ n: 0 }] as any);
+
+    // Once a real rate is on his card he can be given it.
+    await q("UPDATE labour_rates SET amount = 12 WHERE installer_id = ? AND item_id = ?", [ZERO, IT.tiles]);
+    expect((await run<any[]>(m.installers.eligible, { taskId: tilesTask })).find((r) => r.id === ZERO)!.eligible).toBe(true);
+    await q("UPDATE labour_rates SET amount = 0 WHERE installer_id = ? AND item_id = ?", [ZERO, IT.tiles]);
+  });
+
+  test("a typed pay of $0.00 is refused on a direct offer and a broadcast", async () => {
+    const j = await newJob();
+    const t = await newTask(j, "Hybrid typed 0", SK.hybrid, [[IT.hybrid, 10]]);
+    const said = "Pay: Rate not set ($0.00). Enter the agreed amount before sending this offer.";
+    expect((await failure(run(m.offers.sendDirect, { taskId: t, installerId: FAB, payAmount: 0 }))).message).toBe(said);
+    expect((await failure(run(m.offers.broadcast, { taskId: t, payAmount: 0 }))).message).toBe(said);
+    expect(await q("SELECT count(*) n FROM task_offers WHERE task_id = ?", [t])).toEqual([{ n: 0 }] as any);
+    expect(pushes).toEqual([]);
+  });
+
+  test("an hourly man is not stopped by a $0.00 unit line, and is still paid at his agreed hourly rate", async () => {
+    await m.db.insert(schema.labourRates).values({ itemId: IT.hybrid, installerId: HOURLY, amount: 0, effectiveFrom: "2026-01-01" } as any);
+    const j = await newJob();
+    const t = await newTask(j, "Hourly with $0 line", SK.hybrid, [[IT.hybrid, 10]]);
+    const h = (await run<any[]>(m.installers.eligible, { taskId: t })).find((r) => r.id === HOURLY)!;
+    expect(h.reasons.join(" ")).not.toContain("Rate not set");
+    await run(m.tasksRoute.tasks.assign, { id: t, installerId: HOURLY });
+    const [row] = await q("SELECT pay_type, agreed_hourly_rate FROM job_tasks WHERE id = ?", [t]);
+    expect([row.pay_type, row.agreed_hourly_rate]).toEqual(["hourly", 10]);
+  });
+
+  test("a day rate switched on for someone with his own $0.00 day rate shows Rate not set", async () => {
+    await run(m.labour.setItemAccess, { installerId: ZERO, itemId: IT.dayOne, enabled: true, effectiveFrom: "2026-11-01", note: null });
+    await m.db.insert(schema.labourRates).values({ itemId: IT.dayOne, installerId: ZERO, amount: 0, effectiveFrom: "2026-11-01" } as any);
+    const j = await newJob();
+    const t = await newTask(j, "Day at $0", null, [[IT.dayOne, 1]]);
+    const rows = await run<any[]>(m.installers.eligible, { taskId: t });
+    expect(rows.find((r) => r.id === ZERO)!.reasons).toEqual(["Rate not set for Day rate, one man ($0.00)"]);
+    // Paul has it on at Terra's $320, so no rate reason for him.
+    expect(rows.find((r) => r.id === PAUL)!.reasons.join(" ")).not.toContain("Rate not set");
+    // The stored day rates are untouched.
+    expect(await q("SELECT item_id, amount FROM labour_rates WHERE installer_id IS NULL AND item_id IN (73, 74, 103) ORDER BY item_id")).toEqual([
+      { item_id: 73, amount: 320 },
+      { item_id: 74, amount: 640 },
+      { item_id: 103, amount: 580 },
+    ] as any);
+  });
+
+  test("pay on a submitted bill with a $0.00 line can't be approved; a real rate can; approved bills are left as they are", async () => {
+    const j = await newJob();
+    const mk = async (n: number, rate: number, status = "submitted") => {
+      const t = await newTask(j, `Bill ${n}`, SK.tiles, [], { assignedInstallerId: ZERO, status: "complete", payType: "per_job" });
+      const [inv] = await m.db
+        .insert(schema.installerInvoices)
+        .values({
+          taskId: t, jobId: j, installerId: ZERO, invoiceNumber: n, status,
+          lineItems: JSON.stringify([{ description: "Carpet tile install", unit: "m2", qty: 10, rate, total: rate * 10 }]),
+          subtotal: rate * 10, total: rate * 10,
+        } as any)
+        .returning();
+      return inv!.id;
+    };
+    const zero = await mk(1, 0);
+    const e = await failure(run(m.invoices.adminSetStatus, { invoiceId: zero, status: "approved" }));
+    expect(e.message).toBe("Carpet tile install: Rate not set ($0.00). Set the agreed rate before approving this pay.");
+    expect((await q("SELECT status FROM installer_invoices WHERE id = ?", [zero]))[0].status).toBe("submitted");
+    const real = await mk(2, 12);
+    expect((await run<any>(m.invoices.adminSetStatus, { invoiceId: real, status: "approved" })).status).toBe("approved");
+    const old = await mk(3, 0, "approved");
+    expect((await run<any>(m.invoices.adminSetStatus, { invoiceId: old, status: "paid" })).status).toBe("paid");
+  });
+
+  test("stairs: 30 steps at the installer's rate for Carpet stairs ($13.00) = $390.00, nosing included, shown on his completion summary", async () => {
+    const j = await newJob();
+    const t = await newTask(j, "Stairs", SK.stairs, [[IT.stairs, 30]]);
+    await m.tasksRoute.bookTask({ taskId: t, installerId: PAUL, dates: [THU], arrivalStart: "07:00", coordinateAfterFirst: false, perDay: [] } as any, actor());
+    const [row] = await q("SELECT labour_cost, labour_breakdown FROM job_tasks WHERE id = ?", [t]);
+    expect(row.labour_cost).toBe(390);
+    const lines = JSON.parse(row.labour_breakdown);
+    expect(lines.map((l: any) => [l.name, l.qty, l.rate, l.total])).toEqual([["Carpet stairs, standard straight step", 30, 13, 390]]);
+
+    await q("UPDATE job_tasks SET status = 'complete' WHERE id = ?", [t]);
+    const preview = await as(PAUL_LOGIN, () => run<any>(m.invoices.preview, { taskId: t }));
+    expect(JSON.stringify(preview)).not.toContain("Rate not set");
+    const text = JSON.stringify(preview);
+    expect(text).toContain("Carpet stairs, standard straight step");
+    expect(text).toContain('"qty":30');
+    expect(text).toContain('"rate":13');
+    expect(text).toContain('"total":390');
+    expect(text).not.toContain("Nosing supply and fit");
+  });
+
+  test("the 4297 stairs SQL: links the quote line, adds 30 steps once, no separate nosing pay, prices unchanged, twice changes nothing", async () => {
+    const { drizzle } = await import("drizzle-orm/libsql");
+    const f2 = join(dir, "stairs.db");
+    const c2 = createClient({ url: `file:${f2}` });
+    try {
+      for (const s of await generateSQLiteMigration(await generateSQLiteDrizzleJson({}), await generateSQLiteDrizzleJson(schema as any))) await c2.execute(s);
+      const d2 = drizzle(c2, { schema });
+      for (const [id, name] of [[SK.tiles, "Carpet tiles"], [SK.stairs, "Carpet stairs"]] as const) await d2.insert(schema.skills).values({ id, name, groupName: "carpet" } as any);
+      for (const [id, name, unit] of [[IT.tiles, "Carpet tile install", "m2"], [IT.stairs, "Carpet stairs, standard straight step", "step"], [IT.hybrid, "Hybrid installation", "m2"], [IT.trims, "Install trims/scotia", "lm"], [IT.nosingFit, "Nosing supply and fit", "lm"]] as const) {
+        await d2.insert(schema.labourRateItems).values({ id, name, unit, groupName: "carpet", kind: "work", active: true } as any);
+      }
+      await d2.insert(schema.jobs).values({ id: 4297, number: 188070 } as any);
+      await d2.insert(schema.installers).values({ id: PAUL, name: "Paul", crewCapacity: "own_offsider", active: true } as any);
+      await d2.insert(schema.quotes).values({ id: 81, number: 188070, jobId: 4297, status: "accepted", total: 34051.27 } as any);
+      await d2.insert(schema.quoteItems).values({ id: 560, quoteId: 81, kind: "labour", description: "Install carpet tiles to steps inc aluminium nosing install", qty: 30, unit: "each", unitPrice: 55, total: 1650 } as any);
+      await d2.insert(schema.jobTasks).values({ id: 69, jobId: 4297, title: "Carpet tiles", skillId: SK.tiles, durationHours: 8, status: "unassigned", description: "Also on the quote: Install carpet tiles to steps inc aluminium nosing install (30 each)." } as any);
+      for (const [itemId, qty, i] of [[IT.tiles, 256, 0], [IT.hybrid, 135, 1], [IT.trims, 105, 2]]) await d2.insert(schema.taskLabourLines).values({ taskId: 69, itemId, qty, sortOrder: i } as any);
+
+      const sqlText = readFileSync(join(import.meta.dir, "../src/api/database/sql/2026-12-04-job-4297-stairs-line.sql"), "utf8");
+      const statements = sqlText
+        .split("--> statement-breakpoint")
+        .map((s) => s.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n").trim())
+        .filter(Boolean);
+      expect(statements.length).toBe(4);
+      const once = [];
+      for (const st of statements) once.push((await c2.execute(st)).rowsAffected);
+      expect(once).toEqual([1, 1, 1, 1]);
+      const twice = [];
+      for (const st of statements) twice.push((await c2.execute(st)).rowsAffected);
+      expect(twice).toEqual([0, 0, 0, 0]);
+
+      const r2 = async (sql: string) => (await c2.execute(sql)).rows.map((r) => ({ ...r }));
+      expect(await r2("SELECT rate_item_id, qty, unit_price, total FROM quote_items WHERE id = 560")).toEqual([{ rate_item_id: 8, qty: 30, unit_price: 55, total: 1650 }]);
+      expect(await r2("SELECT total FROM quotes WHERE id = 81")).toEqual([{ total: 34051.27 }]);
+      expect(await r2("SELECT item_id, qty, sort_order FROM task_labour_lines WHERE task_id = 69 ORDER BY sort_order")).toEqual([
+        { item_id: IT.tiles, qty: 256, sort_order: 0 },
+        { item_id: IT.hybrid, qty: 135, sort_order: 1 },
+        { item_id: IT.trims, qty: 105, sort_order: 2 },
+        { item_id: IT.stairs, qty: 30, sort_order: 3 },
+      ]);
+      expect(await r2("SELECT count(*) n FROM task_labour_lines WHERE item_id = 67")).toEqual([{ n: 0 }]);
+      expect(await r2("SELECT description, labour_cost, assigned_installer_id FROM job_tasks WHERE id = 69")).toEqual([{ description: null, labour_cost: null, assigned_installer_id: null }]);
+      expect(await r2("SELECT action, actor_name FROM activity_log WHERE task_id = 69")).toEqual([{ action: "labour_line_linked", actor_name: "Damien Lacey" }]);
+
+      // Once the dispatch is booked or priced, it never adds the line again.
+      await c2.execute("DELETE FROM task_labour_lines WHERE item_id = 8");
+      await c2.execute("UPDATE job_tasks SET status = 'assigned', assigned_installer_id = 19, labour_cost = 2560 WHERE id = 69");
+      expect((await c2.execute(statements[1]!)).rowsAffected).toBe(0);
+    } finally {
+      c2.close();
+    }
   });
 });
 

@@ -9,6 +9,7 @@ import { namesFor, sayList, skillsForTask } from "../lib/task-skills";
 import { accessOn, itemOpenTo } from "../lib/rate-access";
 import { todayLocal } from "../lib/local-date";
 import { termsFor } from "../lib/hourly";
+import { unsetRates } from "../lib/line-rates";
 import { mayWorkBetween, slotCols, workSlots } from "../lib/task-run";
 import { installerLogoKey, signGet, signPut } from "../lib/s3";
 import { taskForStaff } from "../lib/staff-view";
@@ -378,13 +379,22 @@ export const installers = {
       const access = restricted.length ? await accessOn(people.map((p) => p.id), todayLocal()) : new Map<string, boolean>();
       // Hourly men with no agreed rate ($0.00) can't be given hourly work.
       const hourlyTerms = await termsFor(people.map((p) => p.id), todayLocal());
+      // A line at $0.00 or with no rate for him is "Rate not set": he can't be given it.
+      const unset = new Map<number, string[]>();
+      if (input.taskId) {
+        for (const p of people) {
+          const u = await unsetRates(input.taskId, p.id, input.itemIds);
+          if (u.length) unset.set(p.id, u.map((x) => x.name));
+        }
+      }
       const rows = people.map((installer) => {
         const mine = links.filter((l) => l.installerId === installer.id);
         const missing = needs.filter((n) => !mine.some((l) => l.skillId === n.id));
         const locked = restricted.filter((i) => !itemOpenTo(i, installer.id, access));
         const t = hourlyTerms.get(installer.id);
         const noRate = Boolean(t?.defaultForNew && !(t.baseRate > 0));
-        return { installer, link: mine.find((l) => l.skillId === needs[0]?.id) ?? null, mine, missing, locked, noRate };
+        const noLineRate = unset.get(installer.id) ?? [];
+        return { installer, link: mine.find((l) => l.skillId === needs[0]?.id) ?? null, mine, missing, locked, noRate, noLineRate };
       });
 
       // Busy means working that Brisbane date on any day of a run, not only on
@@ -411,6 +421,7 @@ export const installers = {
         if (r.missing.length) reasons.push(`Not ticked for ${sayList(r.missing.map((m) => m.name))}`);
         if (r.locked.length) reasons.push(`${sayList(r.locked.map((l) => l.name))} not switched on for them`);
         if (r.noRate) reasons.push("Hourly rate not set ($0.00)");
+        if (r.noLineRate.length) reasons.push(`Rate not set for ${sayList(r.noLineRate)} ($0.00)`);
         if (off) reasons.push("Unavailable that day");
         if (!alone) reasons.push("Needs a second person for a 2-man job");
         if (busy.has(r.installer.id)) reasons.push(sureBusy.has(r.installer.id) ? "Already booked that day" : "Might be booked that day");
@@ -425,7 +436,7 @@ export const installers = {
           rate: isAdmin ? (r.link?.rate ?? null) : null,
           canLead: needs.length === 0 || (r.mine.length > 0 && r.mine.every((l) => l.canLead)),
           /** Ticked for every skill the work needs. Only these can be booked or offered it. */
-          eligible: r.missing.length === 0 && r.locked.length === 0 && !r.noRate,
+          eligible: r.missing.length === 0 && r.locked.length === 0 && !r.noRate && r.noLineRate.length === 0,
           /** Why someone can't take it, or what to watch for. Never a rate or anything private. */
           reasons,
           missingSkills: r.missing.map((m) => m.name),

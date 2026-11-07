@@ -10,6 +10,7 @@ import { missingSkills, sayList, skillsForTask } from "./task-skills";
 import { lockedItems } from "./rate-access";
 import { todayLocal } from "./local-date";
 import { hourlyRateBarrier } from "./hourly";
+import { lineRateBarrier } from "./line-rates";
 import { bookTask } from "../routes/tasks";
 
 /* ---------------------------------------------------------------------------
@@ -176,6 +177,10 @@ export async function previewAllocation(input: AllocateInput, actor: Actor) {
   if (locked.length) stops.push(`${sayList(locked.map((l) => l.name))} isn't switched on for ${installer.name}'s rate card.`);
   const hourlyStop = await hourlyRateBarrier(installer.id);
   if (hourlyStop) stops.push(hourlyStop);
+  if (picked.length) {
+    const rateStop = await lineRateBarrier(task.id, installer.id, picked.map((l) => l.item.id));
+    if (rateStop) stops.push(rateStop);
+  }
   if (installer.archivedAt || !installer.active) stops.push(`${installer.name} is ${installer.archivedAt ? "archived" : "switched off"}.`);
 
   // Booked or offered already: whole dispatch only, as a reviewed change; never a part of it.

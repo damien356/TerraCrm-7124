@@ -187,11 +187,14 @@ export async function sendDirectOffer(
     throw new ORPCError("BAD_REQUEST", { message: "This person is booked directly with a start time, not sent an offer. Use Book instead." });
   }
 
-  // Every skill the task's own lines need, not only the first one.
+  // A typed pay of $0.00 is "Rate not set", never an offer of free work.
+  if (input.payAmount != null && !(input.payAmount > 0)) throw new ORPCError("BAD_REQUEST", { message: TYPED_ZERO });
+  // Every skill the task's own lines need, not only the first one, and a real rate on every line.
   const barrier = await workBarrier(input.taskId, input.installerId);
   if (barrier) throw new ORPCError("BAD_REQUEST", { message: barrier });
 
   const expiresAt = new Date(Date.now() + OFFER_TTL_HOURS * 3600_000);
+  // A task price of exactly $0 is only ever set on purpose (a callback Terra isn't paying for), so it is sent as it is.
   const pay = input.payAmount ?? (await derivePay(input.taskId, input.installerId));
 
   const [offer] = await db
@@ -233,6 +236,9 @@ export async function sendDirectOffer(
   return offer;
 }
 
+/** Damien, 7 Nov 2026: $0.00 means "Rate not set", not an agreement to work for free. */
+const TYPED_ZERO = "Pay: Rate not set ($0.00). Enter the agreed amount before sending this offer.";
+
 export const offers = {
   /** Send to one installer. */
   sendDirect: staffOnly
@@ -247,6 +253,7 @@ export const offers = {
       if (!task) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
       const block = await bookingBlock(input.taskId);
       if (block) throw new ORPCError("BAD_REQUEST", { message: block });
+      if (input.payAmount != null && !(input.payAmount > 0)) throw new ORPCError("BAD_REQUEST", { message: TYPED_ZERO });
       if (!task.skillId) {
         throw new ORPCError("BAD_REQUEST", {
           message: "Give the task a skill first. A broadcast goes to everyone ticked for that skill.",
@@ -262,7 +269,7 @@ export const offers = {
       // A 2-man task can only be broadcast to people who can actually cover it.
       // Staff and calendar-checked people are left out, see offerOff.
       const off = await offerOff(candidates.map((c) => c.installer.id));
-      // Ticked for every skill the task's lines need, not only its headline one.
+      // Ticked for every skill the task's lines need, not only its headline one, with a real rate on each line.
       for (const c of candidates) if (await workBarrier(input.taskId, c.installer.id)) off.add(c.installer.id);
       const eligible = candidates.filter(
         (c) =>

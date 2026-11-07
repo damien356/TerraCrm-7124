@@ -4,6 +4,7 @@ import * as schema from "../database/schema";
 import { lockedItems } from "./rate-access";
 import { todayLocal } from "./local-date";
 import { hourlyRateBarrier } from "./hourly";
+import { lineRateBarrier } from "./line-rates";
 
 /* ---------------------------------------------------------------------------
  * Which skills a piece of work needs, and who can do it (Damien's brief,
@@ -68,13 +69,23 @@ export function sayList(names: string[]): string {
  * he isn't ticked for, and per-contractor items (a day rate) not switched on
  * for him.
  */
-export async function workBarrier(taskId: number, installerId: number, itemIds?: number[] | null): Promise<string | null> {
+export async function workBarrier(
+  taskId: number,
+  installerId: number,
+  itemIds?: number[] | null,
+  opts: { rates?: boolean } = {},
+): Promise<string | null> {
   const missing = await missingSkills(installerId, await skillsForTask(taskId, itemIds));
   if (missing.length) return `That installer isn't ticked for ${sayList(missing.map((m) => m.name))}.`;
   const lines = await db.select({ itemId: schema.taskLabourLines.itemId }).from(schema.taskLabourLines).where(eq(schema.taskLabourLines.taskId, taskId));
   const ids = lines.map((l) => l.itemId).filter((id) => !itemIds?.length || itemIds.includes(id));
   const locked = await lockedItems(installerId, ids, todayLocal());
   if (locked.length) return `${sayList(locked.map((l) => l.name))} isn't switched on for that installer's rate card.`;
+  // A line at $0.00 (or with no rate at all) is "Rate not set", never free work.
+  if (opts.rates !== false) {
+    const rateStop = await lineRateBarrier(taskId, installerId, itemIds);
+    if (rateStop) return rateStop;
+  }
   // Hourly man with no agreed rate: never offered work as if $0.00 were a rate.
   return hourlyRateBarrier(installerId);
 }

@@ -36,7 +36,9 @@ async function assertAssignable(taskId: number, installerId: number, _crewSize: 
 
   // Only installers ticked for every skill the task's own lines need can be given it.
   // And never a per-contractor item (a day rate) that isn't switched on for him.
-  const barrier = await workBarrier(taskId, installerId);
+  // The rate check is for new work: a plain edit of a booking he already has is not re-priced.
+  const keeping = keep && (task.task.assignedInstallerId === installerId || task.task.secondInstallerId === installerId);
+  const barrier = await workBarrier(taskId, installerId, null, { rates: !keeping });
   if (barrier) throw new ORPCError("BAD_REQUEST", { message: barrier, data: { reason: "not_eligible" } });
 
   const [installer] = await db.select().from(schema.installers).where(eq(schema.installers.id, installerId));

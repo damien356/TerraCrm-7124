@@ -12,6 +12,7 @@ import { renderInvoicePdf, type InvoiceLineItem } from "../lib/invoicePdf";
 import { sendEmail } from "../lib/email";
 import { abnView } from "../lib/abn-check";
 import { EMPLOYEE_NO_INVOICE, isEmployee } from "../lib/worker-type";
+import { unsetPayLines } from "../lib/line-rates";
 
 /**
  * The installer's own invoice to Terra for a completed task. Installers can
@@ -96,8 +97,16 @@ async function taskInvoiceContext(taskId: number, installerId: number) {
     gstAmount,
     total,
     hourlySessionIds: hourly?.sessionIds ?? [],
-    hourlyBlock: hourly?.block ?? null,
+    // Hourly: the time checks. Lines: a line at $0.00 is "Rate not set", never free work.
+    hourlyBlock: hourly ? hourly.block : payLineBlock(lineItems),
   };
+}
+
+/** Damien, 7 Nov 2026: $0.00 means "Rate not set". Nothing is invoiced or approved at it. */
+function payLineBlock(lines: InvoiceLineItem[], doing = "this work can be invoiced"): string | null {
+  const unset = unsetPayLines(lines);
+  if (!unset.length) return null;
+  return `${unset.join(", ")}: Rate not set ($0.00). Terra office must set the agreed rate before ${doing}.`;
 }
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -501,6 +510,21 @@ export const installerInvoices = {
       }),
     )
     .handler(async ({ input }) => {
+      // Approving pay (or paying it) needs a real rate on every line. Already approved or paid stays as it is.
+      const [current] = await db.select().from(schema.installerInvoices).where(eq(schema.installerInvoices.id, input.invoiceId));
+      if (!current) throw new ORPCError("NOT_FOUND", { message: "Invoice not found" });
+      const [paidOn] = await db.select({ payType: schema.jobTasks.payType }).from(schema.jobTasks).where(eq(schema.jobTasks.id, current.taskId));
+      // Hourly bills carry the approved time at the rate each day was approved at, checked at approval.
+      if (current.status === "submitted" && input.status !== "submitted" && paidOn?.payType !== "hourly") {
+        let lines: InvoiceLineItem[] = [];
+        try {
+          lines = JSON.parse(current.lineItems) as InvoiceLineItem[];
+        } catch {
+          lines = [];
+        }
+        const block = payLineBlock(lines, "approving this pay");
+        if (block) throw new ORPCError("BAD_REQUEST", { message: block.replace("Terra office must set", "Set") });
+      }
       const now = new Date();
       const stamps: Record<string, Date> = {};
       if (input.status === "approved") stamps.approvedAt = now;
