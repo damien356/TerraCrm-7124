@@ -73,6 +73,8 @@ export const productFind = {
         size: schema.products.size,
         sku: schema.products.sku,
         widthM: schema.products.widthM,
+        /** 7 Nov: one physical length of a trim or scotia, for the installed lm to lengths. */
+        pieceLengthM: schema.products.pieceLengthM,
         unitsPerPack: schema.products.unitsPerPack,
         unitM2: schema.products.unitM2,
         packM2Printed: schema.products.packM2Printed,

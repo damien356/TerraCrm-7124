@@ -70,7 +70,7 @@ import {
 import { isTrimProduct } from "../lib/quote-default-rules";
 import { assertDefaultsResolved } from "../lib/quote-default-gate";
 import { isSheetUnderlay } from "../lib/pack-name";
-import { isUnderlayCategory, underlayName } from "../lib/order-sizes";
+import { isUnderlayCategory, lengthUnitPrice, supplyForInstalled, underlayName } from "../lib/order-sizes";
 import { foldForClient, quoteFreightView, refreshQuoteFreight, supplierChargesMarkupPct } from "../lib/quote-freight";
 import { isChargeLine } from "../lib/charge-fold";
 import { fromPhoneApp, PHONE_PRICE_MESSAGE } from "../lib/phone-app";
@@ -1003,7 +1003,10 @@ export const quotes = {
       z.object({
         quoteId: z.number(),
         productId: z.number(),
-        qty: z.number().default(1),
+        /** Left out with an installed lm on a trim: whole lengths off that (7 Nov, second brief). */
+        qty: z.number().optional(),
+        /** A scotia or trim: the lm actually installed, which the install charges. Never the supplied lengths. */
+        installedLm: z.number().min(0).nullable().optional(),
         measuredM2: z.number().min(0).nullable().optional(),
         wastagePct: z.number().min(0).max(100).nullable().optional(),
         rollWidthM: z.number().positive().nullable().optional(),
@@ -1018,7 +1021,10 @@ export const quotes = {
       const [product] = await db.select().from(schema.products).where(eq(schema.products.id, input.productId));
       if (!product) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
 
-      const unitPrice = await liveSellFor(product);
+      // 7 Nov (second brief): a trim comes to whole lengths x the price of one length.
+      const unitPrice = lengthUnitPrice(product, await liveSellFor(product));
+      const installedLm = isTrimProduct(product) && input.installedLm != null ? input.installedLm : null;
+      const typedQty = input.qty ?? (installedLm != null ? supplyForInstalled(product, installedLm) : null) ?? 1;
       // Reads the way Damien says it out loud: "Andes Peak in Merida", not a
       // string of dashes. This line goes out on the customer's quote.
       const description = productLineName(product);
@@ -1028,7 +1034,7 @@ export const quotes = {
       const rollWidthM = measured != null && !product.widthM ? (input.rollWidthM ?? null) : null;
       const res = measured != null ? floorQty(product, measured, wastagePct ?? 0, rollWidthM) : null;
       // Fix list 11 Oct, items 2 and 3: whole boxes, lengths and pails; underlay off its floor.
-      const start = res ? null : await startLine(input.quoteId, product, input.qty, input.followsItemId);
+      const start = res ? null : await startLine(input.quoteId, product, typedQty, input.followsItemId);
       const qty = res ? res.qty : start!.qty;
 
       // Which install, if any. Only on a measured floor line.
@@ -1094,7 +1100,7 @@ export const quotes = {
 
       // Quote defaults (6 Nov): a measured floor with its install ticked brings its standard items, a trim or scotia its install.
       const defaults = res && input.labour !== null ? await applyFloorDefaults(row.id, product) : null;
-      const trim = input.labour !== null && isTrimProduct(product) ? await applyTrimLabour(row.id, product) : null;
+      const trim = input.labour !== null && isTrimProduct(product) ? await applyTrimLabour(row.id, product, installedLm) : null;
       // 7 Nov: a floor product with no Sold as in the price book is flagged, so its standard lines are not quietly missing.
       const unclassified = input.labour !== null && !floorTypeOf(product) ? await flagUnclassified(row.id, product) : false;
       const added = [...(defaults?.added ?? []), ...(trim?.added ?? [])];
@@ -1620,7 +1626,7 @@ export const quotes = {
       const [product] = await db.select().from(schema.products).where(eq(schema.products.id, input.productId));
       if (!product) throw new ORPCError("NOT_FOUND", { message: "Product not found" });
 
-      const unitPrice = await liveSellFor(product);
+      const unitPrice = lengthUnitPrice(product, await liveSellFor(product));
       const [oldProduct] = before.productId
         ? await db.select().from(schema.products).where(eq(schema.products.id, before.productId))
         : [];

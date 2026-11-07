@@ -29,6 +29,8 @@ import { markupOf, sellAtMarkup } from "./pricing";
 import {
   appliedOf,
   areaGoneFlag,
+  autoKey,
+  autoOf,
   coveredKey,
   coveredLineOf,
   DISPOSAL_COST_KEY,
@@ -39,12 +41,17 @@ import {
   DISPOSAL_NO_RATE_FLAG,
   DISPOSAL_ORPHAN_FLAG,
   changedFlag,
+  AREA_TRIM_WHAT,
   enterFlag,
   FLOOR_DEFAULTS,
   isCommercialSheet,
   isDefaultFlag,
   isDefaultWarning,
+  installedKey,
+  installedOf,
+  keepTrimAddedFor,
   isTrimProduct,
+  isWallVinyl,
   needsClassifying,
   notCommercialFlag,
   RATE,
@@ -55,8 +62,11 @@ import {
   TRIM_KEY,
   TRIM_PICK_FLAG,
   trimOverlapFlag,
+  trimTypedFlag,
+  trimUnmeasuredFlag,
   unclassifiedFlag,
   withoutEnterFlag,
+  withoutTrimAdded,
   UPLIFT_NO_WIDTH_FLAG,
   type FloorDefault,
   type QtyRule,
@@ -219,7 +229,8 @@ export async function applyFloorDefaults(floorId: number, product: Product): Pro
   if (!(await takesDefaults(start.quoteId))) return out;
   // 7 Nov: coving and welding only on a roll the price book marks commercial. Any other sheet vinyl waits for a decision.
   if (t === "sheet_vinyl" && !isCommercialSheet(product)) {
-    await flagLine(floorId, notCommercialFlag(product.tier));
+    // 7 Nov (second brief): wall vinyl is a verified type with nothing put on, so it is not flagged.
+    if (!isWallVinyl(product)) await flagLine(floorId, notCommercialFlag(product.tier));
     return out;
   }
 
@@ -351,17 +362,23 @@ export async function applyFloorDefaults(floorId: number, product: Product): Pro
 }
 
 /**
- * A scotia or trim line has just gone on: Install trims/scotia goes under it
- * at 0 lm, flagged, unless the quote already has that install on (the
- * laminate or hybrid default, one typed in by hand, or another trim's). Then
- * that line covers it, and nothing is added.
+ * A scotia or trim line has just gone on: Install trims/scotia goes under it,
+ * unless the quote already has that install on (the laminate or hybrid
+ * default, one typed in by hand, or another trim's). Then that line covers
+ * it, and no second line is added.
+ *
+ * 7 Nov (second brief): the installed lm, when typed in with the trim, is
+ * kept on the trim line and is what the install charges. The supplied
+ * lengths never are. With no installed lm the install is flagged to enter.
  */
-export async function applyTrimLabour(trimId: number, product: Product): Promise<DefaultsAdded> {
+export async function applyTrimLabour(trimId: number, product: Product, installedLm: number | null = null): Promise<DefaultsAdded> {
   const out: DefaultsAdded = { added: [], notes: [] };
   const trim = await lineOf(trimId);
   if (!trim || !isTrimProduct(product)) return out;
   if (appliedOf(trim.defaultsApplied).includes(TRIM_KEY)) return out;
   if (!(await takesDefaults(trim.quoteId))) return out;
+  const lm = installedLm != null && installedLm >= 0 ? r4(installedLm) : null;
+  const own = lm != null ? [installedKey(lm)] : [];
 
   const installs = (await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, trim.quoteId)))
     .filter((l) => l.rateItemId === RATE.trimInstall.id && l.id !== trim.id)
@@ -369,31 +386,123 @@ export async function applyTrimLabour(trimId: number, product: Product): Promise
   if (installs.length) {
     // The nearest one above the trim: the area it was added in. With more than one area, the office picks (7 Nov).
     const cover = installs.find((l) => l.sortOrder < trim.sortOrder) ?? installs[0]!;
-    await addApplied(trim.id, [TRIM_KEY, coveredKey(cover.id)]);
+    await addApplied(trim.id, [TRIM_KEY, ...own, coveredKey(cover.id)]);
     const area = await areaNameOf(cover);
+    const settled = await settleInstall(cover.id, { added: trim.id });
     if (installs.length > 1) {
       await flagLine(trim.id, TRIM_PICK_FLAG);
       out.notes.push(`Install covered by ${area}'s Install trims/scotia for now. More than one area has one, so pick the right area on the line.`);
-    } else out.notes.push(`Install covered by ${area}'s Install trims/scotia already on the quote. Its length should include this.`);
+    } else out.notes.push(`Install covered by ${area}'s Install trims/scotia already on the quote.`);
+    out.notes.push(settled.note);
     return out;
   }
   const rate = await liveRate(RATE.trimInstall);
   let priced;
   try {
     if (!rate.ok) throw new Error(rate.why);
-    priced = await standardLabour(RATE.trimInstall.id, 0);
+    priced = await standardLabour(RATE.trimInstall.id, lm ?? 0);
   } catch (e) {
     const why = `Install trims/scotia not put on. ${e instanceof Error ? e.message : ""}`.trim();
     await flagLine(trim.id, why);
     return out;
   }
-  const row = await insertUnder(trim, TRIM_KEY, { ...priced.values, flagged: true, flagReason: TRIM_FLAG });
-  await addApplied(trim.id, [TRIM_KEY]);
+  const row = await insertUnder(trim, TRIM_KEY, {
+    ...priced.values,
+    flagged: lm == null,
+    flagReason: lm == null ? TRIM_FLAG : null,
+    defaultsApplied: lm != null ? JSON.stringify([autoKey(lm)]) : null,
+  });
+  await addApplied(trim.id, [TRIM_KEY, ...own]);
   if (row) {
     out.added.push(row);
-    out.notes.push(`${row.description} put on underneath. Enter its length.`);
+    out.notes.push(lm != null ? `${row.description} put on underneath at ${lm} lm installed.` : `${row.description} put on underneath. Enter the installed length.`);
   }
   return out;
+}
+
+/** The trims an Install trims/scotia line is for: the trim it was put on under, and every trim it covers. */
+async function trimsOf(install: Line, exclude?: number) {
+  const lines = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, install.quoteId));
+  return lines.filter((l) => {
+    if (l.id === exclude || l.id === install.id) return false;
+    const applied = appliedOf(l.defaultsApplied);
+    if (!applied.includes(TRIM_KEY)) return false;
+    return coveredLineOf(applied) === install.id || (install.defaultKey === TRIM_KEY && install.defaultForItemId === l.id);
+  });
+}
+
+/**
+ * 7 Nov (second brief). An Install trims/scotia line after a trim was added
+ * to it, moved off it or removed. While its length is still what this
+ * feature set (or 0, never typed), it is the installed lm of the trims it is
+ * for, added up. Once typed by hand it is kept exactly as typed, and the
+ * office is asked to check it includes a trim just added. A trim with no
+ * installed lm is never counted off its supplied lengths: it is flagged.
+ */
+export async function settleInstall(installId: number, opts: { added?: number; exclude?: number } = {}) {
+  const install = await lineOf(installId);
+  if (!install || install.rateItemId !== RATE.trimInstall.id) return { note: "" };
+  const applied = appliedOf(install.defaultsApplied);
+  const auto = autoOf(applied);
+  const typed = auto == null ? install.qty > 0.0005 : !same(install.qty, auto);
+  const trims = await trimsOf(install, opts.exclude);
+  const added = opts.added != null ? trims.find((t) => t.id === opts.added) : undefined;
+  if (typed) {
+    // A trim that went elsewhere (or was removed) takes its own check sentence with it.
+    const left = keepTrimAddedFor(install.flagReason, trims.map((t) => `"${t.description}"`));
+    if (left !== install.flagReason) {
+      await db
+        .update(schema.quoteItems)
+        .set({ flagged: Boolean(left), flagReason: left, updatedAt: new Date() })
+        .where(eq(schema.quoteItems.id, install.id));
+    }
+    if (added) await flagLine(install.id, trimTypedFlag(`"${added.description}"`, installedOf(appliedOf(added.defaultsApplied))));
+    return { note: "Its length was typed by hand, so it was kept. Check it includes this." };
+  }
+  const measured = trims.map((t) => installedOf(appliedOf(t.defaultsApplied)));
+  const lm = r4(measured.reduce<number>((s, n) => s + (n ?? 0), 0));
+  const missing = trims.filter((_, i) => measured[i] == null).map((t) => `"${t.description}"`);
+  // Nothing measured yet: it stays at 0 with its own "enter the length" flag.
+  if (!(lm > 0)) {
+    // A length this feature set, with nothing left to count (trim moved or removed): back to 0, to fill in.
+    if (auto != null) {
+      const what = install.defaultKey === TRIM_KEY ? TRIM_FLAG : enterFlag(AREA_TRIM_WHAT);
+      const rest = withoutTrimAdded(withoutEnterFlag(install.flagReason));
+      const reason = rest ? `${what} ${rest}` : what;
+      await db
+        .update(schema.quoteItems)
+        .set({
+          qty: 0,
+          total: 0,
+          defaultsApplied: JSON.stringify(applied.filter((k) => !k.startsWith(`${TRIM_KEY}:auto:`))),
+          flagged: true,
+          flagReason: reason,
+          ...(reason !== install.flagReason ? NOT_REVIEWED : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.quoteItems.id, install.id));
+      return { note: "Enter the installed length on the Install trims/scotia line." };
+    }
+    if (missing.length && install.qty <= 0.0005 && !install.flagged) await flagLine(install.id, TRIM_FLAG);
+    return { note: "Enter the installed length on the Install trims/scotia line." };
+  }
+  let reason = withoutTrimAdded(withoutEnterFlag(install.flagReason));
+  if (missing.length) reason = reason ? `${reason} ${trimUnmeasuredFlag(missing)}` : trimUnmeasuredFlag(missing);
+  const keys = [...applied.filter((k) => !k.startsWith(`${TRIM_KEY}:auto:`)), autoKey(lm)];
+  const fresh = reason !== install.flagReason;
+  await db
+    .update(schema.quoteItems)
+    .set({
+      qty: lm,
+      total: r2(lm * install.unitPrice),
+      defaultsApplied: JSON.stringify(keys),
+      flagged: Boolean(reason),
+      flagReason: reason,
+      ...(fresh && reason ? NOT_REVIEWED : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.quoteItems.id, install.id));
+  return { note: `Install trims/scotia is now ${lm} lm installed.` };
 }
 
 /** What an Install trims/scotia line is for: its floor area or trim, or the line itself when typed in on its own. */
@@ -433,12 +542,18 @@ export async function coverTrim(trimId: number, installId: number) {
     .from(schema.quoteItems)
     .where(and(eq(schema.quoteItems.defaultForItemId, trim.id), eq(schema.quoteItems.defaultKey, TRIM_KEY)));
   if (own.length) throw new Error("This trim has its own Install trims/scotia line underneath it.");
+  const was = coveredLineOf(applied);
   const keys = [...applied.filter((k) => !k.startsWith(`${TRIM_KEY}:covered:`)), coveredKey(install.id)];
   const left = stripWarnings(trim.flagReason, [TRIM_PICK_FLAG, TRIM_INSTALL_GONE_FLAG]);
   await db
     .update(schema.quoteItems)
     .set({ defaultsApplied: JSON.stringify(keys), flagged: Boolean(left), flagReason: left, updatedAt: new Date() })
     .where(eq(schema.quoteItems.id, trim.id));
+  // 7 Nov (second brief): its installed lm moves with it, off the old area and onto the new one (never onto a length typed by hand).
+  if (was !== install.id) {
+    if (was != null) await settleInstall(was);
+    await settleInstall(install.id, { added: trim.id });
+  }
   return { area: await areaNameOf(install) };
 }
 
@@ -674,6 +789,18 @@ export async function afterLineEdit(before: Line, row: Line, typed: { qty?: numb
     const left = withoutEnterFlag(row.flagReason);
     await db.update(schema.quoteItems).set({ flagged: Boolean(left), flagReason: left }).where(eq(schema.quoteItems.id, row.id));
   }
+  if (qtyTyped && row.rateItemId === RATE.trimInstall.id) {
+    // 7 Nov (second brief): a length typed by hand is the office's own. It is kept from now on, and its check-the-length warnings come off.
+    const [now] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, row.id));
+    if (now) {
+      const left = withoutTrimAdded(now.flagReason);
+      const keys = appliedOf(now.defaultsApplied).filter((k) => !k.startsWith(`${TRIM_KEY}:auto:`));
+      await db
+        .update(schema.quoteItems)
+        .set({ flagged: Boolean(left), flagReason: left, defaultsApplied: keys.length ? JSON.stringify(keys) : null })
+        .where(eq(schema.quoteItems.id, row.id));
+    }
+  }
   if (qtyTyped && row.rateItemId === RATE.carpetUplift.id) await followDisposal(row.id);
 }
 
@@ -731,7 +858,11 @@ export async function removeDefaultsOf(lineId: number) {
   for (const k of kept) {
     await db.update(schema.quoteItems).set({ defaultForItemId: null, updatedAt: new Date() }).where(eq(schema.quoteItems.id, k.id));
     await flagLine(k.id, k.reason);
+    await settleInstall(k.id, { exclude: lineId });
   }
+  // 7 Nov (second brief): a trim taken off takes its installed lm off the install that covered it.
+  const coveredBy0 = self ? coveredLineOf(appliedOf(self.defaultsApplied)) : null;
+  if (coveredBy0 != null && !gone.includes(coveredBy0)) await settleInstall(coveredBy0, { exclude: lineId });
   // An Install trims/scotia removed by hand: the trims it covered are flagged, and moved to the nearest other install for now.
   let trimsFlagged = 0;
   if (self?.rateItemId === RATE.trimInstall.id) {
@@ -745,6 +876,7 @@ export async function removeDefaultsOf(lineId: number) {
       if (next) keys.push(coveredKey(next.id));
       await db.update(schema.quoteItems).set({ defaultsApplied: JSON.stringify(keys) }).where(eq(schema.quoteItems.id, t.id));
       await flagLine(t.id, TRIM_INSTALL_GONE_FLAG);
+      if (next) await settleInstall(next.id, { added: t.id, exclude: lineId });
       trimsFlagged++;
     }
   }

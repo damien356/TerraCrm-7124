@@ -1225,6 +1225,192 @@ describe("7 Nov 8: follow-ups, as they stand", () => {
   });
 });
 
+describe("7 Nov (second brief): trims and scotia by the length, install by the installed lm, vinyl classified", () => {
+  // Copies of the live records the demos use, with the lengths the catalog SQL fills in.
+  test("set up the demo products", async () => {
+    // Acouslime 10961: scotia per lm, 2.4 m lengths, $12.50 a length stored as 5.2083 a lm.
+    await product("acScotia", { id: 20961, brand: "Acouslime", range: "Scotia Waterproof 19x19mm", colour: "Wood Grain", sku: "D10961", category: "scotia", unit: "lm", pieceLengthM: 2.4, costPrice: 2.7083, sellPrice: 5.2083 });
+    // Big Panda 8545 (2400 x 22 x 12mm) and 8548 (2700mm), priced per length.
+    await product("bpScotia", { brand: "Big Panda Flooring", range: "Scotia PVC/WPC", colour: "", sku: "D8545", category: "accessory", unit: "each", pieceLengthM: 2.4, costPrice: 4.8, sellPrice: 9.17 });
+    await product("bpTrim27", { brand: "Big Panda Flooring", range: "Universal Trim", colour: "", sku: "D8548", category: "accessory", unit: "each", pieceLengthM: 2.7, costPrice: 17, sellPrice: 32.49 });
+    // Acouslime 10968: 3.4 m, each, tagged Box with 1 a pack in the price book.
+    await product("acTop34", { brand: "Acouslime", range: "Universal Top Cover", colour: "Wood Grain", sku: "D10968", category: "accessory", unit: "each", pieceLengthM: 3.4, soldAs: "box", unitsPerPack: 1, costPrice: 25.5, sellPrice: 49.1 });
+    // Acouslime 10995: a longer existing trim, 3.6 m, per lm.
+    await product("acStep36", { brand: "Acouslime", range: "Vinyl Step Down 3mm", colour: "Silver", sku: "D10995", category: "trim", unit: "lm", pieceLengthM: 3.6, costPrice: 7.9167, sellPrice: 15.25 });
+    // NFD 8491 style: a scotia priced each with no length on file.
+    await product("noLenScotia", { brand: "NFD", range: "Scotia Unknown", colour: "", sku: "D8491", category: "accessory", unit: "each", costPrice: 5, sellPrice: 10 });
+    // Forbo Surestep after the catalog SQL: broadloom, Safety Sheet. Armstrong Wallflex: Wall Vinyl.
+    await product("forboSafety", { brand: "Forbo", range: "Surestep Original", colour: "Grey", sku: "D-SS", category: "vinyl", soldAs: "broadloom", unit: "m2", widthM: 2, tier: "Safety Sheet" });
+    await product("wallVinyl", { brand: "Armstrong", range: "Wallflex", colour: "White", sku: "D-WF", category: "vinyl", soldAs: "broadloom", unit: "m2", widthM: 2, tier: "Wall Vinyl" });
+    expect(P.acScotia).toBe(20961);
+  });
+
+  const noteOf = (r: unknown) => String((r as { qtyNote?: string | null }).qtyNote ?? "");
+  const auto = (l: Item) => m.rules.autoOf(m.rules.appliedOf(l.defaultsApplied));
+  const installedOn = (l: Item) => m.rules.installedOf(m.rules.appliedOf(l.defaultsApplied));
+
+  test("23 lm installed on 2.4 m scotia: 10 lengths supplied, Install trims/scotia at 23 lm", async () => {
+    const qid = await newQuote();
+    const sc = await addProduct({ quoteId: qid, productId: P.acScotia, installedLm: 23 });
+    const line = await lineOf(sc.item.id);
+    expect(line.qty).toBe(24);
+    expect(noteOf(sc)).toContain("10 lengths of 2.4 m (24 lm)");
+    expect(installedOn(line)).toBe(23);
+    // Material: 10 lengths at $12.50 a length.
+    expect(line.total).toBe(125);
+    const [inst] = await installsOf(qid);
+    expect(inst!.defaultForItemId).toBe(sc.item.id);
+    expect(inst!.qty).toBe(23);
+    expect(inst!.total).toBe(r2t(23 * inst!.unitPrice));
+    expect(inst!.flagged).toBe(false);
+    expect(auto(inst!)).toBe(23);
+  });
+
+  test("Acouslime scotia per length: 63 lengths come to 787.50, not 787.49", async () => {
+    const qid = await newQuote();
+    const sc = await addProduct({ quoteId: qid, productId: P.acScotia, installedLm: 151.2 });
+    const line = await lineOf(sc.item.id);
+    expect(line.qty).toBe(151.2);
+    expect(line.total).toBe(787.5);
+    // The price is not changed, only carried to more places.
+    expect(Math.abs(line.unitPrice - 5.2083)).toBeLessThan(0.00005);
+  });
+
+  test("2.4, 2.7, 3.4 and 3.6 m trims each use their own length; labour is always the installed lm", async () => {
+    const cases: [string, number, number, number][] = [
+      // product, installed lm, supply qty, material total
+      ["bpScotia", 23, 10, r2t(10 * 9.17)],
+      ["bpTrim27", 23, 9, r2t(9 * 32.49)],
+      ["acTop34", 23, 7, r2t(7 * 49.1)],
+      ["acStep36", 23, 25.2, r2t(25.2 * 15.25)],
+    ];
+    const out: unknown[] = [];
+    for (const [key, lm, supply, total] of cases) {
+      const qid = await newQuote();
+      const t = await addProduct({ quoteId: qid, productId: P[key], installedLm: lm });
+      const line = await lineOf(t.item.id);
+      expect([key, line.qty, line.total]).toEqual([key, supply, total]);
+      const [inst] = await installsOf(qid);
+      expect([key, inst!.qty, inst!.flagged]).toEqual([key, lm, false]);
+      out.push([line.description, line.qty, noteOf(t), inst!.qty]);
+    }
+    console.log("lengths:", JSON.stringify(out));
+    // The 3.4 m one tagged Box still reads in lengths.
+    expect(String(out[2])).toContain("7 lengths of 3.4 m (23.8 lm)");
+  });
+
+  test("lengths typed with no installed lm: the lm is shown, the install is flagged to fill in", async () => {
+    const qid = await newQuote();
+    const t = await addProduct({ quoteId: qid, productId: P.bpScotia, qty: 10 });
+    expect(noteOf(t)).toContain("10 lengths of 2.4 m (24 lm)");
+    const [inst] = await installsOf(qid);
+    expect(inst!.qty).toBe(0);
+    expect(inst!.flagReason).toBe(m.rules.TRIM_FLAG);
+    expect(m.gate.openDefaultWarning(inst!)).toBe(true);
+  });
+
+  test("a scotia with no length on file, priced each: the count is typed, and the install is still added", async () => {
+    const qid = await newQuote();
+    const t = await addProduct({ quoteId: qid, productId: P.noLenScotia, qty: 4, installedLm: 9 });
+    expect((await lineOf(t.item.id)).qty).toBe(4);
+    const [inst] = await installsOf(qid);
+    expect(inst!.qty).toBe(9);
+  });
+
+  test("on a hybrid area: the area's install takes the trims' installed lm, no second line", async () => {
+    const qid = await newQuote();
+    const hy = await addProduct({ quoteId: qid, productId: P.hybrid, measuredM2: 30 });
+    const area = (await installsOf(qid)).find((l) => l.defaultForItemId === hy.item.id)!;
+    expect(area.qty).toBe(0);
+    const sc = await addProduct({ quoteId: qid, productId: P.bpScotia, installedLm: 23 });
+    expect(sc.defaultsAdded).toBe(0);
+    let installs = await installsOf(qid);
+    expect(installs).toHaveLength(1);
+    expect(installs[0]!.qty).toBe(23);
+    const tr = await addProduct({ quoteId: qid, productId: P.bpTrim27, installedLm: 5 });
+    installs = await installsOf(qid);
+    expect(installs.map((l) => [l.id, l.qty])).toEqual([[area.id, 28]]);
+    expect(installs[0]!.total).toBe(r2t(28 * installs[0]!.unitPrice));
+    // Removing a trim takes its length off.
+    await removeItem(tr.item.id);
+    expect((await lineOf(area.id)).qty).toBe(23);
+    // A trim with no installed lm is not counted, and says so.
+    const bare = await addProduct({ quoteId: qid, productId: P.acTop34, qty: 2 });
+    const after = await lineOf(area.id);
+    expect(after.qty).toBe(23);
+    expect(after.flagReason ?? "").toContain(m.rules.TRIM_ADDED_MARK);
+    expect(after.flagReason ?? "").toContain(bare.item.description);
+    expect(m.gate.openDefaultWarning(after)).toBe(true);
+    // Removing it takes the warning with it.
+    await removeItem(bare.item.id);
+    const clean = await lineOf(area.id);
+    expect(clean.qty).toBe(23);
+    expect(clean.flagReason ?? "").not.toContain(m.rules.TRIM_ADDED_MARK);
+  });
+
+  test("an install length typed by hand is kept, and the new trim is flagged to check", async () => {
+    const qid = await newQuote();
+    const hy = await addProduct({ quoteId: qid, productId: P.hybrid, measuredM2: 30 });
+    const area = (await installsOf(qid)).find((l) => l.defaultForItemId === hy.item.id)!;
+    await updateItem({ id: area.id, qty: 30 });
+    const sc = await addProduct({ quoteId: qid, productId: P.bpScotia, installedLm: 23 });
+    const kept = await lineOf(area.id);
+    expect(kept.qty).toBe(30);
+    expect(kept.flagReason ?? "").toContain(m.rules.trimTypedFlag(`"${sc.item.description}"`, 23));
+    expect(m.gate.openDefaultWarning(kept)).toBe(true);
+    // Typing the length again clears the check.
+    await updateItem({ id: area.id, qty: 53 });
+    const typed = await lineOf(area.id);
+    expect(typed.qty).toBe(53);
+    expect(typed.flagReason ?? "").not.toContain(m.rules.TRIM_ADDED_MARK);
+  });
+
+  test("moving a scotia to the other area moves its installed lm with it", async () => {
+    const qid = await newQuote();
+    const lam = await addProduct({ quoteId: qid, productId: P.laminate, measuredM2: 20 });
+    const hy = await addProduct({ quoteId: qid, productId: P.hybrid, measuredM2: 30 });
+    const lamInstall = (await installsOf(qid)).find((l) => l.defaultForItemId === lam.item.id)!;
+    const hyInstall = (await installsOf(qid)).find((l) => l.defaultForItemId === hy.item.id)!;
+    const sc = await addProduct({ quoteId: qid, productId: P.bpScotia, installedLm: 12 });
+    expect((await lineOf(hyInstall.id)).qty).toBe(12);
+    await cover(sc.item.id, lamInstall.id);
+    expect((await lineOf(lamInstall.id)).qty).toBe(12);
+    const left = await lineOf(hyInstall.id);
+    expect(left.qty).toBe(0);
+    expect(left.flagReason ?? "").toContain(m.rules.AREA_TRIM_WHAT);
+    expect((await installsOf(qid))).toHaveLength(2);
+  });
+
+  test("vinyl: commercial and safety sheet get skim, coving, corners and welding; plank skim only; wall vinyl nothing and not flagged", async () => {
+    const rateIds = async (qid: number) => (await linesOf(qid)).map((l) => l.rateItemId).filter((r) => r != null).sort((a, b) => a! - b!);
+    for (const key of ["sheetVinyl", "forboSafety"]) {
+      const qid = await newQuote();
+      await addProduct({ quoteId: qid, productId: P[key], measuredM2: 20 });
+      expect([key, await rateIds(qid)]).toEqual([key, [19, 20, 21, 102, 109]]);
+    }
+    const plank = await newQuote();
+    await addProduct({ quoteId: plank, productId: P.vinylPlank, measuredM2: 20 });
+    expect(await rateIds(plank)).toEqual([17, 109]);
+    const wall = await newQuote();
+    const w = await addProduct({ quoteId: wall, productId: P.wallVinyl, measuredM2: 20 });
+    expect((await rateIds(wall)).filter((r) => [20, 21, 102, 109].includes(r!))).toEqual([]);
+    expect((await lineOf(w.item.id)).flagReason ?? "").not.toContain(m.rules.NOT_COMMERCIAL_MARK);
+  });
+
+  test("lines already on a quote are not changed by any of this", async () => {
+    const qid = await newQuote();
+    // As live line 388 (Big Panda scotia, each 26), put on before the lengths were filled in.
+    const [old] = await m.db
+      .insert(schema.quoteItems)
+      .values({ quoteId: qid, productId: P.bpScotia, description: "Big Panda Flooring Scotia PVC/WPC", qty: 26, unit: "each", unitPrice: 9.17, total: 238.42, sortOrder: 1, kind: "material" } as any)
+      .returning();
+    await addProduct({ quoteId: qid, productId: P.hybrid, measuredM2: 30 });
+    await addProduct({ quoteId: qid, productId: P.bpTrim27, installedLm: 5 });
+    const same = await lineOf(old!.id);
+    expect([same.qty, same.unitPrice, same.total, same.defaultsApplied ?? null]).toEqual([26, 9.17, 238.42, old!.defaultsApplied ?? null]);
+  });
+});
+
 test("nothing was sent", () => {
   expect(blocked).toEqual([]);
 });

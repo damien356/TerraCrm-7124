@@ -135,11 +135,52 @@ export const coveredLineOf = (applied: string[]) => {
   return Number.isFinite(id) ? id : null;
 };
 
-/** The products that bring Install trims/scotia: Scotia, Trim, and Accessories with scotia or trim in the name. */
+/**
+ * The products that bring Install trims/scotia: Scotia, Trim, and Accessories
+ * named as a trim. 7 Nov (second brief): end profiles, C channels, reducers
+ * and top covers are trims too. Stair nosings are not (their own labour).
+ */
+const TRIM_WORDS = /scotia|trim|profile|channel|reducer|top cover/i;
+const NOT_TRIM_WORDS = /nosing|stair/i;
 export function isTrimProduct(p: { category: string | null; brand?: string | null; range?: string | null; colour?: string | null }) {
   if (p.category === "scotia" || p.category === "trim") return true;
   if (p.category !== "accessory") return false;
-  return /scotia|trim/i.test([p.brand, p.range, p.colour].filter(Boolean).join(" "));
+  const name = [p.brand, p.range, p.colour].filter(Boolean).join(" ");
+  return TRIM_WORDS.test(name) && !NOT_TRIM_WORDS.test(name);
+}
+
+/**
+ * 7 Nov (second brief): the installed lm typed in when a trim was added, kept
+ * on the trim line as "trim:installed:<lm>". The supply is whole lengths off
+ * it; the install is this, never the supplied metres.
+ */
+export const installedKey = (lm: number) => `${TRIM_KEY}:installed:${Math.round(lm * 10_000) / 10_000}`;
+export const installedOf = (applied: string[]) => {
+  const k = applied.find((a) => a.startsWith(`${TRIM_KEY}:installed:`));
+  const n = k ? Number(k.split(":")[2]) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+/**
+ * On an Install trims/scotia line: the lm this feature last set it to, off
+ * the installed lm of the trims it covers ("trim:auto:<lm>"). A qty that no
+ * longer matches it (or any qty above 0 with no such key) was typed by hand,
+ * and is never changed.
+ */
+export const autoKey = (lm: number) => `${TRIM_KEY}:auto:${Math.round(lm * 10_000) / 10_000}`;
+export const autoOf = (applied: string[]) => {
+  const k = applied.find((a) => a.startsWith(`${TRIM_KEY}:auto:`));
+  const n = k ? Number(k.split(":")[2]) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+
+/**
+ * Sheet vinyl the price book marks as wall cladding (7 Nov, second brief). A
+ * verified type: no coving or welding goes on, and it is not flagged as an
+ * unclassified roll.
+ */
+export const WALL_VINYL_TIER = "Wall Vinyl";
+export function isWallVinyl(p: { tier?: string | null }) {
+  return (p.tier ?? "").trim().toLowerCase() === WALL_VINYL_TIER.toLowerCase();
 }
 
 /* ------------------------------ carpet disposal ----------------------------- */
@@ -187,6 +228,49 @@ export const TRIM_PICK_FLAG =
   "More than one floor area has Install trims/scotia. Pick the area this goes with (Install with, on this line), or mark this reviewed.";
 export const TRIM_INSTALL_GONE_FLAG =
   "The Install trims/scotia line that covered this was removed. Pick another area on this line, or mark this reviewed if no install is needed.";
+/**
+ * 7 Nov (second brief), on an Install trims/scotia line. Either its length
+ * was typed by hand (kept, never changed) and a trim was added to it, or a
+ * trim it covers has no installed length, so that trim is not counted. Both
+ * clear when the length is typed again.
+ */
+export const TRIM_ADDED_MARK = "Check the Install trims/scotia length.";
+export const trimTypedFlag = (trim: string, lm: number | null) =>
+  `${TRIM_ADDED_MARK} It was typed by hand, so it was kept. ${trim} was added ${lm != null ? `with ${lm} lm installed` : "with no installed length"}. Type the length again if it does not include it, or mark this reviewed.`;
+export const trimUnmeasuredFlag = (trims: string[]) =>
+  `${TRIM_ADDED_MARK} ${trims.join(", ")} ${trims.length === 1 ? "has" : "have"} no installed length, so ${trims.length === 1 ? "it is" : "they are"} not counted. Type the full length, or mark this reviewed.`;
+/** The flag with these sentences taken off. Null when nothing is left. */
+export function withoutTrimAdded(reason: string | null | undefined): string | null {
+  if (!reason) return null;
+  let text = reason;
+  for (let i = text.indexOf(TRIM_ADDED_MARK); i >= 0; i = text.indexOf(TRIM_ADDED_MARK)) {
+    const end = text.indexOf("or mark this reviewed.", i);
+    if (end < 0) break;
+    text = `${text.slice(0, i)} ${text.slice(end + "or mark this reviewed.".length)}`;
+  }
+  text = text.replace(/\s+/g, " ").trim();
+  return text || null;
+}
+/**
+ * The flag with only the "check the length" sentences for these trims kept
+ * (each sentence names its trim in quotes). A trim moved to another area, or
+ * removed, takes its sentence with it. Other warnings are kept as they are.
+ */
+export function keepTrimAddedFor(reason: string | null | undefined, names: string[]): string | null {
+  if (!reason) return null;
+  const END = "or mark this reviewed.";
+  let rest = reason;
+  let out = "";
+  for (let i = rest.indexOf(TRIM_ADDED_MARK); i >= 0; i = rest.indexOf(TRIM_ADDED_MARK)) {
+    const end = rest.indexOf(END, i);
+    if (end < 0) break;
+    const sentence = rest.slice(i, end + END.length);
+    out += ` ${rest.slice(0, i)}${names.some((n) => sentence.includes(n)) ? ` ${sentence}` : ""}`;
+    rest = rest.slice(end + END.length);
+  }
+  const text = `${out} ${rest}`.replace(/\s+/g, " ").trim();
+  return text || null;
+}
 export const AREA_GONE_MARK = "area this install was for was removed";
 export const areaGoneFlag = (area: string, trims: string[]) =>
   `The ${area} ${AREA_GONE_MARK}. It still covers ${trims.join(", ")}. Check the length is only for ${trims.length === 1 ? "that" : "those"}, or remove it.`;
@@ -237,6 +321,7 @@ export function isDefaultWarning(reason: string | null | undefined) {
     TRIM_INSTALL_GONE_FLAG,
     AREA_GONE_MARK,
     TRIM_OVERLAP_MARK,
+    TRIM_ADDED_MARK,
   ].some((m) => reason.includes(m));
 }
 

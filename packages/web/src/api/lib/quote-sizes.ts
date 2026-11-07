@@ -26,6 +26,7 @@ import {
   type UnderlayQty,
 } from "./order-sizes";
 import { qtyForLine } from "./quote-labour";
+import { appliedOf, installedOf } from "./quote-default-rules";
 import { isCountedPack, isSheetUnderlay, packNameOf, packsFor, packWord } from "./pack-name";
 import { ensurePackInstall, followPackLabour } from "./pack-lines";
 
@@ -278,7 +279,11 @@ export async function lineSizes(items: Line[]): Promise<Record<number, LineSize>
       continue;
     }
     const r = wholeUnits(p, i.qty);
-    if (r.note && same(r.qty, i.qty)) out[i.id] = { note: r.note, follows: null, floorChoices: null, packs };
+    // 7 Nov (second brief): a trim shows the lm installed next to the lengths supplied.
+    const inst = installedOf(appliedOf(i.defaultsApplied));
+    const sized = r.note && same(r.qty, i.qty) ? r.note : null;
+    const note = inst != null ? `${sized ? `${sized}. ` : ""}${round2(inst)} lm installed.` : sized;
+    if (note) out[i.id] = { note, follows: null, floorChoices: null, packs };
     else if (packs) out[i.id] = { note: null, follows: null, floorChoices: null, packs };
   }
   return out;

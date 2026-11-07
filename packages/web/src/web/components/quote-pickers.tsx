@@ -9,6 +9,8 @@ import { ProductFinder, type LastQuotedContext } from "./product-finder";
 import { useRatePicker } from "../queries/labour";
 import { useAddQuoteLabour, useAddQuoteProduct } from "../queries/quotes";
 import { ProductAreaFields, useAreaDraft } from "./floor-area";
+import { isTrimProduct } from "../../api/lib/quote-default-rules";
+import { pieceLengthOf, supplyForInstalled } from "../../api/lib/order-sizes";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
 
@@ -132,7 +134,13 @@ export function ProductPicker({ quoteId, context }: { quoteId: number; context?:
   const add = useAddQuoteProduct();
   const [chosen, setChosen] = React.useState<FoundProduct | null>(null);
   const [qty, setQty] = React.useState("1");
+  // 7 Nov (second brief): a trim or scotia takes the installed lm; the supply is whole lengths off it.
+  const [installed, setInstalled] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+  const trim = chosen != null && isTrimProduct(chosen);
+  const installedLm = trim && installed.trim() !== "" && Number(installed) > 0 ? Number(installed) : null;
+  const length = chosen ? pieceLengthOf(chosen) : null;
+  const supply = chosen && installedLm != null ? supplyForInstalled(chosen, installedLm) : null;
 
   // Items 8 and 9: a Box or Broadloom product is measured, not counted.
   const area = useAreaDraft(chosen);
@@ -144,18 +152,21 @@ export function ProductPicker({ quoteId, context }: { quoteId: number; context?:
   const [done, setDone] = React.useState<string | null>(null);
   const canAdd = chosen != null && (!area.active || (area.measured != null && area.measured > 0));
   // Measuring: the line is what the area works out to, nothing until an area is in.
-  const lineQty = area.active ? (area.result?.qty ?? 0) : Number(qty) || 0;
+  const lineQty = area.active ? (area.result?.qty ?? 0) : installedLm != null ? (supply ?? 0) : Number(qty) || 0;
+  const lengthsNote = trimLengthsNote(chosen, length, lineQty, installedLm, trim);
 
   async function submit() {
     if (chosen == null || !canAdd) return;
     setError(null);
     setDone(null);
     try {
-      const r = await add.mutateAsync({ quoteId, productId: chosen.id, qty: Number(qty) || 1, ...area.submit() });
+      const amount = installedLm != null && supply != null ? { installedLm } : { qty: Number(qty) || 1, ...(installedLm != null ? { installedLm } : {}) };
+      const r = await add.mutateAsync({ quoteId, productId: chosen.id, ...amount, ...area.submit() });
       const bits = [r.qtyNote, r.labour ? `${r.labour.description} added underneath.` : null, r.defaultsNote, r.item?.flagged ? r.item.flagReason : null];
-      setDone(bits.filter(Boolean).join(" ") || null);
+      setDone(bits.filter(Boolean).map((b) => (/[.!?]$/.test(String(b)) ? b : `${b}.`)).join(" ") || null);
       setChosen(null);
       setQty("1");
+      setInstalled("");
       area.reset();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -173,6 +184,7 @@ export function ProductPicker({ quoteId, context }: { quoteId: number; context?:
         picked={chosen}
         onPick={(p) => {
           setChosen(p);
+          setInstalled("");
           setDone(null);
           setError(null);
         }}
@@ -181,7 +193,20 @@ export function ProductPicker({ quoteId, context }: { quoteId: number; context?:
 
       {chosen ? (
         <div className="flex flex-wrap items-end justify-end gap-2">
-          {area.active ? null : (
+          {trim && !area.active ? (
+            <>
+              <Input
+                className="tabular w-[80px] text-right"
+                aria-label="Installed lm"
+                placeholder="lm"
+                value={installed}
+                onChange={(e) => setInstalled(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && submit()}
+              />
+              <span className="pb-2 text-xs text-muted-foreground">lm installed</span>
+            </>
+          ) : null}
+          {area.active || (installedLm != null && supply != null) ? null : (
             <>
               <Input
                 className="tabular w-[80px] text-right"
@@ -199,6 +224,8 @@ export function ProductPicker({ quoteId, context }: { quoteId: number; context?:
           </Button>
         </div>
       ) : null}
+
+      {lengthsNote ? <p className="text-xs text-muted-foreground">{lengthsNote}</p> : null}
 
       {chosen ? <ProductAreaFields product={chosen} area={area} installNames={installNames} /> : null}
 
@@ -218,6 +245,24 @@ export function ProductPicker({ quoteId, context }: { quoteId: number; context?:
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
     </div>
   );
+}
+
+/**
+ * 7 Nov (second brief): what the supply comes to in lengths and lm, and what
+ * the install is charged on. Lengths only (no installed lm): the equivalent
+ * lm, and a note that the install still needs its installed lm.
+ */
+function trimLengthsNote(p: FoundProduct | null, length: number | null, qty: number, installedLm: number | null, trim: boolean) {
+  if (!p || !trim) return null;
+  const lm = (n: number) => `${Math.round(n * 100) / 100} lm`;
+  const lengths = !length ? null : p.unit === "each" ? qty : Math.ceil(Math.round((qty / length) * 10_000) / 10_000 - 1e-9);
+  const supplyText = length && lengths != null && qty > 0 ? `${lengths} lengths of ${length} m (${lm(lengths * length)})` : null;
+  if (installedLm != null) {
+    if (!supplyText && p.unit === "each") return "No length recorded on this one, so the lengths cannot be worked out. Type the count instead.";
+    return `${supplyText ?? `${lm(qty)} supplied (no length recorded)`} for ${lm(installedLm)} installed. Install is charged on ${lm(installedLm)}.`;
+  }
+  if (supplyText) return `${supplyText}. No installed lm yet, so the install will be flagged to fill in.`;
+  return "No installed lm yet, so the install will be flagged to fill in.";
 }
 
 /* ----------------------------- labour picker ---------------------------- */

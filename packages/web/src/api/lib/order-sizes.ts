@@ -103,6 +103,13 @@ export type Rounded = {
  */
 export function wholeUnits(p: SizeShape, qtyIn: number): Rounded {
   const qty = Math.max(0, qtyIn);
+  // 7 Nov (second brief): a trim priced per length (each) is a count of lengths. The lm it comes to is shown. First, so
+  // a length tagged Box in the price book (3 Acouslime rows) still reads in lengths.
+  const eachLen = p.unit === "each" && isAccessoryCategory(p.category) && p.pieceLengthM && p.pieceLengthM > 0 ? p.pieceLengthM : null;
+  if (eachLen) {
+    const n = Math.ceil(qty - 1e-9);
+    return { qty: n, note: `${plural(n, "length", "lengths")} of ${fmt(eachLen)} m (${fmt(r4(n * eachLen))} lm)`, flag: null };
+  }
   // Pack name (2 Nov): a sheet, carton or bag product rounds to whole packs like a box good.
   if (p.soldAs === "box" || isCountedPack(p)) {
     const boxM2 = boxM2Of(p);
@@ -132,6 +139,45 @@ export function wholeUnits(p: SizeShape, qtyIn: number): Rounded {
     return { qty: n, note: n !== qty ? `Rounded up to ${plural(n, words[0], words[1])}.` : null, flag: null };
   }
   return { qty, note: null, flag: null };
+}
+
+/* ------------------------------ trim lengths ------------------------------ */
+
+/** The length one piece of a trim comes in, when the price book has it. */
+export function pieceLengthOf(p: SizeShape): number | null {
+  if (!isAccessoryCategory(p.category) || (p.unit !== "lm" && p.unit !== "each")) return null;
+  return p.pieceLengthM && p.pieceLengthM > 0 ? p.pieceLengthM : null;
+}
+
+/**
+ * 7 Nov (second brief). The supply for an installed length: up to whole
+ * lengths, in the product's own unit (lm, or a count of lengths). 23 lm on
+ * 2.4 m scotia is 10 lengths (24 lm). Null when it cannot be told.
+ */
+export function supplyForInstalled(p: SizeShape, installedLm: number): number | null {
+  const len = pieceLengthOf(p);
+  // No length: an lm trim takes the installed lm, flagged by wholeUnits to check. A count cannot be told.
+  if (!len) return p.unit === "lm" ? r4(Math.max(0, installedLm)) : null;
+  const n = Math.ceil(r4(Math.max(0, installedLm) / len) - 1e-9);
+  return p.unit === "each" ? n : r4(n * len);
+}
+
+/**
+ * 7 Nov (second brief). The price per lm a new trim line carries, so the
+ * line comes to whole lengths x the price of one length. A trim priced per
+ * length in the price book is stored per lm to 4 places (12.50 a 2.4 m
+ * length is 5.2083), which drifts a cent over many lengths. When the length
+ * price is a whole cent amount, the per lm price is put back off it, to 6
+ * places. Any other price is left exactly as it is. Never changes the price.
+ */
+export function lengthUnitPrice(p: SizeShape, sell: number): number {
+  const len = p.unit === "lm" ? pieceLengthOf(p) : null;
+  if (!len || !(sell > 0)) return sell;
+  const perLength = sell * len;
+  const cents = Math.round(perLength * 100) / 100;
+  if (Math.abs(perLength - cents) >= 0.0005) return sell;
+  const back = Math.round((cents / len) * 1_000_000) / 1_000_000;
+  return Math.abs(back - sell) < 0.00005 ? back : sell;
 }
 
 /* -------------------------------- underlay -------------------------------- */
