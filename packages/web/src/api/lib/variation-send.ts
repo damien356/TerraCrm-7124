@@ -8,6 +8,7 @@ import { SENDER_NAME } from "./material-selection";
 import { todayISO } from "./pricing";
 import { quoteRefOf } from "./quote-number";
 import { jobText } from "./refs";
+import { sha256 } from "./doc-classify";
 import { getObject, putObject, signGet } from "./s3";
 import { normaliseMobile, sendSms, SMS_OPT_OUT } from "./sms";
 import { type Signature } from "./signature";
@@ -115,7 +116,7 @@ export async function variationPhotos(v: Variation, expiresIn = 3600) {
     .select()
     .from(schema.jobMedia)
     .where(and(eq(schema.jobMedia.jobId, v.jobId), inArray(schema.jobMedia.id, ids)));
-  const kept = ids.map((id) => rows.find((r) => r.id === id)).filter((r): r is NonNullable<typeof r> => !!r && !r.archivedAt);
+  const kept = ids.map((id) => rows.find((r) => r.id === id)).filter((r): r is NonNullable<typeof r> => !!r && !r.archivedAt && r.sensitivity !== "restricted"); // privacy 9 Nov: a restricted file never goes to a customer as a variation photo
   return Promise.all(
     kept.map(async (r) => ({ id: r.id, caption: r.caption, kind: r.kind, mime: r.mime, storageKey: r.storageKey, url: await signGet(r.storageKey, expiresIn) })),
   );
@@ -381,6 +382,14 @@ export async function sendVariationSignedCopy(args: {
     sizeBytes: pdf.length,
     caption: `Signed variation ${v.ref}, ${args.signerName}`,
     uploaderName: "Terra Ops",
+    // Signed paperwork with prices: restricted, never for the crew (document privacy, 9 Nov 2026).
+    visibility: "office",
+    sensitivity: "restricted",
+    restrictReason: "signed",
+    reviewStatus: "kept_office",
+    classifyNote: "Signed variation made by Terra Ops",
+    classifiedAt: new Date(),
+    contentSha256: sha256(pdf),
   });
   await db.update(schema.variationSignatures).set({ pdfKey: key, updatedAt: new Date() }).where(eq(schema.variationSignatures.id, args.signatureId));
   return { key, emailed, failed };

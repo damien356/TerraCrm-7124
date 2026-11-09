@@ -12,6 +12,7 @@ import { sendAsTeam } from "./agent-mail";
 import { LEAD_AUTOREPLY_KEY, clientTypeLabel, repairTypeOf, floorTypeOf, TIMBER_TAG, TEST_LEAD_TAG, isTestLeadName, repairTypeLabel, floorTypeLabel } from "./lead-codes";
 import { jobText } from "./refs";
 import { startRepairRequest } from "./timber-repair";
+import { fileInbound } from "./file-intake";
 
 /* ---------------------------------------------------------------------------
  * LANDING PAGE FORMS COMING IN (spec 14 Oct, Part A item 3). Section 18.38.
@@ -688,18 +689,18 @@ export async function takeLead(formKey: string, raw: Record<string, unknown>, fi
         photoMisses++;
         continue;
       }
-      await db.insert(schema.jobMedia).values({
+      // Office only and read first (document privacy, 9 Nov 2026): a photo from outside waits for the office before the crew see it.
+      await fileInbound({
         jobId: job.id,
         bucket: "damage",
-        kind: "photo",
         storageKey,
-        url: storageKey,
         filename: f.name || null,
         mime: f.type,
         sizeBytes: f.bytes.length,
         caption: photoTags[0] ? `${photoTags[0]}, from the form` : "From the form",
         uploaderName: "Client (form)",
-        tags: JSON.stringify(photoTags),
+        tags: photoTags,
+        bytes: f.bytes,
       });
       photos++;
     }

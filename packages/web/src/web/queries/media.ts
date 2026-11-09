@@ -40,6 +40,47 @@ export function useMoveMedia() {
   return useMutation(orpc.media.move.mutationOptions({ onSuccess: invalidate }));
 }
 
+/** "Show to crew": a person checked it. Refused for restricted files. */
+export function useApproveForCrew() {
+  const invalidate = useInvalidateJobFile();
+  return useMutation(orpc.media.approveForCrew.mutationOptions({ onSuccess: invalidate }));
+}
+
+/** "Keep office only", and taking a file back off the crew. */
+export function useKeepOffice() {
+  const invalidate = useInvalidateJobFile();
+  return useMutation(orpc.media.keepOffice.mutationOptions({ onSuccess: invalidate }));
+}
+
+/** Admin only: restrict a file, or lift a wrong restriction (back to Needs review), with a reason. */
+export function useReclassifyMedia() {
+  const invalidate = useInvalidateJobFile();
+  return useMutation(orpc.media.reclassify.mutationOptions({ onSuccess: invalidate }));
+}
+
+/** Site access details a client sent in, waiting for the office. */
+export function useAccessProposals(jobId: number | null) {
+  return useQuery(orpc.accessNotes.list.queryOptions({ input: { jobId: jobId ?? 0 }, enabled: jobId !== null, staleTime: 10_000 }));
+}
+
+function useInvalidateAccess() {
+  const queryClient = useQueryClient();
+  return () => {
+    queryClient.invalidateQueries({ queryKey: orpc.accessNotes.key() });
+    queryClient.invalidateQueries({ queryKey: orpc.jobs.key() });
+  };
+}
+
+export function useApproveAccessNote() {
+  const invalidate = useInvalidateAccess();
+  return useMutation(orpc.accessNotes.approve.mutationOptions({ onSuccess: invalidate }));
+}
+
+export function useDismissAccessNote() {
+  const invalidate = useInvalidateAccess();
+  return useMutation(orpc.accessNotes.dismiss.mutationOptions({ onSuccess: invalidate }));
+}
+
 export function useSetMediaCaption() {
   const invalidate = useInvalidateJobFile();
   return useMutation(orpc.media.setCaption.mutationOptions({ onSuccess: invalidate }));

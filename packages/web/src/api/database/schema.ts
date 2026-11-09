@@ -1065,13 +1065,73 @@ export const jobMedia = sqliteTable(
     archivedAt: integer("archived_at", { mode: "timestamp" }),
     /** JSON list of tags, e.g. the repair type on a timber repair photo. */
     tags: text("tags").notNull().default("[]"),
+    /*
+     * Document privacy (Damien, 9 Nov 2026). Category (bucket) and who may see
+     * the file are two separate decisions. Deny by default: a row is office
+     * only until something marks it crew. Moving, renaming, archiving or
+     * copying a file never changes these. See lib/file-access.ts.
+     */
+    /** crew · office. Crew only ever get "crew" rows on a job they are assigned to. */
+    visibility: text("visibility").notNull().default("office"),
+    /** normal · restricted · unknown. Restricted never reaches crew, whatever the category or visibility says. */
+    sensitivity: text("sensitivity").notNull().default("unknown"),
+    /** Why it is restricted: customer_quote · customer_invoice · signed · supplier_cost · bank · price_content. */
+    restrictReason: text("restrict_reason"),
+    /** needs_review · approved · kept_office. */
+    reviewStatus: text("review_status").notNull().default("needs_review"),
+    /** Short reason from the content check, never the content itself. */
+    classifyNote: text("classify_note"),
+    classifiedAt: integer("classified_at", { mode: "timestamp" }),
+    /** The email it came in on, if it came in by email. */
+    sourceMessageId: integer("source_message_id"),
+    /** sha256 of the file bytes, so a known restricted file is caught again when it comes back renamed. */
+    contentSha256: text("content_sha256"),
+    /** Who released it to crew, or kept it office only, and when. */
+    reviewedByName: text("reviewed_by_name"),
+    reviewedAt: integer("reviewed_at", { mode: "timestamp" }),
     ...timestamps,
   },
   (t) => [
     index("media_job_idx").on(t.jobId, t.bucket),
+    index("media_sha_idx").on(t.contentSha256),
     index("media_task_idx").on(t.taskId),
     index("media_area_idx").on(t.areaId),
   ],
+);
+
+/**
+ * A proposed Site access note, out of a client's email or text (Damien, 9 Nov
+ * 2026). Nothing reaches the job's access notes, which the crew see, until
+ * someone in the office approves it. The notes as they were before are kept
+ * on the row, so an approval never silently overwrites an earlier instruction.
+ */
+export const accessNoteProposals = sqliteTable(
+  "access_note_proposals",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    /** The email it came from. Null for a text, which has its own id below. */
+    sourceMessageId: integer("source_message_id"),
+    /** sms · email */
+    channel: text("channel").notNull().default("email"),
+    fromName: text("from_name").notNull().default(""),
+    /** The client's own words, exactly, without the quoted history. */
+    text: text("text").notNull(),
+    /** JSON list of job_media ids sent with it. */
+    mediaIds: text("media_ids").notNull().default("[]"),
+    /** True when the job already had access notes, so the office checks the two agree. */
+    conflicts: integer("conflicts", { mode: "boolean" }).notNull().default(false),
+    /** pending · approved · dismissed */
+    status: text("status").notNull().default("pending"),
+    /** The job's access notes just before this was approved. */
+    previousNotes: text("previous_notes"),
+    decidedByName: text("decided_by_name"),
+    decidedAt: integer("decided_at", { mode: "timestamp" }),
+    /** Same text from the same message never makes a second proposal. */
+    dedupeKey: text("dedupe_key").notNull(),
+    ...timestamps,
+  },
+  (t) => [index("access_note_proposals_job_idx").on(t.jobId, t.status), uniqueIndex("access_note_proposals_dedupe").on(t.dedupeKey)],
 );
 
 /* ---------------------------------------------------------------------------

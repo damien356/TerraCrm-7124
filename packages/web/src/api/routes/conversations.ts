@@ -6,7 +6,8 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { staffOnly, type Actor } from "../middleware/auth";
 import { parseTags } from "../lib/person-tags";
-import { mailUploadKey, bucketForMime } from "../lib/job-mail";
+import { mailUploadKey } from "../lib/job-mail";
+import { startBucketFor } from "../lib/file-intake";
 import { dismissHolding, fileHolding, holdingSender, moveMessageToJob, unfiledList } from "../lib/mail-filing";
 import { mediaKey, signGet, signPut } from "../lib/s3";
 import { createJob } from "./jobs";
@@ -774,7 +775,7 @@ export const conversations = {
   uploadSlot: staffOnly
     .input(z.object({ filename: z.string().min(1).max(200), contentType: z.string().min(1).max(120), jobId: z.number().int().nullish() }))
     .handler(async ({ input }) => {
-      const key = input.jobId ? mediaKey(input.jobId, bucketForMime(input.contentType), input.filename) : mailUploadKey(input.filename);
+      const key = input.jobId ? mediaKey(input.jobId, startBucketFor(input.contentType), input.filename) : mailUploadKey(input.filename);
       return { url: await signPut(key, input.contentType), key };
     }),
 

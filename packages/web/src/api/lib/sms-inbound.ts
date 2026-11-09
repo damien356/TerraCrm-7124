@@ -123,7 +123,7 @@ export async function handleInboundSms(raw: Record<string, unknown>) {
   const name = contact ? [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim() : "";
   const stop = isStop(msg.body);
 
-  await logMessage({
+  const logged = await logMessage({
     conversationId,
     jobId,
     contactId: contact?.id ?? null,
@@ -135,8 +135,8 @@ export async function handleInboundSms(raw: Record<string, unknown>) {
     fromAddress: mobile,
     providerId: msg.messageId,
   });
-  // Notes 18.56: "key's under the mat" in answer to a prep text goes on the job's access notes.
-  if (!stop && jobId) await noteKeyReply({ jobId, contactId: contact?.id ?? null, body: msg.body, channel: "sms", name: name || mobile });
+  // Notes 18.56, privacy 9 Nov: "key's under the mat" becomes a proposed Site access note for the office to approve.
+  if (!stop && jobId) await noteKeyReply({ jobId, contactId: contact?.id ?? null, body: msg.body, channel: "sms", name: name || mobile, messageId: logged?.id ?? null });
 
   if (stop) {
     const [already] = await db

@@ -1,5 +1,7 @@
 import { z } from "zod";
+import { ORPCError } from "@orpc/server";
 import { authed, installerOnly } from "../middleware/auth";
+import { CREW_BUCKETS, installerOnJob } from "../lib/file-access";
 import { installerLogoKey, mediaKey, signPut } from "../lib/s3";
 
 /**
@@ -17,7 +19,12 @@ export const upload = {
         contentType: z.string().min(1),
       }),
     )
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
+      // Field crew upload only to a job they are on, and only into the crew's own slots.
+      if (context.actor.role === "field") {
+        if (!(CREW_BUCKETS as readonly string[]).includes(input.bucket)) throw new ORPCError("FORBIDDEN", { message: "The crew can't add to that part of the job file." });
+        if (!context.actor.installerId || !(await installerOnJob(context.actor.installerId, input.jobId))) throw new ORPCError("FORBIDDEN", { message: "You're not on this job." });
+      }
       const key = mediaKey(input.jobId, input.bucket, input.filename);
       const url = await signPut(key, input.contentType);
       return { url, key };

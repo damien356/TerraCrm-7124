@@ -2,7 +2,9 @@ import { and, desc, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { ensureForJob } from "./conversations";
-import { bucketForMime, tagForJob } from "./job-mail";
+import { tagForJob } from "./job-mail";
+import { askOfficeToCheck } from "./doc-classify";
+import { fileInbound } from "./file-intake";
 import { IGNORE_SENDERS_KEY, ignoredSenders } from "./mail-replies";
 
 /* ---------------------------------------------------------------------------
@@ -32,30 +34,40 @@ export async function moveMessageToJob(messageId: number, jobId: number, byName:
   /* Files that came in on this email follow it into the new job's file. A
    * file Terra sent from a job file stays on the job it came from. */
   const files = await db.select().from(schema.messageAttachments).where(eq(schema.messageAttachments.messageId, m.id));
+  /* Document privacy (9 Nov 2026): an emailed file lands office only and is
+   * read first. A file released to the crew on the old job goes back to
+   * Needs review on the new one: that approval was for the other job. A
+   * restricted file stays restricted wherever it goes. */
+  const oldJobs = new Set<number>();
   for (const f of files) {
     if (m.direction !== "in") continue;
     if (f.mediaId) {
-      await db.update(schema.jobMedia).set({ jobId, updatedAt: new Date() }).where(eq(schema.jobMedia.id, f.mediaId));
-    } else if (f.storageKey) {
-      const mime = f.mime || "application/octet-stream";
-      const [row] = await db
-        .insert(schema.jobMedia)
-        .values({
+      const [was] = await db.select({ jobId: schema.jobMedia.jobId, visibility: schema.jobMedia.visibility }).from(schema.jobMedia).where(eq(schema.jobMedia.id, f.mediaId)).limit(1);
+      if (!was || was.jobId === jobId) continue;
+      oldJobs.add(was.jobId);
+      await db
+        .update(schema.jobMedia)
+        .set({
           jobId,
-          bucket: bucketForMime(mime),
-          kind: mime.startsWith("image/") ? "photo" : mime.startsWith("video/") ? "video" : "doc",
-          storageKey: f.storageKey,
-          url: f.storageKey,
-          filename: f.filename,
-          mime,
-          sizeBytes: f.sizeBytes,
-          caption: `Emailed by ${m.authorName || m.fromAddress || "client"}`.slice(0, 200),
-          uploaderName: (m.authorName || "").slice(0, 120),
+          ...(was.visibility === "crew" ? { visibility: "office", reviewStatus: "needs_review", reviewedAt: null, reviewedByName: null } : {}),
+          updatedAt: new Date(),
         })
-        .returning({ id: schema.jobMedia.id });
-      await db.update(schema.messageAttachments).set({ mediaId: row?.id ?? null }).where(eq(schema.messageAttachments.id, f.id));
+        .where(eq(schema.jobMedia.id, f.mediaId));
+    } else if (f.storageKey) {
+      const id = await fileInbound({
+        jobId,
+        storageKey: f.storageKey,
+        filename: f.filename,
+        mime: f.mime || "application/octet-stream",
+        sizeBytes: f.sizeBytes,
+        caption: `Emailed by ${m.authorName || m.fromAddress || "client"}`,
+        uploaderName: m.authorName || "",
+        sourceMessageId: m.id,
+      });
+      await db.update(schema.messageAttachments).set({ mediaId: id }).where(eq(schema.messageAttachments.id, f.id));
     }
   }
+  for (const j of [...oldJobs, jobId]) await askOfficeToCheck(j).catch(() => null);
 
   await db
     .update(schema.officeTasks)

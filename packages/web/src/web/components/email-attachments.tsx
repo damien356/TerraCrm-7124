@@ -124,7 +124,8 @@ export function EmailAttachments({
   const latest = React.useRef(value);
   latest.current = value;
 
-  const all = (media.data ?? []).flatMap((b) => b.items.map((it) => ({ ...it, bucketLabel: b.label })));
+  // A file this person may not open is never offered to attach.
+  const all = (media.data ?? []).flatMap((b) => b.items.filter((it) => !it.locked).map((it) => ({ ...it, bucketLabel: b.label })));
   const pickedMedia = all.filter((m) => value.mediaIds.includes(m.id));
   const total = extraBytes + pickedMedia.reduce((s, m) => s + (m.sizeBytes ?? 0), 0) + value.uploads.reduce((s, u) => s + u.sizeBytes, 0);
 

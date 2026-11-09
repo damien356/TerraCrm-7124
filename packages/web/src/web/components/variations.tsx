@@ -799,7 +799,7 @@ function PhotoPicker({ v, canEdit, onError }: { v: Variation; canEdit: boolean; 
   const [showAll, setShowAll] = React.useState(false);
   const picked = React.useMemo(() => new Set(v.photos.map((p) => p.id)), [v.photos]);
   const photos = React.useMemo(
-    () => (media.data ?? []).flatMap((g) => g.items.filter((m) => m.kind === "photo" && !m.archivedAt).map((m) => ({ ...m, bucketLabel: g.label }))),
+    () => (media.data ?? []).flatMap((g) => g.items.filter((m) => m.kind === "photo" && !m.archivedAt && !m.locked && m.sensitivity !== "restricted").map((m) => ({ ...m, bucketLabel: g.label }))),
     [media.data],
   );
 

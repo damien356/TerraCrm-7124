@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
-import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, or } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly, withUser } from "../middleware/auth";
@@ -65,12 +65,25 @@ async function putSetting(key: string, value: string) {
     .onConflictDoUpdate({ target: schema.settings.key, set: { value, updatedAt: now } });
 }
 
-/** Photos on the repair's job, signed for an hour. */
-async function damagePhotos(jobId: number) {
+/**
+ * Photos on the repair's job, signed for an hour. The repairer's page
+ * (outside) gets only photos the reader found clean or the office showed to
+ * the crew, never a restricted or unread one (document privacy, 9 Nov 2026).
+ */
+async function damagePhotos(jobId: number, outside = false) {
   const rows = await db
     .select({ id: schema.jobMedia.id, storageKey: schema.jobMedia.storageKey, caption: schema.jobMedia.caption, tags: schema.jobMedia.tags, mime: schema.jobMedia.mime })
     .from(schema.jobMedia)
-    .where(and(eq(schema.jobMedia.jobId, jobId), eq(schema.jobMedia.bucket, "damage"), eq(schema.jobMedia.kind, "photo"), isNull(schema.jobMedia.archivedAt)))
+    .where(
+      and(
+        eq(schema.jobMedia.jobId, jobId),
+        eq(schema.jobMedia.bucket, "damage"),
+        eq(schema.jobMedia.kind, "photo"),
+        isNull(schema.jobMedia.archivedAt),
+        ne(schema.jobMedia.sensitivity, "restricted"),
+        outside ? or(eq(schema.jobMedia.visibility, "crew"), eq(schema.jobMedia.sensitivity, "normal")) : undefined,
+      ),
+    )
     .orderBy(asc(schema.jobMedia.id));
   return Promise.all(
     rows.map(async (r) => {
@@ -261,7 +274,7 @@ export const timber = {
       floorType: r.floorType && r.floorType !== "not_sure" ? floorTypeLabel(r.floorType) : "Not known",
       suburb: r.suburb,
       expiresAt: r.expiresAt,
-      photos: (await damagePhotos(r.jobId)).map((p) => ({ id: p.id, url: p.url })),
+      photos: (await damagePhotos(r.jobId, true)).map((p) => ({ id: p.id, url: p.url })),
     };
   }),
 };

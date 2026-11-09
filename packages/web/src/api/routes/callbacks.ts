@@ -51,10 +51,10 @@ export const callbacks = {
   }),
 
   /** Products, notes and photos from the original job, read only, on the callback page. */
-  original: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
+  original: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input, context }) => {
     const [job] = await db.select({ parentJobId: schema.jobs.parentJobId }).from(schema.jobs).where(eq(schema.jobs.id, input.jobId));
     if (!job?.parentJobId) throw new ORPCError("BAD_REQUEST", { message: "This job isn't a callback." });
-    return originalJobFile(job.parentJobId);
+    return originalJobFile(job.parentJobId, context.actor);
   }),
 
   setCause: staffOnly.input(setCauseInput).handler(({ input, context }) => setCause(input, context.actor)),

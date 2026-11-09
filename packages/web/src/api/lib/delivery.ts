@@ -230,6 +230,12 @@ export async function recordHandover(args: HandoverArgs) {
           capturedAt: when,
           uploadedByProfileId: profile?.id ?? null,
           uploaderName: args.actor.name || "Office",
+          // A delivery docket can carry supplier prices: an office record unless the office shows it to the crew (privacy, 9 Nov 2026).
+          visibility: "office",
+          sensitivity: "unknown",
+          reviewStatus: "kept_office",
+          classifyNote: "Proof of delivery or collection, an office record",
+          classifiedAt: new Date(),
         })),
       );
     }

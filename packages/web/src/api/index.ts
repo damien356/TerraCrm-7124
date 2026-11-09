@@ -29,6 +29,7 @@ import { installerInvoices } from "./routes/installerInvoices";
 import { upload } from "./routes/upload";
 import { areas } from "./routes/areas";
 import { media } from "./routes/media";
+import { accessNotes } from "./routes/access-notes";
 import { forms } from "./routes/forms";
 import { crew } from "./routes/crew";
 import { dashboard } from "./routes/dashboard";
@@ -188,6 +189,8 @@ export const router = {
   areas,
   /** The job file: named media buckets, never a loose diary feed. */
   media,
+  /** Site access details a client sent in, waiting for the office to approve before the crew see them. */
+  accessNotes,
   /** On-site forms. Crew describe and photograph; the OFFICE prices variations. */
   forms,
   /** Live crew map — on-shift positions only, consent-gated. */

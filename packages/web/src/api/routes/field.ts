@@ -2,7 +2,7 @@ import { isUnitType, parseAptChecks, propertyTypeAnswered, propertyTypeShort } f
 import { jobNumberSql, taskRefSql } from "../lib/job-ref";
 import { syncJobForTask } from "../lib/job-stage";
 import { z } from "zod";
-import { and, asc, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -10,7 +10,7 @@ import { installerOnly } from "../middleware/auth";
 import { notifyOffice } from "../lib/notify";
 import { signMany } from "../lib/s3";
 import { acceptOffer, declineOffer, expireStale, releaseTask } from "./offers";
-import { OFFICE_ONLY_BUCKETS } from "./media";
+import { CREW_BUCKETS, crewWhere } from "../lib/file-access";
 import { addLocalDays, todayLocal } from "../lib/local-date";
 import { workDaysFor, type WorkDay } from "../lib/crew-days";
 import { crewMaterials } from "../lib/crew-materials";
@@ -205,7 +205,6 @@ export async function ownTaskOrThrow(taskId: number, installerId: number) {
 }
 
 /** Buckets the crew may add to. Plans are office-only — they can look, not upload. */
-const CREW_BUCKETS = ["access", "area", "damage", "found", "completion", "defect"] as const;
 
 async function countMedia(taskId: number, bucket: string) {
   const rows = await db
@@ -773,7 +772,7 @@ export const field = {
       db
         .select()
         .from(schema.jobMedia)
-        .where(and(eq(schema.jobMedia.jobId, task.jobId), sql`${schema.jobMedia.archivedAt} is null`, notInArray(schema.jobMedia.bucket, [...OFFICE_ONLY_BUCKETS])))
+        .where(and(eq(schema.jobMedia.jobId, task.jobId), crewWhere(context.installerId)))
         .orderBy(asc(schema.jobMedia.capturedAt)),
     ]);
 
@@ -783,7 +782,7 @@ export const field = {
       ? await db
           .select()
           .from(schema.jobMedia)
-          .where(and(eq(schema.jobMedia.jobId, parentId), sql`${schema.jobMedia.archivedAt} is null`, notInArray(schema.jobMedia.bucket, [...OFFICE_ONLY_BUCKETS])))
+          .where(and(eq(schema.jobMedia.jobId, parentId), crewWhere(context.installerId)))
           .orderBy(asc(schema.jobMedia.capturedAt))
       : [];
     const signed = await signMany(mediaRows);
@@ -844,6 +843,9 @@ export const field = {
         .select({ name: schema.installers.name })
         .from(schema.installers)
         .where(eq(schema.installers.id, context.installerId));
+      if (!input.storageKey.startsWith(`jobs/${task.jobId}/`) || input.storageKey.includes("..")) {
+        throw new ORPCError("BAD_REQUEST", { message: "That upload didn't go to this job. Take it again." });
+      }
 
       const [row] = await db
         .insert(schema.jobMedia)
@@ -864,6 +866,12 @@ export const field = {
           capturedLng: input.lng ?? null,
           uploadedByInstallerId: context.installerId,
           uploaderName: installer?.name ?? "Installer",
+          // The crew's own site photos are shared with the crew on this job. Office files never start this way.
+          visibility: "crew",
+          sensitivity: "normal",
+          reviewStatus: "approved",
+          classifyNote: "Crew site photo",
+          classifiedAt: new Date(),
         })
         .returning({ id: schema.jobMedia.id, bucket: schema.jobMedia.bucket });
 

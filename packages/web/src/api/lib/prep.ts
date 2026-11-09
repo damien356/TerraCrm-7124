@@ -19,6 +19,8 @@ import {
   type PrepTemplates,
 } from "./prep-templates";
 import { isLiveServer } from "./runtime";
+import { createHash } from "node:crypto";
+import { askOfficeToCheck } from "./doc-classify";
 import { normaliseMobile, sendSms } from "./sms";
 
 /* ---------------------------------------------------------------------------
@@ -784,44 +786,81 @@ function freshText(body: string) {
 
 export const looksLikeKeyReply = (body: string) => KEY_WORDS.test(freshText(body));
 
+/** Words that only ever mean site access, so they count even without a recent prep message. */
+const ACCESS_WORDS = /\b(lock ?box|key ?safe|gate code|access code|door code|alarm code|the code is|side gate|intercom|lift booking|loading (dock|bay|zone))\b/i;
+
 /**
- * A client answering a prep message with where the key is. Saved onto the
- * job's access notes, which the installer's task card shows. Only on a job
- * that has had a prep message in the last 30 days, so a stray "keys" in some
- * other email never lands there. Never throws.
+ * A client telling us where the key is or how to get in, by email or text.
+ * Document privacy (Damien, 9 Nov 2026): this no longer writes to the job's
+ * access notes, which the crew see. It makes a proposed Site access note with
+ * the client's exact words, for the office to approve or dismiss. Approval
+ * keeps the notes as they were, so nothing is silently overwritten.
+ *
+ * Counts when the job had a prep message in the last 30 days and the words
+ * mention a key, or when the words can only mean site access (lockbox, gate
+ * code ...). The same words for the same job never make a second proposal.
+ * The activity feed gets that a proposal exists, never the words: they can
+ * hold a code. Never throws.
  */
-export async function noteKeyReply(args: { jobId: number | null; contactId: number | null; body: string; channel: "sms" | "email"; name: string; photos?: number }) {
+export async function noteKeyReply(args: {
+  jobId: number | null;
+  contactId: number | null;
+  body: string;
+  channel: "sms" | "email";
+  name: string;
+  /** The email or text it came on. */
+  messageId?: number | null;
+  /** Files that came with it, already filed office only. */
+  mediaIds?: number[];
+}) {
   try {
     if (!args.jobId) return false;
     const text = freshText(args.body);
-    if (!text || !KEY_WORDS.test(text)) return false;
-    const since = new Date(Date.now() - 30 * 86_400_000);
-    const [recent] = await db
-      .select({ id: schema.prepSends.id })
-      .from(schema.prepSends)
-      .where(and(eq(schema.prepSends.jobId, args.jobId), eq(schema.prepSends.status, "sent"), gte(schema.prepSends.updatedAt, since)))
-      .limit(1);
-    if (!recent) return false;
+    if (!text) return false;
+    const strong = ACCESS_WORDS.test(text);
+    if (!strong) {
+      if (!KEY_WORDS.test(text)) return false;
+      const since = new Date(Date.now() - 30 * 86_400_000);
+      const [recent] = await db
+        .select({ id: schema.prepSends.id })
+        .from(schema.prepSends)
+        .where(and(eq(schema.prepSends.jobId, args.jobId), eq(schema.prepSends.status, "sent"), gte(schema.prepSends.updatedAt, since)))
+        .limit(1);
+      if (!recent) return false;
+    }
     const [job] = await db.select({ accessNotes: schema.jobs.accessNotes }).from(schema.jobs).where(eq(schema.jobs.id, args.jobId));
     if (!job) return false;
-    const day = localDate(new Date()).split("-").reverse().join("/");
-    const words = text.replace(/\s+/g, " ").slice(0, 400);
-    const line = `Key, from the client ${day} (${args.channel === "sms" ? "text" : "email"}, ${args.name}): ${words}${args.photos ? " Photo in the job files." : ""}`;
-    const notes = [job.accessNotes?.trim(), line].filter(Boolean).join("\n");
-    await db.update(schema.jobs).set({ accessNotes: notes, updatedAt: new Date() }).where(eq(schema.jobs.id, args.jobId));
+    const words = text.slice(0, 2000);
+    const dedupeKey = `${args.jobId}:${createHash("sha256").update(words.replace(/\s+/g, " ").trim().toLowerCase()).digest("hex")}`;
+    const [made] = await db
+      .insert(schema.accessNoteProposals)
+      .values({
+        jobId: args.jobId,
+        sourceMessageId: args.messageId ?? null,
+        channel: args.channel,
+        fromName: args.name.slice(0, 120),
+        text: words,
+        mediaIds: JSON.stringify(args.mediaIds ?? []),
+        conflicts: Boolean(job.accessNotes?.trim()),
+        dedupeKey,
+      })
+      .onConflictDoNothing()
+      .returning({ id: schema.accessNoteProposals.id });
+    if (!made) return false;
     await db.insert(schema.activityLog).values({
       jobId: args.jobId,
       contactId: args.contactId,
-      entityType: "job",
-      entityId: args.jobId,
-      action: "key_note_saved",
-      detail: `Saved to access notes: ${words}`.slice(0, 500),
+      entityType: "access_note_proposal",
+      entityId: made.id,
+      action: "access_note_proposed",
+      detail: `Site access details came in by ${args.channel === "sms" ? "text" : "email"}. Waiting for the office to check and approve.`,
       actorName: args.name.slice(0, 120) || "Client",
       actorRole: "customer",
     });
+    await askOfficeToCheck(args.jobId);
     return true;
   } catch (e) {
-    console.error("[prep] key reply not saved:", (e as Error).message ?? e);
+    console.error("[prep] access proposal not saved:", (e as Error).message ?? e);
     return false;
   }
 }

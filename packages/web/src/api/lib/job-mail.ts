@@ -1,6 +1,8 @@
 import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../database";
+import { fileInbound } from "./file-intake";
+import { staffMayOpen } from "./file-access";
 import * as schema from "../database/schema";
 import { sendAsTeam } from "./agent-mail";
 import { addParticipant, jobRef, logMessage, subjectWithRef, tagFromRef, threadHeaders } from "./conversations";
@@ -86,7 +88,7 @@ export async function jobFamily(jobId: number) {
 }
 
 /** Files picked from the job file, read back out of storage. Only from this job and its repairs. */
-export async function filesFromMedia(jobId: number, mediaIds: number[]): Promise<MailFile[]> {
+export async function filesFromMedia(jobId: number, mediaIds: number[], byProfileId: number | null = null): Promise<MailFile[]> {
   const ids = [...new Set(mediaIds)];
   if (!ids.length) return [];
   const family = await jobFamily(jobId);
@@ -95,6 +97,13 @@ export async function filesFromMedia(jobId: number, mediaIds: number[]): Promise
     .from(schema.jobMedia)
     .where(and(inArray(schema.jobMedia.id, ids), inArray(schema.jobMedia.jobId, family), isNull(schema.jobMedia.archivedAt)));
   if (rows.length !== ids.length) throw new Error("One of the files is not on this job any more. Pick them again.");
+  // A cost document (supplier costs, bank details, prices) goes out only from someone allowed to open it.
+  if (byProfileId && rows.some((r) => !staffMayOpen(r, { role: "office", canSeeCosts: false }))) {
+    const [p] = await db.select({ role: schema.profiles.role, canSeeCosts: schema.profiles.canSeeCosts }).from(schema.profiles).where(eq(schema.profiles.id, byProfileId)).limit(1);
+    const role: "admin" | "office" | "field" = p?.role === "admin" ? "admin" : p?.role === "office" ? "office" : "field";
+    const actor = { role, canSeeCosts: role === "admin" || (role === "office" && Boolean(p?.canSeeCosts)) };
+    if (rows.some((r) => !staffMayOpen(r, actor))) throw new Error("One of the files is restricted to people who can see costs. Take it off or ask an Admin to send it.");
+  }
   const out: MailFile[] = [];
   for (const id of ids) {
     const r = rows.find((x) => x.id === id)!;
@@ -119,9 +128,6 @@ export const uploadInput = z.object({
 });
 export type MailUpload = z.infer<typeof uploadInput>;
 
-/** What files go in which part of the job file. Photos with the client photos, papers with the plans. */
-export const bucketForMime = (mime: string) => (/^(image|video)\//.test(mime) ? "client_reported" : "plan");
-const kindForMime = (mime: string) => (mime.startsWith("image/") ? "photo" : mime.startsWith("video/") ? "video" : "doc");
 
 /** Where a device file for an email with no job yet goes. The browser asks for a slot here. */
 export const mailUploadKey = (filename: string) => `mail/uploads/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName(filename)}`;
@@ -142,33 +148,21 @@ export async function pickedFiles(args: {
   const out: MailFile[] = [];
   if (args.mediaIds?.length) {
     if (!args.jobId) throw new Error("Files from the job file need a job.");
-    out.push(...(await filesFromMedia(args.jobId, args.mediaIds)));
+    out.push(...(await filesFromMedia(args.jobId, args.mediaIds, args.byProfileId ?? null)));
   }
   const family = args.jobId ? await jobFamily(args.jobId) : [];
   for (const u of args.uploads ?? []) {
     const ok = u.storageKey.startsWith("mail/uploads/") || family.some((id) => u.storageKey.startsWith(`jobs/${id}/`));
     if (!ok || u.storageKey.includes("..")) throw new Error(`${u.filename} did not upload to the right place. Attach it again.`);
     const content = await getObject(u.storageKey);
-    let mediaId: number | null = null;
-    if (args.jobId) {
-      const [row] = await db
-        .insert(schema.jobMedia)
-        .values({
-          jobId: args.jobId,
-          bucket: bucketForMime(u.mime),
-          kind: kindForMime(u.mime),
-          storageKey: u.storageKey,
-          url: u.storageKey,
-          filename: u.filename,
-          mime: u.mime,
-          sizeBytes: content.length,
-          caption: "Sent by email",
-          uploadedByProfileId: args.byProfileId ?? null,
-          uploaderName: args.byName,
-        })
-        .returning({ id: schema.jobMedia.id });
-      mediaId = row?.id ?? null;
-    }
+    // Office only until its content is read (document privacy, 9 Nov 2026). The office sent it, so clean content goes to the crew.
+    const mediaId = args.jobId
+      ? await fileInbound(
+          { jobId: args.jobId, storageKey: u.storageKey, filename: u.filename, mime: u.mime, sizeBytes: content.length, caption: "Sent by email", uploaderName: args.byName, uploadedByProfileId: args.byProfileId ?? null, bytes: content },
+          "office",
+          { name: args.byName, role: "office" },
+        )
+      : null;
     out.push({ filename: u.filename, content, contentType: u.mime, mediaId, storageKey: u.storageKey });
   }
   return out;

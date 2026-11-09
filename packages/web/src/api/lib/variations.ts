@@ -194,8 +194,8 @@ export async function updateVariation(id: number, fields: { description?: string
       const found = await db
         .select({ id: schema.jobMedia.id })
         .from(schema.jobMedia)
-        .where(and(eq(schema.jobMedia.jobId, v.jobId), inArray(schema.jobMedia.id, ids), ne(schema.jobMedia.bucket, "signed")));
-      if (found.length !== ids.length) throw bad("A photo picked is not in this job's file.");
+        .where(and(eq(schema.jobMedia.jobId, v.jobId), inArray(schema.jobMedia.id, ids), ne(schema.jobMedia.bucket, "signed"), ne(schema.jobMedia.sensitivity, "restricted")));
+      if (found.length !== ids.length) throw bad("A photo picked is not in this job's file, or it is restricted. Pick another.");
     }
     set.photoMediaIds = JSON.stringify(ids);
   }

@@ -6,6 +6,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import type { Actor } from "../middleware/auth";
 import { signMany } from "./s3";
+import { staffMayOpen } from "./file-access";
 import { parseRepairRef, quoteRef, repairRef } from "./refs";
 
 /**
@@ -273,7 +274,7 @@ export async function callbackChain(jobId: number) {
 }
 
 /** What the callback page shows from the original job: products, notes and photos, read only. */
-export async function originalJobFile(parentJobId: number) {
+export async function originalJobFile(parentJobId: number, actor: Pick<Actor, "role" | "canSeeCosts">) {
   const [materials, notes, media] = await Promise.all([
     db.select().from(schema.jobMaterials).where(eq(schema.jobMaterials.jobId, parentJobId)),
     db
@@ -288,7 +289,8 @@ export async function originalJobFile(parentJobId: number) {
       .where(and(eq(schema.jobMedia.jobId, parentJobId), isNull(schema.jobMedia.archivedAt)))
       .orderBy(asc(schema.jobMedia.capturedAt)),
   ]);
-  return { materials, notes, media: await signMany(media) };
+  // A cost document stays closed to office without cost access, here as on the job itself.
+  return { materials, notes, media: await signMany(media.filter((m) => staffMayOpen(m, actor))) };
 }
 
 /* ------------------------------ office edits ------------------------------ */

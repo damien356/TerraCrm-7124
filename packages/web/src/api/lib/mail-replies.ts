@@ -7,7 +7,7 @@ import { ensureForJob, ensureForQuote, logMessage, openUnassigned, refInSubject 
 import { NOTIFY_FROM_ADDRESS, isTerraOpsMail } from "./notify-kinds";
 import { notifyOffice } from "./notify";
 import { noteKeyReply } from "./prep";
-import { bucketForMime } from "./job-mail";
+import { fileInbound, startBucketFor } from "./file-intake";
 
 /* ---------------------------------------------------------------------------
  * The reply pass (job email thread, spec 15 Oct). Every round of the email
@@ -372,38 +372,25 @@ export async function fileReply(accountId: number, address: string, gmailId: str
 
   /* Files: into the job file when there is a job, held with the email until it is filed when not. */
   let stored = 0;
+  const filedIds: number[] = [];
   for (const part of files.slice(0, MAX_FILES)) {
     if ((part.body?.size ?? 0) > MAX_FILE_BYTES) continue;
     const bytes = part.body?.data ? Buffer.from(part.body.data, "base64url") : await getAttachment(address, gmailId, part.body!.attachmentId!);
     const mime = part.mimeType || "application/octet-stream";
     const filename = (part.filename || "file").slice(0, 200);
-    const bucket = bucketForMime(mime);
+    const bucket = startBucketFor(mime);
     const key = jobId ? mediaKey(jobId, bucket, filename) : `mail/in/${conv.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${filename.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-60)}`;
     await putObject(key, bytes, mime, filename);
-    let mediaId: number | null = null;
-    if (jobId) {
-      const [m] = await db
-        .insert(schema.jobMedia)
-        .values({
-          jobId,
-          bucket,
-          kind: mime.startsWith("image/") ? "photo" : mime.startsWith("video/") ? "video" : "doc",
-          storageKey: key,
-          url: key,
-          filename,
-          mime,
-          sizeBytes: bytes.length,
-          caption: `Emailed by ${name}`.slice(0, 200),
-          uploaderName: name.slice(0, 120),
-        })
-        .returning({ id: schema.jobMedia.id });
-      mediaId = m?.id ?? null;
-    }
+    // Office only and read first (document privacy, 9 Nov 2026): never straight into the crew's job file.
+    const mediaId = jobId
+      ? await fileInbound({ jobId, storageKey: key, filename, mime, sizeBytes: bytes.length, caption: `Emailed by ${name}`, uploaderName: name, sourceMessageId: message.id, bytes })
+      : null;
     await db.insert(schema.messageAttachments).values({ messageId: message.id, mediaId, filename, mime, sizeBytes: bytes.length, storageKey: key, url: "" });
+    if (mediaId) filedIds.push(mediaId);
     stored++;
   }
-  // Notes 18.56: where the key is, in answer to a prep email, goes on the job's access notes.
-  if (jobId && !auto) await noteKeyReply({ jobId, contactId: contact?.id ?? null, body: bodyOf(msg), channel: "email", name, photos: stored });
+  // Notes 18.56, privacy 9 Nov: where the key is becomes a proposed Site access note for the office to approve.
+  if (jobId && !auto) await noteKeyReply({ jobId, contactId: contact?.id ?? null, body: bodyOf(msg), channel: "email", name, messageId: message.id, mediaIds: filedIds });
 
   if (contact) {
     await db.insert(schema.activityLog).values({

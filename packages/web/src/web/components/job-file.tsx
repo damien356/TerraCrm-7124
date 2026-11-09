@@ -1,14 +1,19 @@
 import { useRef, useState } from "react";
-import { Archive, Camera, FileText, PlayCircle, Plus, RotateCcw, Trash2, Upload, Video } from "lucide-react";
+import { Archive, Camera, Eye, EyeOff, FileText, Lock, PlayCircle, Plus, RotateCcw, ShieldAlert, Trash2, Upload, Video } from "lucide-react";
 import { FileViewer } from "./file-viewer";
+import { AccessNoteProposals } from "./access-note-proposals";
+import { useBootstrap } from "../queries/settings";
 import { Card, CardHeader, Empty, Spinner } from "./ui/card";
 import { Button } from "./ui/button";
 import { Input } from "./ui/field";
 import {
   uploadToStorage,
   useArchiveMedia,
+  useApproveForCrew,
   useAttachMedia,
   useCreateArea,
+  useKeepOffice,
+  useReclassifyMedia,
   useJobAreas,
   useJobMedia,
   useRemoveArea,
@@ -49,6 +54,46 @@ function stamp(value: Date | string) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+type Tile = {
+  locked: boolean;
+  sensitivity: string;
+  visibility: string;
+  reviewStatus: string;
+  restrictLabel: string | null;
+  bucket: string;
+  archivedAt: Date | string | null;
+};
+
+/** Who can see a file, in words, on every tile. */
+function PrivacyBadge({ m }: { m: Tile }) {
+  if (m.sensitivity === "restricted") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-[#B4232A]/10 px-2 py-0.5 text-[10px] font-semibold text-[#8F1D22]">
+        <Lock className="size-3" /> Restricted{m.restrictLabel ? `: ${m.restrictLabel}` : ""}
+      </span>
+    );
+  }
+  if (m.visibility === "crew") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-[#2F6B3A]/10 px-2 py-0.5 text-[10px] font-medium text-[#24552D]">
+        <Eye className="size-3" /> Crew can see
+      </span>
+    );
+  }
+  if (m.reviewStatus === "needs_review") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-[#C77A12]/15 px-2 py-0.5 text-[10px] font-semibold text-[#8A520A]">
+        <ShieldAlert className="size-3" /> Needs review
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+      <EyeOff className="size-3" /> Office only
+    </span>
+  );
 }
 
 function AreaManager({ jobId }: { jobId: number }) {
@@ -126,11 +171,33 @@ export function JobFile({ jobId, isCallback = false }: { jobId: number; isCallba
   const media = useJobMedia(jobId, showArchived);
   const attach = useAttachMedia();
   const archive = useArchiveMedia();
+  const showToCrew = useApproveForCrew();
+  const keepOffice = useKeepOffice();
+  const reclassify = useReclassifyMedia();
+  const boot = useBootstrap();
+  const isAdmin = boot.data?.actor.role === "admin";
 
   const groups = media.data ?? [];
   const active = groups.find((g) => g.bucket === bucket);
   const meta = BUCKETS.find((b) => b.key === bucket)!;
   const items = active?.items ?? [];
+  /** Files waiting for a person before the crew can have them. */
+  const toCheck = groups.flatMap((g) => g.items).filter((m) => !m.archivedAt && m.reviewStatus === "needs_review" && m.sensitivity !== "restricted").length;
+
+  async function act(run: () => Promise<unknown>) {
+    setError(null);
+    try {
+      await run();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "That didn't save.");
+    }
+  }
+
+  function restrictToggle(id: number, restricted: boolean) {
+    const reason = window.prompt(restricted ? "Why is this file restricted? (kept in the activity feed)" : "Why lift the restriction? It goes back to Needs review, not to the crew.");
+    if (!reason || reason.trim().length < 5) return;
+    void act(() => reclassify.mutateAsync({ id, restricted, reason: reason.trim() }));
+  }
 
   async function onFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -193,6 +260,20 @@ export function JobFile({ jobId, isCallback = false }: { jobId: number; isCallba
         })}
       </div>
 
+      <AccessNoteProposals jobId={jobId} />
+
+      {toCheck ? (
+        <div className="flex items-start gap-2 border-b border-border bg-[#C77A12]/10 px-4 py-2.5 text-xs text-[#6E4208]" data-testid="files-to-check">
+          <ShieldAlert className="mt-0.5 size-4 shrink-0" />
+          <span>
+            <span className="font-semibold">
+              {toCheck} file{toCheck === 1 ? "" : "s"} marked Needs review.
+            </span>{" "}
+            The crew can't see {toCheck === 1 ? "it" : "them"} until you open {toCheck === 1 ? "it" : "each one"} and press Show to crew. Quotes, invoices, signed papers and payment records stay office only.
+          </span>
+        </div>
+      ) : null}
+
       {bucket === "area" ? <AreaManager jobId={jobId} /> : null}
 
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
@@ -225,7 +306,18 @@ export function JobFile({ jobId, isCallback = false }: { jobId: number; isCallba
         <Empty>Nothing in {meta.label.toLowerCase()} yet.</Empty>
       ) : (
         <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-3">
-          {items.map((m) => (
+          {items.map((m) => m.locked ? (
+            <figure key={m.id} className={`overflow-hidden rounded-lg border border-border bg-card ${m.archivedAt ? "opacity-55" : ""}`} data-media-id={m.id}>
+              <div className="flex aspect-square w-full flex-col items-center justify-center gap-1.5 bg-muted text-xs text-muted-foreground">
+                <Lock className="size-7" />
+                Restricted
+              </div>
+              <figcaption className="space-y-1 px-2.5 py-2">
+                <PrivacyBadge m={m} />
+                <p className="text-[11px] text-muted-foreground">Only people who can see costs can open this.</p>
+              </figcaption>
+            </figure>
+          ) : (
             <figure
               key={m.id}
               className={`overflow-hidden rounded-lg border border-border bg-card ${m.archivedAt ? "opacity-55" : ""}`}
@@ -265,6 +357,39 @@ export function JobFile({ jobId, isCallback = false }: { jobId: number; isCallba
                   {m.kind === "video" ? <Video className="size-3" /> : <Camera className="size-3" />}
                   {m.uploaderName ?? "Office"} · {stamp(m.capturedAt)}
                 </p>
+                <PrivacyBadge m={m} />
+                {m.reviewStatus === "needs_review" && m.classifyNote ? <p className="text-[10px] text-muted-foreground">Check: {m.classifyNote}</p> : null}
+                {!m.archivedAt && m.sensitivity !== "restricted" && m.bucket !== "signed" ? (
+                  <div className="flex flex-wrap gap-x-2.5 gap-y-1 pt-0.5">
+                    {m.visibility !== "crew" ? (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-[#24552D] hover:underline"
+                        onClick={() => void act(() => showToCrew.mutateAsync({ id: m.id }))}
+                      >
+                        <Eye className="size-3" /> Show to crew
+                      </button>
+                    ) : null}
+                    {m.visibility === "crew" || m.reviewStatus === "needs_review" ? (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                        onClick={() => void act(() => keepOffice.mutateAsync({ id: m.id }))}
+                      >
+                        <EyeOff className="size-3" /> {m.visibility === "crew" ? "Take off crew" : "Keep office only"}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                    onClick={() => restrictToggle(m.id, m.sensitivity !== "restricted")}
+                  >
+                    <Lock className="size-3" /> {m.sensitivity === "restricted" ? "Lift restriction" : "Restrict"}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
@@ -283,10 +408,10 @@ export function JobFile({ jobId, isCallback = false }: { jobId: number; isCallba
         <FileViewer
           key={`${viewing.bucket}-${viewing.id}`}
           title={BUCKETS.find((b) => b.key === viewing.bucket)!.label}
-          items={groups.find((g) => g.bucket === viewing.bucket)?.items ?? []}
+          items={(groups.find((g) => g.bucket === viewing.bucket)?.items ?? []).filter((m) => !m.locked)}
           openId={viewing.id}
           onClose={() => setViewing(null)}
-          refresh={async () => (await media.refetch()).data?.find((g) => g.bucket === viewing.bucket)?.items}
+          refresh={async () => (await media.refetch()).data?.find((g) => g.bucket === viewing.bucket)?.items.filter((m) => !m.locked)}
         />
       ) : null}
     </Card>
