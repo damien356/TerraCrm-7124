@@ -32,6 +32,19 @@ export function usePoPreview(input: PoPreviewInput | null) {
   );
 }
 
+/** A supplier's saved pickup locations (9 Nov 2026). */
+export function useSupplierDepots(supplierId: number | null) {
+  return useQuery(orpc.purchasing.depots.queryOptions({ input: { supplierId: supplierId ?? 0 }, enabled: supplierId != null, staleTime: 30_000 }));
+}
+
+/** A saved depot of this supplier at the address being typed, so it is reused instead of saved twice. */
+export function useDepotMatch(supplierId: number | null, address: string) {
+  const a = address.trim();
+  return useQuery(
+    orpc.purchasing.depotMatch.queryOptions({ input: { supplierId: supplierId ?? 0, address: a }, enabled: supplierId != null && a.length >= 6, staleTime: 10_000 }),
+  );
+}
+
 export function useOpenPosForSupplier(supplierId: number | null) {
   return useQuery(
     orpc.purchasing.openForSupplier.queryOptions({ input: { supplierId: supplierId ?? 0 }, enabled: supplierId != null, staleTime: 10_000 }),

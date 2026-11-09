@@ -1241,6 +1241,33 @@ export const suppliers = sqliteTable(
 );
 
 /**
+ * A supplier's pickup depot or branch (Damien, 9 Nov 2026: PO pickup). Saved
+ * only when the office says "Save for next time" on a pickup PO. A supplier
+ * can have more than one. Never the supplier's billing address, never Terra's
+ * warehouse, never a site. A PO keeps its own copy of the name and address, so
+ * editing a depot here never changes a PO already written.
+ */
+export const supplierDepots = sqliteTable(
+  "supplier_depots",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    supplierId: integer("supplier_id")
+      .notNull()
+      .references(() => suppliers.id, { onDelete: "cascade" }),
+    /** "Yatala branch". */
+    name: text("name").notNull().default(""),
+    /** One line, as typed or picked: "12 Example St, Yatala QLD 4207". */
+    address: text("address").notNull(),
+    /** The address lower case, punctuation and street words evened out. Stops the same depot being saved twice. */
+    addressKey: text("address_key").notNull(),
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    createdByName: text("created_by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [index("supplier_depots_supplier_idx").on(t.supplierId), unique("supplier_depots_key_unique").on(t.supplierId, t.addressKey)],
+);
+
+/**
  * Every charge a supplier adds on top of the rate. One row per charge, so a
  * supplier can run SEVERAL AT ONCE on different bases — Chaparral charge
  * $2.00 per lineal metre fuel AND $20.00 per roll baling on the same order,
@@ -3962,9 +3989,15 @@ export const purchaseOrders = sqliteTable(
     supplierId: integer("supplier_id").notNull().references(() => suppliers.id, { onDelete: "restrict" }),
     /** draft · sent · invoiced · cancelled */
     status: text("status").notNull().default("draft"),
-    /** warehouse · site */
+    /** warehouse · site · pickup (collected from the supplier, 9 Nov 2026) */
     deliverTo: text("deliver_to").notNull().default("warehouse"),
+    /** Where it is delivered. Always "" on a pickup: the pickup place lives in the pickup_ columns, never here. */
     deliveryAddress: text("delivery_address").notNull().default(""),
+    /** Pickup only. The saved depot it came from, if any. */
+    pickupDepotId: integer("pickup_depot_id").references(() => supplierDepots.id, { onDelete: "set null" }),
+    /** Pickup only. This PO's own copy, as printed. Both "" = depot/address to be confirmed. */
+    pickupName: text("pickup_name").notNull().default(""),
+    pickupAddress: text("pickup_address").notNull().default(""),
     goodsExGst: real("goods_ex_gst").notNull().default(0),
     /** Supplier charges that are not freight: fuel levy, cutting, baling. */
     chargesExGst: real("charges_ex_gst").notNull().default(0),

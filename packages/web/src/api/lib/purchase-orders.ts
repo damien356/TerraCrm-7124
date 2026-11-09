@@ -66,7 +66,8 @@ export type PoLineInput = {
 
 export type PoPricingInput = {
   supplierId: number;
-  deliverTo: "warehouse" | "site";
+  /** pickup: collected from the supplier (9 Nov 2026). */
+  deliverTo: "warehouse" | "site" | "pickup";
   lines: PoLineInput[];
   /** Optional fee rules the office ticked on. */
   feeIds?: number[];
@@ -102,6 +103,8 @@ export type PricedPo = {
   specialSavingExGst: number;
   measures: { m2: number; lm: number; boxes: number; rolls: number; items: number; pallets: number };
   notes: string[];
+  /** Charges to check with the supplier, never guessed (pickup, 9 Nov 2026). Shown apart from the notes. */
+  review: string[];
   /** Fee ids actually used, so a re-price lands on the same answer. */
   pricingInputs: { feeIds: number[]; skipFeeIds: number[]; boxes: number | null; rolls: number | null; pallets: number | null };
 };
@@ -290,14 +293,36 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
   ).filter((r) => !(r.autoApply && skip.has(r.id)));
 
   const picked = new Set(input.feeIds ?? []);
-  const offRoute = rules.filter((r) => !feeAppliesTo(r.appliesTo, input.deliverTo));
-  rules = rules.filter((r) => feeAppliesTo(r.appliesTo, input.deliverTo));
-  const offTicked = offRoute.filter((r) => r.autoApply || picked.has(r.id));
-  if (offTicked.length) {
-    notes.push(`Not charged on a ${input.deliverTo} order: ${offTicked.map((r) => r.name).join(", ")}.`);
-  }
-  if (!supplierDeliversTo(supplier.deliversTo, input.deliverTo)) {
-    notes.push(`${supplier.name} only deliver to ${supplier.deliversTo === "site" ? "site" : "the warehouse"}.`);
+  const review: string[] = [];
+  if (input.deliverTo === "pickup") {
+    // Pickup (9 Nov 2026). A delivery fee never goes on by itself. A charge set
+    // for warehouse or site orders only is left off unless ticked, and said.
+    // Everything else (handling, baling, cutting, fuel, levies) stays as the
+    // supplier's rules say, and anything that may be about delivery is flagged
+    // to check with the supplier, never guessed.
+    const delivery = rules.filter((r) => r.kind === "delivery");
+    const oneWay = rules.filter((r) => r.kind !== "delivery" && (r.appliesTo === "warehouse" || r.appliesTo === "site"));
+    const deliveryOn = delivery.filter((r) => r.autoApply || picked.has(r.id));
+    if (deliveryOn.length) notes.push(`Not charged on a pickup: ${deliveryOn.map((r) => r.name).join(", ")}.`);
+    for (const r of delivery) picked.delete(r.id);
+    for (const r of oneWay.filter((x) => !picked.has(x.id) && x.autoApply)) {
+      review.push(`${r.name} is set for ${r.appliesTo === "site" ? "site" : "warehouse"} orders only, so it is off this pickup. Tick it on if ${supplier.name} charge it when you collect.`);
+    }
+    rules = rules.filter((r) => r.kind !== "delivery" && (!oneWay.includes(r) || picked.has(r.id)));
+    for (const r of rules.filter((x) => (x.autoApply || picked.has(x.id)) && (x.kind === "fuel" || /freight|deliver|cartage|truck|crane/i.test(x.name)))) {
+      review.push(`${r.name} stays on this pickup. Check with ${supplier.name} that it applies when you collect.`);
+    }
+    if (manualFreight) review.push(`A freight line is typed on this pickup. Check with ${supplier.name} that it applies when you collect.`);
+  } else {
+    const offRoute = rules.filter((r) => !feeAppliesTo(r.appliesTo, input.deliverTo as DeliverTo));
+    rules = rules.filter((r) => feeAppliesTo(r.appliesTo, input.deliverTo as DeliverTo));
+    const offTicked = offRoute.filter((r) => r.autoApply || picked.has(r.id));
+    if (offTicked.length) {
+      notes.push(`Not charged on a ${input.deliverTo} order: ${offTicked.map((r) => r.name).join(", ")}.`);
+    }
+    if (!supplierDeliversTo(supplier.deliversTo, input.deliverTo as DeliverTo)) {
+      notes.push(`${supplier.name} only deliver to ${supplier.deliversTo === "site" ? "site" : "the warehouse"}.`);
+    }
   }
   if (input.deliverTo === "site" && isHurfords(supplier.name)) {
     const crane = rules.find((r) => r.kind === "delivery" && /crane|site/i.test(r.name));
@@ -309,7 +334,7 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
       notes.push("Hurford's only deliver solids to site. Book a carrier for this one, that bill is not on this PO.");
     }
   }
-  if (!supplier.deliversDirect) notes.push(`${supplier.name} don't deliver. Terra books the carrier, that bill is not on this PO.`);
+  if (!supplier.deliversDirect && input.deliverTo !== "pickup") notes.push(`${supplier.name} don't deliver. Terra books the carrier, that bill is not on this PO.`);
 
   const boxes = input.boxes ?? autoBoxes;
   const measures = { m2: round2(m2), lm: round2(lm), boxes, rolls: input.rolls ?? autoRolls, items: round2(items), pallets: input.pallets ?? 0 };
@@ -346,6 +371,7 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
     specialSavingExGst: round2(specialSaving),
     measures,
     notes,
+    review,
     pricingInputs: {
       feeIds: [...picked],
       skipFeeIds: [...skip],

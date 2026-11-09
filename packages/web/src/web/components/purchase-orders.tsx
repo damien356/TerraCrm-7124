@@ -9,6 +9,7 @@ import { overlapOf, PoOverlapNotice } from "./po-overlap";
 import { moneyExact } from "../lib/money";
 import { isPackUnit, unitText } from "../../api/lib/pack-name";
 import { EmailInput } from "./email-input";
+import { NO_PICKUP, PickupPanel, pickupFromPo, pickupInputOf, pickupProblem, type PickupDraft } from "./po-pickup";
 import {
   type PoPreviewInput,
   useCancelPo,
@@ -21,6 +22,7 @@ import {
   useRemovePoDraft,
   useSendPo,
   useStoredPoPdfUrl,
+  useSupplierDepots,
   useUpdatePo,
 } from "../queries/purchasing";
 
@@ -71,6 +73,19 @@ const unitLabel = (u: string) => (u === "m2" ? "m²" : u);
 /** Next to a qty: "10 sheets", "1 sheet", "12 m²". */
 const qtyUnit = (qty: number, u: string) => `${qty} ${unitText(u, qty)}`;
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e ?? ""));
+type DeliverTo = "warehouse" | "site" | "pickup";
+/** Charge changes the server wants confirmed before a draft switches between delivery and pickup. */
+const chargeChangesOf = (e: unknown): string[] => {
+  const d = (e as { data?: { chargeChanges?: unknown } } | null)?.data?.chargeChanges;
+  return Array.isArray(d) ? d.filter((x): x is string => typeof x === "string") : [];
+};
+/** "to site", "to warehouse", "pick up from supplier (Nerang)". */
+function routeText(po: { deliverTo: string; pickupName?: string; pickupAddress?: string }) {
+  if (po.deliverTo === "site") return "to site";
+  if (po.deliverTo !== "pickup") return "to warehouse";
+  const where = (po.pickupName ?? "").trim() || (po.pickupAddress ?? "").trim();
+  return where ? `pick up from supplier (${where})` : "pick up from supplier, location to be confirmed";
+}
 let keySeq = 0;
 const nextKey = () => `l${++keySeq}`;
 
@@ -176,7 +191,7 @@ export function PurchaseOrdersCard({ jobId }: { jobId: number }) {
                           <Badge colour={st.colour}>{st.label}</Badge>
                         </div>
                         <p className="mt-0.5 text-xs text-muted-foreground">
-                          {goods.length} {goods.length === 1 ? "line" : "lines"} · to {po.deliverTo === "site" ? "site" : "warehouse"}
+                          {goods.length} {goods.length === 1 ? "line" : "lines"} · {routeText(po)}
                           {po.sentAt ? ` · sent ${dayOf(po.sentAt)}${po.sentTo ? ` to ${po.sentTo}` : ""}` : ""}
                         </p>
                       </div>
@@ -373,9 +388,12 @@ function PoEditor({
 }) {
   const initialSupplier = po?.supplierId ?? guessSupplier(data) ?? data.suppliers[0]?.id ?? null;
   const [supplierId, setSupplierId] = React.useState<number | null>(initialSupplier);
-  const [deliverTo, setDeliverTo] = React.useState<"warehouse" | "site">(
-    () => (po?.deliverTo as "warehouse" | "site") ?? onlyTo(data.suppliers.find((s) => s.id === initialSupplier)) ?? "warehouse",
+  const [deliverTo, setDeliverTo] = React.useState<DeliverTo>(
+    () => (po?.deliverTo as DeliverTo) ?? onlyTo(data.suppliers.find((s) => s.id === initialSupplier)) ?? "warehouse",
   );
+  const [pickup, setPickup] = React.useState<PickupDraft>(() => pickupFromPo(po));
+  /** Charge changes shown before a draft switches between delivery and pickup. */
+  const [chargeReview, setChargeReview] = React.useState<string[]>([]);
   const [address, setAddress] = React.useState(po?.deliverTo === "site" ? po.deliveryAddress : data.siteAddress);
   const [notes, setNotes] = React.useState(po?.notes.replace(/\s*Draft removed, never sent\.\s*/g, "") ?? "");
   const [lines, setLines] = React.useState<LineDraft[]>(() => linesFrom(po, data, initialSupplier));
@@ -390,6 +408,7 @@ function PoEditor({
 
   const supplier = data.suppliers.find((s) => s.id === supplierId) ?? null;
   const fees = useFeeRules(supplierId);
+  const depots = useSupplierDepots(deliverTo === "pickup" ? supplierId : null);
   const create = useCreatePo();
   const update = useUpdatePo();
   const saving = create.isPending || update.isPending;
@@ -402,6 +421,7 @@ function PoEditor({
           supplierId,
           deliverTo,
           deliveryAddress: deliverTo === "site" ? address : "",
+          pickup: deliverTo === "pickup" ? pickupInputOf(pickup) : null,
           notes,
           lines: usable.map((l) => ({
             kind: l.kind,
@@ -439,7 +459,11 @@ function PoEditor({
     setSupplierId(id);
     // Item 14: a supplier that only delivers one way flips the order to that way.
     const only = onlyTo(data.suppliers.find((s) => s.id === id));
-    if (only) setDeliverTo(only);
+    // A pickup stays a pickup: where a supplier delivers does not matter when Terra collects.
+    if (only && deliverTo !== "pickup") setDeliverTo(only);
+    // A depot belongs to one supplier. A new supplier needs a fresh pickup choice.
+    setPickup(NO_PICKUP);
+    setChargeReview([]);
     setPicked(new Set());
     setSkipped(new Set());
     // A new PO picks up that supplier's materials. Lines typed by hand stay.
@@ -453,15 +477,24 @@ function PoEditor({
 
   const needsCounts = (fees.data ?? []).some((r) => ["roll", "pallet", "week"].includes(r.basis));
 
-  async function save() {
+  async function save(chargesConfirmed = false) {
     if (!input) return;
     setError("");
+    const problem = deliverTo === "pickup" ? pickupProblem(pickup, depots.data) : null;
+    if (problem) return setError(problem);
     try {
-      const r = po ? await update.mutateAsync({ ...input, id: po.id }) : await create.mutateAsync(input);
+      const r = po ? await update.mutateAsync({ ...input, id: po.id, chargesConfirmed }) : await create.mutateAsync(input);
+      setChargeReview([]);
       onSaved(r.id);
     } catch (e) {
-      setError(errText(e));
+      const change = chargeChangesOf(e);
+      if (change.length) setChargeReview(change);
+      else setError(errText(e));
     }
+  }
+  function pickRoute(d: DeliverTo) {
+    setDeliverTo(d);
+    setChargeReview([]);
   }
 
   return (
@@ -476,7 +509,7 @@ function PoEditor({
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>
-          <Button onClick={save} disabled={!input || saving || (!!pv && pv.totalExGst <= 0)}>
+          <Button onClick={() => save()} disabled={!input || saving || (!!pv && pv.totalExGst <= 0)}>
             {saving ? <Spinner className="border-white/40 border-t-white" /> : null}
             {po ? "Save changes" : "Save, then send"}
           </Button>
@@ -485,7 +518,7 @@ function PoEditor({
     >
       <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
         <div className="space-y-5">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3">
             <Field label="Supplier">
               <Select value={supplierId ?? ""} onChange={(e) => changeSupplier(Number(e.target.value))}>
                 {data.suppliers.map((s) => (
@@ -495,18 +528,20 @@ function PoEditor({
                 ))}
               </Select>
             </Field>
-            <Field label="Deliver to">
+            <Field label="Delivery / collection">
               <div className="flex gap-1.5">
-                {(["warehouse", "site"] as const).map((d) => {
+                {(["warehouse", "site", "pickup"] as const).map((d) => {
                   const only = onlyTo(supplier);
-                  const blocked = only !== null && only !== d;
+                  // Pickup: Terra collects, so a supplier that only delivers one way can still be picked up from.
+                  const blocked = d !== "pickup" && only !== null && only !== d;
                   return (
                   <button
                     key={d}
                     type="button"
                     disabled={blocked}
                     title={blocked ? `${supplier?.name ?? "This supplier"} only deliver to ${only === "site" ? "site" : "the warehouse"}.` : undefined}
-                    onClick={() => setDeliverTo(d)}
+                    data-testid={`po-route-${d}`}
+                    onClick={() => pickRoute(d)}
                     className={
                       deliverTo === d
                         ? "h-9 flex-1 rounded-md bg-primary text-[13px] font-semibold text-primary-foreground"
@@ -515,7 +550,7 @@ function PoEditor({
                           : "h-9 flex-1 rounded-md border border-border text-[13px] font-medium text-muted-foreground hover:text-foreground"
                     }
                   >
-                    {d === "warehouse" ? "Warehouse" : "Site"}
+                    {d === "warehouse" ? "Warehouse" : d === "site" ? "Site" : "Pick up from supplier"}
                   </button>
                   );
                 })}
@@ -527,7 +562,9 @@ function PoEditor({
               ) : null}
             </Field>
           </div>
-          {deliverTo === "site" ? (
+          {deliverTo === "pickup" ? (
+            <PickupPanel supplierId={supplierId} supplierName={supplier?.name ?? ""} value={pickup} onChange={setPickup} />
+          ) : deliverTo === "site" ? (
             <Field label="Site address">
               <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street, suburb" />
             </Field>
@@ -652,8 +689,12 @@ function PoEditor({
               <ul className="space-y-1.5">
                 {(fees.data ?? []).map((r) => {
                   // Item 14: each fee says which orders it goes on (warehouse, site or both).
-                  const off = r.appliesTo === "warehouse" || r.appliesTo === "site" ? r.appliesTo !== deliverTo : false;
-                  const checked = r.autoApply ? !skipped.has(r.id) : picked.has(r.id);
+                  // Pickup (9 Nov 2026): a delivery fee never goes on. A charge set for warehouse or site only can be ticked on if the supplier charges it at the counter.
+                  const pickupOneWay = deliverTo === "pickup" && r.kind !== "delivery" && (r.appliesTo === "warehouse" || r.appliesTo === "site");
+                  const off =
+                    deliverTo === "pickup" ? r.kind === "delivery" : r.appliesTo === "warehouse" || r.appliesTo === "site" ? r.appliesTo !== deliverTo : false;
+                  const byTick = !r.autoApply || pickupOneWay;
+                  const checked = byTick ? picked.has(r.id) : !skipped.has(r.id);
                   const rate = r.basis === "percent_of_order" ? `${r.percent ?? 0}%` : `$${(r.amount ?? 0).toFixed(2)}${r.basis === "order" ? "" : ` / ${r.basis}`}`;
                   return (
                     <li key={r.id}>
@@ -663,7 +704,21 @@ function PoEditor({
                           disabled={off}
                           onChange={(e) => {
                             const on = e.target.checked;
-                            if (r.autoApply) {
+                            if (byTick) {
+                              setPicked((s) => {
+                                const n = new Set(s);
+                                if (on) n.add(r.id);
+                                else n.delete(r.id);
+                                return n;
+                              });
+                              if (on) {
+                                setSkipped((s) => {
+                                  const n = new Set(s);
+                                  n.delete(r.id);
+                                  return n;
+                                });
+                              }
+                            } else if (r.autoApply) {
                               setSkipped((s) => {
                                 const n = new Set(s);
                                 if (on) n.delete(r.id);
@@ -682,7 +737,7 @@ function PoEditor({
                         />
                         <span className="flex-1">{r.name}</span>
                         <span className="tabular text-xs text-muted-foreground">{rate}</span>
-                        <span className="w-20 text-right text-[11px] text-muted-foreground">{off ? (r.appliesTo === "site" ? "site only" : "warehouse only") : r.autoApply ? "every order" : "tick to add"}</span>
+                        <span className="w-20 text-right text-[11px] text-muted-foreground">{off ? (deliverTo === "pickup" ? "not on pickup" : r.appliesTo === "site" ? "site only" : "warehouse only") : byTick ? "tick to add" : "every order"}</span>
                       </label>
                     </li>
                   );
@@ -704,7 +759,10 @@ function PoEditor({
             ) : null}
           </div>
 
-          <Field label="Notes for the supplier" hint="Printed on the PO. Delivery times, contact on site, cut sizes.">
+          <Field
+            label="Notes for the supplier"
+            hint={deliverTo === "pickup" ? "Printed on the PO. Collection instructions: who is collecting, when, cut sizes." : "Printed on the PO. Delivery times, contact on site, cut sizes."}
+          >
             <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
           </Field>
         </div>
@@ -765,10 +823,42 @@ function PoEditor({
                     ))}
                   </ul>
                 ) : null}
+                {pv.review?.length ? (
+                  <div className="rounded-md border border-[var(--warning)]/35 bg-[var(--warning)]/[0.06] px-2 py-1.5" data-testid="po-charge-review">
+                    <p className="text-xs font-semibold">Check with the supplier</p>
+                    <ul className="mt-1 space-y-1">
+                      {pv.review.map((n) => (
+                        <li key={n} className="flex gap-1.5 text-xs text-muted-foreground">
+                          <TriangleAlert className="mt-0.5 size-3 shrink-0 text-[var(--warning)]" />
+                          {n}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 {preview.error ? <p className="text-xs text-destructive">{errText(preview.error)}</p> : null}
               </div>
             )}
           </div>
+          {chargeReview.length ? (
+            <div className="mt-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/[0.08] px-3 py-2.5" data-testid="po-charge-confirm">
+              <p className="text-sm font-semibold">Charges change with this switch</p>
+              <ul className="mt-1 space-y-0.5 text-xs">
+                {chargeReview.map((c) => (
+                  <li key={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</li>
+                ))}
+              </ul>
+              <p className="mt-1.5 text-xs text-muted-foreground">Nothing changes on the quote, sent POs, invoices or payments.</p>
+              <div className="mt-2 flex gap-1.5">
+                <Button size="sm" disabled={saving} onClick={() => save(true)}>
+                  Confirm and save
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setChargeReview([])}>
+                  Not yet
+                </Button>
+              </div>
+            </div>
+          ) : null}
           {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
         </div>
       </div>
@@ -854,7 +944,7 @@ function SendPoModal({ po, supplier, onClose }: { po: Po; supplier: Supplier | n
       open
       onClose={onClose}
       title={`Send ${po.number} to ${po.supplierName}`}
-      subtitle={`${moneyExact(po.totalExGst)} ex GST, to ${po.deliverTo === "site" ? "site" : "the warehouse"}.`}
+      subtitle={`${moneyExact(po.totalExGst)} ex GST, ${po.deliverTo === "pickup" ? routeText(po) : po.deliverTo === "site" ? "to site" : "to the warehouse"}.`}
       footer={
         done ? (
           <Button onClick={onClose}>Done</Button>

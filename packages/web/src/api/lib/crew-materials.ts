@@ -15,13 +15,14 @@ import { singular } from "./stock/replenish";
  * here ever carries a price or a cost.
  */
 
-export type CrewWhere = "on_site" | "warehouse" | "to_site" | "to_warehouse" | "to_order" | "installed" | "by_others";
+export type CrewWhere = "on_site" | "warehouse" | "to_site" | "to_warehouse" | "to_pickup" | "to_order" | "installed" | "by_others";
 
 export const WHERE_LABEL: Record<CrewWhere, string> = {
   on_site: "On site",
   warehouse: "In the warehouse",
   to_site: "Ordered, coming to site",
   to_warehouse: "Ordered, coming to the warehouse",
+  to_pickup: "Ordered, pick up from supplier",
   to_order: "Still to arrive",
   installed: "Installed",
   by_others: "Supplied by others",
@@ -204,7 +205,13 @@ export async function crewMaterials(jobId: number, parentJobId: number | null): 
   const [poLines, reserved] = await Promise.all([
     ids.length
       ? db
-          .select({ jobMaterialId: schema.purchaseOrderLines.jobMaterialId, deliverTo: schema.purchaseOrders.deliverTo })
+          .select({
+            jobMaterialId: schema.purchaseOrderLines.jobMaterialId,
+            deliverTo: schema.purchaseOrders.deliverTo,
+            number: schema.purchaseOrders.number,
+            pickupName: schema.purchaseOrders.pickupName,
+            pickupAddress: schema.purchaseOrders.pickupAddress,
+          })
           .from(schema.purchaseOrderLines)
           .innerJoin(schema.purchaseOrders, eq(schema.purchaseOrders.id, schema.purchaseOrderLines.poId))
           .where(and(inArray(schema.purchaseOrderLines.jobMaterialId, ids), ne(schema.purchaseOrders.status, "cancelled")))
@@ -212,6 +219,12 @@ export async function crewMaterials(jobId: number, parentJobId: number | null): 
     reservedFor(ids),
   ]);
   const deliverTo = new Map(poLines.map((l) => [l.jobMaterialId!, l.deliverTo]));
+  // Pickup (9 Nov 2026): only where to collect and the order number. Never the PO's prices, the supplier's costs or the quote.
+  const pickupAt = new Map(
+    poLines
+      .filter((l) => l.deliverTo === "pickup")
+      .map((l) => [l.jobMaterialId!, `Pick up from supplier, PO ${l.number}\n${[l.pickupName, l.pickupAddress].filter((x) => x.trim()).join(", ") || "Depot/address to be confirmed"}`]),
+  );
   // A2: a shortage put on a warehouse order. Sent: coming to the warehouse. Draft: not ordered yet.
   const linked = ids.length
     ? await db
@@ -233,8 +246,9 @@ export async function crewMaterials(jobId: number, parentJobId: number | null): 
 
   const out: CrewMaterial[] = rows.map(({ m, p }) => {
     // Where the part not in the warehouse is: on order, on a warehouse order, or still to sort.
-    const rest: CrewWhere = m.status === "ordered" ? (deliverTo.get(m.id) === "site" ? "to_site" : "to_warehouse") : onWarehousePo.has(m.id) ? "to_warehouse" : "to_order";
-    const restLabel = rest === "to_order" ? shortLabel(p?.supplyMode) : WHERE_LABEL[rest];
+    const how = deliverTo.get(m.id);
+    const rest: CrewWhere = m.status === "ordered" ? (how === "site" ? "to_site" : how === "pickup" ? "to_pickup" : "to_warehouse") : onWarehousePo.has(m.id) ? "to_warehouse" : "to_order";
+    const restLabel = rest === "to_order" ? shortLabel(p?.supplyMode) : rest === "to_pickup" ? (pickupAt.get(m.id) ?? WHERE_LABEL.to_pickup) : WHERE_LABEL[rest];
     let where: CrewWhere;
     let split: string | null = null;
     if (m.status === "installed") where = "installed";
@@ -263,7 +277,7 @@ export async function crewMaterials(jobId: number, parentJobId: number | null): 
       count: q.count,
       m2: q.m2,
       where,
-      whereLabel: split ?? (where === "to_order" ? shortLabel(p?.supplyMode) : WHERE_LABEL[where]),
+      whereLabel: split ?? (where === "to_order" ? shortLabel(p?.supplyMode) : where === "to_pickup" ? restLabel : WHERE_LABEL[where]),
     };
   });
 

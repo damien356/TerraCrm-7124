@@ -21,8 +21,10 @@ export type PoPdfInput = {
   supplierAccount: string | null;
   /** Null: a warehouse stock order (A2), printed as "Warehouse stock". */
   jobNumber: number | string | null;
-  deliverTo: "warehouse" | "site";
+  deliverTo: "warehouse" | "site" | "pickup";
   deliveryAddress: string;
+  /** Pickup only (9 Nov 2026): "PICKUP FROM SUPPLIER", depot, address; or the to be confirmed line. Printed instead of any delivery wording. */
+  pickup?: string[] | null;
   notes: string;
   lines: Array<{ description: string; qty: number; unit: string; unitCostExGst: number; totalExGst: number }>;
   goodsExGst: number;
@@ -100,12 +102,24 @@ export async function renderPoPdf(po: PoPdfInput): Promise<Buffer> {
   y -= 34;
 
   t("Supplier", M, 9, bold, MUTED);
-  t(po.deliverTo === "site" ? "Deliver to site" : "Deliver to", W / 2, 9, bold, MUTED);
+  const pickup = po.deliverTo === "pickup" ? (po.pickup?.length ? po.pickup : ["PICKUP FROM SUPPLIER - DEPOT/ADDRESS TO BE CONFIRMED"]) : null;
+  t(pickup ? "Collection" : po.deliverTo === "site" ? "Deliver to site" : "Deliver to", W / 2, 9, bold, MUTED);
   y -= 13;
   t(po.supplierName, M, 10);
-  for (const [i, l] of wrap(po.deliveryAddress || (po.deliverTo === "warehouse" ? TERRA.address : ""), 48).entries()) {
-    if (i) y -= 13;
-    t(l, W / 2, 10);
+  if (pickup) {
+    // Never the site or Terra's warehouse: the goods are collected from the supplier.
+    // The to be confirmed line is too long for the column: broken after the dash, both halves bold.
+    const head = (l: string) => (l === "PICKUP FROM SUPPLIER - DEPOT/ADDRESS TO BE CONFIRMED" ? ["PICKUP FROM SUPPLIER -", "DEPOT/ADDRESS TO BE CONFIRMED"] : wrap(l, 40));
+    const rows = pickup.flatMap((l, i) => (i === 0 ? head(l) : wrap(l, 48)).map((r) => ({ r, head: i === 0 })));
+    for (const [i, x] of rows.entries()) {
+      if (i) y -= 13;
+      t(x.r, W / 2, 10, x.head ? bold : reg);
+    }
+  } else {
+    for (const [i, l] of wrap(po.deliveryAddress || (po.deliverTo === "warehouse" ? TERRA.address : ""), 48).entries()) {
+      if (i) y -= 13;
+      t(l, W / 2, 10);
+    }
   }
   if (po.supplierAccount) {
     y -= 13;
@@ -155,7 +169,8 @@ export async function renderPoPdf(po: PoPdfInput): Promise<Buffer> {
   };
   sum("Goods", po.goodsExGst);
   if (po.chargesExGst) sum("Supplier charges", po.chargesExGst);
-  sum(po.deliverTo === "warehouse" ? "Freight to our warehouse" : "Freight to site", po.freightExGst);
+  if (po.deliverTo !== "pickup") sum(po.deliverTo === "warehouse" ? "Freight to our warehouse" : "Freight to site", po.freightExGst);
+  else if (po.freightExGst) sum("Freight", po.freightExGst);
   sum("Total ex GST", po.totalExGst, true);
   sum("GST", Math.round(po.totalExGst * 10) / 100);
   sum("Total inc GST", Math.round(po.totalExGst * 110) / 100, true);

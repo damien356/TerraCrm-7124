@@ -13,6 +13,7 @@ import { INVOICES_TO } from "../lib/gmail";
 import { putObject, signGet } from "../lib/s3";
 import { auDate, safeJson } from "../lib/invoice-match";
 import { todayISO } from "../lib/pricing";
+import { depotsFor, matchingDepot, pickupLines, PickupError, resolvePickup } from "../lib/pickup";
 
 /**
  * PURCHASE ORDERS, raised from a job.
@@ -33,10 +34,27 @@ const lineInput = z.object({
   unitCostExGst: z.number().nullable().optional(),
 });
 
+const pickupInput = z
+  .object({
+    mode: z.enum(["depot", "new", "tbc"]),
+    depotId: z.number().nullable().optional(),
+    name: z.string().max(120).optional(),
+    address: z.string().max(300).optional(),
+    save: z.boolean().optional(),
+    updateSaved: z.boolean().optional(),
+  })
+  .nullable()
+  .default(null);
+
 const poInput = z.object({
   supplierId: z.number(),
-  deliverTo: z.enum(["warehouse", "site"]).default("warehouse"),
+  /** pickup: collected from the supplier (9 Nov 2026). */
+  deliverTo: z.enum(["warehouse", "site", "pickup"]).default("warehouse"),
   deliveryAddress: z.string().max(300).default(""),
+  /** Pickup only: a saved depot, a place typed now, or to be confirmed. */
+  pickup: pickupInput,
+  /** Editing a draft: the office has seen how the charges change with the new delivery or collection choice. */
+  chargesConfirmed: z.boolean().default(false),
   notes: z.string().max(2000).default(""),
   lines: z.array(lineInput).min(1).max(80),
   feeIds: z.array(z.number()).default([]),
@@ -64,7 +82,7 @@ async function profileIdFor(userId: string) {
   return p?.id ?? null;
 }
 
-function pricingOf(input: PoInput): PoPricingInput {
+function pricingOf(input: Pick<PoInput, "supplierId" | "deliverTo" | "lines" | "feeIds" | "skipFeeIds" | "boxes" | "rolls" | "pallets">): PoPricingInput {
   return {
     supplierId: input.supplierId,
     deliverTo: input.deliverTo,
@@ -79,6 +97,8 @@ function pricingOf(input: PoInput): PoPricingInput {
 
 /** Fix list 11 Oct, item 14: a supplier that only delivers to one place can't be sent the other way. */
 async function assertDeliverable(input: PoInput) {
+  // Collected from the supplier: where they deliver does not matter.
+  if (input.deliverTo === "pickup") return;
   const [sup] = await db
     .select({ name: schema.suppliers.name, deliversTo: schema.suppliers.deliversTo })
     .from(schema.suppliers)
@@ -90,8 +110,20 @@ async function assertDeliverable(input: PoInput) {
 }
 
 async function deliveryFor(jobId: number, input: PoInput) {
+  // A pickup has no delivery address. Its pickup place is kept apart, never the site or the warehouse.
+  if (input.deliverTo === "pickup") return "";
   if (input.deliverTo === "warehouse") return WAREHOUSE_ADDRESS;
   return input.deliveryAddress.trim() || (await siteAddressFor(jobId));
+}
+
+/** Pickup place for the PO. Saves or updates a depot only when the office asked to. */
+async function pickupFor(input: PoInput, byName: string) {
+  try {
+    return await resolvePickup(input.supplierId, input.deliverTo, input.pickup, byName);
+  } catch (e) {
+    if (e instanceof PickupError) throw new ORPCError("BAD_REQUEST", { message: e.message });
+    throw e;
+  }
 }
 
 /** A2: a warehouse draft only goes out while S6 is on. One already sent stays as it is. */
@@ -133,7 +165,7 @@ async function sendOne(input: { id: number; to?: string; saveEmail: boolean; ove
   }
   const [job] = po.jobId != null ? await db.select({ number: jobNumberSql }).from(schema.jobs).where(eq(schema.jobs.id, po.jobId)) : [];
   const { pdf, filename } = await pdfFor(po.id);
-  const mail = poEmailText(sup?.name ?? "there", po.number, po.jobId == null ? null : (job?.number ?? 0), po.deliverTo, po.deliveryAddress);
+  const mail = poEmailText(sup?.name ?? "there", po.number, po.jobId == null ? null : (job?.number ?? 0), po.deliverTo, po.deliverTo === "pickup" ? pickupLines(po).join("\n") : po.deliveryAddress);
   try {
     await sendAsTeam({ to, subject: mail.subject, text: mail.text, attachments: [{ filename, content: pdf, contentType: "application/pdf" }] });
   } catch (e) {
@@ -217,8 +249,9 @@ async function pdfFor(poId: number) {
     supplierName: sup?.name ?? "Supplier",
     supplierAccount: sup?.accountNumber ?? null,
     jobNumber: po.jobId == null ? null : (job?.number ?? 0),
-    deliverTo: po.deliverTo === "site" ? "site" : "warehouse",
+    deliverTo: po.deliverTo === "site" ? "site" : po.deliverTo === "pickup" ? "pickup" : "warehouse",
     deliveryAddress: po.deliveryAddress,
+    pickup: po.deliverTo === "pickup" ? pickupLines(po) : null,
     notes: po.notes,
     lines: lines.map((l) => ({
       description: l.description,
@@ -244,7 +277,8 @@ export function poEmailText(supplierName: string, number: string, jobNumber: num
       "",
       jobNumber == null ? `Please find attached purchase order ${number} for warehouse stock.` : `Please find attached purchase order ${number} for job ${jobNumber}.`,
       "",
-      `Deliver to: ${deliverTo === "site" ? `site, ${address}` : `our warehouse, ${address}`}`,
+      // Pickup (9 Nov 2026): collected from the supplier. No delivery wording at all.
+      deliverTo === "pickup" ? address : `Deliver to: ${deliverTo === "site" ? `site, ${address}` : `our warehouse, ${address}`}`,
       "",
       `Please quote ${number} on your invoice and send the invoice to ${INVOICES_TO}.`,
       "",
@@ -257,7 +291,39 @@ export function poEmailText(supplierName: string, number: string, jobNumber: num
   };
 }
 
+/** How the supplier charges and freight on a draft change, as "Removed X $10.00", "Added Y $5.00". Goods are not compared. */
+async function chargeChanges(poId: number, next: { kind: string; description: string; totalExGst: number }[]) {
+  const before = (await db.select().from(schema.purchaseOrderLines).where(eq(schema.purchaseOrderLines.poId, poId))).filter((l) => l.kind !== "goods");
+  const after = next.filter((l) => l.kind !== "goods");
+  const key = (l: { description: string; totalExGst: number }) => `${l.description}|${l.totalExGst.toFixed(2)}`;
+  const out: string[] = [];
+  for (const l of before) if (!after.some((a) => key(a) === key(l))) out.push(`removed ${l.description} $${l.totalExGst.toFixed(2)}`);
+  for (const l of after) if (!before.some((b) => key(b) === key(l))) out.push(`added ${l.description} $${l.totalExGst.toFixed(2)}`);
+  return out;
+}
+
+async function logDepot(what: "created" | "reused" | "updated", depotId: number | null, poNumber: string, supplierId: number, actor: { name: string; role: string }) {
+  if (what === "reused" || depotId == null) return;
+  await db.insert(schema.activityLog).values({
+    entityType: "supplier",
+    entityId: supplierId,
+    action: what === "created" ? "depot_saved" : "depot_updated",
+    detail: `${what === "created" ? "Pickup location saved" : "Saved pickup location changed"} from ${poNumber}.`,
+    actorName: actor.name,
+    actorRole: actor.role,
+  });
+}
+
 export const purchasing = {
+  /** A supplier's saved pickup locations, for the pickup choice on a PO. */
+  depots: adminOnly.input(z.object({ supplierId: z.number() })).handler(({ input }) => depotsFor(input.supplierId)),
+
+  /** A saved depot at the address being typed, so the office reuses it instead of saving a copy. */
+  depotMatch: adminOnly.input(z.object({ supplierId: z.number(), address: z.string().max(300) })).handler(async ({ input }) => {
+    const d = await matchingDepot(input.supplierId, input.address);
+    return d && d.active ? { id: d.id, name: d.name, address: d.address } : null;
+  }),
+
   /** Everything the PO card on a job needs. */
   forJob: adminOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
     // A removed draft is kept only to hold its letter. Nobody needs to see it.
@@ -367,6 +433,7 @@ export const purchasing = {
     const priced = await pricePo(pricingOf(input)).catch((e: Error) => {
       throw new ORPCError("BAD_REQUEST", { message: e.message });
     });
+    const pickup = await pickupFor(input, context.actor.name);
     const number = await nextPoNumber(input.jobId).catch((e: Error) => {
       throw new ORPCError("BAD_REQUEST", { message: e.message });
     });
@@ -379,6 +446,9 @@ export const purchasing = {
         status: "draft",
         deliverTo: input.deliverTo,
         deliveryAddress: await deliveryFor(input.jobId, input),
+        pickupDepotId: pickup.pickupDepotId,
+        pickupName: pickup.pickupName,
+        pickupAddress: pickup.pickupAddress,
         goodsExGst: priced.goodsExGst,
         chargesExGst: priced.chargesExGst,
         freightExGst: priced.freightExGst,
@@ -390,11 +460,12 @@ export const purchasing = {
       })
       .returning();
     await writeLines(po!.id, priced.lines);
-    return { ...po!, priced };
+    if (pickup.saved) await logDepot(pickup.saved, pickup.pickupDepotId, po!.number, input.supplierId, context.actor);
+    return { ...po!, priced, depotSaved: pickup.saved };
   }),
 
   /** Change a draft. Once a PO has gone to the supplier, cancel it and raise a new one instead. */
-  update: adminOnly.input(poInput.extend({ id: z.number() })).handler(async ({ input }) => {
+  update: adminOnly.input(poInput.extend({ id: z.number() })).handler(async ({ input, context }) => {
     const po = await loadPo(input.id);
     if (po.status !== "draft") throw new ORPCError("BAD_REQUEST", { message: `PO ${po.number} has gone to the supplier. Cancel it and raise a new one.` });
     if (po.jobId == null) throw new ORPCError("BAD_REQUEST", { message: `${po.number} is a warehouse order. Change it on the Reorder list.` });
@@ -403,12 +474,23 @@ export const purchasing = {
     const priced = await pricePo(pricingOf(input)).catch((e: Error) => {
       throw new ORPCError("BAD_REQUEST", { message: e.message });
     });
+    // Switching between delivery and pickup: charge changes are shown and confirmed first, never slipped in.
+    if (po.deliverTo !== input.deliverTo && !input.chargesConfirmed) {
+      const change = await chargeChanges(po.id, priced.lines);
+      if (change.length) {
+        throw new ORPCError("CONFLICT", { message: `Charges change with this switch: ${change.join("; ")}. Check them, then save again to confirm.`, data: { chargeChanges: change } });
+      }
+    }
+    const pickup = await pickupFor(input, context.actor.name);
     const [row] = await db
       .update(schema.purchaseOrders)
       .set({
         supplierId: input.supplierId,
         deliverTo: input.deliverTo,
         deliveryAddress: await deliveryFor(jobId, input),
+        pickupDepotId: pickup.pickupDepotId,
+        pickupName: pickup.pickupName,
+        pickupAddress: pickup.pickupAddress,
         goodsExGst: priced.goodsExGst,
         chargesExGst: priced.chargesExGst,
         freightExGst: priced.freightExGst,
@@ -421,7 +503,8 @@ export const purchasing = {
       .where(eq(schema.purchaseOrders.id, po.id))
       .returning();
     await writeLines(po.id, priced.lines);
-    return { ...row!, priced };
+    if (pickup.saved) await logDepot(pickup.saved, pickup.pickupDepotId, po.number, input.supplierId, context.actor);
+    return { ...row!, priced, depotSaved: pickup.saved };
   }),
 
   removeDraft: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
