@@ -50,7 +50,7 @@ import { useBootstrap } from "../queries/settings";
 import { JobPhoneCard } from "../components/phone-calls";
 import { sourceName } from "../../api/lib/lead-codes";
 import { JobPeopleCard } from "../components/job-people";
-import { DispatchWork, MergeDispatchesModal, SplitDispatchModal } from "../components/dispatch-split";
+import { DispatchWork, MergeDispatchesModal, RenameDispatchModal, SplitDispatchModal } from "../components/dispatch-split";
 import { AllocateLabourModal } from "../components/allocate-labour";
 import { CancelJobButton } from "../components/job-cancel";
 import { MergeJobButton } from "../components/job-merge";
@@ -344,6 +344,7 @@ export default function JobDetailPage() {
   const [measuring, setMeasuring] = React.useState<{ id: number; title: string } | null>(null);
   const [booking, setBooking] = React.useState<number | null>(null);
   const [splitting, setSplitting] = React.useState<number | null>(null);
+  const [renaming, setRenaming] = React.useState<{ id: number; seq: number; title: string } | null>(null);
   const [allocating, setAllocating] = React.useState(false);
   const [merging, setMerging] = React.useState(false);
   const [note, setNote] = React.useState("");
@@ -698,6 +699,15 @@ export default function JobDetailPage() {
                         <DispatchWork lines={work.data?.find((d) => d.id === t.id)?.lines} />
                       </div>
                       <div className="flex items-center gap-2">
+                        {t.status !== "cancelled" ? (
+                          <button
+                            type="button"
+                            onClick={() => setRenaming({ id: t.id, seq: t.seq, title: t.title })}
+                            className="text-xs font-medium text-primary hover:underline"
+                          >
+                            Rename
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => setMeasuring({ id: t.id, title: t.title })}
@@ -879,6 +889,7 @@ export default function JobDetailPage() {
       <CreateCallbackModal job={j} open={callbackModal} onClose={() => setCallbackModal(false)} />
       <NewTaskModal jobId={j.id} open={taskModal} onClose={() => setTaskModal(false)} furniture={j.furnitureOnSite} />
       <SplitDispatchModal jobId={j.id} jobRef={jobText(j)} taskId={splitting} open={splitting !== null} onClose={() => setSplitting(null)} />
+      <RenameDispatchModal task={renaming} jobRef={jobText(j)} onClose={() => setRenaming(null)} />
       <MergeDispatchesModal jobId={j.id} jobRef={jobText(j)} open={merging} onClose={() => setMerging(false)} />
       <AllocateLabourModal jobId={j.id} open={allocating} onClose={() => setAllocating(false)} />
       <MeasureUpModal

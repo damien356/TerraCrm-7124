@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ORPCError } from "@orpc/server";
 import { staffOnly } from "../middleware/auth";
-import { DispatchError, jobDispatchLines, mergeDispatches, splitDispatch } from "../lib/dispatch-build";
+import { DispatchError, jobDispatchLines, mergeDispatches, renameDispatch, splitDispatch } from "../lib/dispatch-build";
 import { allocate, allocationView, previewAllocation } from "../lib/allocate";
 import { assignAnywayInput } from "../lib/assign-check";
 
@@ -41,8 +41,20 @@ export const dispatches = {
   forJob: staffOnly.input(z.object({ jobId: z.number() })).handler(({ input }) => jobDispatchLines(input.jobId)),
 
   split: staffOnly
-    .input(z.object({ taskId: z.number(), itemIds: z.array(z.number()).min(1), title: z.string().trim().max(200).nullable().default(null) }))
+    .input(
+      z.object({
+        taskId: z.number(),
+        itemIds: z.array(z.number()).min(1),
+        title: z.string().trim().max(200).nullable().default(null),
+        keepTitle: z.string().trim().max(200).nullable().default(null),
+      }),
+    )
     .handler(({ input, context }) => guard(() => splitDispatch(input, context.actor))),
+
+  /** Rename a dispatch. Only the name changes; it goes on the job history. */
+  rename: staffOnly
+    .input(z.object({ taskId: z.number(), title: z.string().trim().min(1).max(200) }))
+    .handler(({ input, context }) => guard(() => renameDispatch(input, context.actor))),
 
   /** Allocate / Dispatch labour: every dispatch with its state and lines, and what on the quote is not pay. */
   allocation: staffOnly.input(z.object({ jobId: z.number() })).handler(({ input }) => allocationView(input.jobId)),

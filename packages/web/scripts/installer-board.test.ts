@@ -507,3 +507,64 @@ describe("4. Changing who has it", () => {
     expect(e.data?.reason).toBe("board_stopped");
   });
 });
+
+describe("5. Dispatch names after Split by trade (Damien, 11 Nov, 188070-A kept the old name)", () => {
+  const dispatches = async () => (await import("../src/api/routes/dispatches")).dispatches;
+  const names = (jobId: number) => q("SELECT seq, title FROM job_tasks WHERE job_id = ? AND status <> 'cancelled' ORDER BY seq", [jobId]);
+
+  test("the rule: named after its work, '+ N more', a typed name, and a name the office gave it", async () => {
+    const { leftBehindName, nameFromWork } = await import("../src/api/lib/dispatch-names");
+    expect(nameFromWork(["A", "B", "C", "D"])).toBe("A + B + 2 more");
+    expect(leftBehindName("Carpet tile install + Hybrid installation + 1 more", ["Hybrid installation", "Install trims/scotia"], ["Carpet tile install", "Carpet stairs"])).toBe(
+      "Carpet tile install + Carpet stairs",
+    );
+    expect(leftBehindName("Install + prep + 3 more", ["Uplift"], ["Install"])).toBe("Install");
+    expect(leftBehindName("Downstairs", ["Hybrid installation"], ["Carpet tile install"])).toBeNull();
+    expect(leftBehindName("Downstairs", ["Hybrid installation"], ["Carpet tile install"], "  Upstairs carpet  ")).toBe("Upstairs carpet");
+    expect(leftBehindName("Same", ["x"], ["y"], "Same")).toBeNull();
+  });
+
+  test("Split by trade renames what stays to the work still on it; the new one keeps its typed name; the history says so", async () => {
+    const { jobId, taskId } = await job188070({ withHybridOnDispatch: true });
+    const d = await dispatches();
+    const created = await run<any>(d.split, { taskId, itemIds: [IT.hybrid, IT.scotia], title: "Hybrid + Scotia install" });
+    expect(await names(jobId)).toEqual([
+      { seq: 1, title: "Carpet tile install + Carpet stairs, standard straight step" },
+      { seq: 2, title: "Hybrid + Scotia install" },
+    ]);
+    const [log] = await q("SELECT detail FROM activity_log WHERE task_id = ? AND action = 'dispatch_split'", [created.id]);
+    expect(log.detail).toContain('The dispatch left behind is now "Carpet tile install + Carpet stairs, standard straight step"');
+    // Work, quantities and pay basis are untouched by the name.
+    expect((await qtys(jobId)).map((r: any) => [r.item, r.qty])).toEqual([[IT.tiles, 256], [IT.stairs, 30], [IT.hybrid, 135], [IT.scotia, 105]]);
+  });
+
+  test("a name typed for what stays wins, and a name the office gave it is kept when left blank", async () => {
+    const a = await job188070({ withHybridOnDispatch: true });
+    const d = await dispatches();
+    await run(d.split, { taskId: a.taskId, itemIds: [IT.hybrid, IT.scotia], title: null, keepTitle: "Carpet tiles + stairs" });
+    expect((await names(a.jobId))[0].title).toBe("Carpet tiles + stairs");
+
+    const b = await job188070({ withHybridOnDispatch: true });
+    await client.execute({ sql: "UPDATE job_tasks SET title = 'Level 2 fit-out' WHERE id = ?", args: [b.taskId] });
+    await run(d.split, { taskId: b.taskId, itemIds: [IT.hybrid, IT.scotia], title: null });
+    expect((await names(b.jobId)).map((r: any) => r.title)).toEqual(["Level 2 fit-out", "Hybrid installation, Install trims/scotia"]);
+  });
+
+  test("Rename changes only the name, even on booked work, goes on the history, and refuses a blank name", async () => {
+    const { jobId, taskId } = await job188070({ withHybridOnDispatch: true });
+    const d = await dispatches();
+    await book(taskId, PAUL, [WED]);
+    const before = (await q("SELECT status, assigned_installer_id, scheduled_date, labour_cost FROM job_tasks WHERE id = ?", [taskId]))[0];
+    const days = await q("SELECT date, status FROM task_days WHERE task_id = ? ORDER BY date", [taskId]);
+    await as(OFFICE, () => run(d.rename, { taskId, title: "  Carpet tiles + stairs  " }));
+    expect((await names(jobId))[0].title).toBe("Carpet tiles + stairs");
+    expect((await q("SELECT status, assigned_installer_id, scheduled_date, labour_cost FROM job_tasks WHERE id = ?", [taskId]))[0]).toEqual(before);
+    expect(await q("SELECT date, status FROM task_days WHERE task_id = ? ORDER BY date", [taskId])).toEqual(days);
+    const [log] = await q("SELECT detail, actor_name FROM activity_log WHERE task_id = ? AND action = 'dispatch_renamed'", [taskId]);
+    expect(log.detail).toBe('Dispatch renamed from "Carpet tile install + Hybrid installation + 1 more" to "Carpet tiles + stairs"');
+    expect(log.actor_name).toBe("Test Office");
+    expect(await failure(run(d.rename, { taskId, title: "   " }))).toBeTruthy();
+    expect((await names(jobId))[0].title).toBe("Carpet tiles + stairs");
+    expect(blocked).toEqual([]);
+  });
+});

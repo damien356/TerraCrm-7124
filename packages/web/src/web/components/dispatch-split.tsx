@@ -2,8 +2,9 @@ import * as React from "react";
 import { Button } from "./ui/button";
 import { Checkbox, Field, Input } from "./ui/field";
 import { Modal } from "./ui/modal";
-import { useJobDispatchLines, useMergeDispatches, useSplitDispatch } from "../queries/dispatches";
+import { useJobDispatchLines, useMergeDispatches, useRenameDispatch, useSplitDispatch } from "../queries/dispatches";
 import { taskRef } from "../../api/lib/refs";
+import { leftBehindName } from "../../api/lib/dispatch-names";
 
 /* ---------------------------------------------------------------------------
  * Split by trade and Merge (fix list item 13). A quote makes one dispatch per
@@ -49,11 +50,13 @@ export function SplitDispatchModal({
   const task = rows.data?.find((t) => t.id === taskId) ?? null;
   const [picked, setPicked] = React.useState<number[]>([]);
   const [title, setTitle] = React.useState("");
+  const [keepTitle, setKeepTitle] = React.useState("");
 
   React.useEffect(() => {
     if (open) {
       setPicked([]);
       setTitle("");
+      setKeepTitle("");
       split.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -61,6 +64,9 @@ export function SplitDispatchModal({
 
   const names = task?.lines.filter((l) => picked.includes(l.itemId)).map((l) => l.name) ?? [];
   const tooMany = task ? picked.length >= task.lines.length : false;
+  const staying = task?.lines.filter((l) => !picked.includes(l.itemId)).map((l) => l.name) ?? [];
+  // What the dispatch left behind will be called if the box is left blank (the server works it out the same way).
+  const keepName = task ? (picked.length ? (leftBehindName(task.title, names, staying) ?? task.title) : task.title) : "";
 
   function toggle(itemId: number) {
     setPicked((p) => (p.includes(itemId) ? p.filter((i) => i !== itemId) : [...p, itemId]));
@@ -68,7 +74,7 @@ export function SplitDispatchModal({
 
   function submit() {
     if (!task || !picked.length || tooMany) return;
-    split.mutate({ taskId: task.id, itemIds: picked, title: title.trim() || null }, { onSuccess: onClose });
+    split.mutate({ taskId: task.id, itemIds: picked, title: title.trim() || null, keepTitle: keepTitle.trim() || null }, { onSuccess: onClose });
   }
 
   return (
@@ -113,6 +119,9 @@ export function SplitDispatchModal({
           </ul>
           <Field label="New dispatch name" hint="Leave it blank to name it after the work.">
             <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={names.join(", ") || "e.g. Uplift and prep"} />
+          </Field>
+          <Field label={`Name for what stays on ${taskRef(jobRef, task.seq)}`} hint={`Leave it blank to call it "${keepName}".`}>
+            <Input value={keepTitle} onChange={(e) => setKeepTitle(e.target.value)} placeholder={keepName} />
           </Field>
           {tooMany ? <p className="text-xs text-destructive">Leave at least one line on this dispatch.</p> : null}
           {split.error ? <p className="text-xs text-destructive">{errorText(split.error)}</p> : null}
@@ -213,6 +222,67 @@ export function MergeDispatchesModal({
           {merge.error ? <p className="text-xs text-destructive">{errorText(merge.error)}</p> : null}
         </div>
       )}
+    </Modal>
+  );
+}
+
+/** Rename a dispatch on the job page. Only the name changes: work, pay, days and offers stay as they are. */
+export function RenameDispatchModal({
+  task,
+  jobRef,
+  onClose,
+}: {
+  task: { id: number; seq: number; title: string } | null;
+  jobRef: string;
+  onClose: () => void;
+}) {
+  const rename = useRenameDispatch();
+  const [title, setTitle] = React.useState("");
+
+  React.useEffect(() => {
+    if (task) {
+      setTitle(task.title);
+      rename.reset();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task?.id]);
+
+  const clean = title.trim();
+  function submit() {
+    if (!task || !clean) return;
+    if (clean === task.title) return onClose();
+    rename.mutate({ taskId: task.id, title: clean }, { onSuccess: onClose });
+  }
+
+  return (
+    <Modal
+      open={task !== null}
+      onClose={onClose}
+      title="Rename dispatch"
+      subtitle={task ? `${taskRef(jobRef, task.seq)}. Only the name changes. The work, pay, days and offers stay as they are.` : undefined}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={!clean || rename.isPending}>
+            {rename.isPending ? "Saving" : "Save name"}
+          </Button>
+        </>
+      }
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+        className="space-y-3"
+      >
+        <Field label="Dispatch name">
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} />
+        </Field>
+        {rename.error ? <p className="text-xs text-destructive">{errorText(rename.error)}</p> : null}
+      </form>
     </Modal>
   );
 }

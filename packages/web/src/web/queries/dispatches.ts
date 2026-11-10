@@ -17,12 +17,18 @@ function useRefresh() {
     queryClient.invalidateQueries({ queryKey: orpc.jobs.key() });
     queryClient.invalidateQueries({ queryKey: orpc.costing.key() });
     queryClient.invalidateQueries({ queryKey: orpc.dashboard.key() });
+    queryClient.invalidateQueries({ queryKey: orpc.installerBoard.key() });
   };
 }
 
 export function useSplitDispatch() {
   const refresh = useRefresh();
   return useMutation(orpc.dispatches.split.mutationOptions({ onSuccess: refresh }));
+}
+/** Rename a dispatch on the job page. Only the name changes. */
+export function useRenameDispatch() {
+  const refresh = useRefresh();
+  return useMutation(orpc.dispatches.rename.mutationOptions({ onSuccess: refresh }));
 }
 export function useMergeDispatches() {
   const refresh = useRefresh();

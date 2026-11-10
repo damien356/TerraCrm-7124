@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { leftBehindName } from "./dispatch-names";
 
 /* ---------------------------------------------------------------------------
  * One dispatch per job (fix list item 13, Damien 11 Oct).
@@ -24,6 +25,7 @@ export type WorkLine = typeof schema.quoteItems.$inferSelect;
 /** Log actions that mark a dispatch as made from a quote, or split off one. */
 export const DISPATCH_MADE = "dispatch_made";
 export const DISPATCH_SPLIT = "dispatch_split";
+export const DISPATCH_RENAMED = "dispatch_renamed";
 
 /** Rate book groups that are not the floor itself. */
 export const SIDE_GROUPS = new Set(["prep", "demolition", "trades", "other", "surcharge"]);
@@ -267,7 +269,8 @@ async function freeTask(id: number, jobId?: number, held = false) {
  * At least one line has to stay behind.
  */
 export async function splitDispatch(
-  args: { taskId: number; itemIds: number[]; title?: string | null },
+  /** keepTitle: the name typed for the dispatch left behind. Blank renames it after its work when its name came from its work. */
+  args: { taskId: number; itemIds: number[]; title?: string | null; keepTitle?: string | null },
   actor: { name: string; role: string },
   /** The office confirmed taking these lines off a booked or offered dispatch (lib/installer-board.ts). */
   opts: { held?: boolean } = {},
@@ -328,6 +331,10 @@ export async function splitDispatch(
 
   // The dispatch left behind keeps its skill unless none of its lines are done under it any more.
   const patch: Partial<typeof schema.jobTasks.$inferInsert> = { updatedAt: new Date() };
+  // Its name follows the work still on it (Damien, 11 Nov, 188070-A kept "+ Hybrid installation + 1 more").
+  const stayNames = lines.filter((l) => !args.itemIds.includes(l.itemId)).map((l) => items.get(l.itemId)?.name ?? "");
+  const renamed = leftBehindName(task.title, movedItems.map((i) => i.name), stayNames, args.keepTitle);
+  if (renamed) patch.title = renamed;
   if (moveArea) patch.areaM2 = null;
   if (shareArea) patch.areaM2 = Math.round((task.areaM2! - movedM2) * 100) / 100;
   if (!stayItems.some((i) => i.skillId === task.skillId)) {
@@ -342,11 +349,35 @@ export async function splitDispatch(
     entityType: "task",
     entityId: created!.id,
     action: DISPATCH_SPLIT,
-    detail: `Split from "${task.title}": ${movedItems.map((i) => i.name).join(", ")}`,
+    detail: `Split from "${task.title}": ${movedItems.map((i) => i.name).join(", ")}${renamed ? `. The dispatch left behind is now "${renamed}"` : ""}`,
     actorName: actor.name,
     actorRole: actor.role,
   });
   return created!;
+}
+
+/* --------------------------------- rename --------------------------------- */
+
+/** Rename on the job page. Only the name changes: work, pay, days and offers stay as they are. */
+export async function renameDispatch(args: { taskId: number; title: string }, actor: { name: string; role: string }) {
+  const title = args.title.trim();
+  if (!title) throw new DispatchError("Type a name for the dispatch.");
+  const [task] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, args.taskId));
+  if (!task) throw new DispatchError("That dispatch is not on the job any more.");
+  if (task.status === "cancelled") throw new DispatchError("That dispatch was cancelled, so it can't be renamed.");
+  if (task.title === title) return task;
+  const [row] = await db.update(schema.jobTasks).set({ title, updatedAt: new Date() }).where(eq(schema.jobTasks.id, task.id)).returning();
+  await db.insert(schema.activityLog).values({
+    jobId: task.jobId,
+    taskId: task.id,
+    entityType: "task",
+    entityId: task.id,
+    action: DISPATCH_RENAMED,
+    detail: `Dispatch renamed from "${task.title}" to "${title}"`,
+    actorName: actor.name,
+    actorRole: actor.role,
+  });
+  return row!;
 }
 
 /* --------------------------------- merge ---------------------------------- */
