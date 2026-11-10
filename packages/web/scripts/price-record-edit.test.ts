@@ -151,6 +151,9 @@ async function seed() {
   // Belgotex as it is live: delivers to store, no PO-free flag. Its supplier email is a .invalid address.
   const [b] = await db.insert(schema.suppliers).values({ name: "Belgotex", code: "belgotex", active: true, deliversDirect: true, deliversTo: "both", email: "orders@belgotex.invalid" } as any).returning();
   ids.belgotex = b!.id;
+  // Belgotex's charges as they are live: Broadloom baling $35 a roll, automatic. The carpet tile pallet fee does not bite on a broadloom cut.
+  await db.insert(schema.supplierFeeRules).values({ supplierId: ids.belgotex, name: "Handling / baling: carpet tiles", kind: "handling", basis: "pallet", amount: 50, autoApply: true, active: true, appliesTo: "both", sortOrder: 1 } as any);
+  await db.insert(schema.supplierFeeRules).values({ supplierId: ids.belgotex, name: "Broadloom baling", kind: "baling", basis: "roll", amount: 35, autoApply: true, active: true, appliesTo: "both", sortOrder: 2 } as any);
   const [o] = await db.insert(schema.suppliers).values({ name: "Underlay Co", code: "underlayco", active: true, email: "orders@underlay.invalid" } as any).returning();
   ids.other = o!.id;
   const [p] = await db
@@ -186,6 +189,9 @@ async function seed() {
   await db.insert(schema.installers).values({ id: ids.installer, name: "Phillip Test", active: true } as any);
   await db.insert(schema.installerBuyerLinks).values({ installerId: ids.installer, billToType: "contact", contactId: ids.contact, buyerName: "PHILLIP TEST", basis: "confirmed", confirmedByName: "Test", confirmedAt: new Date() } as any);
 }
+
+const goods = (items: any[]) => items.filter((i: any) => i.kind !== "supplier_charge");
+const charges = (items: any[]) => items.filter((i: any) => i.kind === "supplier_charge");
 
 const LINE = () => ({ productId: ids.boulevard, description: "", qty: 25, unit: "lm", unitPrice: 263.34, fromStock: 0 });
 
@@ -223,20 +229,56 @@ async function save(jobId: number, lines: any[], note: string | null = null) {
 /* ---------------------------------- tests ---------------------------------- */
 
 describe("Sell products puts the price book cost on its lines", () => {
-  test("188083 replayed: cost $137.80 on the line, total still $7,241.85, no supplier charge lines", async () => {
+  test("188083 replayed: cost $137.80 on the line, and Belgotex's $35 a roll baling on the sale and the draft PO", async () => {
     const { pv, jobId } = await raise188083();
-    expect(pv.total).toBe(7241.85);
+    expect(pv.subtotal).toBe(6623.75);
+    expect(pv.charges.length).toBe(1);
+    expect(pv.charges[0].description).toContain("Broadloom baling");
+    expect(pv.charges[0].total).toBe(40.25);
     const r = await rowsOf(jobId);
-    expect(r.items.length).toBe(1);
+    expect(r.items.length).toBe(2);
+    expect(r.items[0].kind).not.toBe("supplier_charge");
     expect(r.items[0].unit_cost).toBe(137.8);
     expect(r.items[0].markup_percent).toBeGreaterThan(90);
-    expect(r.items.some((i: any) => i.kind === "supplier_charge")).toBe(false);
-    expect(r.quote.total).toBe(7241.85);
+    const ch = charges(r.items);
+    expect(ch.map((i: any) => [i.qty, i.unit_cost, i.unit_price, i.total, i.charge_supplier_id])).toEqual([[1, 35, 40.25, 40.25, ids.belgotex]]);
+    expect(r.quote.subtotal).toBe(6623.75);
+    expect(r.quote.total).toBe(pv.total);
+    expect(r.job.value).toBe(pv.total);
     expect(r.invoices.length).toBe(1);
-    expect(r.invoices[0].total).toBe(7241.85);
+    expect(r.invoices[0].subtotal).toBe(6623.75);
+    expect(r.invoices[0].total).toBe(pv.total);
     expect(r.pos.length).toBe(1);
     expect(r.pos[0].status).toBe("draft");
-    expect(r.pos[0].total_ex_gst).toBe(3445);
+    expect(r.pos[0].total_ex_gst).toBe(3480);
+  });
+
+  test("the customer's copy has no baling line: it sits inside the carpet's price, same as a quote", async () => {
+    const { jobId } = await raise188083();
+    const [quote] = await q("select id from quotes where job_id=?", [jobId]);
+    const rows = await m.db.select().from(schema.quoteItems).where(m.orm.eq(schema.quoteItems.quoteId, quote.id));
+    const { foldForClient } = await import("../src/api/lib/quote-freight");
+    const { lines } = await foldForClient(rows as any);
+    expect(lines.length).toBe(1);
+    expect(lines[0]!.total).toBe(6623.75);
+    expect(lines[0]!.qty).toBe(25);
+  });
+
+  test("a login without costs sees one supplier charges total, not Belgotex's rate", async () => {
+    const input = { buyer: { kind: "installer" as const, installerId: ids.installer }, mode: "invoice" as const, lines: [LINE()], orderNeeded: true, depositPercent: null, note: null };
+    const pv = await as(OFFICE, () => run(m.sales.preview, input));
+    expect(pv.charges.map((c: any) => [c.description, c.total])).toEqual([["Supplier charges (freight, baling, handling)", 40.25]]);
+    expect(pv.subtotal).toBe(6623.75);
+  });
+
+  test("nothing ordered, no charge: ordering off, or all of it from stock", async () => {
+    const base = { buyer: { kind: "installer" as const, installerId: ids.installer }, mode: "invoice" as const, depositPercent: null, note: null };
+    const off = await run(m.sales.preview, { ...base, lines: [LINE()], orderNeeded: false });
+    expect(off.charges).toEqual([]);
+    expect(off.subtotal).toBe(6583.5);
+    const stock = await run(m.sales.preview, { ...base, lines: [{ ...LINE(), fromStock: 25 }], orderNeeded: true });
+    expect(stock.charges).toEqual([]);
+    expect(stock.subtotal).toBe(6583.5);
   });
 
   test("a quote (not an invoice) gets the cost too; a typed line has none", async () => {
@@ -265,6 +307,9 @@ describe("Edit price record", () => {
     expect(rec.blockers).toEqual([]);
     expect(rec.editable).toBe(true);
     expect(rec.lines[0].unitCost).toBe(137.8);
+    // The baling line is not an editable line; it is worked out again from what is ordered.
+    expect(rec.lines.length).toBe(1);
+    expect(rec.chargesTotal).toBe(40.25);
     const office = await as(OFFICE, () => state(jobId));
     expect(office.lines[0].unitCost).toBeNull();
     expect(office.lines[0].bookCost).toBeNull();
@@ -274,9 +319,10 @@ describe("Edit price record", () => {
     const rec = await state(jobId);
     const before = await rowsOf(jobId);
     const pv = await run(m.sales.previewPriceRecordEdit, { jobId, lines: lineIn(rec, { qty: 23, unitPrice: 250 }) });
-    expect(pv.after.total).toBe(6325);
-    expect(pv.invoice.after).toBe(6325);
-    expect(pv.drafts[0].after).toBe(3169.4);
+    // 23 x 250 + 40.25 baling (still 1 roll) = 5790.25 ex GST.
+    expect(pv.after.total).toBe(6369.28);
+    expect(pv.invoice.after).toBe(6369.28);
+    expect(pv.drafts[0].after).toBe(3204.4);
     expect(pv.changes.join(" ")).toContain("25 lm to 23 lm");
     const after = await rowsOf(jobId);
     expect(after.quote.total).toBe(before.quote.total);
@@ -290,34 +336,35 @@ describe("Edit price record", () => {
     const out = await save(jobId, lineIn(rec, { qty: 23, unitPrice: 250 }), "installer took 23 lm");
     expect(out.changed).toBe(true);
     const r = await rowsOf(jobId);
-    expect(r.quote.subtotal).toBe(5750);
-    expect(r.quote.total).toBe(6325);
-    expect(r.job.value).toBe(6325);
+    expect(r.quote.subtotal).toBe(5790.25);
+    expect(r.quote.total).toBe(6369.28);
+    expect(r.job.value).toBe(6369.28);
+    expect(charges(r.items).map((i: any) => [i.qty, i.total])).toEqual([[1, 40.25]]);
     expect(r.items[0].qty).toBe(23);
     expect(r.items[0].unit_price).toBe(250);
     expect(r.items[0].unit_cost).toBe(137.8);
     expect(r.invoices.length).toBe(1);
     expect(r.invoices[0].number).toBe(before.invoices[0].number);
     expect(r.invoices[0].id).toBe(before.invoices[0].id);
-    expect(r.invoices[0].subtotal).toBe(5750);
-    expect(r.invoices[0].total).toBe(6325);
+    expect(r.invoices[0].subtotal).toBe(5790.25);
+    expect(r.invoices[0].total).toBe(6369.28);
     expect(r.lines[0].qty).toBe(23);
     expect(r.mats[0].qty).toBe(23);
     expect(r.pos.length).toBe(1);
     expect(r.pos[0].number).toBe(before.pos[0].number);
     expect(r.pos[0].status).toBe("draft");
     expect(r.pos[0].sent_at).toBeNull();
-    expect(r.pos[0].total_ex_gst).toBe(3169.4);
+    expect(r.pos[0].total_ex_gst).toBe(3204.4);
     expect(r.poLines.filter((l: any) => l.kind === "goods").map((l: any) => [l.qty, l.job_material_id])).toEqual([[23, r.mats[0].id]]);
     const log = r.acts.find((a: any) => a.action === "price_record_edited");
     expect(log.detail).toContain("Why: installer took 23 lm");
     expect(log.detail).toContain("Nothing was emailed or sent.");
-    expect(log.detail).toContain(`${r.invoices[0].number} now $6,325.00, same number`);
+    expect(log.detail).toContain(`${r.invoices[0].number} now $6,369.28, same number`);
     const inst = await q("select * from activity_log where entity_type='installer' and entity_id=? and action='materials_invoice_changed'", [ids.installer]);
     expect(inst.length).toBe(1);
     // The forecast follows the invoice.
     const cash = await q("select * from cash_events where invoice_id=?", [r.invoices[0].id]);
-    if (cash.length) expect(cash[0].amount).toBe(6325);
+    if (cash.length) expect(cash[0].amount).toBe(6369.28);
   });
 
   test("a screen opened before the save can not save over it", async () => {
@@ -356,6 +403,25 @@ describe("Edit price record", () => {
     expect((await rowsOf(jobId)).mats[0].qty).toBe(23);
   });
 
+  test("all of it from stock takes the baling off; ordering it again puts it back", async () => {
+    const rec = await state(jobId);
+    const pv = await run(m.sales.previewPriceRecordEdit, { jobId, lines: lineIn(rec, { fromStock: 23 }) });
+    expect(pv.changes.join(" ")).toContain("Supplier charges (freight, baling)");
+    await save(jobId, lineIn(rec, { fromStock: 23 }));
+    let r = await rowsOf(jobId);
+    expect(charges(r.items)).toEqual([]);
+    expect(r.quote.subtotal).toBe(23 * 251);
+    const log = r.acts.filter((a: any) => a.action === "price_record_edited").pop();
+    expect(log.detail).toContain("Supplier charges (freight, baling): $40.25 to none ex GST");
+    await save(jobId, lineIn(await state(jobId), { fromStock: 0 }));
+    r = await rowsOf(jobId);
+    expect(charges(r.items).map((i: any) => i.total)).toEqual([40.25]);
+    expect(r.quote.subtotal).toBe(23 * 251 + 40.25);
+    // A fresh draft for Belgotex, with the baling on it: 23 x 137.80 + 35.
+    const drafts = r.pos.filter((p: any) => p.supplier_id === ids.belgotex && p.status === "draft");
+    expect(drafts.map((p: any) => p.total_ex_gst)).toEqual([3204.4]);
+  });
+
   test("a login without costs can not change a cost; its other changes still save", async () => {
     const rec = await as(OFFICE, () => state(jobId));
     await as(OFFICE, () => save(jobId, lineIn(rec, { unitCost: 1, unitPrice: 255 })));
@@ -386,10 +452,12 @@ describe("Edit price record", () => {
     const out = await save(jobId, lines);
     expect(out.drafted.length).toBe(1);
     const r = await rowsOf(jobId);
-    expect(r.items.length).toBe(2);
-    expect(r.items[1].unit_cost).toBe(40);
-    expect(r.quote.subtotal).toBe(23 * 255 + 180);
-    expect(r.invoices[0].subtotal).toBe(23 * 255 + 180);
+    expect(goods(r.items).length).toBe(2);
+    expect(goods(r.items)[1].unit_cost).toBe(40);
+    // Underlay Co has no charge rules, so only the Belgotex baling stays.
+    expect(charges(r.items).map((i: any) => i.total)).toEqual([40.25]);
+    expect(r.quote.subtotal).toBe(23 * 255 + 180 + 40.25);
+    expect(r.invoices[0].subtotal).toBe(23 * 255 + 180 + 40.25);
     expect(r.lines.length).toBe(2);
     const live = r.pos.filter((p: any) => p.status === "draft");
     expect(live.length).toBe(2);
@@ -401,15 +469,16 @@ describe("Edit price record", () => {
     const lines = lineIn(rec).filter((l: any) => l.productId === ids.boulevard);
     await save(jobId, lines);
     const r = await rowsOf(jobId);
-    expect(r.items.length).toBe(1);
+    expect(goods(r.items).length).toBe(1);
+    expect(charges(r.items).length).toBe(1);
     expect(r.lines.length).toBe(1);
     expect(r.mats.length).toBe(1);
     const other = r.pos.find((p: any) => p.supplier_id === ids.other);
     expect(other.status).toBe("cancelled");
     expect(other.sent_at).toBeNull();
-    expect(r.pos.find((p: any) => p.supplier_id === ids.belgotex).status).toBe("draft");
-    expect(r.quote.subtotal).toBe(23 * 255);
-    expect(r.invoices[0].subtotal).toBe(23 * 255);
+    expect(r.pos.filter((p: any) => p.supplier_id === ids.belgotex && p.status === "draft").length).toBe(1);
+    expect(r.quote.subtotal).toBe(23 * 255 + 40.25);
+    expect(r.invoices[0].subtotal).toBe(23 * 255 + 40.25);
   });
 
   test("locked once the invoice is emailed, in Xero, paid, or a PO is sent", async () => {

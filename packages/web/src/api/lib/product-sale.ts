@@ -12,6 +12,7 @@ import { liveSellFor } from "./live-sell";
 import { markupOf } from "./pricing";
 import { wholeUnits } from "./order-sizes";
 import { quoteRefOf } from "./quote-number";
+import { chargeItemValues, chargesView, saleChargesFor } from "./sale-charges";
 import { jobText } from "./refs";
 import { salesAccountsView } from "./xero-invoices";
 
@@ -189,8 +190,8 @@ export async function bookCostsOf(productIds: (number | null | undefined)[]) {
   return new Map(rows.filter((r) => r.costPrice != null && r.costPrice >= 0).map((r) => [r.id, r2(r.costPrice!)]));
 }
 
-/** The same sums recalc does on a quote with no referral fee and no supplier charge lines. */
-export function totalsOf(lines: Priced[]) {
+/** The same sums recalc does on a quote with no referral fee: product lines plus any supplier charge lines. */
+export function totalsOf(lines: { total: number }[]) {
   const subtotal = r2(lines.reduce((s, l) => s + l.total, 0));
   const gst = r2(subtotal * 0.1);
   return { subtotal, gst, total: r2(subtotal + gst) };
@@ -198,10 +199,21 @@ export function totalsOf(lines: Priced[]) {
 
 /* -------------------------------- preview -------------------------------- */
 
-export async function previewSale(input: SaleInput & { requestKey?: string | null }) {
+/** Each product line's price book cost, for the supplier charges. */
+async function chargesOf(lines: Priced[], orderNeeded: boolean) {
+  const costs = await bookCostsOf(lines.map((l) => l.productId));
+  return saleChargesFor(
+    lines.map((l) => ({ productId: l.productId, toOrder: l.toOrder, unitCost: l.productId != null ? (costs.get(l.productId) ?? null) : null, unitPrice: l.unitPrice })),
+    orderNeeded,
+  );
+}
+
+export async function previewSale(input: SaleInput & { requestKey?: string | null }, opts: { canSeeCosts?: boolean } = {}) {
   const buyer = await buyerOf(input.buyer);
   const lines = await priceLines(input.lines);
-  const totals = totalsOf(lines);
+  // Damien, 11 Nov 2026 (job 188083): the supplier's baling and freight go on the price, as on a quote.
+  const charges = await chargesOf(lines, input.orderNeeded);
+  const totals = totalsOf([...lines, ...charges]);
   const accounts = await salesAccountsView();
   const account = accounts[buyer.salesCategory];
   const depositPercent = input.mode === "invoice" && !(await stockSalesOn()) ? 0 : (input.depositPercent ?? buyer.cardPercent ?? 0);
@@ -220,6 +232,9 @@ export async function previewSale(input: SaleInput & { requestKey?: string | nul
     salesCategory: buyer.salesCategory,
     account: { label: account.label, code: account.code, name: account.name },
     lines,
+    /** Supplier charges on what is ordered (freight, baling), ex GST. In the total. Not a line on the customer's copy. */
+    charges: chargesView(charges, !!opts.canSeeCosts),
+    chargesTotal: r2(charges.reduce((a, c) => a + c.total, 0)),
     ...totals,
     depositPercent,
     deposit,
@@ -232,6 +247,9 @@ export async function previewSale(input: SaleInput & { requestKey?: string | nul
         ? `Raises one invoice for ${money(totals.total)} billed to ${buyer.billToName}, on its own supply only job.`
         : `Saves a draft quote for ${money(totals.total)} for ${buyer.billToName}, on its own supply only job.${deposit > 0 ? ` When it is accepted, a ${depositPercent}% deposit invoice (${money(deposit)}) is raised.` : ""}`,
       `Sales category: ${account.label} (${account.name}).`,
+      ...(charges.length
+        ? [`Supplier charges on what is ordered (freight, baling): ${money(r2(charges.reduce((a, c) => a + c.total, 0)))} ex GST, in the total. The customer sees them inside the product prices, not as their own line.`]
+        : []),
       input.mode === "invoice" ? "Nothing is emailed and nothing goes to Xero. Use Email and Send to Xero on the job when you are ready." : "Nothing is sent. Open the quote and press Send when you are ready.",
       input.orderNeeded
         ? ordering.length
@@ -319,7 +337,9 @@ export async function raiseSale(input: SaleInput & { requestKey: string; expecte
 
     const buyer = await buyerOf(input.buyer);
     const lines = await priceLines(input.lines);
-    const totals = totalsOf(lines);
+    const charges = await chargesOf(lines, input.orderNeeded);
+    const goodsTotals = totalsOf(lines);
+    const totals = totalsOf([...lines, ...charges]);
     // A2 (7D): raising it as an invoice commits the stock. A container or stock-only shortage needs the owner's OK first.
     // A draft quote is internal and may be saved; its Send is checked instead.
     if (input.mode === "invoice") {
@@ -375,8 +395,8 @@ export async function raiseSale(input: SaleInput & { requestKey: string; expecte
         validDays: 30,
         notes: null,
         terms: null,
-        // No cost on the lines here, so no supplier freight lines are added and the total is what the preview showed.
-        // The price book cost goes on just after (see below), the same way, so cost and margin still show.
+        // No cost on the lines here, so recalc adds no supplier freight lines of its own and the total is the lines.
+        // The price book cost and the supplier charges the preview showed go on just after (see below).
         items: lines.map((l) => ({
           productId: l.productId,
           kind: "supply",
@@ -435,8 +455,20 @@ export async function raiseSale(input: SaleInput & { requestKey: string; expecte
       .where(eq(schema.jobs.id, jobId));
     await db.update(schema.productSales).set({ jobId, quoteId: q.id, updatedAt: now }).where(eq(schema.productSales.id, sale.id));
 
-    const [quote] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, q.id));
+    let [quote] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, q.id));
     const ref = quote ? await quoteRefOf(quote) : "";
+    /*
+     * Supplier charges (Damien, 11 Nov 2026, job 188083): baling, freight and
+     * handling on what is ordered, as their own internal lines, the way the
+     * quote builder keeps them. The customer's quote and invoice spread them
+     * into the supplier's product lines. Added only when the quote came to
+     * what its lines add up to, so nothing else on it is written over.
+     */
+    if (quote && charges.length && Math.abs(r2(quote.total) - goodsTotals.total) <= 0.005) {
+      await db.insert(schema.quoteItems).values(charges.map((c, i) => ({ ...chargeItemValues(c), quoteId: q.id, sortOrder: items.length + i })));
+      await db.update(schema.quotes).set({ ...totals, updatedAt: new Date() }).where(eq(schema.quotes.id, q.id));
+      [quote] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, q.id));
+    }
     const realTotal = r2(quote?.total ?? 0);
     const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, jobId));
     const jobRef = job ? jobText(job) : String(jobId);

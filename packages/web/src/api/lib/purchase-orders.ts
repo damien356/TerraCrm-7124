@@ -154,9 +154,12 @@ function orderSize(p: typeof schema.products.$inferSelect, qty: number): { qty: 
     if (r) return { qty: r.qty, rolls: r.rolls, note: `${r.note}.` };
     return { qty, rolls: 0, note: "No roll length in the price book. Check how many rolls to order." };
   }
+  // Damien, 11 Nov 2026 (job 188083): a broadloom cut is baled and sent as one roll, the same count
+  // the quote uses (quote-freight.ts measure), so a per roll baling charge is on the PO too. Rolls typed on the PO still win.
+  const cutRolls = p.soldAs === "broadloom" ? 1 : 0;
   const w = wholeUnits(p, qty);
-  if (w.flag) return { qty, rolls: 0, note: "No length size in the price book. Check how many lengths to order." };
-  return { qty: w.qty, rolls: 0, note: w.note && (w.qty !== qty || p.soldAs === "box") ? `${w.note.replace(/\.$/, "")}.` : null };
+  if (w.flag) return { qty, rolls: cutRolls, note: "No length size in the price book. Check how many lengths to order." };
+  return { qty: w.qty, rolls: cutRolls, note: w.note && (w.qty !== qty || p.soldAs === "box") ? `${w.note.replace(/\.$/, "")}.` : null };
 }
 
 export async function pricePo(input: PoPricingInput, today = todayISO()): Promise<PricedPo> {

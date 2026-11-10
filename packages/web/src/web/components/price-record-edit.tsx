@@ -276,6 +276,12 @@ function PriceRecordModal({ rec, onClose }: { rec: PriceRecord; onClose: () => v
                 Lines {moneyExact(r2(typedTotal))} ex GST, {moneyExact(r2(typedTotal * 1.1))} inc GST
               </span>
             </div>
+            {/* Supplier charges (Damien, 11 Nov 2026, job 188083). */}
+            <p className="text-xs text-muted-foreground" data-testid="price-record-charges-now">
+              {rec.orderNeeded
+                ? `Supplier charges (freight, baling) on what is ordered are worked out again and added on top. Now ${rec.chargesTotal > 0 ? `${moneyExact(rec.chargesTotal)} ex GST` : "none"}. Check changes shows the new figure.`
+                : "Nothing is ordered on this sale, so there are no supplier charges."}
+            </p>
           </div>
           <div className="grid gap-1">
             <p className="text-xs font-medium text-muted-foreground">Add a product</p>
@@ -331,6 +337,19 @@ function PriceRecordModal({ rec, onClose }: { rec: PriceRecord; onClose: () => v
                 <p>
                   Invoice {shown.invoice.number} keeps its number and becomes {moneyExact(shown.invoice.after)}. It is not emailed.
                 </p>
+                {shown.charges.length ? (
+                  <div data-testid="price-record-charges">
+                    <p>Supplier charges in the total, {moneyExact(shown.chargesTotal)} ex GST. The customer sees them inside the product prices:</p>
+                    <ul className="list-disc pl-5 text-xs text-muted-foreground">
+                      {shown.charges.map((c) => (
+                        <li key={c.description}>
+                          {c.description}, {moneyExact(c.total)}
+                          {c.flagReason ? ` (${c.flagReason})` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 {shown.drafts.map((d) => (
                   <p key={d.number}>
                     {d.removed

@@ -3,12 +3,14 @@ import { and, asc, eq, inArray, ne } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { resolveAiActionsForPo } from "./ai-actions";
+import { isChargeLine } from "./charge-fold";
 import { emailedAtFor } from "./invoice-emailed";
 import { syncJobValue } from "./job-value";
 import { markupOf } from "./pricing";
 import { bookCostsOf, LIVE_HOLDS, oneAtATime, orderForSale, priceLines, saleOfJob, syncSaleLines, totalsOf, type Priced } from "./product-sale";
 import { pricePo, writeLines, type PoLineInput } from "./purchase-orders";
 import { quoteRefOf } from "./quote-number";
+import { chargeItemValues, chargesView, saleChargesFor, type SaleCharge } from "./sale-charges";
 
 /* ---------------------------------------------------------------------------
  * Edit price record (Damien, 11 Nov 2026, job 188083).
@@ -27,7 +29,9 @@ import { quoteRefOf } from "./quote-number";
  * the invoice amounts (same invoice number, same label), the sale lines and
  * From stock now, the materials to order, and the draft POs (re-priced in
  * place, a draft left with nothing on it is removed and kept as cancelled).
- * New lines are ordered as drafts when ordering is on. Nothing is emailed,
+ * New lines are ordered as drafts when ordering is on. The supplier charges
+ * (freight, baling) are worked out again from what is ordered, the same way
+ * Sell products adds them (lib/sale-charges.ts). Nothing is emailed,
  * sent to Xero or sent to a supplier. Every change goes on the job history.
  * ------------------------------------------------------------------------- */
 
@@ -83,8 +87,8 @@ async function blockersOf(s: Loaded): Promise<string[]> {
   if (/cancel/i.test(status?.name ?? "")) out.push("This job is cancelled.");
   if (job.completedAt) out.push("The sale is marked complete.");
 
-  if (items.some((i) => i.lineType === "labour" || !["supply", "accessory", "other"].includes(i.kind))) {
-    out.push("This price record has lines Sell products does not make (labour, delivery or supplier charges). Change it with a variation.");
+  if (items.some((i) => !isChargeLine(i) && (i.lineType === "labour" || !["supply", "accessory", "other"].includes(i.kind)))) {
+    out.push("This price record has lines Sell products does not make (labour or delivery). Change it with a variation.");
   }
   const lineSum = r2(items.reduce((t, i) => t + (i.total ?? 0), 0));
   if (Math.abs(lineSum - r2(quote.subtotal)) > 0.005) out.push(`The quote total (${money(quote.subtotal)} ex GST) is not the sum of its lines (${money(lineSum)}). Ask for it to be checked first.`);
@@ -167,6 +171,7 @@ export async function priceRecordState(jobId: number, actor: { canSeeCosts: bool
   const sups = supIds.length ? await db.select({ id: schema.suppliers.id, name: schema.suppliers.name }).from(schema.suppliers).where(inArray(schema.suppliers.id, supIds)) : [];
   const inv = s.invoices[0] ?? null;
   const book = actor.canSeeCosts ? await bookCostsOf(productIds) : new Map<number, number>();
+  const charges = s.items.filter(isChargeLine);
   return {
     jobId,
     saleId: s.sale.id,
@@ -181,7 +186,10 @@ export async function priceRecordState(jobId: number, actor: { canSeeCosts: bool
     total: r2(s.quote.total),
     subtotal: r2(s.quote.subtotal),
     drafts: s.pos.map((p) => ({ number: p.number, totalExGst: r2(p.totalExGst), status: p.status })),
-    lines: s.items.map((i) => {
+    /** Supplier charges on the record now (freight, baling), ex GST. Worked out again on save. */
+    charges: chargesView(charges, actor.canSeeCosts),
+    chargesTotal: r2(charges.reduce((a, c) => a + c.total, 0)),
+    lines: s.items.filter((i) => !isChargeLine(i)).map((i) => {
       const p = products.find((x) => x.id === i.productId);
       const sl = s.lines.find((l) => l.quoteItemId === i.id);
       return {
@@ -213,7 +221,7 @@ async function planOf(s: Loaded, input: EditLineIn[]) {
     if (l.quoteItemId == null) continue;
     if (seen.has(l.quoteItemId)) throw bad("The same line is on the list twice. Refresh the page and try again.");
     seen.add(l.quoteItemId);
-    const it = s.items.find((i) => i.id === l.quoteItemId);
+    const it = s.items.find((i) => i.id === l.quoteItemId && !isChargeLine(i));
     if (!it) throw bad("A line has changed since you opened this. Close it and open Edit price record again.");
     // A line keeps its product. To swap a product, remove the line and add the new one.
     if ((l.productId ?? null) !== (it.productId ?? null)) throw bad(`"${it.description}": remove the line and add the new product instead of swapping it.`);
@@ -225,14 +233,25 @@ async function planOf(s: Loaded, input: EditLineIn[]) {
   const book = await bookCostsOf(priced.map((p) => p.productId));
   const planned: PlannedLine[] = priced.map((p, i) => {
     const l = input[i]!;
-    const it = l.quoteItemId != null ? s.items.find((x) => x.id === l.quoteItemId) : undefined;
+    const it = l.quoteItemId != null ? s.items.find((x) => x.id === l.quoteItemId && !isChargeLine(x)) : undefined;
     // Left out: a line keeps its cost, a new line gets the price book cost (as Sell products and the quote builder do).
     const cost = l.unitCost === undefined ? (it ? (it.unitCost ?? null) : p.productId != null ? (book.get(p.productId) ?? null) : null) : l.unitCost;
     if (cost != null && !(cost >= 0)) throw bad(`"${p.description}": cost must be $0 or more.`);
     return { ...p, itemId: it?.id ?? null, unitCost: cost == null ? null : r2(cost), keepDescription: !!it };
   });
-  const totals = totalsOf(planned);
-  const removed = s.items.filter((i) => !planned.some((p) => p.itemId === i.id));
+  // The supplier charges on what will be ordered, from the lines as they will be.
+  const charges = await saleChargesFor(
+    planned.map((p) => ({ productId: p.productId, toOrder: p.toOrder, unitCost: p.unitCost, unitPrice: p.unitPrice })),
+    s.sale.orderNeeded,
+  );
+  const oldCharges = s.items.filter(isChargeLine);
+  const sig = (c: { chargeSupplierId?: number | null; supplierId?: number; chargeKey?: string | null; key?: string; qty: number; unitPrice: number; unitCost: number | null; description: string }) =>
+    JSON.stringify([c.supplierId ?? c.chargeSupplierId ?? null, c.key ?? c.chargeKey ?? null, r4(c.qty), r2(c.unitPrice), c.unitCost == null ? null : r4(c.unitCost), c.description]);
+  const chargesChanged = JSON.stringify(oldCharges.map(sig).sort()) !== JSON.stringify(charges.map(sig).sort());
+  const chargesBefore = r2(oldCharges.reduce((a, c) => a + c.total, 0));
+  const chargesAfter = r2(charges.reduce((a, c) => a + c.total, 0));
+  const totals = totalsOf([...planned, ...charges]);
+  const removed = s.items.filter((i) => !isChargeLine(i) && !planned.some((p) => p.itemId === i.id));
 
   // Materials: each line's to-order qty after the change, by the material that carries it now.
   const matPlan = new Map<number, { qty: number; productId: number | null; description: string; unit: string } | null>();
@@ -316,6 +335,13 @@ async function planOf(s: Loaded, input: EditLineIn[]) {
     if (bits.length) said.push(`${it.description}: ${bits.join(", ")}${Math.abs(it.total - p.total) > 0.005 ? ` (${money(it.total)} to ${money(p.total)} ex GST)` : ""}`);
   }
   for (const r of removed) said.push(`Remove ${r.description}, ${qtyText(r.qty, r.unit)}, ${money(r.total)} ex GST`);
+  if (chargesChanged) {
+    said.push(
+      Math.abs(chargesAfter - chargesBefore) > 0.005
+        ? `Supplier charges (freight, baling): ${chargesBefore ? money(chargesBefore) : "none"} to ${chargesAfter ? money(chargesAfter) : "none"} ex GST`
+        : `Supplier charges (freight, baling) worked out again, still ${money(chargesAfter)} ex GST`,
+    );
+  }
   const stockSaid: string[] = [];
   for (const p of planned) {
     const sl = p.itemId != null ? s.lines.find((l) => l.quoteItemId === p.itemId) : undefined;
@@ -323,11 +349,11 @@ async function planOf(s: Loaded, input: EditLineIn[]) {
     const after = Math.min(p.qty, p.fromStock);
     if (sl && Math.abs(before - after) > 0.00005) stockSaid.push(`${p.description}: From stock now ${qtyText(before, p.unit)} to ${qtyText(after, p.unit)}`);
   }
-  return { planned, totals, removed, matPlan, drafts, said, stockSaid };
+  return { planned, totals, removed, matPlan, drafts, said, stockSaid, charges, chargesChanged, chargesAfter };
 }
 
 /** What Save would do. Writes nothing. */
-export async function previewPriceRecordEdit(args: { jobId: number; lines: EditLineIn[] }) {
+export async function previewPriceRecordEdit(args: { jobId: number; lines: EditLineIn[]; canSeeCosts?: boolean }) {
   const s = await load(args.jobId);
   if (!s) throw bad("This job is not a Sell products sale.");
   const blockers = await blockersOf(s);
@@ -339,6 +365,9 @@ export async function previewPriceRecordEdit(args: { jobId: number; lines: EditL
     stock: p.stockSaid,
     before: { subtotal: r2(s.quote.subtotal), gst: r2(s.quote.gst), total: r2(s.quote.total) },
     after: p.totals,
+    /** Supplier charges after the save (freight, baling), ex GST. In the total. */
+    charges: chargesView(p.charges, !!args.canSeeCosts),
+    chargesTotal: p.chargesAfter,
     invoice: { number: inv.number, before: r2(inv.total), after: p.totals.total },
     drafts: p.drafts.map((d) => ({ number: d.number, before: d.before, after: d.priced ? r2(d.priced.totalExGst) : 0, removed: d.remove, notes: d.priced?.lines.filter((l) => l.note).map((l) => `${l.description}: ${l.note}`) ?? [] })),
     ordersNew: s.sale.orderNeeded && p.planned.some((x) => x.itemId == null && x.toOrder > 0 && !x.orderNote),
@@ -396,6 +425,14 @@ export async function editPriceRecord(
           .values({ ...values, quoteId: s.quote.id, kind: "supply", lineType: "material", flagged: false, createdAt: now })
           .returning({ id: schema.quoteItems.id });
         itemIdOf.push(row!.id);
+      }
+    }
+    // The supplier charge lines, when they move. Kept after the product lines.
+    if (p.chargesChanged) {
+      const old = s.items.filter(isChargeLine);
+      if (old.length) await db.delete(schema.quoteItems).where(inArray(schema.quoteItems.id, old.map((c) => c.id)));
+      if (p.charges.length) {
+        await db.insert(schema.quoteItems).values(p.charges.map((c: SaleCharge, i) => ({ ...chargeItemValues(c), quoteId: s.quote.id, sortOrder: p.planned.length + i, createdAt: now, updatedAt: now })));
       }
     }
     // A removed line's materials go first (they are only on drafts), so the line itself can go.
@@ -470,6 +507,7 @@ export async function editPriceRecord(
       `Price record ${ref} changed. ${inv.number} was not emailed, not in Xero, nothing paid.`,
       ...p.said.map((t) => `- ${t}`),
       ...p.stockSaid.map((t) => `- ${t}`),
+      p.chargesChanged && p.charges.length ? `Supplier charges now: ${p.charges.map((c) => `${c.description} ${money(c.total)}`).join(", ")} ex GST. Inside the product prices on the customer's copy.` : "",
       Math.abs(p.totals.total - s.quote.total) > 0.005
         ? `Total ${money(s.quote.total)} to ${money(p.totals.total)} inc GST. ${inv.number} now ${money(p.totals.total)}, same number.`
         : `Total unchanged at ${money(p.totals.total)} inc GST.`,

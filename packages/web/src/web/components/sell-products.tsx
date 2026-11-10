@@ -586,6 +586,18 @@ function PreviewBody({ p, error }: { p: SalePreview; error: string | null }) {
                 <td className="tabular py-1.5 text-right">{l.fromStock > 0 ? qtyText(l.fromStock, l.unit) : "none"}</td>
               </tr>
             ))}
+            {/* Supplier charges (Damien, 11 Nov 2026, job 188083): freight and baling on what is ordered. */}
+            {p.charges.map((c, i) => (
+              <tr key={`c${i}`} className="border-b border-border align-top" data-testid="sale-charge">
+                <td colSpan={3} className="py-1.5 pr-2">
+                  {c.description}
+                  <span className="block text-xs text-muted-foreground">Inside the product prices on the customer's quote and invoice, not its own line.</span>
+                  {c.flagReason ? <span className="block text-xs text-amber-700">{c.flagReason}</span> : null}
+                </td>
+                <td className="tabular py-1.5 pr-2 text-right">{moneyExact(c.total)}</td>
+                <td className="py-1.5 text-right text-xs text-muted-foreground">ordered</td>
+              </tr>
+            ))}
           </tbody>
           <tfoot>
             <tr>

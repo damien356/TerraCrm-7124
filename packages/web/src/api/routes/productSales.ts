@@ -140,7 +140,7 @@ export const productSales = {
   preview: staffOnly
     .input(saleInput.extend({ requestKey: z.string().max(80).nullish() }))
     // A2 (7D): only the main admin sees the approve control for a container or stock-only shortage.
-    .handler(async ({ input, context }) => ({ ...(await previewSale(input)), canApproveShort: context.actor.isMainAdmin })),
+    .handler(async ({ input, context }) => ({ ...(await previewSale(input, { canSeeCosts: context.actor.canSeeCosts })), canApproveShort: context.actor.isMainAdmin })),
 
   /** Saves the quote, or raises the invoice. The same requestKey twice gives the first sale back. */
   raise: staffOnly
@@ -206,7 +206,7 @@ export const productSales = {
   /** What Save would change. Writes nothing. */
   previewPriceRecordEdit: staffOnly
     .input(z.object({ jobId: z.number(), lines: editLinesInput }))
-    .handler(async ({ input, context }) => previewPriceRecordEdit({ jobId: input.jobId, lines: editLinesFor(input.lines, context.actor.canSeeCosts) })),
+    .handler(async ({ input, context }) => previewPriceRecordEdit({ jobId: input.jobId, lines: editLinesFor(input.lines, context.actor.canSeeCosts), canSeeCosts: context.actor.canSeeCosts })),
 
   /** Changes the price record, the invoice (same number), the sale lines, materials and draft POs together. Nothing is emailed or sent. */
   editPriceRecord: staffOnly
