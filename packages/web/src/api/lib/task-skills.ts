@@ -5,6 +5,7 @@ import { lockedItems } from "./rate-access";
 import { todayLocal } from "./local-date";
 import { hourlyRateBarrier } from "./hourly";
 import { lineRateBarrier } from "./line-rates";
+import { payBarrier } from "./pay-status";
 
 /* ---------------------------------------------------------------------------
  * Which skills a piece of work needs, and who can do it (Damien's brief,
@@ -73,7 +74,7 @@ export async function workBarrier(
   taskId: number,
   installerId: number,
   itemIds?: number[] | null,
-  opts: { rates?: boolean } = {},
+  opts: { rates?: boolean; pay?: number | null } = {},
 ): Promise<string | null> {
   const missing = await missingSkills(installerId, await skillsForTask(taskId, itemIds));
   if (missing.length) return `That installer isn't ticked for ${sayList(missing.map((m) => m.name))}.`;
@@ -85,6 +86,9 @@ export async function workBarrier(
   if (opts.rates !== false) {
     const rateStop = await lineRateBarrier(taskId, installerId, itemIds);
     if (rateStop) return rateStop;
+    // No lines, no frozen labour and no agreed amount: "Pay not set", never a dash or $0.00.
+    const payStop = await payBarrier(taskId, installerId, opts.pay);
+    if (payStop) return payStop;
   }
   // Hourly man with no agreed rate: never offered work as if $0.00 were a rate.
   return hourlyRateBarrier(installerId);

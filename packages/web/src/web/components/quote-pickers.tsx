@@ -9,7 +9,7 @@ import { ProductFinder, type LastQuotedContext } from "./product-finder";
 import { useRatePicker } from "../queries/labour";
 import { useAddQuoteLabour, useAddQuoteProduct } from "../queries/quotes";
 import { ProductAreaFields, useAreaDraft } from "./floor-area";
-import { takesInstalledLm } from "../../api/lib/quote-default-rules";
+import { isAreaPrepItem, takesInstalledLm } from "../../api/lib/quote-default-rules";
 import { pieceLengthOf, supplyForInstalled } from "../../api/lib/order-sizes";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
@@ -299,6 +299,8 @@ export function LabourPicker({ quoteId, category }: { quoteId: number; category?
     }
   }, [itemId, rows, picker.isLoading]);
 
+  // Area prep (10 Nov): left blank, the qty is the floor's measured m2 and follows it.
+  const areaPrep = Boolean(item && isAreaPrepItem(item));
   const qtyNum = Number(qty) || 0;
   const lineSell = item?.sell != null ? item.sell * qtyNum : null;
 
@@ -312,6 +314,7 @@ export function LabourPicker({ quoteId, category }: { quoteId: number; category?
         itemId,
         qty: qtyNum,
         installerId: installerId ? Number(installerId) : null,
+        ...(areaPrep && !qty.trim() ? { qtyFromArea: true } : {}),
       });
       const bits = [`${r.rateItem.name} on at ${money(r.item?.total ?? 0)}.`];
       if (r.minApplied && r.minimumCharge != null) {
@@ -363,6 +366,8 @@ export function LabourPicker({ quoteId, category }: { quoteId: number; category?
           onChange={(v) => {
             setItemId(v ? Number(v) : null);
             setInstallerId("");
+            const r = rows.find((x) => String(x.itemId) === v);
+            setQty(r && isAreaPrepItem(r) ? "" : "1");
           }}
           emptyLabel="Nothing picked"
           placeholder={
@@ -386,6 +391,8 @@ export function LabourPicker({ quoteId, category }: { quoteId: number; category?
         <Input
           className="tabular w-[80px] text-right"
           aria-label="Quantity"
+          placeholder={areaPrep ? "Floor m2" : undefined}
+          title={areaPrep ? "Leave blank to follow the floor's measured m2" : undefined}
           value={qty}
           onChange={(e) => setQty(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}

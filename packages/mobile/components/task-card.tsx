@@ -217,6 +217,12 @@ export function TaskCard({
                   ) : (
                     <View />
                   )}
+                  {task.payNote ? (
+                    // Pay not set (Damien, 10 Nov): never a dash or an apparent $0.00.
+                    <Text style={{ fontFamily: Fonts.medium, fontSize: 13, color: c.destructive }}>
+                      {task.payNote}
+                    </Text>
+                  ) : (
                   <Text style={{ fontFamily: Fonts.bold, fontSize: 16, color: c.foreground }}>
                     {fmtMoney(task.payAmount)}
                     {task.payType === "hourly" ? (
@@ -225,6 +231,7 @@ export function TaskCard({
                       <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground }}> /m²</Text>
                     ) : null}
                   </Text>
+                  )}
                 </View>
               )}
             </View>

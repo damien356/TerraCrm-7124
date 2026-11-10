@@ -75,7 +75,9 @@ import {
   UPLIFT_NO_WIDTH_FLAG,
   type FloorDefault,
   type QtyRule,
+  isPrepKey,
 } from "./quote-default-rules";
+import { leavePrep } from "./prep-link";
 import { qtyForLine, standardLabour } from "./quote-labour";
 import { slotUnder, startLine } from "./quote-sizes";
 
@@ -862,6 +864,7 @@ export async function removeDefaultsOf(lineId: number) {
   // The trims each Install trims/scotia covers (7 Nov), so removing an area never takes away an install another trim still needs.
   const coveredBy = (installId: number) => quoteLines.filter((l) => l.id !== lineId && coveredLineOf(appliedOf(l.defaultsApplied)) === installId);
   const kept: { id: number; reason: string }[] = [];
+  const prepLeft: Line[] = [];
   let parents = [lineId];
   const seen = new Set<number>(parents);
   while (parents.length) {
@@ -882,6 +885,11 @@ export async function removeDefaultsOf(lineId: number) {
         flagged.push(k.id);
         continue;
       }
+      // Area prep (10 Nov) is never taken off with its floor: it stays, asking which area it is for.
+      if (isPrepKey(k.defaultKey)) {
+        prepLeft.push(k);
+        continue;
+      }
       const covers = k.rateItemId === RATE.trimInstall.id ? coveredBy(k.id) : [];
       if (covers.length) {
         const parent = quoteLines.find((l) => l.id === k.defaultForItemId) ?? self;
@@ -899,6 +907,7 @@ export async function removeDefaultsOf(lineId: number) {
       .set({ defaultForItemId: null, flagged: true, flagReason: DISPOSAL_ORPHAN_FLAG, ...NOT_REVIEWED, updatedAt: new Date() })
       .where(inArray(schema.quoteItems.id, flagged));
   }
+  for (const k of prepLeft) await leavePrep(k, lineId);
   for (const k of kept) {
     await db.update(schema.quoteItems).set({ defaultForItemId: null, updatedAt: new Date() }).where(eq(schema.quoteItems.id, k.id));
     await flagLine(k.id, k.reason);

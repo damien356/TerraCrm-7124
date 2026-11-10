@@ -26,7 +26,7 @@ import type { Actor } from "../middleware/auth";
  */
 
 /** Enforces the furniture rule and the skill-tick rule in one place. */
-async function assertAssignable(taskId: number, installerId: number, _crewSize: number, keep = false) {
+async function assertAssignable(taskId: number, installerId: number, _crewSize: number, keep = false, typedPay: number | null = null) {
   const [task] = await db
     .select({ task: schema.jobTasks, job: schema.jobs })
     .from(schema.jobTasks)
@@ -38,7 +38,8 @@ async function assertAssignable(taskId: number, installerId: number, _crewSize: 
   // And never a per-contractor item (a day rate) that isn't switched on for him.
   // The rate check is for new work: a plain edit of a booking he already has is not re-priced.
   const keeping = keep && (task.task.assignedInstallerId === installerId || task.task.secondInstallerId === installerId);
-  const barrier = await workBarrier(taskId, installerId, null, { rates: !keeping });
+  // A fixed-price dispatch with no lines and no agreed pay is "Pay not set", unless the office gives the amount now.
+  const barrier = await workBarrier(taskId, installerId, null, { rates: !keeping, pay: typedPay });
   if (barrier) throw new ORPCError("BAD_REQUEST", { message: barrier, data: { reason: "not_eligible" } });
 
   const [installer] = await db.select().from(schema.installers).where(eq(schema.installers.id, installerId));
@@ -286,7 +287,7 @@ export async function bookTask(input: z.infer<typeof bookTaskInput>, actor: Acto
   // Client prep (notes 18.56): an install can't be booked until the property type and furniture are answered.
   const block = await bookingBlock(input.taskId);
   if (block) throw new ORPCError("BAD_REQUEST", { message: block });
-  const { task, job, installer } = await assertAssignable(input.taskId, input.installerId, 1);
+  const { task, job, installer } = await assertAssignable(input.taskId, input.installerId, 1, false, input.payAmount ?? null);
 
   // Never a silent swap: booked to someone else means the office reviews it first.
   const { previous, previousName } = await replaceGuard(task, installer, input.replaceInstaller);
@@ -298,10 +299,10 @@ export async function bookTask(input: z.infer<typeof bookTaskInput>, actor: Acto
       message: `This is a 2-man task${job.furnitureOnSite ? " (furniture on site)" : ""} and ${installer.name} doesn't bring an offsider. Pick a second installer.`,
     });
   }
-  if (input.secondInstallerId) await assertAssignable(input.taskId, input.secondInstallerId, 1);
+  if (input.secondInstallerId) await assertAssignable(input.taskId, input.secondInstallerId, 1, false, input.payAmount ?? null);
   // A day handed to someone else still has to be someone ticked for the work.
   for (const d of input.perDay) {
-    if (d.installerId) await assertAssignable(input.taskId, d.installerId, 1);
+    if (d.installerId) await assertAssignable(input.taskId, d.installerId, 1, false, input.payAmount ?? null);
   }
 
   const overrides = new Map(input.perDay.map((d) => [d.date, d]));
@@ -909,7 +910,7 @@ export const tasks = {
       }),
     )
     .handler(async ({ input, context }) => {
-      const { task, job, installer } = await assertAssignable(input.id, input.installerId, 1);
+      const { task, job, installer } = await assertAssignable(input.id, input.installerId, 1, false, input.payAmount ?? null);
       const { previous, previousName } = await replaceGuard(task, installer, input.replaceInstaller);
 
       const needsTwo = task.crewSize > 1;
@@ -920,7 +921,7 @@ export const tasks = {
         });
       }
       if (input.secondInstallerId) {
-        await assertAssignable(input.id, input.secondInstallerId, 1);
+        await assertAssignable(input.id, input.secondInstallerId, 1, false, input.payAmount ?? null);
       }
       // The days stay where they are. Only who attends changes, so check the new crew on them.
       await calGuard({

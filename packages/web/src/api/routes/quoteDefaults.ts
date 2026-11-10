@@ -6,7 +6,9 @@ import * as schema from "../database/schema";
 import { staffOnly } from "../middleware/auth";
 import { openDefaultWarning, openDefaultWarnings } from "../lib/quote-default-gate";
 import { coverTrim, trimInstallChoices } from "../lib/quote-defaults";
-import { editableQuoteOrThrow } from "./quotes";
+import { isPrepWarning, m2Text } from "../lib/quote-default-rules";
+import { confirmPartial, followArea, prepLinks } from "../lib/prep-link";
+import { editableQuoteOrThrow, recalc } from "./quotes";
 
 /**
  * Quote defaults in the builder (Damien's review, 7 Nov 2026). Admin and
@@ -27,6 +29,11 @@ export const quoteDefaults = {
       const quote = await editableQuoteOrThrow(line.quoteId);
       if (!openDefaultWarning(line)) {
         throw new ORPCError("BAD_REQUEST", { message: "This line has no quote defaults warning waiting for review." });
+      }
+      if (isPrepWarning(line.flagReason)) {
+        throw new ORPCError("BAD_REQUEST", {
+          message: "A quantity mismatch is not cleared by Mark reviewed. Follow the floor area, confirm a partial area with a reason, or remove the line.",
+        });
       }
       const at = new Date();
       const [row] = await db
@@ -52,6 +59,42 @@ export const quoteDefaults = {
       };
     }),
 
+  /** Area prep lines (grinding and the other m2 prep) with the floor area each follows. Read only. */
+  prepLinks: staffOnly.input(z.object({ quoteId: z.number() })).handler(({ input }) => prepLinks(input.quoteId)),
+
+  /** Follow the floor's measured area: the qty becomes that m2 and moves with it from now on. */
+  followArea: staffOnly
+    .input(z.object({ itemId: z.number(), floorItemId: z.number().optional() }))
+    .handler(async ({ input, context }) => {
+      const [line] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, input.itemId));
+      if (!line) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
+      const quote = await editableQuoteOrThrow(line.quoteId);
+      const res = await followArea(line.id, input.floorItemId).catch((e: unknown) => {
+        throw new ORPCError("BAD_REQUEST", { message: e instanceof Error ? e.message : "Could not follow the area." });
+      });
+      await logPrep(quote, context.actor, "prep_follow_area", `"${line.description}" now follows the measured floor area of "${res.floor.description}": ${m2Text(res.qty)} (was ${m2Text(res.was)}).`);
+      return { item: res.row, totals: await recalc(line.quoteId) };
+    }),
+
+  /** A genuine partial area. A click is never enough: the qty and a reason are needed, and who and when are kept. */
+  confirmPartial: staffOnly
+    .input(z.object({ itemId: z.number(), qty: z.number().positive(), reason: z.string().trim().min(3).max(300), floorItemId: z.number().optional() }))
+    .handler(async ({ input, context }) => {
+      const [line] = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.id, input.itemId));
+      if (!line) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
+      const quote = await editableQuoteOrThrow(line.quoteId);
+      const res = await confirmPartial(line.id, input.qty, input.reason, context.actor.name, input.floorItemId).catch((e: unknown) => {
+        throw new ORPCError("BAD_REQUEST", { message: e instanceof Error ? e.message : "Could not confirm the partial area." });
+      });
+      await logPrep(
+        quote,
+        context.actor,
+        "prep_partial_confirmed",
+        `Partial area confirmed on "${line.description}": ${m2Text(res.qty)} of the ${m2Text(res.floor.measuredM2 ?? 0)} floor "${res.floor.description}" (was ${m2Text(res.was)}). Reason: ${res.reason}`,
+      );
+      return { item: res.row, totals: await recalc(line.quoteId) };
+    }),
+
   /** The Install trims/scotia lines on the quote, each with its floor area, for a trim's Install with pick. */
   trimChoices: staffOnly.input(z.object({ quoteId: z.number() })).handler(({ input }) => trimInstallChoices(input.quoteId)),
 
@@ -69,3 +112,21 @@ export const quoteDefaults = {
       }
     }),
 };
+
+async function logPrep(
+  quote: { id: number; jobId: number | null; contactId: number | null },
+  actor: { name: string; role: string },
+  action: string,
+  detail: string,
+) {
+  await db.insert(schema.activityLog).values({
+    jobId: quote.jobId,
+    contactId: quote.contactId,
+    entityType: "quote",
+    entityId: quote.id,
+    action,
+    detail: detail.slice(0, 2000),
+    actorName: actor.name,
+    actorRole: actor.role,
+  });
+}

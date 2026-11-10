@@ -14,6 +14,8 @@ import { Modal } from "../components/ui/modal";
 import { LabourPicker, ProductPicker } from "../components/quote-pickers";
 import { DefaultMark, LineAreaStrip, LinkedInstallMark, type LineArea } from "../components/floor-area";
 import { DefaultWarningActions } from "../components/quote-default-actions";
+import { PrepAreaStrip } from "../components/prep-area";
+import { isPrepKey, isPrepWarning } from "../../api/lib/quote-default-rules";
 import { SupervisorPicker } from "../components/supervisor-picker";
 import { JobPeopleCard, QuotePeopleCard } from "../components/job-people";
 import { useJob } from "../queries/jobs";
@@ -485,7 +487,7 @@ function LineRow({
           </span>
         ) : null}
         {item.flagged ? (
-          <span className="mb-1 flex items-center gap-1 text-xs text-[#D08A1E]" title={item.flagReason ?? "Needs review"}>
+          <span className={`mb-1 flex items-center gap-1 text-xs ${isPrepWarning(item.flagReason) ? "text-destructive" : "text-[#D08A1E]"}`} title={item.flagReason ?? "Needs review"}>
             <AlertTriangle className="size-3.5" /> {item.flagReason ?? "Needs review"}
           </span>
         ) : null}
@@ -517,7 +519,7 @@ function LineRow({
         {changing ? <ChangeProduct item={item} onClose={() => setChanging(false)} /> : null}
         {item.area ? <LineAreaStrip item={item} locked={locked} /> : null}
         {item.labourForItemId != null ? <LinkedInstallMark /> : null}
-        {item.defaultForItemId != null || item.kind === INTERNAL_CHARGE ? <DefaultMark defaultKey={item.defaultKey} disposalTyped={item.disposalTyped} /> : null}
+        {isPrepKey(item.defaultKey) ? <PrepAreaStrip item={item} locked={locked} onNotice={onNotice} /> : item.defaultForItemId != null || item.kind === INTERNAL_CHARGE ? <DefaultMark defaultKey={item.defaultKey} disposalTyped={item.disposalTyped} /> : null}
         {item.size ? <LineSizeStrip item={item} locked={locked} /> : null}
         {charge ? (
           <p className="mt-1 text-[11px] text-muted-foreground">

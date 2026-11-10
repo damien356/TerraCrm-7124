@@ -13,6 +13,7 @@ import { sendEmail } from "../lib/email";
 import { abnView } from "../lib/abn-check";
 import { EMPLOYEE_NO_INVOICE, isEmployee } from "../lib/worker-type";
 import { unsetPayLines } from "../lib/line-rates";
+import { PAY_NOT_SET, visitSkillIds } from "../lib/pay-status";
 
 /**
  * The installer's own invoice to Terra for a completed task. Installers can
@@ -75,6 +76,20 @@ async function taskInvoiceContext(taskId: number, installerId: number) {
       // leave lineItems as whatever was already pushed
     }
   }
+  /*
+   * The same pay basis as his Your pay card (field.ts payTotalOf): the frozen
+   * lines, else a flat amount the office agreed. Nothing at all is "Pay not
+   * set", never a $0.00 invoice (Damien, 10 Nov).
+   */
+  let payNotSetBlock: string | null = null;
+  const visit = task.skillId != null && (await visitSkillIds()).has(task.skillId);
+  if (!hourly && !visit && lineItems.length === 0) {
+    if (task.payAmount != null && task.payAmount > 0) {
+      lineItems.push({ description: task.title, unit: "job", qty: 1, rate: task.payAmount, total: task.payAmount });
+    } else if (task.payAmount == null) {
+      payNotSetBlock = `${PAY_NOT_SET}. Terra office must confirm the agreed pay for this work before it can be invoiced.`;
+    }
+  }
   const usableVariations = approvedVariations.filter((v) => !v.invoiceId);
   for (const v of usableVariations) {
     lineItems.push({ description: `Approved extra: ${v.description}`, unit: "each", qty: 1, rate: v.amount, total: v.amount });
@@ -98,7 +113,7 @@ async function taskInvoiceContext(taskId: number, installerId: number) {
     total,
     hourlySessionIds: hourly?.sessionIds ?? [],
     // Hourly: the time checks. Lines: a line at $0.00 is "Rate not set", never free work.
-    hourlyBlock: hourly ? hourly.block : payLineBlock(lineItems),
+    hourlyBlock: hourly ? hourly.block : (payNotSetBlock ?? payLineBlock(lineItems)),
   };
 }
 
@@ -513,7 +528,7 @@ export const installerInvoices = {
       // Approving pay (or paying it) needs a real rate on every line. Already approved or paid stays as it is.
       const [current] = await db.select().from(schema.installerInvoices).where(eq(schema.installerInvoices.id, input.invoiceId));
       if (!current) throw new ORPCError("NOT_FOUND", { message: "Invoice not found" });
-      const [paidOn] = await db.select({ payType: schema.jobTasks.payType }).from(schema.jobTasks).where(eq(schema.jobTasks.id, current.taskId));
+      const [paidOn] = await db.select({ payType: schema.jobTasks.payType, payAmount: schema.jobTasks.payAmount, skillId: schema.jobTasks.skillId }).from(schema.jobTasks).where(eq(schema.jobTasks.id, current.taskId));
       // Hourly bills carry the approved time at the rate each day was approved at, checked at approval.
       if (current.status === "submitted" && input.status !== "submitted" && paidOn?.payType !== "hourly") {
         let lines: InvoiceLineItem[] = [];
@@ -524,6 +539,11 @@ export const installerInvoices = {
         }
         const block = payLineBlock(lines, "approving this pay");
         if (block) throw new ORPCError("BAD_REQUEST", { message: block.replace("Terra office must set", "Set") });
+        // No pay line at all (only extras, or nothing): the work itself has no agreed pay.
+        const visit = paidOn?.skillId != null && (await visitSkillIds()).has(paidOn.skillId);
+        if (!visit && paidOn?.payAmount !== 0 && !lines.some((l) => !(l.description ?? "").startsWith("Approved extra:") && (l.total ?? 0) > 0)) {
+          throw new ORPCError("BAD_REQUEST", { message: `${PAY_NOT_SET}. This invoice has no agreed pay for the work itself. Confirm the pay before approving it.` });
+        }
       }
       const now = new Date();
       const stamps: Record<string, Date> = {};

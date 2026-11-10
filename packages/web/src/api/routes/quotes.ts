@@ -69,6 +69,7 @@ import {
   removeDefaultsOf,
 } from "../lib/quote-defaults";
 import { isNewSkirting, isTrimProduct, takesInstalledLm } from "../lib/quote-default-rules";
+import { followPrepArea, placePrep, prepPlan, settlePrep } from "../lib/prep-link";
 import { assertDefaultsResolved } from "../lib/quote-default-gate";
 import { isSheetUnderlay } from "../lib/pack-name";
 import { isUnderlayCategory, lengthUnitPrice, supplyForInstalled, underlayName } from "../lib/order-sizes";
@@ -1147,6 +1148,9 @@ export const quotes = {
          * underneath, and works the qty out from that line's measured m2.
          */
         forItemId: z.number().optional(),
+        /** m2 area prep (grinding and the like): the floor it is for, and take the qty from its measured m2. */
+        floorItemId: z.number().optional(),
+        qtyFromArea: z.boolean().optional(),
       }),
     )
     .handler(async ({ input, context }) => {
@@ -1177,7 +1181,10 @@ export const quotes = {
         };
       }
 
-      const { item, live, cost, sell, lineCost, lineSell, minApplied } = await standardLabour(input.itemId, input.qty);
+      // Area prep goes with a floor area and follows its measured m2 (10 Nov, job 188016).
+      const plan = input.forItemId == null ? await prepPlan(input.quoteId, input.itemId, input.floorItemId) : null;
+      const qty = plan && input.qtyFromArea ? plan.qty : input.qty;
+      const { item, live, cost, sell, lineCost, lineSell, minApplied } = await standardLabour(input.itemId, qty);
 
       let installerName: string | null = null;
       if (input.installerId != null) {
@@ -1200,7 +1207,7 @@ export const quotes = {
           kind: item.kind === "work" ? "labour" : item.kind === "allowance" ? "other" : "labour",
           lineType: "labour",
           description: input.description?.trim() || item.name,
-          qty: input.qty,
+          qty,
           unit: item.unit,
           // Unit figures, so editing qty on the row still behaves. The minimum
           // charge is folded into the stored total instead.
@@ -1210,10 +1217,12 @@ export const quotes = {
           total: lineSell,
           sortOrder: Number(maxRow?.max ?? -1) + 1,
           rateItemId: item.id,
+          ...(plan ? { defaultForItemId: plan.floor?.id ?? null, defaultKey: plan.key } : {}),
         })
         .returning();
       // Quote defaults: a Carpet uplift added by hand brings Terra's disposal allowance with it.
       if (row) await ensureDisposal(row.id);
+      if (row && plan) await placePrep(row, plan.floor).then(() => settlePrep(row.id));
 
       const totals = await recalc(input.quoteId);
       const showCost = context.actor.canSeeCosts;
@@ -1491,7 +1500,9 @@ export const quotes = {
           const hasInstall = labour || (await db.select({ id: schema.quoteItems.id }).from(schema.quoteItems).where(eq(schema.quoteItems.labourForItemId, row.id)))[0];
           if (before.measuredM2 == null && row.measuredM2 != null && (addInstall || hasInstall)) await applyFloorDefaults(row.id, product);
         }
+        if (areaTouched && product) await followPrepArea(before, row);
         await afterLineEdit(before, row, { qty: input.qty, unitPrice: input.unitPrice, unitCost: input.unitCost });
+        if (input.qty !== undefined) await settlePrep(row.id);
       }
 
       // Roll and cut carpet: only a new qty or product prices the line again. Wording and price edits leave it.

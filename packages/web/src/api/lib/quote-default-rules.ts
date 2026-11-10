@@ -340,6 +340,75 @@ export const TRIM_MISSING_MARK = "Install trims/scotia not put on.";
 export const SKIRTING_MISSING_MARK = "Install new skirting not put on.";
 const CHANGED_MARK = "This was put on for the";
 
+/* ------------------------------- area prep -------------------------------- */
+/*
+ * Area prep (Damien, 10 Nov 2026, job 188016: Grinding at 1 m2 on a 50 m2
+ * carpet tile floor). An m2 preparation line (the rate book's prep group:
+ * grinding, floor preparation, levelling, moisture barrier, hardboard,
+ * floating floor removal) is linked to the floor area it is for and follows
+ * that floor's measured m2, never the ordered m2 with waste. A different
+ * qty is a partial area, confirmed with a reason, or a mismatch that stops
+ * the quote going out. Work not measured in m2 keeps its own rule.
+ */
+export const PREP_KEY_PREFIX = "prep:";
+export const prepKey = (rateItemId: number) => `${PREP_KEY_PREFIX}${rateItemId}`;
+export const isPrepKey = (k: string | null | undefined) => !!k && k.startsWith(PREP_KEY_PREFIX) && !k.startsWith("prep:partial:");
+const isM2Unit = (u: string | null | undefined) => /^(m2|m²|sqm)$/i.test((u ?? "").trim());
+/** A rate book item that is area preparation, priced by the m2. */
+export function isAreaPrepItem(i: { unit: string | null; groupName: string | null }) {
+  return isM2Unit(i.unit) && (i.groupName ?? "").trim().toLowerCase() === "prep";
+}
+const r4 = (n: number) => Math.round(n * 10_000) / 10_000;
+/** On a prep line in defaultsApplied: a partial area someone confirmed, and the floor m2 it was confirmed against. */
+export const partialKey = (qty: number, floorM2: number) => `prep:partial:${r4(qty)}:${r4(floorM2)}`;
+export function partialOf(applied: string[]): { qty: number; floorM2: number } | null {
+  const k = applied.find((a) => a.startsWith("prep:partial:"));
+  if (!k) return null;
+  const [, , q, f] = k.split(":");
+  const qty = Number(q);
+  const floorM2 = Number(f);
+  return Number.isFinite(qty) && Number.isFinite(floorM2) ? { qty, floorM2 } : null;
+}
+export const m2Text = (n: number) => `${Math.round(n * 100) / 100} m2`;
+export const followsAreaLabel = (m2: number) => `Follows measured floor area: ${m2Text(m2)}`;
+export const PREP_MISMATCH_MARK = "Quantity mismatch:";
+const PREP_MISMATCH_END = "if it is not required.";
+export const prepMismatchFlag = (areaM2: number, name: string, qty: number) =>
+  `${PREP_MISMATCH_MARK} this floor area is ${m2Text(areaM2)} but ${name} is ${m2Text(qty)}. Follow the ${m2Text(areaM2)} area, confirm partial ${name.toLowerCase()} with a reason, or remove ${name.toLowerCase()} ${PREP_MISMATCH_END}`;
+export const PREP_PICK_MARK = "Pick the floor area for";
+const PREP_PICK_END = "confirm a partial area with a reason.";
+export const prepPickFlag = (name: string, floors: number) =>
+  floors === 0
+    ? `${PREP_PICK_MARK} ${name}: no floor line on this quote has a measured area yet. Enter the floor's measured m2, then follow it, or ${PREP_PICK_END}`
+    : `${PREP_PICK_MARK} ${name}: this quote has ${floors} measured floor areas. Pick the one it is for, or ${PREP_PICK_END}`;
+export const PREP_PARTIAL_MARK = "Check the partial area:";
+const PREP_PARTIAL_END = "or remove it if it is not needed.";
+export const prepPartialReviewFlag = (name: string, qty: number, wasM2: number, nowM2: number) =>
+  `${PREP_PARTIAL_MARK} ${name} was confirmed at ${m2Text(qty)} of a ${m2Text(wasM2)} floor, and the floor is now ${m2Text(nowM2)}. Confirm the partial area again with a reason, follow the ${m2Text(nowM2)} area, ${PREP_PARTIAL_END}`;
+const PREP_FLAGS: Array<[string, string]> = [
+  [PREP_MISMATCH_MARK, PREP_MISMATCH_END],
+  [PREP_PICK_MARK, PREP_PICK_END],
+  [PREP_PARTIAL_MARK, PREP_PARTIAL_END],
+];
+/** True when the reason carries an area prep warning. Mark reviewed is not enough for these. */
+export function isPrepWarning(reason: string | null | undefined) {
+  return !!reason && PREP_FLAGS.some(([m]) => reason.includes(m));
+}
+/** The reason with the area prep warnings taken off. Null when nothing is left. */
+export function withoutPrepFlags(reason: string | null | undefined): string | null {
+  if (!reason) return null;
+  let text = reason;
+  for (const [mark, end] of PREP_FLAGS) {
+    for (let i = text.indexOf(mark); i >= 0; i = text.indexOf(mark)) {
+      const j = text.indexOf(end, i);
+      if (j < 0) break;
+      text = `${text.slice(0, i)} ${text.slice(j + end.length)}`;
+    }
+  }
+  text = text.replace(/\s+/g, " ").trim();
+  return text || null;
+}
+
 /**
  * The warnings this feature puts on a line. While any is on a line, the
  * quote cannot be sent, accepted or made into a job (lib/quote-default-gate.ts).
@@ -362,6 +431,9 @@ export function isDefaultWarning(reason: string | null | undefined) {
     AREA_GONE_MARK,
     TRIM_OVERLAP_MARK,
     TRIM_ADDED_MARK,
+    PREP_MISMATCH_MARK,
+    PREP_PICK_MARK,
+    PREP_PARTIAL_MARK,
   ].some((m) => reason.includes(m));
 }
 

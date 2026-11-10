@@ -89,6 +89,8 @@ let m: {
   offers: typeof import("../src/api/routes/offers").offers;
   dispatches: typeof import("../src/api/routes/dispatches").dispatches;
   invoices: typeof import("../src/api/routes/installerInvoices").installerInvoices;
+  field: typeof import("../src/api/routes/field").field;
+  pay: typeof import("../src/api/lib/pay-status");
 };
 let client: Client;
 
@@ -145,6 +147,8 @@ beforeAll(async () => {
     offers: (await import("../src/api/routes/offers")).offers,
     dispatches: (await import("../src/api/routes/dispatches")).dispatches,
     invoices: (await import("../src/api/routes/installerInvoices")).installerInvoices,
+    field: (await import("../src/api/routes/field")).field,
+    pay: await import("../src/api/lib/pay-status"),
   };
   await seed();
 });
@@ -909,6 +913,106 @@ describe("9. $0.00 is Rate not set, and the job 4297 stairs line", () => {
     } finally {
       c2.close();
     }
+  });
+});
+
+describe("10. Pay not set (Damien, 10 Nov, job 188016 / 188016-B)", () => {
+  const MEASURE = 50; // a Measure & quote skill, as live
+  const GRIND = 57; // Grinding, m2, prep group, Terra $10
+  const NOPAY = "Pay not set / Office review required";
+  /** A fixed-price dispatch with no lines and no pay, as 188016-B was. */
+  const bare = async (title = "Carpet tiles", skillId: number | null = SK.tiles) => newTask(await newJob(), title, skillId, [], { payType: "per_job" });
+
+  test("booking, assigning, a direct offer and a broadcast are all refused, and nothing is written", async () => {
+    const t = await bare();
+    for (const p of [
+      failure(run(m.tasksRoute.tasks.assign, { id: t, installerId: PAUL })),
+      failure(m.tasksRoute.bookTask({ taskId: t, installerId: PAUL, dates: [FRI], arrivalStart: "07:00", coordinateAfterFirst: false, perDay: [] } as any, actor())),
+      failure(run(m.offers.sendDirect, { taskId: t, installerId: PAUL })),
+      failure(run(m.offers.broadcast, { taskId: t })),
+    ]) {
+      const e = await p;
+      expect(e.message).toStartWith(NOPAY);
+      expect(e.message).toContain("no measured lines and no agreed pay");
+    }
+    const [row] = await q("SELECT status, assigned_installer_id FROM job_tasks WHERE id = ?", [t]);
+    expect([row.status, row.assigned_installer_id]).toEqual(["unassigned", null]);
+    expect(await q("SELECT count(*) n FROM task_offers WHERE task_id = ?", [t])).toEqual([{ n: 0 }] as any);
+  });
+
+  test("an agreed amount typed with the booking is enough, and so is a $0.00 typed on purpose", async () => {
+    const t = await bare();
+    await run(m.tasksRoute.tasks.assign, { id: t, installerId: PAUL, payAmount: 450 });
+    expect((await q("SELECT pay_amount FROM job_tasks WHERE id = ?", [t]))[0].pay_amount).toBe(450);
+    const z = await bare();
+    await run(m.tasksRoute.tasks.assign, { id: z, installerId: PAUL, payAmount: 0 });
+    expect((await q("SELECT pay_amount, assigned_installer_id FROM job_tasks WHERE id = ?", [z]))[0]).toEqual({ pay_amount: 0, assigned_installer_id: PAUL });
+  });
+
+  test("a Measure & quote visit and an hourly man are never Pay not set", async () => {
+    await m.db.insert(schema.skills).values({ id: MEASURE, name: "Measure & quote", groupName: "sales" } as any);
+    await m.db.insert(schema.installerSkills).values({ installerId: DAMIEN, skillId: MEASURE } as any);
+    const visit = await bare("Measure & quote", MEASURE);
+    await run(m.tasksRoute.tasks.assign, { id: visit, installerId: DAMIEN });
+    const hourly = await bare("Hybrid by the hour", SK.hybrid);
+    await run(m.tasksRoute.tasks.assign, { id: hourly, installerId: HOURLY });
+    expect((await m.pay.payNotSetTaskIds([visit, hourly])).size).toBe(0);
+  });
+
+  test("a booking made before the check is flagged, never cancelled: office flag, crew card says Pay not set, no invoice", async () => {
+    const t = await bare();
+    await q("UPDATE job_tasks SET assigned_installer_id = ?, status = 'assigned', scheduled_date = ? WHERE id = ?", [FAB, FRI, t]);
+    expect([...(await m.pay.payNotSetTaskIds([t]))]).toEqual([t]);
+    const card = await as(FAB_LOGIN, () => run<any>(m.field.task, { id: t }));
+    expect([card.payStatus, card.payNote, card.payAmount]).toEqual(["not_set", NOPAY, null]);
+    expect((await q("SELECT status FROM job_tasks WHERE id = ?", [t]))[0].status).toBe("assigned");
+    await q("UPDATE job_tasks SET status = 'complete' WHERE id = ?", [t]);
+    const preview = await as(FAB_LOGIN, () => run<any>(m.invoices.preview, { taskId: t }));
+    expect(JSON.stringify(preview)).toContain(NOPAY);
+    expect((await failure(as(FAB_LOGIN, () => run(m.invoices.submit, { taskId: t })))).message).toContain(NOPAY);
+    expect(await q("SELECT count(*) n FROM installer_invoices WHERE task_id = ?", [t])).toEqual([{ n: 0 }] as any);
+  });
+
+  test("a submitted bill with only approved extras on it can't be approved", async () => {
+    const j = await newJob();
+    const t = await newTask(j, "Extras only", SK.tiles, [], { assignedInstallerId: FAB, status: "complete", payType: "per_job" });
+    const [inv] = await m.db
+      .insert(schema.installerInvoices)
+      .values({
+        taskId: t, jobId: j, installerId: FAB, invoiceNumber: 77, status: "submitted",
+        lineItems: JSON.stringify([{ description: "Approved extra: move a fridge", unit: "each", qty: 1, rate: 50, total: 50 }]),
+        subtotal: 50, total: 50,
+      } as any)
+      .returning();
+    const e = await failure(run(m.invoices.adminSetStatus, { invoiceId: inv!.id, status: "approved" }));
+    expect(e.message).toStartWith(NOPAY);
+    expect((await q("SELECT status FROM installer_invoices WHERE id = ?", [inv!.id]))[0].status).toBe("submitted");
+  });
+
+  test("the 188016-B shape once repaired: 50 m2 install at $10 and 50 m2 grinding at $6 is $800 once, on the card and the bill", async () => {
+    await m.db.insert(schema.labourRateItems).values({ id: GRIND, name: "Grinding", unit: "m2", groupName: "prep", skillId: null, kind: "work", active: true } as any);
+    await m.db.insert(schema.labourRates).values({ itemId: GRIND, amount: 10, effectiveFrom: "2026-01-01" } as any);
+    await m.db.insert(schema.labourRates).values({ itemId: GRIND, installerId: FAB, amount: 6, effectiveFrom: "2026-11-02" } as any);
+    await m.db.insert(schema.labourRates).values({ itemId: IT.tiles, installerId: FAB, amount: 10, effectiveFrom: "2026-11-02" } as any);
+    const t = await bare();
+    await q("UPDATE job_tasks SET assigned_installer_id = ?, status = 'assigned', scheduled_date = ? WHERE id = ?", [FAB, FRI, t]);
+    const breakdown = [
+      { itemId: IT.tiles, name: "Carpet tile install", unit: "m2", qty: 50, rate: 10, total: 500 },
+      { itemId: GRIND, name: "Grinding", unit: "m2", qty: 50, rate: 6, total: 300 },
+    ];
+    await m.db.insert(schema.taskLabourLines).values([
+      { taskId: t, itemId: IT.tiles, qty: 50, sortOrder: 0 },
+      { taskId: t, itemId: GRIND, qty: 50, sortOrder: 1 },
+    ] as any);
+    await q("UPDATE job_tasks SET labour_cost = 800, labour_breakdown = ?, labour_priced_on = '2026-11-02' WHERE id = ?", [JSON.stringify(breakdown), t]);
+    expect((await m.pay.payNotSetTaskIds([t])).size).toBe(0);
+    const card = await as(FAB_LOGIN, () => run<any>(m.field.task, { id: t }));
+    expect([card.payStatus, card.payNote, card.payTotal]).toEqual(["set", null, 800]);
+    expect(card.payBreakdown.map((l: any) => [l.name, l.qty, l.rate, l.total])).toEqual([["Carpet tile install", 50, 10, 500], ["Grinding", 50, 6, 300]]);
+    await q("UPDATE job_tasks SET status = 'complete' WHERE id = ?", [t]);
+    const preview = await as(FAB_LOGIN, () => run<any>(m.invoices.preview, { taskId: t }));
+    expect(preview.subtotal).toBe(800);
+    expect(JSON.stringify(preview)).not.toContain(NOPAY);
   });
 });
 

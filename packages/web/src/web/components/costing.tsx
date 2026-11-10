@@ -455,6 +455,8 @@ function SaleCostLines({ jobId, sale }: { jobId: number; sale: SaleCostsView }) 
 
 /** Damien's wording, 31 Oct. Shown instead of a cost, GP or margin while a cost price is missing. */
 export const COST_INCOMPLETE = "Cost incomplete — margin unavailable";
+/** Damien, 10 Nov: a booked fixed-price dispatch with no agreed pay. */
+const PAY_NOT_SET_LABEL = "Pay not set / Office review required";
 
 export function JobForecastCard({ jobId, productSale = false }: { jobId: number; productSale?: boolean }) {
   const [against, setAgainst] = React.useState("");
@@ -470,6 +472,8 @@ export function JobForecastCard({ jobId, productSale = false }: { jobId: number;
     // A missing cost price has its own line below: Cost incomplete.
     const nothingMeasured = f.tasks.filter((t) => t.measured === 0);
     if (nothingMeasured.length) gaps.push(`${nothingMeasured.length} dispatch(es) not measured up`);
+    const unpaid = f.tasks.filter((t) => t.payNotSet);
+    if (unpaid.length) gaps.push(`${unpaid.length} booked dispatch(es): ${PAY_NOT_SET_LABEL}`);
     const short = Array.from(new Set(f.tasks.flatMap((t) => t.unpriced)));
     if (short.length) gaps.push(`no rate for ${short.join(", ")}`);
   }
@@ -615,6 +619,7 @@ export function JobForecastCard({ jobId, productSale = false }: { jobId: number;
                             </Badge>
                           ) : null}
                           {t.measured === 0 ? <Badge colour="#B4472E">not measured</Badge> : null}
+                          {t.payNotSet ? <Badge colour="#B42318">{PAY_NOT_SET_LABEL}</Badge> : null}
                           {t.unpriced.length ? <Badge colour="#B4472E">{t.unpriced.length} unpriced</Badge> : null}
                         </div>
                         <p className="text-xs text-muted-foreground">

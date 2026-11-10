@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { payNotSetTaskIds } from "../lib/pay-status";
 import { ORPCError } from "@orpc/server";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../database";
@@ -473,6 +474,9 @@ export const costing = {
           ? await jobHourlyCosting(input.jobId)
           : null;
 
+      // Booked fixed-price dispatches with no agreed pay: flagged, never changed (Damien, 10 Nov).
+      const unpaid = await payNotSetTaskIds(taskIds);
+
       const taskViews = tasks.map((t) => {
         const lines = allLines.filter((l) => l.taskId === t.task.id);
         const pricedAgainst = input.installerId ?? t.task.assignedInstallerId ?? null;
@@ -523,6 +527,7 @@ export const costing = {
               }
             : {}),
           frozen,
+          payNotSet: unpaid.has(t.task.id),
           pricedOn: frozen ? t.task.labourPricedOn : on,
           unpriced: live.unpriced,
           incomplete: hv ? (!hv.final && hv.plan.hours == null) || hv.vehicleMissing.length > 0 : lines.length === 0 || live.incomplete,

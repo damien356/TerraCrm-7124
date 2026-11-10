@@ -1,5 +1,5 @@
 import { CheckCircle2 } from "lucide-react";
-import { isDefaultWarning, coveredLineOf, appliedOf, TRIM_KEY } from "../../api/lib/quote-default-rules";
+import { isDefaultWarning, isPrepWarning, coveredLineOf, appliedOf, TRIM_KEY } from "../../api/lib/quote-default-rules";
 import { useCoverTrim, useReviewDefault, useTrimChoices } from "../queries/quote-defaults";
 import { Select } from "./ui/field";
 
@@ -25,7 +25,7 @@ const when = (d: Date | string) =>
 export function DefaultWarningActions({ item, locked, onNotice }: { item: DefaultLine; locked: boolean; onNotice: (t: string) => void }) {
   const review = useReviewDefault();
   const warned = Boolean(item.flagged && isDefaultWarning(item.flagReason));
-  const reviewed = item.defaultReviewedAt ? { by: item.defaultReviewedBy ?? "someone", at: item.defaultReviewedAt } : null;
+  const reviewed = item.defaultReviewedAt && !isPrepWarning(item.flagReason) ? { by: item.defaultReviewedBy ?? "someone", at: item.defaultReviewedAt } : null;
   const covered = coveredLineOf(appliedOf(item.defaultsApplied));
   const isTrim = appliedOf(item.defaultsApplied).includes(TRIM_KEY);
   if (!warned && !(isTrim && covered != null)) return null;
@@ -36,7 +36,7 @@ export function DefaultWarningActions({ item, locked, onNotice }: { item: Defaul
           <CheckCircle2 className="size-3.5" /> Reviewed by {reviewed.by}, {when(reviewed.at)}
           {item.defaultReviewNote ? `: ${item.defaultReviewNote}` : ""}
         </span>
-      ) : warned && !locked ? (
+      ) : warned && !locked && !isPrepWarning(item.flagReason) ? (
         <button
           type="button"
           disabled={review.isPending}

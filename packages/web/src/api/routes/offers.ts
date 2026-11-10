@@ -10,6 +10,7 @@ import { notifyOffice } from "../lib/notify";
 import { blockedReason } from "../lib/availability";
 import { bookingBlock } from "../lib/prep";
 import { workBarrier } from "../lib/task-skills";
+import { PAY_NOT_SET } from "../lib/pay-status";
 import { lockTaskLabour } from "./costing";
 import { isHourlyContractor } from "../lib/hourly";
 import { syncJobForTask } from "../lib/job-stage";
@@ -189,13 +190,14 @@ export async function sendDirectOffer(
 
   // A typed pay of $0.00 is "Rate not set", never an offer of free work.
   if (input.payAmount != null && !(input.payAmount > 0)) throw new ORPCError("BAD_REQUEST", { message: TYPED_ZERO });
-  // Every skill the task's own lines need, not only the first one, and a real rate on every line.
-  const barrier = await workBarrier(input.taskId, input.installerId);
+  // A task price of exactly $0 is only ever set on purpose (a callback Terra isn't paying for), so it is sent as it is.
+  const pay = input.payAmount ?? (await derivePay(input.taskId, input.installerId));
+  // Every skill the task's own lines need, not only the first one, a real rate on every line,
+  // and some agreed pay: no lines and no amount is "Pay not set", never an offer of free work.
+  const barrier = await workBarrier(input.taskId, input.installerId, null, { pay });
   if (barrier) throw new ORPCError("BAD_REQUEST", { message: barrier });
 
   const expiresAt = new Date(Date.now() + OFFER_TTL_HOURS * 3600_000);
-  // A task price of exactly $0 is only ever set on purpose (a callback Terra isn't paying for), so it is sent as it is.
-  const pay = input.payAmount ?? (await derivePay(input.taskId, input.installerId));
 
   const [offer] = await db
     .insert(schema.taskOffers)
@@ -270,7 +272,14 @@ export const offers = {
       // Staff and calendar-checked people are left out, see offerOff.
       const off = await offerOff(candidates.map((c) => c.installer.id));
       // Ticked for every skill the task's lines need, not only its headline one, with a real rate on each line.
-      for (const c of candidates) if (await workBarrier(input.taskId, c.installer.id)) off.add(c.installer.id);
+      // And some agreed pay for him: no lines and no amount is "Pay not set".
+      let payStop: string | null = null;
+      for (const c of candidates) {
+        const pay = input.payAmount ?? (await derivePay(input.taskId, c.installer.id));
+        const why = await workBarrier(input.taskId, c.installer.id, null, { pay });
+        if (why) off.add(c.installer.id);
+        if (why?.startsWith(PAY_NOT_SET)) payStop = why;
+      }
       const eligible = candidates.filter(
         (c) =>
           !off.has(c.installer.id) &&
@@ -278,6 +287,7 @@ export const offers = {
       );
 
       if (eligible.length === 0) {
+        if (payStop) throw new ORPCError("BAD_REQUEST", { message: payStop });
         throw new ORPCError("BAD_REQUEST", {
           message:
             task.crewSize > 1

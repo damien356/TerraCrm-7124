@@ -32,3 +32,20 @@ export function useCoverTrim() {
   const refresh = useRefresh();
   return useMutation(orpc.quoteDefaults.coverTrim.mutationOptions({ onSuccess: refresh }));
 }
+
+/** Area prep lines and the floor area each follows (10 Nov). */
+export function usePrepLinks(quoteId: number | null, enabled = true) {
+  return useQuery(
+    orpc.quoteDefaults.prepLinks.queryOptions({ input: { quoteId: quoteId ?? 0 }, enabled: enabled && quoteId != null, staleTime: 0 }),
+  );
+}
+
+export function useFollowArea() {
+  const refresh = useRefresh();
+  return useMutation(orpc.quoteDefaults.followArea.mutationOptions({ onSuccess: refresh }));
+}
+
+export function useConfirmPartial() {
+  const refresh = useRefresh();
+  return useMutation(orpc.quoteDefaults.confirmPartial.mutationOptions({ onSuccess: refresh }));
+}

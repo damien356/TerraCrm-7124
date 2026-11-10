@@ -146,6 +146,9 @@ const RATES: { id: number; name: string; unit: string; group: string; markup: nu
   { id: 120, name: "Cutting gyprock", unit: "lm", group: "resilient", markup: 60, amount: 4 },
   { id: 121, name: "Install new skirting", unit: "lm", group: "trades", markup: 50, amount: 10 },
   { id: 122, name: "Skirting removal only", unit: "lm", group: "trades", markup: 50, amount: 5 },
+  // Area prep (10 Nov, job 188016): carpet tile install and Grinding, live ids.
+  { id: 4, name: "Carpet tile install", unit: "m2", group: "carpet", markup: null, amount: 10 },
+  { id: 57, name: "Grinding", unit: "m2", group: "prep", markup: null, amount: 10 },
 ];
 
 const P: Record<string, number> = {};
@@ -201,6 +204,7 @@ async function seed() {
   await product("scotia", { brand: "Terra", range: "Scotia", colour: "White", sku: "SC1", category: "scotia", unit: "lm" });
   await product("trim", { brand: "Terra", range: "Reducer", colour: "Silver", sku: "TR1", category: "trim", unit: "each" });
   await product("accTrim", { brand: "Terra", range: "Aluminium Trim End", colour: "Silver", sku: "AC1", category: "accessory", unit: "each" });
+  await product("carpetTile", { brand: "Interface", range: "Ethos", colour: "Grey", sku: "CT1", category: "carpet_tile", soldAs: "box", unit: "m2", unitsPerPack: 20, unitM2: 0.25 });
   await product("accGlue", { brand: "Terra", range: "Glue", colour: "", sku: "AC2", category: "accessory", unit: "each" });
   await db.insert(schema.settings).values([
     { key: "carpet_disposal_cost_per_m2", value: "3" },
@@ -1511,3 +1515,179 @@ describe("7 Nov catalog decisions: base plates, new skirting, Sunstar and Riverh
 test("nothing was sent", () => {
   expect(blocked).toEqual([]);
 });
+
+describe("area prep follows the floor area (Damien, 10 Nov, job 188016)", () => {
+  const GRIND = 57;
+  const MISMATCH =
+    "Quantity mismatch: this floor area is 50 m2 but Grinding is 1 m2. Follow the 50 m2 area, confirm partial grinding with a reason, or remove grinding if it is not required.";
+  const floor = async (qid: number, m2 = 50) => (await addProduct({ quoteId: qid, productId: P.carpetTile, measuredM2: m2, wastagePct: 10 })).item;
+  const grind = async (qid: number, extra: Record<string, unknown> = {}) => (await addLabour({ quoteId: qid, itemId: GRIND, qty: 1, installerId: null, ...extra })).item;
+  const links = (qid: number) => run<{ quoteId: number }, any>(m.quoteDefaults.prepLinks, { quoteId: qid });
+  const failure = async (p: Promise<unknown>): Promise<any> => {
+    try {
+      await p;
+    } catch (e) {
+      return e;
+    }
+    throw new Error("expected it to be refused");
+  };
+
+  test("188016 as it happened: Grinding at 1 m2 on a 50 m2 floor is linked, warned in Damien's words, and stops the quote", async () => {
+    const qid = await newQuote();
+    const f = await floor(qid);
+    const g = await lineOf((await grind(qid)).id);
+    expect([g.qty, g.defaultForItemId, g.defaultKey, g.flagged]).toEqual([1, f.id, "prep:57", true]);
+    expect(g.flagReason).toBe(MISMATCH);
+    const ls = await linesOf(qid);
+    expect(ls.findIndex((l) => l.id === g.id)).toBeGreaterThan(ls.findIndex((l) => l.id === f.id));
+    expect((await m.gate.openDefaultWarnings(qid)).map((o) => o.id)).toEqual([g.id]);
+    // A click is not a confirmation.
+    const e = await failure(run(m.quoteDefaults.review, { itemId: g.id }));
+    expect(e.message).toContain("not cleared by Mark reviewed");
+    await q("update quote_items set default_reviewed_at = 1, default_reviewed_by = 'x' where id = ?", [g.id]);
+    expect((await m.gate.openDefaultWarnings(qid)).map((o) => o.id)).toEqual([g.id]);
+    const sendStop = await failure(m.gate.assertDefaultsResolved(qid));
+    expect(sendStop.message).toContain("A quantity mismatch needs Follow area");
+    expect((await links(qid)).lines[0]).toMatchObject({ id: g.id, mode: "open", floorM2: 50 });
+  });
+
+  test("Follow area: 50 m2, the warning comes off, it says what it follows, and it moves with the floor", async () => {
+    const qid = await newQuote();
+    const f = await floor(qid);
+    const g = await grind(qid);
+    const r = await run<any, any>(m.quoteDefaults.followArea, { itemId: g.id });
+    expect([r.item.qty, r.item.flagged, r.item.flagReason]).toEqual([50, false, null]);
+    expect((await links(qid)).lines[0]).toMatchObject({ mode: "follows", label: "Follows measured floor area: 50 m2" });
+    expect((await m.gate.openDefaultWarnings(qid)).length).toBe(0);
+    const [log] = await q("select action, detail from activity_log where action = 'prep_follow_area' order by id desc limit 1");
+    expect(log.detail).toContain("50 m2 (was 1 m2)");
+    await updateItem({ id: f.id, measuredM2: 60 });
+    expect((await lineOf(g.id)).qty).toBe(60);
+    expect((await lineOf(g.id)).flagged).toBe(false);
+    // The ordered m2 with waste is never used: 60 m2 measured, not 66.
+    expect((await lineOf(f.id)).measuredM2).toBe(60);
+  });
+
+  test("added with the qty left blank, it takes the measured m2 straight away", async () => {
+    const qid = await newQuote();
+    const f = await floor(qid, 42.5);
+    const g = await lineOf((await grind(qid, { qtyFromArea: true })).id);
+    expect([g.qty, g.defaultForItemId, g.flagged]).toEqual([42.5, f.id, false]);
+  });
+
+  test("scenario 3: 50 m2 measured supplies 55 m2, installs 50 m2 and grinds the full 50 m2", async () => {
+    const qid = await newQuote();
+    const f = await floor(qid, 50);
+    expect(f.qty).toBe(55);
+    const inst = (await addLabour({ quoteId: qid, itemId: 4, forItemId: f.id, qty: 50, installerId: null })).item;
+    const g = await lineOf((await grind(qid, { qtyFromArea: true })).id);
+    const install = await lineOf(inst.id);
+    expect([install.qty, install.labourForItemId]).toEqual([50, f.id]);
+    expect([g.qty, g.defaultForItemId, g.flagged]).toEqual([50, f.id, false]);
+  });
+
+  test("scenario 7: two floors each keep their own grinding, so 30 + 20 m2 is ground once each, never 100 m2", async () => {
+    const qid = await newQuote();
+    const a = await floor(qid, 30);
+    const b = await floor(qid, 20);
+    const g1 = await grind(qid, { qtyFromArea: true });
+    await run<any, any>(m.quoteDefaults.followArea, { itemId: g1.id, floorItemId: a.id });
+    const g2 = await grind(qid, { qtyFromArea: true, variant: "second" });
+    await run<any, any>(m.quoteDefaults.followArea, { itemId: g2.id, floorItemId: b.id });
+    const ls = (await linesOf(qid)).filter((l) => l.defaultKey === "prep:57");
+    expect(ls.map((l) => [l.qty, l.defaultForItemId, l.flagged]).sort()).toEqual([[20, b.id, false], [30, a.id, false]].sort());
+    await updateItem({ id: a.id, measuredM2: 32 });
+    const after = (await linesOf(qid)).filter((l) => l.defaultKey === "prep:57");
+    expect(after.map((l) => l.qty).sort()).toEqual([20, 32]);
+  });
+
+  test("a typed qty over a following line is a mismatch again", async () => {
+    const qid = await newQuote();
+    await floor(qid);
+    const g = await grind(qid, { qtyFromArea: true });
+    await updateItem({ id: g.id, qty: 30 });
+    const now = await lineOf(g.id);
+    expect(now.flagged).toBe(true);
+    expect(now.flagReason).toContain("this floor area is 50 m2 but Grinding is 30 m2");
+  });
+
+  test("a partial needs a qty and a reason, keeps who and when, and is asked again when the floor changes", async () => {
+    const qid = await newQuote();
+    const f = await floor(qid);
+    const g = await grind(qid);
+    expect((await failure(run(m.quoteDefaults.confirmPartial, { itemId: g.id, qty: 20, reason: "" }))).code).toBe("BAD_REQUEST");
+    expect((await failure(run(m.quoteDefaults.confirmPartial, { itemId: g.id, qty: 0, reason: "Hallway only" }))).code).toBe("BAD_REQUEST");
+    expect((await lineOf(g.id)).flagReason).toBe(MISMATCH);
+    const r = await run<any, any>(m.quoteDefaults.confirmPartial, { itemId: g.id, qty: 20, reason: "Only the hallway needs grinding" });
+    expect([r.item.qty, r.item.flagged, r.item.defaultReviewedBy]).toEqual([20, false, "Test Admin"]);
+    expect(r.item.defaultReviewedAt).toBeTruthy();
+    expect(r.item.defaultReviewNote).toBe("Partial area 20 m2 of 50 m2: Only the hallway needs grinding");
+    expect((await links(qid)).lines[0]).toMatchObject({ mode: "partial", label: "Partial area: 20 m2 of 50 m2" });
+    const [log] = await q("select detail from activity_log where action = 'prep_partial_confirmed' order by id desc limit 1");
+    expect(log.detail).toContain("Reason: Only the hallway needs grinding");
+    await updateItem({ id: f.id, measuredM2: 70 });
+    const now = await lineOf(g.id);
+    expect(now.qty).toBe(20);
+    expect(now.flagReason).toStartWith("Check the partial area:");
+    expect(now.defaultReviewedAt).toBeNull();
+    expect((await failure(run(m.quoteDefaults.review, { itemId: g.id }))).code).toBe("BAD_REQUEST");
+  });
+
+  test("two floors: never guessed, it asks which, then follows the one picked", async () => {
+    const qid = await newQuote();
+    await floor(qid, 30);
+    const b = await floor(qid, 18);
+    const g = await lineOf((await grind(qid, { qtyFromArea: true })).id);
+    expect([g.qty, g.defaultForItemId]).toEqual([0, null]);
+    expect(g.flagReason).toContain("this quote has 2 measured floor areas");
+    const r = await run<any, any>(m.quoteDefaults.followArea, { itemId: g.id, floorItemId: b.id });
+    expect([r.item.qty, r.item.defaultForItemId, r.item.flagged]).toEqual([18, b.id, false]);
+  });
+
+  test("removing the floor leaves the grinding on, unlinked, asking which area", async () => {
+    const qid = await newQuote();
+    const f = await floor(qid);
+    const g = await grind(qid, { qtyFromArea: true });
+    await removeItem(f.id);
+    const now = await lineOf(g.id);
+    expect([now.defaultForItemId, now.flagged]).toEqual([null, true]);
+    expect(now.flagReason).toContain("no floor line on this quote has a measured area yet");
+  });
+
+  test("customer wording naming a different area is a note only, nothing changes", async () => {
+    const qid = await newQuote();
+    await floor(qid);
+    const g = await grind(qid, { qtyFromArea: true, description: "Grinding to 40 m2 of hallway" });
+    const l = (await links(qid)).lines[0];
+    expect(l.wordingNote).toBe("Customer wording says 40 m2 for grinding, but the line is 50 m2. Check which is right. Nothing was changed.");
+    expect((await lineOf(g.id)).qty).toBe(50);
+  });
+
+  test("prospective only: an old unlinked grinding line is left as it is", async () => {
+    const qid = await newQuote();
+    await floor(qid);
+    const [old] = await m.db
+      .insert(schema.quoteItems)
+      .values({ quoteId: qid, kind: "labour", lineType: "labour", description: "Grinding", qty: 1, unit: "m2", unitPrice: 11.5, unitCost: 10, total: 11.5, rateItemId: GRIND, sortOrder: 99 })
+      .returning();
+    await updateItem({ id: old!.id, qty: 2 });
+    const now = await lineOf(old!.id);
+    expect([now.qty, now.flagged, now.defaultKey, now.defaultForItemId]).toEqual([2, false, null, null]);
+    expect((await links(qid)).lines.find((x: any) => x.id === old!.id)).toMatchObject({ mode: "unlinked" });
+  });
+
+  test("a new version keeps the link and the partial", async () => {
+    const qid = await newQuote();
+    await floor(qid);
+    const g = await grind(qid);
+    await run(m.quoteDefaults.confirmPartial, { itemId: g.id, qty: 20, reason: "Only the hallway needs grinding" });
+    await q("update quotes set status = 'sent' where id = ?", [qid]);
+    const v2 = await run<{ id: number }, { id: number }>(m.quotes.revise, { id: qid });
+    const ls = await linesOf(v2.id);
+    const f2 = ls.find((l) => l.productId === P.carpetTile)!;
+    const g2 = ls.find((l) => l.rateItemId === GRIND)!;
+    expect([g2.defaultForItemId, g2.defaultKey, g2.qty, g2.flagged]).toEqual([f2.id, "prep:57", 20, false]);
+    expect(m.rules.appliedOf(g2.defaultsApplied)).toContain("prep:partial:20:50");
+  });
+});
+

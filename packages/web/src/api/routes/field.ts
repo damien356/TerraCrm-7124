@@ -18,6 +18,7 @@ import { completionPhotosOn, minCompletionPhotos, recheckPhotoFlags } from "../l
 import { assertSwmsDone, swmsNeededFor } from "../lib/swms";
 import { crewPeopleFor } from "../lib/crew-people";
 import { redactCards, redactHistory, redactMe, redactOffers } from "../lib/hourly-crew";
+import { notPerJobPeople, PAY_NOT_SET, payStatusOf } from "../lib/pay-status";
 
 /**
  * THE INSTALLER API. Every single query here filters by `context.installerId`.
@@ -93,6 +94,8 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
     .from(schema.installers)
     .where(eq(schema.installers.id, installerId));
   const gstRegistered = Boolean(me?.gst);
+  // Hourly, employee or staff card: never shown "Pay not set" (paid another way).
+  const notPerJob = (await notPerJobPeople([installerId])).has(installerId);
 
   const cards = rows.map((r) => {
     let payBreakdown: Array<{ name: string; unit: string; qty: number; rate: number | null; total: number | null }> | null =
@@ -114,8 +117,20 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
     const { labourBreakdown: _labourBreakdown, ...rest } = r;
     const run = runs.get(r.id) ?? (r.scheduledDate ? [r.scheduledDate] : []);
     const payTotal = payTotalOf(payBreakdown, r.labourCost, r.payAmount);
+    // Fixed-price work with no agreed pay says so, never a dash or an apparent $0.00 (Damien, 10 Nov).
+    const payStatus = payStatusOf({
+      payType: r.payType,
+      payAmount: r.payAmount,
+      labourCost: r.labourCost,
+      lineCount: 0,
+      notPerJob,
+      visit: /^measure/i.test(r.skillName ?? ""),
+      payTotal,
+    });
     return {
       ...rest,
+      payStatus,
+      payNote: payStatus === "not_set" ? PAY_NOT_SET : null,
       // A fixed-price job with no flat amount typed in pays what its lines add
       // up to, so every app build shows a Total instead of a dash.
       payAmount: r.payAmount ?? (r.payType === "per_job" ? payTotal : null),

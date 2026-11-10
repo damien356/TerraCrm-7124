@@ -19,13 +19,14 @@ import { ORPCError } from "@orpc/server";
 import { eq } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { isDefaultWarning } from "./quote-default-rules";
+import { isDefaultWarning, isPrepWarning } from "./quote-default-rules";
 
 type Line = typeof schema.quoteItems.$inferSelect;
 
 /** True while a line still has a quote defaults warning nobody has dealt with. */
 export function openDefaultWarning(l: Pick<Line, "flagged" | "flagReason" | "defaultReviewedAt">) {
-  return Boolean(l.flagged && isDefaultWarning(l.flagReason) && !l.defaultReviewedAt);
+  // An area prep warning is never settled by Mark reviewed: it needs Follow area, a confirmed partial, or the line removed.
+  return Boolean(l.flagged && isDefaultWarning(l.flagReason) && (!l.defaultReviewedAt || isPrepWarning(l.flagReason)));
 }
 
 /** What the customer sees if a quote with an open warning is accepted online. Nothing about prices or lines. */
@@ -46,7 +47,7 @@ export async function assertDefaultsResolved(quoteId: number, via: "staff" | "on
   const names = open.slice(0, 3).map((o) => `"${o.description}"`).join(", ");
   const more = open.length > 3 ? ` and ${open.length - 3} more` : "";
   throw new ORPCError("BAD_REQUEST", {
-    message: `${open.length} line${open.length === 1 ? "" : "s"} put on by quote defaults still need${open.length === 1 ? "s" : ""} attention: ${names}${more}. Fill each one in, press Mark reviewed on it, or remove it.`,
+    message: `${open.length} line${open.length === 1 ? "" : "s"} put on by quote defaults still need${open.length === 1 ? "s" : ""} attention: ${names}${more}. Fill each one in, press Mark reviewed on it, or remove it.${open.some((o) => isPrepWarning(o.reason)) ? " A quantity mismatch needs Follow area or a partial area confirmed with a reason." : ""}`,
     data: { defaultWarnings: open.map((o) => o.id) },
   });
 }

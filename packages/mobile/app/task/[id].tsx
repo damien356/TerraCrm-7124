@@ -749,6 +749,14 @@ export default function TaskScreen() {
                   )}
                 </View>
               </View>
+            ) : t.payNote ? (
+              // Pay not set (Damien, 10 Nov): never a dash or an apparent $0.00.
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <Text style={{ fontFamily: Fonts.bold, fontSize: 16, color: c.destructive, flex: 1 }}>
+                  {t.payNote}
+                </Text>
+                <Ionicons name="alert-circle-outline" size={22} color={c.destructive} />
+              </View>
             ) : (
               <View style={{ flexDirection: "row", alignItems: "center" }}>
                 <Text style={{ fontFamily: Fonts.bold, fontSize: 24, color: c.foreground, flex: 1 }}>
