@@ -149,6 +149,7 @@ async function load() {
     poGate: await import("../../src/api/lib/stock/po-send-gate"),
     quoteAccept: await import("../../src/api/lib/quote-accept"),
     productSale: await import("../../src/api/lib/product-sale"),
+    poIdentity: await import("../../src/api/lib/po-identity"),
     drizzle: await import("drizzle-orm"),
   };
 }

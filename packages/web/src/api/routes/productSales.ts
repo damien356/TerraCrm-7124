@@ -6,10 +6,17 @@ import * as schema from "../database/schema";
 import { staffOnly } from "../middleware/auth";
 import { rebuildForecast } from "../lib/cashflow";
 import { deliveryStatus } from "../lib/delivery";
-import { orderPlan, previewSale, raiseSale, saleOfJob, setStockAndOrder } from "../lib/product-sale";
+import { orderPlan, previewSale, raiseSale, saleOfJob, setStockAndOrder, syncSaleLines } from "../lib/product-sale";
 import { quoteRefOf } from "../lib/quote-number";
 import { emailedAtFor } from "../lib/invoice-emailed";
 import { jobText } from "../lib/refs";
+
+/**
+ * Quote states whose lines the sale follows on open. An accepted quote is
+ * brought into line by the accept itself and by Order, both actions a person
+ * takes, never by just opening the job. A replaced or declined quote is history.
+ */
+const SYNCED = new Set(["draft", "needs_review", "sent"]);
 
 /* ---------------------------------------------------------------------------
  * Sell products (Damien, 30 Oct). The form, the sales lists on installer,
@@ -124,10 +131,12 @@ export const productSales = {
     .handler(async ({ input }) => salesList(input)),
 
   /** The sale behind a job, with its order plan. Null when the job is not a product sale. */
-  forJob: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
+  forJob: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input, context }) => {
     const sale = await saleOfJob(input.jobId);
     if (!sale) return null;
     const [quote] = sale.quoteId ? await db.select().from(schema.quotes).where(eq(schema.quotes.id, sale.quoteId)) : [];
+    // 188065: before acceptance the order plan is the quote as it is now. A product changed in the quote builder shows straight away.
+    if (quote && SYNCED.has(quote.status)) await syncSaleLines(sale.id, quote.id, context.actor);
     /*
      * Raise invoice now (Damien, 31 Oct, job 188054): raiseSale saves the
      * lines as a quote and marks it accepted so the invoice has something to

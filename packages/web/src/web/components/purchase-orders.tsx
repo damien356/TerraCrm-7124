@@ -5,7 +5,7 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox, Field, Input, Select, Textarea } from "./ui/field";
 import { Modal } from "./ui/modal";
-import { overlapOf, PoOverlapNotice } from "./po-overlap";
+import { overlapOf, PoOverlapNotice, PoSubstituteNotice, ProductMismatchNote, substituteOf } from "./po-overlap";
 import { moneyExact } from "../lib/money";
 import { isPackUnit, unitText } from "../../api/lib/pack-name";
 import { EmailInput } from "./email-input";
@@ -170,6 +170,11 @@ export function PurchaseOrdersCard({ jobId }: { jobId: number }) {
         <Empty>Couldn't load purchase orders.</Empty>
       ) : (
         <>
+          {data.materials.some((m) => m.productMismatch) ? (
+            <div className="px-4 pt-3">
+              <ProductMismatchNote lines={[...new Set(data.materials.map((m) => m.productMismatch).filter((x): x is string => !!x))]} />
+            </div>
+          ) : null}
           {data.pos.length === 0 ? (
             <Empty>
               No POs on this job yet.
@@ -216,6 +221,12 @@ export function PurchaseOrdersCard({ jobId }: { jobId: number }) {
                             );
                           })
                         )}
+                      </div>
+                    ) : null}
+
+                    {po.productMismatch.length ? (
+                      <div className="mt-2">
+                        <ProductMismatchNote lines={po.productMismatch} />
                       </div>
                     ) : null}
 
@@ -910,32 +921,40 @@ function SendPoModal({ po, supplier, onClose }: { po: Po; supplier: Supplier | n
   const [error, setError] = React.useState("");
   const [done, setDone] = React.useState("");
   const [overlap, setOverlap] = React.useState<{ lines: string[]; via: "send" | "mark" } | null>(null);
+  // 188065: a product mismatch is asked first. Its reason is kept while the overlap is answered.
+  const [subst, setSubst] = React.useState<{ lines: string[]; via: "send" | "mark" } | null>(null);
+  const [subReason, setSubReason] = React.useState<string | undefined>(undefined);
   const send = useSendPo();
   const markSent = useMarkPoSent();
   const pdf = usePoPdf();
 
-  async function doSend(reason?: string) {
+  function caught(e: unknown, via: "send" | "mark") {
+    const wrong = substituteOf(e);
+    if (wrong.length) return setSubst({ lines: wrong, via });
+    const lines = overlapOf(e);
+    if (lines.length) setOverlap({ lines, via });
+    else setError(errText(e));
+  }
+  async function doSend(reason?: string, sub = subReason) {
     setError("");
     try {
-      const r = await send.mutateAsync({ id: po.id, to: to.trim(), saveEmail, overlapOverride: reason ? { reason } : undefined });
+      const r = await send.mutateAsync({ id: po.id, to: to.trim(), saveEmail, overlapOverride: reason ? { reason } : undefined, substituteOverride: sub ? { reason: sub } : undefined });
       setOverlap(null);
+      setSubst(null);
       setDone(`Sent to ${r.to} from team@.`);
     } catch (e) {
-      const lines = overlapOf(e);
-      if (lines.length) setOverlap({ lines, via: "send" });
-      else setError(errText(e));
+      caught(e, "send");
     }
   }
-  async function doMark(reason?: string) {
+  async function doMark(reason?: string, sub = subReason) {
     setError("");
     try {
-      await markSent.mutateAsync({ id: po.id, how, overlapOverride: reason ? { reason } : undefined });
+      await markSent.mutateAsync({ id: po.id, how, overlapOverride: reason ? { reason } : undefined, substituteOverride: sub ? { reason: sub } : undefined });
       setOverlap(null);
+      setSubst(null);
       setDone(`Marked as ordered (${how}). No email went.`);
     } catch (e) {
-      const lines = overlapOf(e);
-      if (lines.length) setOverlap({ lines, via: "mark" });
-      else setError(errText(e));
+      caught(e, "mark");
     }
   }
 
@@ -1011,6 +1030,18 @@ function SendPoModal({ po, supplier, onClose }: { po: Po; supplier: Supplier | n
             </div>
             <p className="mt-1.5 text-xs text-muted-foreground">Tell them the PO number, {po.number}, so it ends up on their invoice.</p>
           </div>
+          {subst ? (
+            <PoSubstituteNotice
+              lines={subst.lines}
+              action={subst.via === "send" ? "sent" : "marked as ordered"}
+              busy={send.isPending || markSent.isPending}
+              onApprove={(reason) => {
+                setSubReason(reason);
+                setSubst(null);
+                return subst.via === "send" ? doSend(undefined, reason) : doMark(undefined, reason);
+              }}
+            />
+          ) : null}
           {overlap ? (
             <PoOverlapNotice
               lines={overlap.lines}

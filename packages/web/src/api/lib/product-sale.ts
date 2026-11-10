@@ -519,12 +519,21 @@ export async function orderForSale(saleId: number, args: { quoteRef: string; act
   const [sale] = await db.select().from(schema.productSales).where(eq(schema.productSales.id, saleId));
   if (!sale?.jobId) throw bad("This sale has no job yet.");
   const jobId = sale.jobId;
+  // 188065: order what the quote says now, never an older copy of it.
+  if (sale.quoteId) await syncSaleLines(saleId, sale.quoteId, args.actor);
   const lines = await db.select().from(schema.productSaleLines).where(eq(schema.productSaleLines.saleId, saleId));
+  const onQuote = new Set(
+    sale.quoteId
+      ? (await db.select({ id: schema.quoteItems.id }).from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, sale.quoteId))).map((i) => i.id)
+      : [],
+  );
   const plan = await orderPlan(saleId);
   const added: string[] = [];
   for (const p of plan) {
     if (p.stillToOrder <= 0.00005) continue;
     const line = lines.find((l) => l.id === p.lineId)!;
+    // A line kept only because it is already on a PO is never ordered again.
+    if (line.quoteItemId == null || !onQuote.has(line.quoteItemId)) continue;
     await db.insert(schema.jobMaterials).values({
       jobId,
       productId: line.productId,
@@ -560,6 +569,8 @@ export async function setStockAndOrder(args: { jobId: number; fromStock: { lineI
     if (!sale) throw bad("This job is not a product sale.");
     const [q] = sale.quoteId ? await db.select().from(schema.quotes).where(eq(schema.quotes.id, sale.quoteId)) : [];
     if (!q || q.status !== "accepted") throw bad("The quote is not accepted yet. Order once it is accepted.");
+    // 188065: bring the lines into line with the accepted quote before anything is ordered.
+    await syncSaleLines(sale.id, q.id, args.actor);
     const lines = await db.select().from(schema.productSaleLines).where(eq(schema.productSaleLines.saleId, sale.id));
     for (const f of args.fromStock) {
       const l = lines.find((x) => x.id === f.lineId);
@@ -579,37 +590,171 @@ export async function setStockAndOrder(args: { jobId: number; fromStock: { lineI
 export async function saleQuoteAccepted(args: { jobId: number; quoteId: number; quoteRef: string; actor: { name: string; role: string } }) {
   const sale = await saleOfJob(args.jobId);
   if (!sale) return null;
-  if (sale.quoteId !== args.quoteId) {
-    const old = await db.select().from(schema.productSaleLines).where(eq(schema.productSaleLines.saleId, sale.id));
-    const items = await db
-      .select()
-      .from(schema.quoteItems)
-      .where(and(eq(schema.quoteItems.quoteId, args.quoteId), inArray(schema.quoteItems.kind, ["supply", "accessory"])))
-      .orderBy(asc(schema.quoteItems.sortOrder), asc(schema.quoteItems.id));
-    await db.delete(schema.productSaleLines).where(eq(schema.productSaleLines.saleId, sale.id));
-    if (items.length) {
-      await db.insert(schema.productSaleLines).values(
-        items.map((i, n) => {
-          const was = old.find((o) => o.productId === i.productId && o.description === i.description);
-          return {
-            saleId: sale.id,
-            quoteItemId: i.id,
-            productId: i.productId,
-            description: i.description,
-            qty: i.qty,
-            unit: i.unit,
-            unitPrice: i.unitPrice,
-            fromStock: Math.min(i.qty, was?.fromStock ?? 0),
-            sortOrder: n,
-          };
-        }),
-      );
-    }
-    await db.update(schema.productSales).set({ quoteId: args.quoteId, updatedAt: new Date() }).where(eq(schema.productSales.id, sale.id));
-  }
+  // 188065: the lines follow the accepted quote every time, the same version included.
+  // Before, only a new version rebuilt them, so a product changed in the quote builder kept the old one.
+  await syncSaleLines(sale.id, args.quoteId, args.actor);
   if (!sale.orderNeeded) return { sale, pos: [] as Awaited<ReturnType<typeof orderForSale>>["pos"], ordered: false };
   const out = await orderForSale(sale.id, { quoteRef: args.quoteRef, actor: args.actor });
   return { sale, pos: out.pos, ordered: true };
+}
+
+/* ------------------------------ sale line sync ----------------------------- */
+
+const LIVE_HOLDS = ["temporary", "reserved", "cut", "picked", "awaiting", "planned"];
+
+export type SaleSync = { changed: string[]; removed: string[]; kept: string[] };
+
+/**
+ * Wrong product (Damien, 11 Nov, job 188065). A sale line is the quote line
+ * it became, by quote item id, then by product. A quote line removed or
+ * swapped for another product in the quote builder leaves its sale line with
+ * nothing to point at; that line is retired and the new quote line gets its
+ * own. Never matched by name or price.
+ *
+ * A retired line's materials that are still to order and not on a live PO
+ * go with it. Anything already ordered, on a live PO or held in stock is
+ * left alone and the line is kept, so nothing sent or committed is touched;
+ * ordering then skips it and says so. Safe to run again: the second run
+ * finds nothing to change.
+ */
+export async function syncSaleLines(saleId: number, quoteId: number, actor: { name: string; role: string }): Promise<SaleSync> {
+  return oneAtATime(`salesync:${saleId}`, () => syncSaleLinesNow(saleId, quoteId, actor));
+}
+
+async function syncSaleLinesNow(saleId: number, quoteId: number, actor: { name: string; role: string }): Promise<SaleSync> {
+  const out: SaleSync = { changed: [], removed: [], kept: [] };
+  const [sale] = await db.select().from(schema.productSales).where(eq(schema.productSales.id, saleId));
+  if (!sale) return out;
+  const items = await db
+    .select()
+    .from(schema.quoteItems)
+    .where(and(eq(schema.quoteItems.quoteId, quoteId), inArray(schema.quoteItems.kind, ["supply", "accessory"])))
+    .orderBy(asc(schema.quoteItems.sortOrder), asc(schema.quoteItems.id));
+  const lines = await db
+    .select()
+    .from(schema.productSaleLines)
+    .where(eq(schema.productSaleLines.saleId, saleId))
+    .orderBy(asc(schema.productSaleLines.sortOrder), asc(schema.productSaleLines.id));
+
+  const lineOf = new Map<number, (typeof lines)[number]>();
+  const used = new Set<number>();
+  for (const i of items) {
+    const l = lines.find((x) => !used.has(x.id) && x.quoteItemId === i.id);
+    if (l) {
+      lineOf.set(i.id, l);
+      used.add(l.id);
+    }
+  }
+  const itemIds = new Set(items.map((i) => i.id));
+  for (const i of items) {
+    if (lineOf.has(i.id) || i.productId == null) continue;
+    // A revised quote: the same product on a new quote line. Never a line still tied to another line on this quote.
+    const free = lines.filter((x) => !used.has(x.id) && x.productId === i.productId && !(x.quoteItemId != null && itemIds.has(x.quoteItemId)));
+    const l = free.find((x) => x.description === i.description) ?? free[0];
+    if (l) {
+      lineOf.set(i.id, l);
+      used.add(l.id);
+    }
+  }
+
+  const now = new Date();
+  for (const [n, i] of items.entries()) {
+    const l = lineOf.get(i.id);
+    if (l) {
+      const next = { quoteItemId: i.id, productId: i.productId, description: i.description, qty: i.qty, unit: i.unit, unitPrice: i.unitPrice, fromStock: Math.min(i.qty, l.fromStock), sortOrder: n };
+      const diff =
+        l.quoteItemId !== next.quoteItemId ||
+        l.productId !== next.productId ||
+        l.description !== next.description ||
+        Math.abs(l.qty - next.qty) > 0.00005 ||
+        l.unit !== next.unit ||
+        Math.abs(l.unitPrice - next.unitPrice) > 0.005 ||
+        Math.abs(l.fromStock - next.fromStock) > 0.00005 ||
+        l.sortOrder !== next.sortOrder;
+      if (!diff) continue;
+      await db.update(schema.productSaleLines).set({ ...next, updatedAt: now }).where(eq(schema.productSaleLines.id, l.id));
+      if (Math.abs(l.qty - next.qty) > 0.00005 || l.unit !== next.unit) out.changed.push(`${i.description}: ${qtyText(l.qty, l.unit)} is now ${qtyText(next.qty, next.unit)}`);
+    } else {
+      await db.insert(schema.productSaleLines).values({
+        saleId,
+        quoteItemId: i.id,
+        productId: i.productId,
+        description: i.description,
+        qty: i.qty,
+        unit: i.unit,
+        unitPrice: i.unitPrice,
+        fromStock: 0,
+        sortOrder: n,
+        createdAt: now,
+        updatedAt: now,
+      });
+      out.changed.push(`Added ${i.description}, ${qtyText(i.qty, i.unit)}, as quoted`);
+    }
+  }
+
+  const stale = lines.filter((l) => !used.has(l.id));
+  for (const l of stale) {
+    const mats = await db.select().from(schema.jobMaterials).where(eq(schema.jobMaterials.saleLineId, l.id));
+    const matIds = mats.map((m) => m.id);
+    const onLivePo = matIds.length
+      ? await db
+          .select({ jobMaterialId: schema.purchaseOrderLines.jobMaterialId, number: schema.purchaseOrders.number })
+          .from(schema.purchaseOrderLines)
+          .innerJoin(schema.purchaseOrders, eq(schema.purchaseOrders.id, schema.purchaseOrderLines.poId))
+          .where(and(inArray(schema.purchaseOrderLines.jobMaterialId, matIds), ne(schema.purchaseOrders.status, "cancelled")))
+      : [];
+    const linked = matIds.length
+      ? await db
+          .select({ jobMaterialId: schema.stockPoLinks.jobMaterialId })
+          .from(schema.stockPoLinks)
+          .where(and(inArray(schema.stockPoLinks.jobMaterialId, matIds), eq(schema.stockPoLinks.status, "open")))
+      : [];
+    const holds = await db
+      .select({ id: schema.stockReservations.id })
+      .from(schema.stockReservations)
+      .where(and(eq(schema.stockReservations.saleLineId, l.id), inArray(schema.stockReservations.status, LIVE_HOLDS)));
+    const busy = new Set([...onLivePo.map((r) => r.jobMaterialId), ...linked.map((r) => r.jobMaterialId)]);
+    const open = mats.filter((m) => m.status === "to_order" && !busy.has(m.id));
+    for (const m of open) await db.delete(schema.jobMaterials).where(eq(schema.jobMaterials.id, m.id));
+    const left = mats.length - open.length;
+    if (left === 0 && !holds.length) {
+      await db.delete(schema.productSaleLines).where(eq(schema.productSaleLines.id, l.id));
+      out.removed.push(
+        `${l.description}, ${qtyText(l.qty, l.unit)}: no longer on the quote${open.length ? `, taken off Materials to order (${open.map((m) => `material ${m.id}, ${qtyText(m.qty, m.unit)}`).join("; ")})` : ""}`,
+      );
+    } else {
+      const pos = [...new Set(onLivePo.map((r) => r.number))];
+      out.kept.push(
+        `${l.description} is no longer on the quote but is already ${pos.length ? `on ${pos.join(", ")}` : holds.length ? "held in stock" : "ordered"}. Nothing was changed on it. Decide with the supplier.`,
+      );
+    }
+  }
+
+  if (out.changed.length || out.removed.length || out.kept.length) {
+    const [q] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, quoteId));
+    const ref = q ? await quoteRefOf(q) : `quote ${quoteId}`;
+    const detail = [`Sale lines brought into line with quote ${ref}:`, ...[...out.changed, ...out.removed, ...out.kept].map((t) => `- ${t}`)].join("\n").slice(0, 2000);
+    // A kept line is found again on every open. Say it once, not every time the page loads.
+    const said = !out.changed.length && !out.removed.length
+      ? await db
+          .select({ detail: schema.activityLog.detail })
+          .from(schema.activityLog)
+          .where(and(eq(schema.activityLog.entityType, "job"), eq(schema.activityLog.entityId, sale.jobId ?? saleId), eq(schema.activityLog.action, "sale_lines_synced")))
+      : [];
+    const repeat = !out.changed.length && !out.removed.length && out.kept.every((k) => said.some((r) => (r.detail ?? "").includes(k)));
+    if (!repeat)
+      await db.insert(schema.activityLog).values({
+        jobId: sale.jobId,
+        entityType: "job",
+        entityId: sale.jobId ?? saleId,
+        action: "sale_lines_synced",
+        detail,
+        actorName: actor.name,
+        actorRole: actor.role,
+      });
+  }
+  if (sale.quoteId !== quoteId) await db.update(schema.productSales).set({ quoteId, updatedAt: now }).where(eq(schema.productSales.id, saleId));
+  return out;
 }
 
 /** S2 Deposit safeguards on or paused. Off, or the stock tables missing, means today's behaviour. */

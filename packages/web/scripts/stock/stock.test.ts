@@ -36,6 +36,7 @@ import { registerA2 } from "./a2.cases";
 import { registerA2b } from "./a2b.cases";
 import { registerA2c } from "./a2c.cases";
 import { registerBillCost } from "./billcost.cases";
+import { registerWrongProduct } from "./wrongproduct.cases";
 
 beforeAll(async () => {
   await setup();
@@ -1043,6 +1044,7 @@ registerA2({ no, eq, facts, material });
 registerA2b({ no, eq, facts, material });
 registerA2c({ no, eq, facts, material });
 registerBillCost({ eq, facts, material, po });
+registerWrongProduct({ no, eq, facts });
 
 describe("isolation: nothing left the machine", () => {
   test("no network, no SMS, no job email, no customer or supplier email", async () => {

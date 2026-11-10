@@ -133,13 +133,36 @@ const jobLocks = new Map<number, Promise<unknown>>();
 async function draftPosForJobNow(args: { jobId: number; quoteRef: string }): Promise<PoHelperResult> {
   const out: PoHelperResult = { drafted: [], skipped: 0 };
   try {
-    const materials = await openMaterials(args.jobId);
-    if (!materials.length) return out;
+    const open = await openMaterials(args.jobId);
+    if (!open.length) return out;
 
     const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, args.jobId));
     if (!job) return out;
     const jobRef = jobText(job);
     const path = `/jobs/${args.jobId}`;
+
+    // Wrong product (Damien, 11 Nov, 188065): the helper never drafts a product the client did not
+    // agree to, and never picks a replacement. It is left off and put on the tray for a person.
+    const { identityIssues } = await import("./po-identity");
+    const wrong = await identityIssues(args.jobId, open.map((m) => ({ id: m.id, kind: "goods", productId: m.productId, description: m.description })));
+    const wrongIds = new Set(wrong.map((w) => w.lineId));
+    const materials = open.filter((m) => !wrongIds.has(m.id));
+    if (wrong.length) {
+      out.skipped += wrong.length;
+      const ids = wrong.map((w) => w.lineId!).filter((x) => x != null);
+      if (!(await alreadyReported(args.jobId, null, ids))) {
+        await logAiAction({
+          kind: "po_skipped",
+          waiting: true,
+          title: `Product mismatch, no PO drafted, job ${jobRef}`,
+          detail: `Not drafted. ${wrong.map((w) => w.text).join(" ")}\nFix the material to the agreed product, or raise the PO by hand and have the main admin approve the substitute with a reason when it is sent.`,
+          path,
+          jobId: args.jobId,
+          data: { materialIds: ids },
+        });
+      }
+    }
+    if (!materials.length) return out;
 
     const bySupplier = new Map<number, Material[]>();
     const noSupplier: Material[] = [];
@@ -219,7 +242,7 @@ async function draftPosForJobNow(args: { jobId: number; quoteRef: string }): Pro
           waiting: true,
           title: `PO ${po.number} to ${sup.name} drafted, job ${jobRef}`,
           detail: [
-            `Drafted when quote ${args.quoteRef} was accepted. ${plural(items.length, "line")}, ${money(priced.totalExGst)} ex GST, to ${deliverTo === "site" ? "site" : "the warehouse"}.`,
+            `Drafted for quote ${args.quoteRef}. ${plural(items.length, "line")}, ${money(priced.totalExGst)} ex GST, to ${deliverTo === "site" ? "site" : "the warehouse"}.`,
             noAddress ? "The job has no site address. Type one before sending." : "",
             priced.totalExGst <= 0 ? "It comes to $0. Put the costs in before sending." : "",
             ...toCheck.map((t) => `Check: ${t}`),

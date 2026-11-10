@@ -569,6 +569,72 @@ describe("12. Installer collection details, no prices", () => {
   });
 });
 
+/* ========================== 13 wrong product guard ========================== */
+
+// Wrong product PO (Damien, 11 Nov, job 188065), through the real routes as the PO screen calls them.
+describe("13. Wrong product guard on the PO routes (188065)", () => {
+  const JOB2 = 4401;
+  const AGREED = 701;
+  const OTHER = 702;
+  let poId = 0;
+  test("set up: a job whose accepted quote has one product; a material for another product", async () => {
+    const { db } = m;
+    await db.insert(schema.jobs).values({ id: JOB2, number: 188501, title: "Wrong product test job" } as any);
+    await db.insert(schema.products).values({ id: AGREED, supplierId: SUP, brand: "WPR", range: "Eternity", colour: "Snow", category: "hybrid", unit: "m2", costPrice: 40, variantKey: "wpr-1" } as any);
+    await db.insert(schema.products).values({ id: OTHER, supplierId: SUP, brand: "WPR", range: "Arlo", colour: "White", category: "hybrid", unit: "m2", costPrice: 38, variantKey: "wpr-2" } as any);
+    const [qt] = await db.insert(schema.quotes).values({ number: 188501, version: 1, jobId: JOB2, status: "accepted", acceptedAt: new Date(), subtotal: 100, gst: 10, total: 110 } as any).returning();
+    await db.insert(schema.quoteItems).values({ quoteId: qt!.id, productId: AGREED, kind: "supply", description: "WPR Eternity in Snow", qty: 40, unit: "m2", unitPrice: 60 } as any);
+    await db.insert(schema.jobMaterials).values({ id: 20, jobId: JOB2, productId: OTHER, description: "WPR Arlo in White", qty: 40, unit: "m2", status: "to_order" } as any);
+    await db.insert(schema.jobMaterials).values({ id: 21, jobId: JOB2, productId: AGREED, description: "WPR Eternity in Snow", qty: 40, unit: "m2", status: "to_order" } as any);
+  });
+
+  test("a draft with the wrong product can be saved, and says so; the agreed one does not", async () => {
+    const wrong = await run<any>(m.purchasing.create, { ...poIn({ deliverTo: "warehouse", lines: [{ ...goods(20, 40, 38), productId: OTHER }] }), jobId: JOB2 });
+    poId = wrong.id;
+    expect(wrong.productMismatch).toEqual(["WPR Arlo in White is not on the accepted quote or an approved change. The client agreed to WPR Eternity in Snow."]);
+    const right = await run<any>(m.purchasing.create, { ...poIn({ deliverTo: "warehouse", lines: [{ ...goods(21, 20, 40), productId: AGREED }] }), jobId: JOB2 });
+    expect(right.productMismatch).toEqual([]);
+  });
+
+  test("the PO list shows the warning on the PO and on the material, not on the agreed ones", async () => {
+    const f = await run<any>(m.purchasing.forJob, { jobId: JOB2 });
+    const wrong = f.pos.find((p: any) => p.id === poId);
+    expect(wrong.productMismatch.length).toBe(1);
+    expect(f.pos.filter((p: any) => p.id !== poId).every((p: any) => p.productMismatch.length === 0)).toBe(true);
+    // A draft does not order anything, so the wrong material still says so too. The agreed one never does.
+    expect(f.materials.find((x: any) => x.id === 20).productMismatch).toContain("WPR Arlo in White is not on the accepted quote");
+    expect(f.materials.find((x: any) => x.id === 21).productMismatch).toBeNull();
+  });
+
+  test("Send through the route is refused with Product mismatch and the substitute data the screen reads", async () => {
+    const before = mails.length;
+    const e = await failure(run(m.purchasing.send, { id: poId, saveEmail: false }));
+    expect(e.message).toStartWith("Product mismatch. WPR Arlo in White is not on the accepted quote");
+    expect(e.data.poSubstitute.length).toBe(1);
+    const e2 = await failure(run(m.purchasing.markSent, { id: poId, how: "phoned", substituteOverride: { reason: "no" } }));
+    expect(e2.message).toBe("Say why this substitute is OK before it is marked sent.");
+    expect(mails.length).toBe(before);
+    expect((await poRow(poId)).status).toBe("draft");
+  });
+
+  test("Remove draft is written to the job's history", async () => {
+    await remove(poId);
+    const rows = await q("select action, detail, actor_name from activity_log where job_id = ? and action = 'po_draft_removed'", [JOB2]);
+    expect(rows.length).toBe(1);
+    expect(rows[0].detail).toContain("removed, never sent");
+    expect(rows[0].actor_name).toBe("Test Admin");
+    // The material goes back to still to order, and now shows the warning.
+    const f = await run<any>(m.purchasing.forJob, { jobId: JOB2 });
+    const mat = f.materials.find((x: any) => x.id === 20);
+    expect(mat.productMismatch).toContain("WPR Arlo in White is not on the accepted quote");
+  });
+
+  test("a job with no accepted quote (job 4400 above) is never checked", async () => {
+    const f = await run<any>(m.purchasing.forJob, { jobId: JOB });
+    expect(f.pos.every((p: any) => p.productMismatch.length === 0)).toBe(true);
+  });
+});
+
 /* ================================= after ================================= */
 
 describe("Nothing left the machine", () => {

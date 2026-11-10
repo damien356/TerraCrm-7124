@@ -140,6 +140,16 @@ async function overlapCheck(poId: number, how: "send" | "mark_sent", override: {
   return assertPoSendable(poId, how, override, actor);
 }
 
+/** Wrong product (Damien, 11 Nov, 188065): the goods must be what the client agreed to. Main admin may approve a substitute with a reason. */
+async function identityCheck(poId: number, how: "send" | "mark_sent", override: { reason: string } | null | undefined, actor: Parameters<typeof overlapCheck>[3]) {
+  const { assertPoIdentity } = await import("../lib/po-identity");
+  return assertPoIdentity(poId, how, override, actor);
+}
+async function logSubs(...a: Parameters<typeof import("../lib/po-identity").logSubstitutes>) {
+  const { logSubstitutes } = await import("../lib/po-identity");
+  return logSubstitutes(...a);
+}
+
 async function logOverride(...a: Parameters<typeof import("../lib/stock/po-send-gate").logPoOverride>) {
   const { logPoOverride } = await import("../lib/stock/po-send-gate");
   return logPoOverride(...a);
@@ -149,7 +159,7 @@ async function logOverride(...a: Parameters<typeof import("../lib/stock/po-send-
 const sending = new Set<number>();
 
 /** The Send button. The email goes first; the PO only counts as sent once the email is accepted. */
-async function sendOne(input: { id: number; to?: string; saveEmail: boolean; overlapOverride?: { reason: string } | null }, actor: Parameters<typeof overlapCheck>[3]) {
+async function sendOne(input: { id: number; to?: string; saveEmail: boolean; overlapOverride?: { reason: string } | null; substituteOverride?: { reason: string } | null }, actor: Parameters<typeof overlapCheck>[3]) {
   const po = await loadPo(input.id);
   if (po.status === "cancelled") throw new ORPCError("BAD_REQUEST", { message: "This PO is cancelled." });
   if (po.totalExGst <= 0) throw new ORPCError("BAD_REQUEST", { message: "This PO is $0. Put the costs in first." });
@@ -158,6 +168,7 @@ async function sendOne(input: { id: number; to?: string; saveEmail: boolean; ove
   if (!to) throw new ORPCError("BAD_REQUEST", { message: `No email on file for ${sup?.name ?? "this supplier"}. Type one in, or add it on the Suppliers page.` });
   if (!EMAIL.test(to)) throw new ORPCError("BAD_REQUEST", { message: `"${to}" is not an email address.` });
   if (po.jobId == null) await warehouseSendCheck(po.status);
+  const substitutes = await identityCheck(po.id, "send", input.substituteOverride, actor);
   const overridden = await overlapCheck(po.id, "send", input.overlapOverride, actor);
   // Saved only once the checks pass, so a refused send changes nothing.
   if (input.saveEmail && sup && to !== sup.email) {
@@ -177,6 +188,7 @@ async function sendOne(input: { id: number; to?: string; saveEmail: boolean; ove
   try {
     await commitPo(po.id, "email", to);
     await logOverride(po.id, "send", input.overlapOverride, overridden, actor);
+    await logSubs(po.id, "send", input.substituteOverride, substitutes, actor);
   } catch (e) {
     // The supplier has it. Do not invite a second email of the same order.
     console.error("[po] sent but not saved as sent", po.number, (e as Error).message);
@@ -200,13 +212,15 @@ export async function sendPoNow(input: Parameters<typeof sendOne>[0], actor: Par
 }
 
 /** Mark sent: phoned through or put in on the supplier's portal. No email. Exported for the stock tests. */
-export async function markPoSentNow(input: { id: number; how: string; overlapOverride?: { reason: string } | null }, actor: Parameters<typeof sendOne>[1]) {
+export async function markPoSentNow(input: { id: number; how: string; overlapOverride?: { reason: string } | null; substituteOverride?: { reason: string } | null }, actor: Parameters<typeof sendOne>[1]) {
   const po = await loadPo(input.id);
   if (po.status === "cancelled") throw new ORPCError("BAD_REQUEST", { message: "This PO is cancelled." });
   if (po.jobId == null) await warehouseSendCheck(po.status);
+  const substitutes = await identityCheck(po.id, "mark_sent", input.substituteOverride, actor);
   const overridden = await overlapCheck(po.id, "mark_sent", input.overlapOverride, actor);
   await commitPo(po.id, "other", input.how);
   await logOverride(po.id, "mark_sent", input.overlapOverride, overridden, actor);
+  await logSubs(po.id, "mark_sent", input.substituteOverride, substitutes, actor);
   await resolveAiActionsForPo(po.id, actor.name);
   return { ok: true, overridden };
 }
@@ -385,6 +399,19 @@ export const purchasing = {
       .where(eq(schema.suppliers.active, true))
       .orderBy(asc(schema.suppliers.name));
 
+    // Wrong product (188065): each live PO's goods checked against what the client agreed to.
+    const { identityIssues } = await import("../lib/po-identity");
+    const identity = new Map<number, string[]>();
+    for (const p of pos) {
+      if (p.status === "cancelled") continue;
+      const found = await identityIssues(p.jobId, lines.filter((l) => l.poId === p.id));
+      if (found.length) identity.set(p.id, found.map((f) => f.text));
+    }
+    const matIssues = await identityIssues(
+      input.jobId,
+      materials.filter((m) => m.status === "to_order").map((m) => ({ id: m.id, kind: "goods", productId: m.productId, description: m.description })),
+    );
+
     return {
       siteAddress: await siteAddressFor(input.jobId),
       warehouseAddress: WAREHOUSE_ADDRESS,
@@ -394,8 +421,9 @@ export const purchasing = {
         supplierName: suppliers.find((s) => s.id === p.supplierId)?.name ?? "Supplier",
         lines: lines.filter((l) => l.poId === p.id),
         invoices: invoices.filter((i) => i.poId === p.id),
+        productMismatch: identity.get(p.id) ?? [],
       })),
-      materials: materials.map((m) => ({ ...m, onPo: onPo.get(m.id) ?? null })),
+      materials: materials.map((m) => ({ ...m, onPo: onPo.get(m.id) ?? null, productMismatch: matIssues.find((x) => x.lineId === m.id)?.text ?? null })),
       suppliers,
     };
   }),
@@ -461,7 +489,8 @@ export const purchasing = {
       .returning();
     await writeLines(po!.id, priced.lines);
     if (pickup.saved) await logDepot(pickup.saved, pickup.pickupDepotId, po!.number, input.supplierId, context.actor);
-    return { ...po!, priced, depotSaved: pickup.saved };
+    const { poIdentityIssues } = await import("../lib/po-identity");
+    return { ...po!, priced, depotSaved: pickup.saved, productMismatch: (await poIdentityIssues(po!.id)).map((f) => f.text) };
   }),
 
   /** Change a draft. Once a PO has gone to the supplier, cancel it and raise a new one instead. */
@@ -504,7 +533,8 @@ export const purchasing = {
       .returning();
     await writeLines(po.id, priced.lines);
     if (pickup.saved) await logDepot(pickup.saved, pickup.pickupDepotId, po.number, input.supplierId, context.actor);
-    return { ...row!, priced, depotSaved: pickup.saved };
+    const { poIdentityIssues } = await import("../lib/po-identity");
+    return { ...row!, priced, depotSaved: pickup.saved, productMismatch: (await poIdentityIssues(po.id)).map((f) => f.text) };
   }),
 
   removeDraft: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
@@ -515,6 +545,16 @@ export const purchasing = {
     // A2: job shares on a removed warehouse draft stop counting.
     await db.update(schema.stockPoLinks).set({ status: "cancelled", updatedAt: new Date() }).where(and(eq(schema.stockPoLinks.poId, po.id), eq(schema.stockPoLinks.status, "open")));
     await resolveAiActionsForPo(po.id, context.actor.name, "dismissed");
+    // 188065: the history said drafted and never said removed, so the empty PO list looked wrong.
+    await db.insert(schema.activityLog).values({
+      jobId: po.jobId,
+      entityType: "purchase_order",
+      entityId: po.id,
+      action: "po_draft_removed",
+      detail: `Draft ${po.number} removed, never sent. It is kept as cancelled so its number is not used again, and it no longer shows in the PO list.`,
+      actorName: context.actor.name,
+      actorRole: context.actor.role,
+    });
     return { ok: true };
   }),
 
@@ -529,12 +569,12 @@ export const purchasing = {
    * address; `saveEmail` also puts it on the supplier so the next one just goes.
    */
   send: adminOnly
-    .input(z.object({ id: z.number(), to: z.string().max(200).optional(), saveEmail: z.boolean().default(false), overlapOverride: overrideInput }))
+    .input(z.object({ id: z.number(), to: z.string().max(200).optional(), saveEmail: z.boolean().default(false), overlapOverride: overrideInput, substituteOverride: overrideInput }))
     .handler(({ input, context }) => sendPoNow(input, context.actor)),
 
   /** Phoned through, or put in on the supplier's portal. Same effect as sending, no email. */
   markSent: adminOnly
-    .input(z.object({ id: z.number(), how: z.string().max(100).default("phoned"), overlapOverride: overrideInput }))
+    .input(z.object({ id: z.number(), how: z.string().max(100).default("phoned"), overlapOverride: overrideInput, substituteOverride: overrideInput }))
     .handler(({ input, context }) => markPoSentNow(input, context.actor)),
 
   cancel: adminOnly.input(z.object({ id: z.number() })).handler(async ({ input, context }) => {
