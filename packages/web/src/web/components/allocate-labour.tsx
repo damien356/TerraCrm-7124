@@ -7,7 +7,7 @@ import { Badge } from "./ui/badge";
 import { useAllocate, useJobAllocation, usePreviewAllocate } from "../queries/dispatches";
 import { useEligible } from "../queries/installers";
 import { useBookingAsks } from "./outside-hours";
-import { IneligibleNote } from "./book-installer";
+import { IneligibleNote, checkLabel } from "./book-installer";
 import { hmToMin, sayClock, sayDay } from "../../api/lib/work-hours";
 
 /* ---------------------------------------------------------------------------
@@ -202,9 +202,9 @@ export function AllocateLabourModal({ jobId, open, onClose }: { jobId: number; o
               <Select value={installerId} onChange={(e) => setInstallerId(e.target.value)} disabled={!picked.length}>
                 <option value="">{picked.length ? "Pick someone…" : "Tick the work first"}</option>
                 {(eligible.data ?? []).map((i) => (
-                  <option key={i.id} value={i.id} disabled={!i.eligible}>
+                  <option key={i.id} value={i.id}>
                     {i.name}
-                    {!i.eligible ? ` · can't: ${i.reasons.filter((r) => /ticked|switched on|rate not set/i.test(r)).join(", ")}` : ""}
+                    {checkLabel(i)}
                   </option>
                 ))}
               </Select>
@@ -285,7 +285,18 @@ function ReviewBox({ review }: { review: Review }) {
           {s}
         </Line>
       ))}
-      {!review.stops.length && !review.clashes.length ? <Line tone="ok">Ready to book.</Line> : null}
+      {review.payMethod ? (
+        <Line tone="info">
+          Payment: {review.payMethod.label}
+          {review.payMethod.rate ? `, ${review.payMethod.rate}` : ""}
+        </Line>
+      ) : null}
+      {review.warnings.map((w) => (
+        <Line key={w.text} tone="warn">
+          {w.text} {w.detail} You will be asked to confirm (Assign anyway).
+        </Line>
+      ))}
+      {!review.stops.length && !review.clashes.length ? <Line tone="ok">{review.warnings.length ? "Ready to book once the check is confirmed." : "Ready to book."}</Line> : null}
     </div>
   );
 }

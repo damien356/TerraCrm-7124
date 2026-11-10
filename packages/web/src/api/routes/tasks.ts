@@ -15,7 +15,10 @@ import { jobText, taskLetter, taskRef } from "../lib/refs";
 import { bookingBlock, bookingBlockNew } from "../lib/prep";
 import { currentDays, guardAttendance, proposedDays } from "../lib/calendar-availability";
 import { checkOutsideHours, logOutsideHours } from "../lib/outside-hours";
-import { skillsForTask, workBarrier } from "../lib/task-skills";
+import { skillsForTask } from "../lib/task-skills";
+import { payBarrier } from "../lib/pay-status";
+import { assignAnywayInput, assignWarnings, logAssignOverride, overridesFor, payMethodOf, payToConfirmTaskIds, requireAcknowledged } from "../lib/assign-check";
+import type { AssignAnyway, AssignWarning } from "../lib/assign-check";
 import type { Actor } from "../middleware/auth";
 
 /**
@@ -25,22 +28,28 @@ import type { Actor } from "../middleware/auth";
  * biggest single departure from ServiceM8.
  */
 
-/** Enforces the furniture rule and the skill-tick rule in one place. */
-async function assertAssignable(taskId: number, installerId: number, _crewSize: number, keep = false, typedPay: number | null = null) {
+/**
+ * Enforces the hard stops in one place, and the Assign anyway check (Damien,
+ * 11 Nov): a missing work-category tick, a per-person item not switched on,
+ * or a missing rate is a warning the office confirms, never a silent refusal.
+ * Returns the acknowledged warnings so the caller logs them after the write.
+ */
+async function assertAssignable(
+  taskId: number,
+  installerId: number,
+  _crewSize: number,
+  keep = false,
+  typedPay: number | null = null,
+  ack: AssignAnyway = undefined,
+  /** Rates in the check dialog only for those allowed to see them (admins). */
+  showRates = false,
+) {
   const [task] = await db
     .select({ task: schema.jobTasks, job: schema.jobs })
     .from(schema.jobTasks)
     .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
     .where(eq(schema.jobTasks.id, taskId));
   if (!task) throw new ORPCError("NOT_FOUND", { message: "Task not found" });
-
-  // Only installers ticked for every skill the task's own lines need can be given it.
-  // And never a per-contractor item (a day rate) that isn't switched on for him.
-  // The rate check is for new work: a plain edit of a booking he already has is not re-priced.
-  const keeping = keep && (task.task.assignedInstallerId === installerId || task.task.secondInstallerId === installerId);
-  // A fixed-price dispatch with no lines and no agreed pay is "Pay not set", unless the office gives the amount now.
-  const barrier = await workBarrier(taskId, installerId, null, { rates: !keeping, pay: typedPay });
-  if (barrier) throw new ORPCError("BAD_REQUEST", { message: barrier, data: { reason: "not_eligible" } });
 
   const [installer] = await db.select().from(schema.installers).where(eq(schema.installers.id, installerId));
   if (!installer) throw new ORPCError("NOT_FOUND", { message: "Installer not found" });
@@ -55,7 +64,56 @@ async function assertAssignable(taskId: number, installerId: number, _crewSize: 
     });
   }
 
-  return { task: task.task, job: task.job, installer };
+  // A fixed-price dispatch with no lines and no agreed pay is "Pay not set" (10 Nov), unless the office gives the amount now.
+  // A plain edit of a booking he already has is not re-priced.
+  if (!(keep && already)) {
+    const payStop = await payBarrier(taskId, installerId, typedPay);
+    if (payStop) throw new ORPCError("BAD_REQUEST", { message: payStop, data: { reason: "not_eligible" } });
+  }
+  // Someone already on this dispatch was checked (and any warning confirmed) when they got it.
+  if (already) return { task: task.task, job: task.job, installer, override: null as Override };
+
+  const warnings = await assignWarnings(taskId, installerId, null, { typedPay });
+  const ok = requireAcknowledged({ installerId, name: installer.name, warnings, ack, payMethod: await payMethodOf(installerId, showRates) });
+  return { task: task.task, job: task.job, installer, override: (ok ? { warnings, note: ok.note, name: installer.name } : null) as Override };
+}
+
+/** For the booking panel: how the person on it is paid, Pay to confirm, and any Assign anyway. */
+async function bookingFacts(task: typeof schema.jobTasks.$inferSelect, leadName: string | null, actor: Actor) {
+  const names = [leadName];
+  if (task.secondInstallerId) {
+    const [second] = await db.select({ name: schema.installers.name }).from(schema.installers).where(eq(schema.installers.id, task.secondInstallerId));
+    names.push(second?.name ?? null);
+  }
+  const crew = names.filter((n): n is string => Boolean(n));
+  const [overrides, toConfirm] = await Promise.all([overridesFor([{ id: task.id, names: crew }]), payToConfirmTaskIds([task.id])]);
+  return {
+    payMethod: task.assignedInstallerId ? await payMethodOf(task.assignedInstallerId, actor.role === "admin") : null,
+    /** Booked, but the rate for the pay is missing: flagged for the office, never paid at $0.00. */
+    payToConfirm: toConfirm.has(task.id),
+    assignOverrides: (overrides.get(task.id) ?? []).map((o) => ({ detail: o.detail, by: o.by, at: o.at.toISOString() })),
+  };
+}
+
+type Override = { warnings: AssignWarning[]; note: string | null; name: string } | null;
+
+/** Writes each acknowledged override on the job history, after the booking is saved. */
+async function logOverrides(task: { id: number; jobId: number }, overrides: Override[], actor: Actor, source: string) {
+  const ref = await taskRefOf(task.id);
+  for (const o of overrides) {
+    if (!o) continue;
+    await logAssignOverride({ jobId: task.jobId, taskId: task.id, taskRef: ref, installerName: o.name, warnings: o.warnings, note: o.note, actor, source });
+  }
+}
+
+/** "188007-A", or the title when it has no reference. */
+async function taskRefOf(taskId: number) {
+  const [row] = await db
+    .select({ task: schema.jobTasks, job: schema.jobs })
+    .from(schema.jobTasks)
+    .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
+    .where(eq(schema.jobTasks.id, taskId));
+  return row ? taskRef(jobText(row.job), row.task.seq) : `dispatch ${taskId}`;
 }
 
 /**
@@ -280,6 +338,13 @@ export const bookTaskInput = z.object({
    * off them. Without it a booking never quietly replaces another installer.
    */
   replaceInstaller: z.boolean().optional(),
+  /** Assign anyway (11 Nov): the warnings the office confirmed, per person, with an optional note. */
+  assignAnyway: assignAnywayInput,
+  /**
+   * Estimated hours for hourly work, the whole booking. The labour budget only:
+   * approved hours are the actual cost, never added on top.
+   */
+  plannedHours: z.number().min(0).max(2000).nullable().optional(),
 });
 
 export async function bookTask(input: z.infer<typeof bookTaskInput>, actor: Actor) {
@@ -287,7 +352,9 @@ export async function bookTask(input: z.infer<typeof bookTaskInput>, actor: Acto
   // Client prep (notes 18.56): an install can't be booked until the property type and furniture are answered.
   const block = await bookingBlock(input.taskId);
   if (block) throw new ORPCError("BAD_REQUEST", { message: block });
-  const { task, job, installer } = await assertAssignable(input.taskId, input.installerId, 1, false, input.payAmount ?? null);
+  const lead = await assertAssignable(input.taskId, input.installerId, 1, false, input.payAmount ?? null, input.assignAnyway, actor.role === "admin");
+  const { task, job, installer } = lead;
+  const assignOverrides: Override[] = [lead.override];
 
   // Never a silent swap: booked to someone else means the office reviews it first.
   const { previous, previousName } = await replaceGuard(task, installer, input.replaceInstaller);
@@ -299,10 +366,10 @@ export async function bookTask(input: z.infer<typeof bookTaskInput>, actor: Acto
       message: `This is a 2-man task${job.furnitureOnSite ? " (furniture on site)" : ""} and ${installer.name} doesn't bring an offsider. Pick a second installer.`,
     });
   }
-  if (input.secondInstallerId) await assertAssignable(input.taskId, input.secondInstallerId, 1, false, input.payAmount ?? null);
-  // A day handed to someone else still has to be someone ticked for the work.
-  for (const d of input.perDay) {
-    if (d.installerId) await assertAssignable(input.taskId, d.installerId, 1, false, input.payAmount ?? null);
+  if (input.secondInstallerId) assignOverrides.push((await assertAssignable(input.taskId, input.secondInstallerId, 1, false, input.payAmount ?? null, input.assignAnyway, actor.role === "admin")).override);
+  // A day handed to someone else is checked the same way.
+  for (const d of new Map(input.perDay.filter((x) => x.installerId).map((x) => [x.installerId, x])).values()) {
+    assignOverrides.push((await assertAssignable(input.taskId, d.installerId!, 1, false, input.payAmount ?? null, input.assignAnyway, actor.role === "admin")).override);
   }
 
   const overrides = new Map(input.perDay.map((d) => [d.date, d]));
@@ -361,6 +428,7 @@ export async function bookTask(input: z.infer<typeof bookTaskInput>, actor: Acto
       ...(input.durationHours != null ? { durationHours: input.durationHours } : {}),
       ...(input.payAmount != null ? { payAmount: input.payAmount } : {}),
       ...(input.manualDays !== undefined ? { manualDays: input.manualDays } : {}),
+      ...(input.plannedHours !== undefined ? { plannedHours: input.plannedHours } : {}),
       updatedAt: new Date(),
     })
     .where(eq(schema.jobTasks.id, input.taskId))
@@ -384,10 +452,11 @@ export async function bookTask(input: z.infer<typeof bookTaskInput>, actor: Acto
     entityType: "task",
     entityId: input.taskId,
     action: "booked",
-    detail: `${task.title} → ${installer.name}, ${dates.length === 1 ? "1 day" : `${dates.length} days`} ${span}${input.overrideNote ? ` (override: ${input.overrideNote})` : ""}`,
+    detail: `${task.title} → ${installer.name}, ${dates.length === 1 ? "1 day" : `${dates.length} days`} ${span}${input.plannedHours != null ? `, estimated ${input.plannedHours}h` : ""}${input.overrideNote ? ` (override: ${input.overrideNote})` : ""}`,
     actorName: actor.name,
     actorRole: actor.role,
   });
+  await logOverrides(task, assignOverrides, actor, "booking");
   if (previous) {
     await logReplaced({ jobId: task.jobId, taskId: input.taskId, title: task.title, from: previousName!, to: installer.name, actor });
   }
@@ -623,6 +692,7 @@ export const tasks = {
       offers: offers.map((o) => ({ ...o, installer: installerForStaff(o.installer, context.actor) })),
       days: days.map((d) => ({ ...d.day, installerName: d.installer?.name ?? null })),
       suggested,
+      ...(await bookingFacts(row.task, row.installer?.name ?? null, context.actor)),
     };
   }),
 
@@ -708,6 +778,8 @@ export const tasks = {
         confirmOutsideHours: z.boolean().optional(),
         /** The office reviewed taking it off the installer it is assigned to. */
         replaceInstaller: z.boolean().optional(),
+        /** Assign anyway: the warnings confirmed for the person it is dragged onto. */
+        assignAnyway: assignAnywayInput,
       }),
     )
     .handler(async ({ input, context }) => {
@@ -721,8 +793,11 @@ export const tasks = {
       }
 
       let replaced: { previous: number | null; previousName: string | null; to: string } | null = null;
+      let dragOverride: Override = null;
       if (input.installerId) {
-        const { task, job } = await assertAssignable(input.id, input.installerId, existing.crewSize, true);
+        const checked = await assertAssignable(input.id, input.installerId, existing.crewSize, true, null, input.assignAnyway, context.actor.role === "admin");
+        const { task, job } = checked;
+        dragOverride = checked.override;
         const [installer] = await db.select().from(schema.installers).where(eq(schema.installers.id, input.installerId));
         replaced = { ...(await replaceGuard(existing, installer!, input.replaceInstaller)), to: installer!.name };
         // A 2-man task can't be covered by one person unless they bring their own offsider.
@@ -887,6 +962,7 @@ export const tasks = {
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
+      await logOverrides(existing, [dragOverride], context.actor, "board");
       if (replaced?.previous) {
         await logReplaced({ jobId: existing.jobId, taskId: input.id, title: existing.title, from: replaced.previousName!, to: replaced.to, actor: context.actor });
       }
@@ -907,10 +983,14 @@ export const tasks = {
         calendarOverride,
         /** The office reviewed taking it off the installer it is assigned to. */
         replaceInstaller: z.boolean().optional(),
+        /** Assign anyway: the warnings confirmed, per person. */
+        assignAnyway: assignAnywayInput,
       }),
     )
     .handler(async ({ input, context }) => {
-      const { task, job, installer } = await assertAssignable(input.id, input.installerId, 1, false, input.payAmount ?? null);
+      const lead = await assertAssignable(input.id, input.installerId, 1, false, input.payAmount ?? null, input.assignAnyway, context.actor.role === "admin");
+      const { task, job, installer } = lead;
+      const overrides: Override[] = [lead.override];
       const { previous, previousName } = await replaceGuard(task, installer, input.replaceInstaller);
 
       const needsTwo = task.crewSize > 1;
@@ -921,7 +1001,7 @@ export const tasks = {
         });
       }
       if (input.secondInstallerId) {
-        await assertAssignable(input.id, input.secondInstallerId, 1, false, input.payAmount ?? null);
+        overrides.push((await assertAssignable(input.id, input.secondInstallerId, 1, false, input.payAmount ?? null, input.assignAnyway, context.actor.role === "admin")).override);
       }
       // The days stay where they are. Only who attends changes, so check the new crew on them.
       await calGuard({
@@ -967,6 +1047,7 @@ export const tasks = {
         actorName: context.actor.name,
         actorRole: context.actor.role,
       });
+      await logOverrides(task, overrides, context.actor, "direct assign");
       if (previous) {
         await logReplaced({ jobId: task.jobId, taskId: input.id, title: task.title, from: previousName!, to: installer.name, actor: context.actor });
       }
@@ -1083,15 +1164,25 @@ export const tasks = {
             .from(schema.installers)
             .where(eq(schema.installers.active, true));
 
-      const { installer, ambiguous } = matchInstaller(parsed.nameWords, pool);
+      // Anyone active can be booked now (11 Nov): the ticked people first, then everyone else.
+      let { installer, ambiguous } = matchInstaller(parsed.nameWords, pool);
+      if (!installer && ambiguous.length <= 1 && needIds.length && parsed.nameWords.length) {
+        const everyone = await db
+          .select({ id: schema.installers.id, name: schema.installers.name })
+          .from(schema.installers)
+          .where(and(eq(schema.installers.active, true), isNull(schema.installers.archivedAt)));
+        ({ installer, ambiguous } = matchInstaller(parsed.nameWords, everyone));
+      }
       if (!installer) {
         if (ambiguous.length > 1) problems.push(`Which one: ${ambiguous.map((a) => a.name).join(" or ")}?`);
-        else if (parsed.nameWords.length) problems.push(`No installer matching "${parsed.nameWords.join(" ")}" is ticked for this work.`);
+        else if (parsed.nameWords.length) problems.push(`No active team member matching "${parsed.nameWords.join(" ")}".`);
         else problems.push("No installer name in that.");
       } else if (taskRow) {
-        // Ticked for some of the work but not all of it: say what, before Book.
-        const barrier = await workBarrier(taskRow.task.id, installer.id);
-        if (barrier) problems.push(barrier);
+        // A dispatch with no lines and no pay still stops. Anything else is a warning to confirm on Book (11 Nov).
+        const payStop = await payBarrier(taskRow.task.id, installer.id);
+        if (payStop) problems.push(payStop);
+        const warnings = await assignWarnings(taskRow.task.id, installer.id);
+        if (warnings.length) notes.push(`Check assignment: ${warnings.map((w) => w.text).join(" ")} You'll be asked to confirm when you book.`);
       }
 
       /* ---------------------------- the dates ---------------------------- */

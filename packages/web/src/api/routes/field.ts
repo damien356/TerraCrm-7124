@@ -19,6 +19,7 @@ import { assertSwmsDone, swmsNeededFor } from "../lib/swms";
 import { crewPeopleFor } from "../lib/crew-people";
 import { redactCards, redactHistory, redactMe, redactOffers } from "../lib/hourly-crew";
 import { notPerJobPeople, PAY_NOT_SET, payStatusOf } from "../lib/pay-status";
+import { PAY_TO_CONFIRM, payToConfirmTaskIds } from "../lib/assign-check";
 
 /**
  * THE INSTALLER API. Every single query here filters by `context.installerId`.
@@ -96,6 +97,8 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
   const gstRegistered = Boolean(me?.gst);
   // Hourly, employee or staff card: never shown "Pay not set" (paid another way).
   const notPerJob = (await notPerJobPeople([installerId])).has(installerId);
+  // Booked with Assign anyway while a rate is missing (11 Nov): the card says Pay to confirm, never $0.00.
+  const toConfirm = await payToConfirmTaskIds(rows.map((r) => r.id));
 
   const cards = rows.map((r) => {
     let payBreakdown: Array<{ name: string; unit: string; qty: number; rate: number | null; total: number | null }> | null =
@@ -130,7 +133,8 @@ async function taskCardsFor(installerId: number, where: ReturnType<typeof and>[]
     return {
       ...rest,
       payStatus,
-      payNote: payStatus === "not_set" ? PAY_NOT_SET : null,
+      // Lines there but a rate missing is Pay to confirm (11 Nov); nothing there at all is Pay not set.
+      payNote: toConfirm.has(r.id) ? PAY_TO_CONFIRM : payStatus === "not_set" ? PAY_NOT_SET : null,
       // A fixed-price job with no flat amount typed in pays what its lines add
       // up to, so every app build shows a Total instead of a dash.
       payAmount: r.payAmount ?? (r.payType === "per_job" ? payTotal : null),

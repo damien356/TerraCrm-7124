@@ -3,6 +3,7 @@ import { ORPCError } from "@orpc/server";
 import { staffOnly } from "../middleware/auth";
 import { DispatchError, jobDispatchLines, mergeDispatches, splitDispatch } from "../lib/dispatch-build";
 import { allocate, allocationView, previewAllocation } from "../lib/allocate";
+import { assignAnywayInput } from "../lib/assign-check";
 
 const allocateInput = z.object({
   taskId: z.number(),
@@ -16,6 +17,8 @@ const allocateInput = z.object({
   confirmOutsideHours: z.boolean().optional(),
   replaceInstaller: z.boolean().optional(),
   overrideNote: z.string().trim().max(500).nullable().optional(),
+  assignAnyway: assignAnywayInput,
+  plannedHours: z.number().min(0).max(2000).nullable().optional(),
 });
 
 /**

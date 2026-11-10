@@ -457,6 +457,8 @@ function SaleCostLines({ jobId, sale }: { jobId: number; sale: SaleCostsView }) 
 export const COST_INCOMPLETE = "Cost incomplete — margin unavailable";
 /** Damien, 10 Nov: a booked fixed-price dispatch with no agreed pay. */
 const PAY_NOT_SET_LABEL = "Pay not set / Office review required";
+/** Booked with Assign anyway while a rate is missing. Never paid at $0.00 until it is set. */
+const PAY_TO_CONFIRM_LABEL = "Pay to confirm";
 
 export function JobForecastCard({ jobId, productSale = false }: { jobId: number; productSale?: boolean }) {
   const [against, setAgainst] = React.useState("");
@@ -474,6 +476,8 @@ export function JobForecastCard({ jobId, productSale = false }: { jobId: number;
     if (nothingMeasured.length) gaps.push(`${nothingMeasured.length} dispatch(es) not measured up`);
     const unpaid = f.tasks.filter((t) => t.payNotSet);
     if (unpaid.length) gaps.push(`${unpaid.length} booked dispatch(es): ${PAY_NOT_SET_LABEL}`);
+    const toConfirm = f.tasks.filter((t) => t.payToConfirm);
+    if (toConfirm.length) gaps.push(`${toConfirm.length} booked dispatch(es): ${PAY_TO_CONFIRM_LABEL}`);
     const short = Array.from(new Set(f.tasks.flatMap((t) => t.unpriced)));
     if (short.length) gaps.push(`no rate for ${short.join(", ")}`);
   }
@@ -620,6 +624,7 @@ export function JobForecastCard({ jobId, productSale = false }: { jobId: number;
                           ) : null}
                           {t.measured === 0 ? <Badge colour="#B4472E">not measured</Badge> : null}
                           {t.payNotSet ? <Badge colour="#B42318">{PAY_NOT_SET_LABEL}</Badge> : null}
+                          {t.payToConfirm ? <Badge colour="#B54708">{PAY_TO_CONFIRM_LABEL}</Badge> : null}
                           {t.unpriced.length ? <Badge colour="#B4472E">{t.unpriced.length} unpriced</Badge> : null}
                         </div>
                         <p className="text-xs text-muted-foreground">

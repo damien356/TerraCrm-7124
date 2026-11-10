@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { Page } from "../components/layout";
 import { MemoButton } from "../components/voice-memo";
-import { BookInstallerPanel, IneligibleNote } from "../components/book-installer";
+import { BookInstallerPanel, IneligibleNote, checkLabel } from "../components/book-installer";
 import { useBookingAsks } from "../components/outside-hours";
 import { dayWindow, sameDayOverlap } from "../../api/lib/work-hours";
 import { CommandBox } from "../components/command-box";
@@ -528,11 +528,19 @@ function DispatchPanel({
   }
 
   const pay = payOverride ? Number(payOverride) : null;
+  const directNeedsCheck = Boolean(directId && eligible.data?.some((i) => String(i.id) === directId && !i.eligible));
 
   /** Assign now, with the "taken off someone else" review when it is already theirs. */
   const assignAsks = useBookingAsks(
     React.useCallback(
-      (flags) => assign.mutateAsync({ id: taskId, installerId: Number(directId), payAmount: pay, replaceInstaller: flags.replaceInstaller }),
+      (flags) =>
+        assign.mutateAsync({
+          id: taskId,
+          installerId: Number(directId),
+          payAmount: pay,
+          replaceInstaller: flags.replaceInstaller,
+          assignAnyway: flags.assignAnyway,
+        }),
       // eslint-disable-next-line react-hooks/exhaustive-deps
       [assign.mutateAsync, taskId, directId, pay],
     ),
@@ -633,11 +641,11 @@ function DispatchPanel({
 
             <Field label="Offer one installer" className="mt-2">
               <Select value={directId} onChange={(e) => setDirectId(e.target.value)}>
-                <option value="">Pick someone ticked for the work…</option>
+                <option value="">Pick someone…</option>
                 {(eligible.data ?? []).map((i) => (
-                  <option key={i.id} value={i.id} disabled={!i.canCoverAlone || !i.eligible}>
+                  <option key={i.id} value={i.id} disabled={!i.canCoverAlone}>
                     {i.name}
-                    {!i.eligible ? ` · can't: ${i.reasons.filter((r) => /ticked|switched on|rate not set/i.test(r)).join(", ")}` : ""}
+                    {checkLabel(i)}
                     {i.busyThatDay ? (i.busyScheduleIncomplete ? " · maybe on a job (schedule incomplete)" : " · already on a job") : ""}
                     {i.unavailableThatDay ? " · not available" : ""}
                     {!i.canCoverAlone ? " · can't do 2-man alone" : ""}
@@ -650,7 +658,9 @@ function DispatchPanel({
             <div className="mt-2 grid grid-cols-2 gap-2">
               <Button
                 size="sm"
-                disabled={busy || !directId}
+                // Offers stay strict (11 Nov): someone who needs a check is given it with Assign now.
+                disabled={busy || !directId || directNeedsCheck}
+                title={directNeedsCheck ? "Offers need every check clear. Use Assign now to confirm the warning." : undefined}
                 onClick={() =>
                   run(
                     sendDirect.mutateAsync({
@@ -1105,7 +1115,7 @@ export default function SchedulePage() {
       async (flags) => {
         const move = dropping.current;
         if (!move) return;
-        const r: any = await reschedule.mutateAsync({ ...move, confirmOutsideHours: flags.confirmOutsideHours });
+        const r: any = await reschedule.mutateAsync({ ...move, confirmOutsideHours: flags.confirmOutsideHours, assignAnyway: flags.assignAnyway });
         // A one-day drag that booked a whole run says so, rather than the
         // office finding three days on the board they didn't ask for.
         if (r?.bookedDays > 1 && r.dates?.length) {

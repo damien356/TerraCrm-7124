@@ -194,8 +194,13 @@ export async function sendDirectOffer(
   const pay = input.payAmount ?? (await derivePay(input.taskId, input.installerId));
   // Every skill the task's own lines need, not only the first one, a real rate on every line,
   // and some agreed pay: no lines and no amount is "Pay not set", never an offer of free work.
+  // Offers stay strict (11 Nov): an offer goes straight to his phone with nobody confirming a warning.
+  // Booking him directly shows the warning and lets the office press Assign anyway.
   const barrier = await workBarrier(input.taskId, input.installerId, null, { pay });
-  if (barrier) throw new ORPCError("BAD_REQUEST", { message: barrier });
+  if (barrier) {
+    const hint = barrier.startsWith(PAY_NOT_SET) ? "" : " To give it to them anyway, book it directly and press Assign anyway.";
+    throw new ORPCError("BAD_REQUEST", { message: `${barrier}${hint}` });
+  }
 
   const expiresAt = new Date(Date.now() + OFFER_TTL_HOURS * 3600_000);
 

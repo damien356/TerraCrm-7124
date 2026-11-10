@@ -11,8 +11,10 @@ import { exGst } from "../lib/gst";
 import { INTERNAL_CHARGE } from "../lib/line-kinds";
 import { quoteThatCounts } from "../lib/job-value";
 import { jobText, quoteRef, taskRef } from "../lib/refs";
-import { hourlySettings, jobHourlyCosting, termsOn } from "../lib/hourly";
+import { hourlySettings, jobHourlyCosting, termsFor, termsOn } from "../lib/hourly";
 import { saleCosts } from "../lib/sale-costs";
+import { accessOn, itemOpenTo } from "../lib/rate-access";
+import { payToConfirmTaskIds } from "../lib/assign-check";
 
 /**
  * JOB COSTING.
@@ -68,14 +70,31 @@ export type PricedLine = {
  * Work items price on quantity. Surcharges in percent load the work total,
  * everything else (travel per km, a flat allowance) prices on quantity too.
  */
+/** Who of these is paid hourly on new work on this day. */
+async function hourlyIds(installerIds: number[], on: string) {
+  const terms = await termsFor(installerIds, on);
+  return new Set([...terms.entries()].filter(([, t]) => t.defaultForNew).map(([id]) => id));
+}
+
 function priceLines(args: {
   lines: Line[];
   items: Map<number, Item>;
   rates: Rate[];
   installerId: number | null;
   on: string;
+  /**
+   * Per-person items switched on (rate-access). A per-person item that is not
+   * switched on for this installer never borrows Terra's rate: it reads as
+   * unpriced (Pay to confirm) unless he has his own agreed rate (11 Nov).
+   */
+  access?: Map<string, boolean> | null;
+  /**
+   * People paid hourly. For them the lines are only Terra's benchmark (their
+   * pay is the approved hours), so Terra's standard rate is used as before.
+   */
+  hourly?: Set<number> | null;
 }) {
-  const { lines, items, rates, installerId, on } = args;
+  const { lines, items, rates, installerId, on, access, hourly } = args;
 
   const priced: PricedLine[] = [];
   const unpriced: string[] = [];
@@ -83,7 +102,10 @@ function priceLines(args: {
   const resolve = (line: Line): PricedLine | null => {
     const item = items.get(line.itemId);
     if (!item) return null;
-    const r = pick(rates, line.itemId, installerId, on);
+    let r = pick(rates, line.itemId, installerId, on);
+    if (installerId && access && !hourly?.has(installerId) && r.source === "terra" && !itemOpenTo(item, installerId, access)) {
+      r = { amount: null, minimumCharge: null, source: "none", effectiveFrom: null, rateId: null };
+    }
     return {
       lineId: line.id,
       itemId: line.itemId,
@@ -213,6 +235,7 @@ export async function lockTaskLabour(args: { taskId: number; installerId?: numbe
     rates,
     installerId,
     on,
+    access: installerId ? await accessOn([installerId], on) : null,
   });
 
   await db
@@ -303,7 +326,9 @@ export const costing = {
       ]);
 
       const items = new Map(itemRows.map((i) => [i.id, i]));
-      const result = priceLines({ lines, items, rates, installerId, on });
+      const access = installerId ? await accessOn([installerId], on) : null;
+      const hourlyPeople = await hourlyIds(installerId ? [installerId] : [], on);
+      const result = priceLines({ lines, items, rates, installerId, on, access, hourly: hourlyPeople });
 
       // What to offer in the picker: this skill's items, plus every surcharge
       // and allowance, since those are not tied to a trade.
@@ -461,6 +486,9 @@ export const costing = {
       const allLines = taskIds.length
         ? await db.select().from(schema.taskLabourLines).where(inArray(schema.taskLabourLines.taskId, taskIds))
         : [];
+      // Per-person items not switched on never borrow Terra's rate (11 Nov).
+      const people = [input.installerId, ...tasks.map((t) => t.task.assignedInstallerId), ...installerRows.map((i) => i.id)].filter((id): id is number => id != null);
+      const [access, hourlyPeople] = await Promise.all([accessOn(people, on), hourlyIds(people, on)]);
 
       /*
        * Hourly tasks cost what the time costs: approved hours at the rate they
@@ -476,6 +504,8 @@ export const costing = {
 
       // Booked fixed-price dispatches with no agreed pay: flagged, never changed (Damien, 10 Nov).
       const unpaid = await payNotSetTaskIds(taskIds);
+      // Booked with a rate still missing (Assign anyway, 11 Nov): flagged, never paid at $0.00.
+      const toConfirm = await payToConfirmTaskIds(taskIds);
 
       const taskViews = tasks.map((t) => {
         const lines = allLines.filter((l) => l.taskId === t.task.id);
@@ -484,7 +514,7 @@ export const costing = {
 
         // Frozen tasks read back at what they were priced at, not today's rates.
         const frozen = t.task.labourCost != null && input.installerId == null;
-        const live = priceLines({ lines, items, rates, installerId: pricedAgainst, on });
+        const live = priceLines({ lines, items, rates, installerId: pricedAgainst, on, access, hourly: hourlyPeople });
 
         // Split a frozen total back into work and extras off the stored
         // breakdown, so the screen still shows where the money went.
@@ -528,6 +558,7 @@ export const costing = {
             : {}),
           frozen,
           payNotSet: unpaid.has(t.task.id),
+          payToConfirm: !unpaid.has(t.task.id) && toConfirm.has(t.task.id),
           pricedOn: frozen ? t.task.labourPricedOn : on,
           unpriced: live.unpriced,
           incomplete: hv ? (!hv.final && hv.plan.hours == null) || hv.vehicleMissing.length > 0 : lines.length === 0 || live.incomplete,
@@ -587,7 +618,7 @@ export const costing = {
           let incomplete = false;
           for (const t of tasks) {
             const lines = allLines.filter((l) => l.taskId === t.task.id);
-            const p = priceLines({ lines, items, rates, installerId: inst.id, on });
+            const p = priceLines({ lines, items, rates, installerId: inst.id, on, access, hourly: hourlyPeople });
             sum += p.total;
             if (p.incomplete || lines.length === 0) incomplete = true;
           }

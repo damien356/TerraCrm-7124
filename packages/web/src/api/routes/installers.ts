@@ -10,6 +10,7 @@ import { accessOn, itemOpenTo } from "../lib/rate-access";
 import { todayLocal } from "../lib/local-date";
 import { termsFor } from "../lib/hourly";
 import { unsetRates } from "../lib/line-rates";
+import { assignWarnings, payMethodOf, warningText } from "../lib/assign-check";
 import { mayWorkBetween, slotCols, workSlots } from "../lib/task-run";
 import { installerLogoKey, signGet, signPut } from "../lib/s3";
 import { taskForStaff } from "../lib/staff-view";
@@ -396,6 +397,20 @@ export const installers = {
         const noLineRate = unset.get(installer.id) ?? [];
         return { installer, link: mine.find((l) => l.skillId === needs[0]?.id) ?? null, mine, missing, locked, noRate, noLineRate };
       });
+      // Assign anyway (11 Nov): the very warnings the booking asks to confirm (lib/assign-check), and how each is paid.
+      const checks = new Map(
+        await Promise.all(
+          people.map(async (p) => {
+            const warnings = input.taskId
+              ? await assignWarnings(input.taskId, p.id, input.itemIds)
+              : (() => {
+                  const r = rows.find((x) => x.installer.id === p.id)!;
+                  return r.missing.length ? [warningText.skill(r.missing.map((m) => m.name), p.name)] : [];
+                })();
+            return [p.id, { warnings, payMethod: await payMethodOf(p.id, isAdmin) }] as const;
+          }),
+        ),
+      );
 
       // Busy means working that Brisbane date on any day of a run, not only on
       // the task's first date. A schedule nobody can read counts as maybe busy.
@@ -435,8 +450,12 @@ export const installers = {
           rateType: isAdmin ? (r.link?.rateType ?? null) : null,
           rate: isAdmin ? (r.link?.rate ?? null) : null,
           canLead: needs.length === 0 || (r.mine.length > 0 && r.mine.every((l) => l.canLead)),
-          /** Ticked for every skill the work needs. Only these can be booked or offered it. */
+          /** Ticked and switched on for all the work, with its rates set. Offers still need this. */
           eligible: r.missing.length === 0 && r.locked.length === 0 && !r.noRate && r.noLineRate.length === 0,
+          /** Anyone active can be booked (11 Nov). These are what the office confirms with Assign anyway. */
+          warnings: checks.get(r.installer.id)!.warnings,
+          /** How they are paid. The rate only for Admin. */
+          payMethod: checks.get(r.installer.id)!.payMethod,
           /** Why someone can't take it, or what to watch for. Never a rate or anything private. */
           reasons,
           missingSkills: r.missing.map((m) => m.name),

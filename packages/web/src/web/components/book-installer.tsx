@@ -7,7 +7,8 @@ import { Checkbox, Field, Input, Select } from "./ui/field";
 import { useBookTask, usePlanBooking, useTask } from "../queries/tasks";
 import { useEligible } from "../queries/installers";
 import { useCalendarCheck } from "../queries/calendar";
-import { useBookingAsks } from "./outside-hours";
+import { AssignWarningList, PayMethodLine, useBookingAsks } from "./outside-hours";
+import type { AssignWarningView, PayMethodView } from "./outside-hours";
 
 /**
  * BOOK INSTALLER. The whole booking in one panel, not a wizard.
@@ -73,33 +74,56 @@ const longDate = (date: string) =>
 type Mode = "one" | "multi";
 type Following = "same" | "coordinate" | "each";
 
-type Pickable = { id: number; name: string; eligible: boolean; reasons: string[] };
+type Pickable = {
+  id: number;
+  name: string;
+  eligible: boolean;
+  reasons: string[];
+  warnings?: AssignWarningView[];
+  payMethod?: PayMethodView | null;
+};
+
+/** The short words beside a name in the picker: what the office will be asked to confirm. */
+export function checkLabel(p: Pickable) {
+  if (p.eligible) return "";
+  const short = p.reasons.filter((r) => /ticked|switched on|rate not set/i.test(r));
+  return short.length ? ` · check: ${short.join(", ")}` : "";
+}
 
 /**
- * Who can't take this dispatch, and why (brief section 2). Nobody is left
- * off the list without a reason: they show greyed out with what stops them.
+ * Who needs a check before they take this dispatch, and why (Assign anyway,
+ * 11 Nov). Nobody active is greyed out for a missing tick, a per-person item
+ * or a missing rate any more: the picked person's warnings and pay show here,
+ * and booking asks the office to confirm them.
  */
 export function IneligibleNote({ people, picked }: { people: Pickable[] | undefined; picked?: string }) {
   const out = (people ?? []).filter((p) => !p.eligible);
-  if (!out.length) return null;
-  const chosen = out.find((p) => String(p.id) === picked);
+  const chosen = (people ?? []).find((p) => String(p.id) === picked);
+  if (!out.length && !chosen?.payMethod) return null;
   return (
-    <div className="mt-1 text-[11px] text-muted-foreground">
-      {chosen ? (
-        <p className="font-medium text-destructive">
-          {chosen.name} can't be booked on this: {chosen.reasons.join(", ")}.
-        </p>
+    <div className="mt-1 space-y-1.5 text-[11px] text-muted-foreground">
+      {chosen?.warnings?.length ? (
+        <>
+          <p className="font-medium text-amber-800">Check assignment for {chosen.name}. Booking asks you to confirm:</p>
+          <AssignWarningList warnings={chosen.warnings} compact />
+        </>
       ) : null}
-      <details>
-        <summary className="cursor-pointer">{out.length} {out.length === 1 ? "person" : "people"} can't take this. Why</summary>
-        <ul className="mt-1 space-y-0.5">
-          {out.map((p) => (
-            <li key={p.id}>
-              <span className="font-medium text-foreground">{p.name}</span>: {p.reasons.filter((r) => /ticked|switched on|rate not set/i.test(r)).join(", ") || p.reasons.join(", ")}
-            </li>
-          ))}
-        </ul>
-      </details>
+      {chosen?.payMethod ? <PayMethodLine pay={chosen.payMethod} /> : null}
+      {out.length ? (
+        <details>
+          <summary className="cursor-pointer">
+            {out.length} {out.length === 1 ? "person needs" : "people need"} a check first. Why
+          </summary>
+          <ul className="mt-1 space-y-0.5">
+            {out.map((p) => (
+              <li key={p.id}>
+                <span className="font-medium text-foreground">{p.name}</span>:{" "}
+                {p.warnings?.length ? p.warnings.map((w) => w.text).join(" ") : p.reasons.join(", ")}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -130,6 +154,8 @@ export function BookInstallerPanel({
   const [perDay, setPerDay] = React.useState<Record<string, number>>({});
   const [durationHours, setDurationHours] = React.useState(8);
   const [payOverride, setPayOverride] = React.useState("");
+  /** Hourly work: the estimate for the whole booking. The budget only, never added to approved hours. */
+  const [plannedHours, setPlannedHours] = React.useState("");
   const [overrideNote, setOverrideNote] = React.useState("");
   const [startAt, setStartAt] = React.useState("09:00");
   const [finishAt, setFinishAt] = React.useState("10:00");
@@ -152,6 +178,7 @@ export function BookInstallerPanel({
     if (t.scheduledDate) setStartDate(t.scheduledDate);
     if (t.assignedInstallerId) setInstallerId(String(t.assignedInstallerId));
     if (t.durationHours) setDurationHours(t.durationHours);
+    if (t.plannedHours != null) setPlannedHours(String(t.plannedHours));
     const suggested = t.suggested?.days ?? null;
     if (suggested && suggested > 1) {
       setDayCount(suggested);
@@ -258,6 +285,8 @@ export function BookInstallerPanel({
         durationHours: hours,
         calendarOverride: calProblems.length && calMine && !calNoTime && calReason.trim().length >= 3 ? { reason: calReason.trim() } : null,
         payAmount: payOverride ? Number(payOverride) : null,
+        // Hourly only: the estimate is the budget, approved hours stay the cost.
+        ...(chosenHourly ? { plannedHours: plannedHours.trim() ? Number(plannedHours) : null } : {}),
         overrideNote: loud && overrideNote ? overrideNote : null,
         // Whatever gets booked is what the note says next time, so the days box
         // and "Set by hand at N" always agree (notes 18.61). Only a run that
@@ -275,10 +304,11 @@ export function BookInstallerPanel({
   );
 
   const chosen = eligible.data?.find((i) => String(i.id) === installerId);
-  const chosenBlocked = Boolean(chosen && !chosen.eligible);
+  const chosenHourly = chosen?.payMethod?.kind === "hourly";
+  const badPlanned = chosenHourly && plannedHours.trim() !== "" && !(Number(plannedHours) >= 0 && Number(plannedHours) <= 2000);
 
   function submit() {
-    if (!t || !installerId || chosenBlocked) return;
+    if (!t || !installerId) return;
     setError(null);
     void asks.run();
   }
@@ -321,15 +351,29 @@ export function BookInstallerPanel({
           <Select value={installerId} onChange={(e) => setInstallerId(e.target.value)}>
             <option value="">Pick someone…</option>
             {(eligible.data ?? []).map((i) => (
-              <option key={i.id} value={i.id} disabled={!i.eligible && String(i.id) !== installerId}>
+              <option key={i.id} value={i.id}>
                 {i.name}
-                {!i.eligible ? ` · can't: ${i.reasons.filter((r) => /ticked|switched on|rate not set/i.test(r)).join(", ")}` : ""}
+                {checkLabel(i)}
                 {i.eligible && !i.canCoverAlone ? " · can't do 2-man alone" : ""}
               </option>
             ))}
           </Select>
         </Field>
         <IneligibleNote people={eligible.data} picked={installerId} />
+        {t.payToConfirm ? (
+          <p className="mt-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-900">
+            Pay to confirm: a rate for this booking is missing. Nothing is paid, invoiced or approved at $0.00 until it is set.
+          </p>
+        ) : null}
+        {t.assignOverrides?.length ? (
+          <div className="mt-1.5 space-y-1">
+            {t.assignOverrides.map((o) => (
+              <p key={o.at + o.detail} className="rounded-md bg-secondary px-2.5 py-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                {o.detail}
+              </p>
+            ))}
+          </div>
+        ) : null}
 
         {/* ---------------------------- booking type ---------------------------- */}
         <div className="mt-3">
@@ -699,6 +743,20 @@ export function BookInstallerPanel({
           />
         </Field>
 
+        {chosenHourly ? (
+          <Field label="Estimated hours (optional)" hint="The whole booking. A budget only: the cost is the hours the office approves." className="mt-3">
+            <Input
+              type="number"
+              inputMode="decimal"
+              min={0}
+              step={0.5}
+              placeholder="e.g. 16"
+              value={plannedHours}
+              onChange={(e) => setPlannedHours(e.target.value)}
+            />
+          </Field>
+        ) : null}
+
         {error ? (
           <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</p>
         ) : null}
@@ -709,7 +767,7 @@ export function BookInstallerPanel({
       <div className="border-t border-border px-4 py-3">
         <Button
           className="h-11 w-full text-sm font-semibold"
-          disabled={!installerId || dates.length === 0 || book.isPending || asks.pending || chosenBlocked || customBad || calBlocked || (cal.isLoading && crew.length > 0)}
+          disabled={!installerId || dates.length === 0 || book.isPending || asks.pending || customBad || badPlanned || calBlocked || (cal.isLoading && crew.length > 0)}
           onClick={submit}
         >
           {book.isPending ? (

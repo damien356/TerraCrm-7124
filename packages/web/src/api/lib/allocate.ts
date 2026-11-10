@@ -6,11 +6,9 @@ import type { Actor } from "../middleware/auth";
 import { checkDays } from "./availability";
 import { DISPATCH_SPLIT, DispatchError, splitDispatch, taskLock } from "./dispatch-build";
 import { checkOutsideHours } from "./outside-hours";
-import { missingSkills, sayList, skillsForTask } from "./task-skills";
-import { lockedItems } from "./rate-access";
-import { todayLocal } from "./local-date";
-import { hourlyRateBarrier } from "./hourly";
-import { lineRateBarrier } from "./line-rates";
+import { skillsForTask } from "./task-skills";
+import { assignWarnings, payMethodOf, requireAcknowledged } from "./assign-check";
+import type { AssignAnyway } from "./assign-check";
 import { bookTask } from "../routes/tasks";
 
 /* ---------------------------------------------------------------------------
@@ -146,6 +144,10 @@ export type AllocateInput = {
   replaceInstaller?: boolean;
   /** Why the office is booking over another booking that overlaps. */
   overrideNote?: string | null;
+  /** Assign anyway: the warnings confirmed, per person. */
+  assignAnyway?: AssignAnyway;
+  /** Estimated hours for hourly work, the labour budget only. */
+  plannedHours?: number | null;
 };
 
 /**
@@ -171,16 +173,10 @@ export async function previewAllocation(input: AllocateInput, actor: Actor) {
   if (picked.length !== new Set(input.itemIds).size) stops.push("Some of the ticked lines are no longer on this dispatch. Reload the job.");
 
   const needs = await skillsForTask(task.id, picked.map((l) => l.item.id));
-  const missing = await missingSkills(installer.id, needs);
-  if (missing.length) stops.push(`${installer.name} isn't ticked for ${sayList(missing.map((m) => m.name))}.`);
-  const locked = await lockedItems(installer.id, picked.map((l) => l.item.id), todayLocal());
-  if (locked.length) stops.push(`${sayList(locked.map((l) => l.name))} isn't switched on for ${installer.name}'s rate card.`);
-  const hourlyStop = await hourlyRateBarrier(installer.id);
-  if (hourlyStop) stops.push(hourlyStop);
-  if (picked.length) {
-    const rateStop = await lineRateBarrier(task.id, installer.id, picked.map((l) => l.item.id));
-    if (rateStop) stops.push(rateStop);
-  }
+  // Skill ticks, per-person items and missing rates are warnings the office confirms (Assign anyway, 11 Nov).
+  const already = task.assignedInstallerId === installer.id || task.secondInstallerId === installer.id;
+  const warnings = picked.length && !already ? await assignWarnings(task.id, installer.id, picked.map((l) => l.item.id)) : [];
+  const payMethod = await payMethodOf(installer.id, actor.role === "admin");
   if (installer.archivedAt || !installer.active) stops.push(`${installer.name} is ${installer.archivedAt ? "archived" : "switched off"}.`);
 
   // Booked or offered already: whole dispatch only, as a reviewed change; never a part of it.
@@ -229,6 +225,9 @@ export async function previewAllocation(input: AllocateInput, actor: Actor) {
     lines: picked.map((l) => ({ itemId: l.item.id, name: l.item.name, unit: l.item.unit, qty: l.line.qty })),
     staying: lines.filter((l) => !input.itemIds.includes(l.item.id)).map((l) => ({ itemId: l.item.id, name: l.item.name, unit: l.item.unit, qty: l.line.qty })),
     skills: needs.map((n) => n.name),
+    /** What the office confirms with Assign anyway. Never a stop. */
+    warnings,
+    payMethod,
     dates,
     arrivalStart: input.arrivalStart ?? null,
     arrivalEnd: input.arrivalEnd ?? null,
@@ -258,6 +257,8 @@ async function undoSplit(fromId: number, createdId: number, before: { skillId: n
 export async function allocate(input: AllocateInput, actor: Actor) {
   const review = await previewAllocation(input, actor);
   if (review.stops.length) throw new ORPCError("BAD_REQUEST", { message: review.stops.join(" "), data: { reason: "allocation_stopped", stops: review.stops } });
+  // Asked before any split, so a part-split is never left behind for a booking the office then backs out of.
+  requireAcknowledged({ installerId: input.installerId, name: review.recipient.name, warnings: review.warnings, ack: input.assignAnyway, payMethod: review.payMethod });
   if (review.clashes.length && !input.overrideNote?.trim()) {
     throw new ORPCError("BAD_REQUEST", {
       message: `${review.recipient.name} already has work at that time: ${review.clashes.map((c) => `${c.title}${c.when ? ` (${c.when})` : ""}`).join("; ")}. Pick another time, or give a reason to book over it.`,
@@ -305,6 +306,8 @@ export async function allocate(input: AllocateInput, actor: Actor) {
         overrideNote: input.overrideNote?.trim() || null,
         confirmOutsideHours: input.confirmOutsideHours,
         replaceInstaller: input.replaceInstaller,
+        assignAnyway: input.assignAnyway,
+        ...(input.plannedHours !== undefined ? { plannedHours: input.plannedHours } : {}),
       },
       actor,
     );

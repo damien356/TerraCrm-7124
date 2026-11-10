@@ -336,9 +336,10 @@ describe("1. Fabrizio in the installer picker", () => {
     expect(rows.every((r) => r.rate == null && r.rateType == null)).toBe(true);
   });
 
-  test("booking or offering the whole carpet tile dispatch to Fabrizio is still refused, with the skill named", async () => {
+  test("booking the whole carpet tile dispatch to Fabrizio asks for the check (Assign anyway, 11 Nov), with the skill named, and writes nothing", async () => {
     const e = await failure(m.tasksRoute.bookTask({ taskId: 69, installerId: FAB, dates: [MON], arrivalStart: "07:00", coordinateAfterFirst: false, perDay: [] } as any, actor()));
-    expect(e.message).toContain("isn't ticked for Carpet tiles");
+    expect(e.data?.reason).toBe("assign_check");
+    expect(e.message).toContain('"Carpet tiles" is not ticked on Fabrizio\'s profile.');
     expect(await q("SELECT count(*) n FROM task_days WHERE task_id = 69")).toEqual([{ n: 0 }] as any);
   });
 });
@@ -421,11 +422,13 @@ describe("2. Allocate labour on job 4297", () => {
     expect(await q("SELECT count(*) n FROM activity_log WHERE action = 'dispatch_split' AND job_id = ?", [jobId])).toEqual([{ n: 0 }] as any);
   });
 
-  test("Office can't allocate to someone missing a skill on the ticked lines", async () => {
+  test("allocating to someone missing a skill on the ticked lines asks for the check first, before any split", async () => {
     const jobId = await newJob();
     const taskId = await newTask(jobId, "Tiles", SK.tiles, [[IT.tiles, 40]]);
     const e = await failure(as(OFFICE, () => run(m.dispatches.allocate, { taskId, itemIds: [IT.tiles], installerId: FAB, dates: [WED], arrivalStart: "07:00" })));
-    expect(e.message).toContain("Fabrizio isn't ticked for Carpet tiles");
+    expect(e.data?.reason).toBe("assign_check");
+    expect(e.message).toContain('"Carpet tiles" is not ticked on Fabrizio\'s profile.');
+    expect(await q("SELECT count(*) n FROM job_tasks WHERE job_id = ?", [jobId])).toEqual([{ n: 1 }] as any);
   });
 });
 
@@ -622,12 +625,14 @@ describe("6. Day rates 73, 74 and 103: per contractor, off by default", () => {
     expect(card.accessLog[0].by).toBe("Test Admin");
   });
 
-  test("a dispatch with a day rate line can only go to someone it is switched on for", async () => {
+  test("a dispatch with a day rate line not switched on for someone asks for the check; switched on, it goes straight through", async () => {
     const j = await newJob();
     const t = await newTask(j, "Day work", null, [[IT.dayOne, 1]]);
     const rows = await run<any[]>(m.installers.eligible, { taskId: t });
     expect(rows.find((r) => r.id === PAUL)!.reasons).toContain("Day rate, one man not switched on for them");
-    expect((await failure(run(m.tasksRoute.tasks.assign, { id: t, installerId: PAUL }))).message).toContain("isn't switched on");
+    const e = await failure(run(m.tasksRoute.tasks.assign, { id: t, installerId: PAUL }));
+    expect(e.data?.reason).toBe("assign_check");
+    expect(e.message).toContain('"Day rate, one man" is not enabled on Paul\'s profile.');
     await run(m.labour.setItemAccess, { installerId: PAUL, itemId: IT.dayOne, enabled: true, effectiveFrom: "2026-11-01", note: null });
     await run(m.tasksRoute.tasks.assign, { id: t, installerId: PAUL });
   });
@@ -639,7 +644,7 @@ describe("6. Day rates 73, 74 and 103: per contractor, off by default", () => {
 });
 
 describe("7. Contractor labor - per hour", () => {
-  test("$0.00 shows as Rate not set, and blocks the picker, offers, booking and approval", async () => {
+  test("$0.00 shows as Rate not set: offers and approval stay blocked, booking asks the check (Pay to confirm)", async () => {
     expect(await m.hourly.hourlyRateBarrier(NORATE)).toBe(
       "Contractor labor - per hour: Rate not set ($0.00). Set the agreed hourly rate before giving this person hourly work.",
     );
@@ -652,7 +657,9 @@ describe("7. Contractor labor - per hour", () => {
     const nr = rows.find((r) => r.id === NORATE)!;
     expect([nr.eligible, nr.reasons]).toEqual([false, ["Hourly rate not set ($0.00)"]]);
     expect((await failure(run(m.offers.sendDirect, { taskId: t, installerId: NORATE }))).message).toContain("Rate not set ($0.00)");
-    expect((await failure(run(m.tasksRoute.tasks.assign, { id: t, installerId: NORATE }))).message).toContain("Rate not set ($0.00)");
+    const ask = await failure(run(m.tasksRoute.tasks.assign, { id: t, installerId: NORATE }));
+    expect(ask.data?.reason).toBe("assign_check");
+    expect(ask.message).toContain("Pay to confirm: no hourly rate is set for");
     expect(pushes).toEqual([]);
 
     // Time already logged against a $0.00 rate can't be approved.
@@ -768,10 +775,17 @@ describe("9. $0.00 is Rate not set, and the job 4297 stairs line", () => {
     expect(rows.find((r) => r.id === PAUL)!.eligible).toBe(true);
 
     const said = "Carpet tile install: Rate not set ($0.00). Set the agreed rate on this person's rate card before giving this person this work.";
-    expect((await failure(run(m.offers.sendDirect, { taskId: tilesTask, installerId: ZERO }))).message).toBe(said);
-    expect((await failure(run(m.tasksRoute.tasks.assign, { id: tilesTask, installerId: ZERO }))).message).toBe(said);
+    // Offers stay strict, and point to Assign anyway.
+    expect((await failure(run(m.offers.sendDirect, { taskId: tilesTask, installerId: ZERO }))).message).toBe(
+      `${said} To give it to them anyway, book it directly and press Assign anyway.`,
+    );
+    const ask = await failure(run(m.tasksRoute.tasks.assign, { id: tilesTask, installerId: ZERO }));
+    expect(ask.data?.reason).toBe("assign_check");
+    const payText = 'Pay to confirm: "Carpet tile install" has no rate for Zero (Rate not set).';
+    expect(ask.data.warnings.map((w: any) => w.text)).toEqual([payText]);
     const review = await run<any>(m.dispatches.previewAllocate, { taskId: tilesTask, itemIds: [IT.tiles], installerId: ZERO, dates: [THU], arrivalStart: "07:00" });
-    expect(review.stops).toContain(said);
+    expect(review.stops).toEqual([]);
+    expect(review.warnings.map((w: any) => w.text)).toEqual([payText]);
     expect(await q("SELECT count(*) n FROM task_offers WHERE task_id = ?", [tilesTask])).toEqual([{ n: 0 }] as any);
 
     // Once a real rate is on his card he can be given it.
