@@ -26,6 +26,7 @@ import { useSaleForJob } from "../queries/productSales";
 import { VariationsCard } from "../components/variations";
 import { JobConversation } from "../components/conversation";
 import { BookInstallerPanel } from "../components/book-installer";
+import { InstallersBookingsCard } from "../components/installer-board";
 import { Card, CardHeader, Empty, Loading, Spinner } from "../components/ui/card";
 import { Badge, TASK_STATUS_COLOUR, TASK_STATUS_LABEL, tintFor } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -596,6 +597,9 @@ export default function JobDetailPage() {
             ) : null}
             <LeadFacts job={j} />
           </Card>
+
+          {/* who does which work, and when (11 Nov, job 188070) */}
+          {supplyOnly || productSale ? null : <InstallersBookingsCard jobId={j.id} onBook={setBooking} />}
 
           {/* supply only: where the job is up to, with a jump to each card (item 14) */}
           {supplyOnly ? <SupplyStepsCard jobId={j.id} isAdmin={isAdmin} productSale={productSale} /> : null}

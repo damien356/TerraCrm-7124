@@ -93,6 +93,7 @@ function useTaskMutation(
       queryClient.invalidateQueries({ queryKey: orpc.offers.key() });
       queryClient.invalidateQueries({ queryKey: orpc.dashboard.key() });
       queryClient.invalidateQueries({ queryKey: orpc.dispatches.key() });
+      queryClient.invalidateQueries({ queryKey: orpc.installerBoard.key() });
     },
   });
 }

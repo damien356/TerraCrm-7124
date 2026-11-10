@@ -26,6 +26,8 @@ function useOfferMutation(name: "sendDirect" | "broadcast" | "withdraw") {
       queryClient.invalidateQueries({ queryKey: orpc.offers.key() });
       queryClient.invalidateQueries({ queryKey: orpc.tasks.key() });
       queryClient.invalidateQueries({ queryKey: orpc.dashboard.key() });
+      // Installers & bookings shows who has an offer out.
+      queryClient.invalidateQueries({ queryKey: orpc.installerBoard.key() });
     },
   });
 }

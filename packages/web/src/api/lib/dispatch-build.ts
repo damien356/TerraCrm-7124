@@ -248,11 +248,14 @@ export async function jobDispatchLines(jobId: number) {
 
 export class DispatchError extends Error {}
 
-async function freeTask(id: number, jobId?: number) {
+async function freeTask(id: number, jobId?: number, held = false) {
   const [task] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, id));
   if (!task) throw new DispatchError("Dispatch not found.");
   if (jobId != null && task.jobId !== jobId) throw new DispatchError("Those dispatches are on different jobs.");
   if (task.status === "cancelled") throw new DispatchError(`Dispatch "${task.title}" is cancelled.`);
+  // Installers & bookings (11 Nov) splits work off a booked or offered dispatch only after the office confirmed it. Never started or done work.
+  if (held && (task.status === "in_progress" || task.status === "complete")) throw new DispatchError(`Dispatch "${task.title}" is ${task.status === "complete" ? "done" : "started"}, so it cannot be changed.`);
+  if (held) return task;
   const lock = await taskLock(task);
   if (lock) throw new DispatchError(`Dispatch "${task.title}" is ${lock}, so it cannot be changed. Take it back off the crew first.`);
   return task;
@@ -266,8 +269,10 @@ async function freeTask(id: number, jobId?: number) {
 export async function splitDispatch(
   args: { taskId: number; itemIds: number[]; title?: string | null },
   actor: { name: string; role: string },
+  /** The office confirmed taking these lines off a booked or offered dispatch (lib/installer-board.ts). */
+  opts: { held?: boolean } = {},
 ) {
-  const task = await freeTask(args.taskId);
+  const task = await freeTask(args.taskId, undefined, Boolean(opts.held));
   const lines = await db.select().from(schema.taskLabourLines).where(eq(schema.taskLabourLines.taskId, task.id));
   const moving = lines.filter((l) => args.itemIds.includes(l.itemId));
   if (!moving.length) throw new DispatchError("Pick the lines that go on the new dispatch.");
