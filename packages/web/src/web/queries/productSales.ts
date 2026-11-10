@@ -51,3 +51,23 @@ export function useSetStockAndOrder() {
   const onSuccess = useSaleRefresh();
   return useMutation(orpc.productSales.setStockAndOrder.mutationOptions({ onSuccess }));
 }
+
+/* Edit price record (Damien, 11 Nov 2026, job 188083). */
+export type PriceRecord = NonNullable<Awaited<ReturnType<AppRouterClient["productSales"]["priceRecord"]>>>;
+export type PriceRecordPreview = Awaited<ReturnType<AppRouterClient["productSales"]["previewPriceRecordEdit"]>>;
+export type PriceRecordLineIn = Parameters<AppRouterClient["productSales"]["editPriceRecord"]>[0]["lines"][number];
+
+/** The price record behind a Sell products invoice, whether it can change, and why not. */
+export function usePriceRecord(jobId: number | null | undefined, enabled = true) {
+  return useQuery(orpc.productSales.priceRecord.queryOptions({ input: { jobId: jobId ?? 0 }, enabled: enabled && !!jobId, staleTime: 5_000 }));
+}
+
+/** What Save would change. Writes nothing. */
+export function usePreviewPriceRecordEdit() {
+  return useMutation(orpc.productSales.previewPriceRecordEdit.mutationOptions());
+}
+
+export function useEditPriceRecord() {
+  const onSuccess = useSaleRefresh();
+  return useMutation(orpc.productSales.editPriceRecord.mutationOptions({ onSuccess }));
+}

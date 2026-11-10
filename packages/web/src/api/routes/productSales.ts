@@ -9,6 +9,7 @@ import { deliveryStatus } from "../lib/delivery";
 import { orderPlan, previewSale, raiseSale, saleOfJob, setStockAndOrder, syncSaleLines } from "../lib/product-sale";
 import { quoteRefOf } from "../lib/quote-number";
 import { emailedAtFor } from "../lib/invoice-emailed";
+import { editPriceRecord, previewPriceRecordEdit, priceRecordState, type EditLineIn } from "../lib/price-record-edit";
 import { jobText } from "../lib/refs";
 
 /**
@@ -54,6 +55,30 @@ const saleInput = z.object({
   note: z.string().max(500).nullish(),
 });
 
+/* Edit price record (Damien, 11 Nov 2026, job 188083). See lib/price-record-edit.ts. */
+const editLinesInput = z
+  .array(
+    z.object({
+      quoteItemId: z.number().int().positive().nullish(),
+      productId: z.number().int().positive().nullish(),
+      description: z.string().max(300).default(""),
+      qty: z.number().min(0).max(100_000),
+      unit: z.string().trim().max(20).default("each"),
+      unitPrice: z.number().min(0).max(1_000_000),
+      unitCost: z.number().min(0).max(1_000_000).nullish(),
+      fromStock: z.number().min(0).max(100_000).nullish(),
+    }),
+  )
+  .min(1)
+  .max(60);
+
+/** A login that can not see costs never changes one: the line keeps its cost, a new line gets the price book cost. */
+function editLinesFor(lines: z.infer<typeof editLinesInput>, canSeeCosts: boolean): EditLineIn[] {
+  return lines.map((l) => {
+    const { unitCost, ...rest } = l;
+    return canSeeCosts && unitCost !== undefined ? { ...rest, unitCost } : rest;
+  });
+}
 
 async function salesList(where: { installerId?: number; contactId?: number; companyId?: number }) {
   const cond = where.installerId
@@ -172,6 +197,23 @@ export const productSales = {
     .handler(async ({ input, context }) => {
       const out = await setStockAndOrder({ jobId: input.jobId, fromStock: input.fromStock, actor: context.actor });
       await rebuild();
+      return out;
+    }),
+
+  /** Edit price record: what the window opens with, and why it is locked when it is. Null when the job is not a product sale. */
+  priceRecord: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input, context }) => priceRecordState(input.jobId, context.actor)),
+
+  /** What Save would change. Writes nothing. */
+  previewPriceRecordEdit: staffOnly
+    .input(z.object({ jobId: z.number(), lines: editLinesInput }))
+    .handler(async ({ input, context }) => previewPriceRecordEdit({ jobId: input.jobId, lines: editLinesFor(input.lines, context.actor.canSeeCosts) })),
+
+  /** Changes the price record, the invoice (same number), the sale lines, materials and draft POs together. Nothing is emailed or sent. */
+  editPriceRecord: staffOnly
+    .input(z.object({ jobId: z.number(), lines: editLinesInput, stamp: z.string().max(20_000), expectedTotal: z.number(), note: z.string().max(300).nullish() }))
+    .handler(async ({ input, context }) => {
+      const out = await editPriceRecord({ ...input, lines: editLinesFor(input.lines, context.actor.canSeeCosts) }, context.actor);
+      if (out.changed) await rebuild();
       return out;
     }),
 

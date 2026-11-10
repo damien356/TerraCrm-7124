@@ -9,6 +9,7 @@ import { raiseJobInvoice } from "./final-invoice";
 import { billToOfLink, buyerLinkOf } from "./installer-buyer";
 import { moveJobForward } from "./job-stage";
 import { liveSellFor } from "./live-sell";
+import { markupOf } from "./pricing";
 import { wholeUnits } from "./order-sizes";
 import { quoteRefOf } from "./quote-number";
 import { jobText } from "./refs";
@@ -105,7 +106,7 @@ async function emailOf(billTo: BillTo) {
 
 /* ------------------------------- the lines ------------------------------- */
 
-type Priced = {
+export type Priced = {
   productId: number | null;
   description: string;
   qty: number;
@@ -123,7 +124,7 @@ type Priced = {
   orderNote: string | null;
 };
 
-async function priceLines(lines: SaleLineIn[]): Promise<Priced[]> {
+export async function priceLines(lines: SaleLineIn[]): Promise<Priced[]> {
   const clean = lines
     .map((l) => ({ ...l, description: (l.description ?? "").replace(/\s+/g, " ").trim(), unit: (l.unit || "each").trim() }))
     .filter((l) => l.description || l.productId);
@@ -177,8 +178,19 @@ async function priceLines(lines: SaleLineIn[]): Promise<Priced[]> {
   return out;
 }
 
+/**
+ * The price book cost of each product, ex GST, the same figure the quote
+ * builder puts on a product line (Damien, 11 Nov 2026, job 188083). Staff with
+ * cost access see it. It never goes on the customer's quote or invoice.
+ */
+export async function bookCostsOf(productIds: (number | null | undefined)[]) {
+  const ids = [...new Set(productIds.filter((x): x is number => x != null))];
+  const rows = ids.length ? await db.select({ id: schema.products.id, costPrice: schema.products.costPrice }).from(schema.products).where(inArray(schema.products.id, ids)) : [];
+  return new Map(rows.filter((r) => r.costPrice != null && r.costPrice >= 0).map((r) => [r.id, r2(r.costPrice!)]));
+}
+
 /** The same sums recalc does on a quote with no referral fee and no supplier charge lines. */
-function totalsOf(lines: Priced[]) {
+export function totalsOf(lines: Priced[]) {
   const subtotal = r2(lines.reduce((s, l) => s + l.total, 0));
   const gst = r2(subtotal * 0.1);
   return { subtotal, gst, total: r2(subtotal + gst) };
@@ -245,7 +257,7 @@ function orderSentence(mode: "quote" | "invoice", drafted: number, byHand: numbe
 /* --------------------------------- raise --------------------------------- */
 
 const locks = new Map<string, Promise<void>>();
-async function oneAtATime<T>(key: string, fn: () => Promise<T>): Promise<T> {
+export async function oneAtATime<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const before = locks.get(key) ?? Promise.resolve();
   let release!: () => void;
   const mine = before.then(() => new Promise<void>((r) => (release = r)));
@@ -363,7 +375,8 @@ export async function raiseSale(input: SaleInput & { requestKey: string; expecte
         validDays: 30,
         notes: null,
         terms: null,
-        // No cost on the lines, so no supplier freight lines are added and the total is what the preview showed.
+        // No cost on the lines here, so no supplier freight lines are added and the total is what the preview showed.
+        // The price book cost goes on just after (see below), the same way, so cost and margin still show.
         items: lines.map((l) => ({
           productId: l.productId,
           kind: "supply",
@@ -382,6 +395,19 @@ export async function raiseSale(input: SaleInput & { requestKey: string; expecte
     if (!jobId) throw new Error("The sale's job was not made.");
     const items = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, q.id)).orderBy(asc(schema.quoteItems.sortOrder), asc(schema.quoteItems.id));
     const goods = items.filter((i) => i.kind === "supply");
+    /*
+     * Damien, 11 Nov 2026 (job 188083): the cost was blank on every Sell
+     * products quote and invoice, so margin read 100%. Each product line now
+     * gets its price book cost, as the quote builder gives it. Written straight
+     * onto the lines, not through recalc, so the total stays what the preview
+     * showed. A typed line (no product) has no cost.
+     */
+    const costs = await bookCostsOf(goods.map((g) => g.productId));
+    for (const g of goods) {
+      const c = g.productId != null ? costs.get(g.productId) : undefined;
+      if (c == null) continue;
+      await db.update(schema.quoteItems).set({ unitCost: c, markupPercent: markupOf(c, g.unitPrice) }).where(eq(schema.quoteItems.id, g.id));
+    }
     await db.insert(schema.productSaleLines).values(
       lines.map((l, i) => ({
         saleId: sale!.id,
@@ -600,7 +626,7 @@ export async function saleQuoteAccepted(args: { jobId: number; quoteId: number; 
 
 /* ------------------------------ sale line sync ----------------------------- */
 
-const LIVE_HOLDS = ["temporary", "reserved", "cut", "picked", "awaiting", "planned"];
+export const LIVE_HOLDS = ["temporary", "reserved", "cut", "picked", "awaiting", "planned"];
 
 export type SaleSync = { changed: string[]; removed: string[]; kept: string[] };
 

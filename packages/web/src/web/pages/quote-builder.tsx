@@ -55,6 +55,7 @@ import { ReferralFeeRows } from "../components/referrals";
 import { QuoteFollowupsCard } from "../components/quote-followups";
 import { useSaleForJob } from "../queries/productSales";
 import { priceRecordText } from "../components/sale-job";
+import { EditPriceRecordButton } from "../components/price-record-edit";
 import { QuoteSupplyShort } from "../components/stock-supply-short";
 
 const money = (n: number) => n.toLocaleString("en-AU", { style: "currency", currency: "AUD" });
@@ -1028,9 +1029,14 @@ export default function QuoteBuilderPage() {
         </div>
       ) : null}
       {priceRecord ? (
-        <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="price-record-banner">
-          {priceRecordText(saleQ.data?.invoiceNumber)} Sell products saved these lines as a quote so the invoice has something to bill from. It was never sent to the
-          customer and the customer has not signed or accepted it. Prices, qty and lines are locked.
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="price-record-banner">
+          <span className="min-w-0 flex-1">
+            {priceRecordText(saleQ.data?.invoiceNumber)} Sell products saved these lines as a quote so the invoice has something to bill from. It was never sent to the
+            customer and the customer has not signed or accepted it. Change prices, qty, cost and lines with Edit price record, until the invoice is emailed, in Xero or paid,
+            or a PO is sent.
+          </span>
+          {/* Edit price record (Damien, 11 Nov 2026, job 188083). */}
+          {q.jobId ? <EditPriceRecordButton jobId={q.jobId} /> : null}
         </div>
       ) : wordingOpen ? (
         <div className="mb-3 rounded-md border border-border bg-secondary/60 px-3 py-2 text-sm">
@@ -1073,7 +1079,7 @@ export default function QuoteBuilderPage() {
             title="Lines"
             subtitle={
               priceRecord
-                ? "Price record behind the invoice. Line descriptions can still be fixed. Not sent to the customer."
+                ? "Price record behind the invoice. Not sent to the customer. Line descriptions can be fixed here. Change prices, qty, cost and lines with Edit price record above."
                 : wordingOpen
                 ? "Accepted. Line descriptions can still be fixed. Price changes go through a variation on the job."
                 : locked

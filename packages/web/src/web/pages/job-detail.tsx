@@ -19,6 +19,7 @@ import { PaymentTermsCard } from "../components/payment-terms";
 import { ClientInvoicesCard, MaterialSelectionCard } from "../components/client-invoices";
 import { DeliveryCard } from "../components/delivery";
 import { SaleOrderCard, priceRecordText } from "../components/sale-job";
+import { EditPriceRecordButton } from "../components/price-record-edit";
 import { JobSiteFact } from "../components/site-fill";
 import { STEP_ANCHOR, SupplyStepsCard } from "../components/supply-steps";
 import { useDeliveryStatus } from "../queries/delivery";
@@ -817,6 +818,8 @@ export default function JobDetailPage() {
                     <span className="flex items-center gap-2">
                       <Badge>{sale?.internalPriceRecord && sale.quoteId === q.id ? "price record" : q.status}</Badge>
                       <span className="tabular">{money(q.total)}</span>
+                      {/* Edit price record (Damien, 11 Nov 2026, job 188083). */}
+                      {sale?.internalPriceRecord && sale.quoteId === q.id ? <EditPriceRecordButton jobId={j.id} /> : null}
                       {productSale ? null : <DuplicateQuoteButton quoteId={q.id} />}
                     </span>
                   </li>
