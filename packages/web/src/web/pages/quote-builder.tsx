@@ -799,6 +799,9 @@ export default function QuoteBuilderPage() {
   const wordingOpen = q.status === "accepted";
   // Accepted inside Ops by Sell products, not by the customer. Never shown as a customer acceptance.
   const priceRecord = !!saleQ.data?.internalPriceRecord && saleQ.data.quoteId === q.id;
+  // A draft already made from this one (Damien, 11 Nov 2026): open it rather than make another.
+  const myVersion = q.versions.find((v) => v.id === q.id)?.version ?? 0;
+  const newerDraft = q.status === "sent" ? (q.versions.find((v) => v.version > myVersion && (v.status === "draft" || v.status === "needs_review")) ?? null) : null;
   const checksLeft = q.items.filter((i: Item) => i.checkRequired).length;
   const customer = q.contact ? `${q.contact.firstName} ${q.contact.lastName}` : q.company ? "" : "No customer yet";
   // A delivery line and no site on the quote or its job.
@@ -985,9 +988,16 @@ export default function QuoteBuilderPage() {
             </Link>
           ) : null}
           {q.job ? <CancelJobButton jobId={q.job.id} show={q.status === "accepted"} /> : null}
-          {locked && q.status !== "accepted" && q.status !== "cancelled" ? (
+          {/* Damien, 11 Nov 2026: a sent quote gets New version too, so a colour or product can be changed on a draft copy.
+              The customer's sent copy stays as it is until the new version is sent. One open draft at a time: it opens that one instead. */}
+          {newerDraft ? (
+            <Link to={`/quotes/${newerDraft.id}`}>
+              <Button variant="outline">Open draft {newerDraft.ref}</Button>
+            </Link>
+          ) : (locked || q.status === "sent") && q.status !== "accepted" && q.status !== "cancelled" && !priceRecord ? (
             <Button
               variant="outline"
+              title={q.status === "sent" ? "Makes the next version as a draft to change. The customer's copy stays as it is until you send the new one." : undefined}
               onClick={() =>
                 run(async () => {
                   const next = await revise.mutateAsync({ id: q.id });

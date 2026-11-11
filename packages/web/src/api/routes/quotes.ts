@@ -1635,7 +1635,7 @@ export const quotes = {
       if (!before) throw new ORPCError("NOT_FOUND", { message: "Line not found" });
       const quote = await quoteOrThrow(before.quoteId);
       if (quote.status !== "draft" && quote.status !== "needs_review")
-        throw new ORPCError("BAD_REQUEST", { message: "This quote has gone out. Revise it to change a product." });
+        throw new ORPCError("BAD_REQUEST", { message: "This quote has gone out. Close this, tap New version at the top, then change the product on the new version." });
       if (isChargeLine(before)) throw new ORPCError("BAD_REQUEST", { message: "A supplier charge line has no product." });
       const [product] = await db.select().from(schema.products).where(eq(schema.products.id, input.productId));
       if (!product) throw new ORPCError("NOT_FOUND", { message: "Product not found" });

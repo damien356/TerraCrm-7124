@@ -50,6 +50,7 @@ let m: {
   db: typeof import("../src/api/database").db;
   call: typeof import("@orpc/server").call;
   sales: typeof import("../src/api/routes/productSales").productSales;
+  quotes: typeof import("../src/api/routes/quotes").quotes;
   orm: typeof import("drizzle-orm");
 };
 let client: Client;
@@ -115,6 +116,7 @@ beforeAll(async () => {
     db: (await import("../src/api/database")).db,
     call: (await import("@orpc/server")).call,
     sales: (await import("../src/api/routes/productSales")).productSales,
+    quotes: (await import("../src/api/routes/quotes")).quotes,
     orm: await import("drizzle-orm"),
   };
   await seed();
@@ -524,5 +526,42 @@ describe("Edit price record", () => {
     expect(outside.email).toEqual([]);
     expect(outside.sms).toEqual([]);
     expect(outside.stored).toEqual([]);
+  });
+});
+
+describe("New version on a sent quote, to change a colour (Damien, 11 Nov 2026)", () => {
+  test("the sent quote refuses Change product and says to tap New version; the new version takes the colour; the sent copy is untouched", async () => {
+    const { db } = m;
+    const [other] = await db
+      .insert(schema.products)
+      .values({ supplierId: ids.belgotex, supplier: "Belgotex", brand: "Belgotex", range: "Boulevard", colour: "Slate 46", category: "carpet", unit: "lm", costPrice: 137.8, sellPrice: 263.34, active: true, size: "4.00m wide", widthM: 4, variantKey: "belgotex|carpet|boulevard|slate-46|4m", bulkKind: "roll", soldAs: "broadloom", supplyMode: "job" } as any)
+      .returning();
+    const input = { buyer: { kind: "contact" as const, contactId: ids.contact }, mode: "quote" as const, lines: [LINE()], orderNeeded: false, depositPercent: 0, note: null };
+    const pv = await run(m.sales.preview, input);
+    const out = await run(m.sales.raise, { ...input, requestKey: `k-nv-${Math.random().toString(36).slice(2)}`, expectedTotal: pv.total });
+    const [sent] = await q("select * from quotes where job_id=?", [out.jobId]);
+    await q("update quotes set status='sent' where id=?", [sent.id]);
+    const [line] = await q("select * from quote_items where quote_id=? and kind != 'supplier_charge'", [sent.id]);
+
+    const e = await failure(run(m.quotes.changeProduct, { id: line.id, productId: other!.id }));
+    expect(String(e.message)).toContain("tap New version at the top");
+
+    const next = await run(m.quotes.revise, { id: sent.id });
+    const [v2] = await q("select * from quotes where id=?", [next.id]);
+    expect(v2.status).toBe("draft");
+    expect(v2.number).toBe(sent.number);
+    expect(v2.version).toBe(sent.version + 1);
+    const [v2line] = await q("select * from quote_items where quote_id=? and kind != 'supplier_charge'", [v2.id]);
+    await run(m.quotes.changeProduct, { id: v2line.id, productId: other!.id });
+    const [changed] = await q("select * from quote_items where id=?", [v2line.id]);
+    expect(changed.product_id).toBe(other!.id);
+    expect(changed.description).toContain("Slate 46");
+    expect(changed.qty).toBe(25);
+
+    const [still] = await q("select * from quote_items where id=?", [line.id]);
+    expect(still.product_id).toBe(ids.boulevard);
+    const [sentNow] = await q("select status, total from quotes where id=?", [sent.id]);
+    expect(sentNow.status).toBe("sent");
+    expect(sentNow.total).toBe(sent.total);
   });
 });
