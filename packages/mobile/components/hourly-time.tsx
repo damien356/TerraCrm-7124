@@ -381,7 +381,8 @@ export function HourlyTimeSection({
         ) : null}
 
         <View style={{ borderTopWidth: 1, borderTopColor: c.border, marginTop: 12, paddingTop: 8 }}>
-          <Row left={`Approved ${hrsMins(d.approvedMinutes)}`} right={dollars(d.approvedPay)} strong />
+          {/* Damien, 11 Nov 2026: with no agreed rate, nothing approved reads "Nothing yet", never $0.00. */}
+          <Row left={`Approved ${hrsMins(d.approvedMinutes)}`} right={!r && !(d.approvedPay > 0) ? "Nothing yet" : dollars(d.approvedPay)} strong />
           {waiting > 0 ? <Row left="Waiting for the office" right={hrsMins(waiting)} /> : null}
           <Text style={{ fontFamily: Fonts.sans, fontSize: 11.5, color: c.mutedForeground, marginTop: 4 }}>
             Only approved time is paid. The office checks every day before it is approved.
