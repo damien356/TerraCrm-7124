@@ -3,13 +3,17 @@
     "icon": "./assets/icon.png",
     "android": {
       "package": "au.com.terraflooring.terra",
+      "allowBackup": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1C1B1A"
       },
+      "blockedPermissions": [
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO"
+      ],
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.READ_MEDIA_IMAGES",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.POST_NOTIFICATIONS",
@@ -29,6 +33,7 @@
     },
     "ios": {
       "bundleIdentifier": "au.com.terraflooring.terra",
+      "appleTeamId": "P4G75J74F2",
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "Terra uses the camera for job photos: the damage walk before you start, progress shots, and the completion photos the office needs to invoice.",
@@ -36,7 +41,8 @@
         "NSPhotoLibraryAddUsageDescription": "Terra saves job photos back to your camera roll so you keep your own copy.",
         "NSLocationWhenInUseUsageDescription": "Terra uses your location to mark you Arrived and Left site at the jobs you're booked on. If you switch on location sharing, it also shows the office where you are while a job is running.",
         "NSMicrophoneUsageDescription": "Terra uses the microphone when you record a voice quote on site. The recording is turned into a draft quote for the office to check.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "If you switch on Arrive and leave by location, Terra watches a circle round each site you're booked at today or tomorrow, so you're marked Arrived and Left site with the app closed. It only reports crossing in or out of a site circle, never your route."
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "If you switch on Arrive and leave by location, Terra watches a circle round each site you're booked at today or tomorrow, so you're marked Arrived and Left site with the app closed. It only reports crossing in or out of a site circle, never your route.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "name": "Terra",
@@ -94,7 +100,8 @@
           "enableBackgroundPlayback": false
         }
       ],
-      "./plugins/terra-siri/app.plugin.js"
+      "./plugins/terra-siri/app.plugin.js",
+      "expo-asset"
     ],
     "owner": "terra-flooring",
     "updates": {
