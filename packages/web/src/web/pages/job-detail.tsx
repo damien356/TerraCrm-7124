@@ -17,6 +17,7 @@ import { PurchaseOrdersCard } from "../components/purchase-orders";
 import { StockPanelCard } from "../components/stock-panel";
 import { PaymentTermsCard } from "../components/payment-terms";
 import { ClientInvoicesCard, MaterialSelectionCard } from "../components/client-invoices";
+import { StagesCard } from "../components/stages-card";
 import { DeliveryCard } from "../components/delivery";
 import { SaleOrderCard, priceRecordText } from "../components/sale-job";
 import { EditPriceRecordButton } from "../components/price-record-edit";
@@ -640,6 +641,9 @@ export default function JobDetailPage() {
           <div id={STEP_ANCHOR.invoice} className="scroll-mt-4 transition-shadow">
             <ClientInvoicesCard jobId={j.id} />
           </div>
+
+          {/* a job done in parts: planned stages, or work held part way (Damien, 12 Nov 2026) */}
+          {supplyOnly || productSale || isCallback ? null : <StagesCard jobId={j.id} />}
 
           {/* extra work the client approves after the quote is accepted */}
           {productSale || (isCallback && j.callbackChargeable === false) ? null : <VariationsCard jobId={j.id} />}

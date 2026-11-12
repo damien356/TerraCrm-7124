@@ -7,6 +7,7 @@ import { and, asc, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm"
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import { syncJobValue } from "../lib/job-value";
+import { openStaging } from "../lib/staged-guard";
 import { assertCard, cardOf, jobBillTo, setCardDeposit } from "../lib/bill-to";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
@@ -504,6 +505,16 @@ export const jobs = {
       }
       const prevPayer = jobBillTo(before);
       if (rest.furnitureMoving != null) rest.furnitureOnSite = rest.furnitureMoving;
+      // Staged jobs (Damien, 12 Nov 2026): not Complete, Invoiced or Paid while a stage is still to do.
+      if (rest.statusId && rest.statusId !== before.statusId) {
+        const [next] = await db.select().from(schema.jobStatuses).where(eq(schema.jobStatuses.id, rest.statusId));
+        const name = (next?.name ?? "").trim().toLowerCase();
+        if ((next?.stage === "complete" || name === "complete" || name === "invoiced" || name === "paid") && (await openStaging(id))) {
+          throw new ORPCError("BAD_REQUEST", {
+            message: `This job is being done in stages and work remains, so it can't be ${next?.name ?? "closed"} yet. Record the last stage as finished on the Stages card first.`,
+          });
+        }
+      }
 
       const [row] = await db
         .update(schema.jobs)

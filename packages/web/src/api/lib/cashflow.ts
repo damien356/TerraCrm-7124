@@ -5,6 +5,7 @@ import { depositDefaultOf } from "./deposits";
 import { CHARGES_DROPPED_NOTE } from "./expected-costs";
 import { quoteRef } from "./refs";
 import { isTestJob } from "./lead-codes";
+import { stagedForecastDates } from "./staged-guard";
 import { costCashOut, costHasGst } from "./gst";
 import { DEFAULT_SUPPLIER_TERMS, supplierTermsMap, supplierTermsText, type SupplierTerms } from "./supplier-terms";
 
@@ -438,19 +439,27 @@ export async function rebuildForecast(): Promise<RebuildResult> {
   let missingCosts = 0;
   let valueMissingCosts = 0;
 
+  // Staged jobs (Damien, 12 Nov 2026): the remaining work, and the money tied to finishing, lands on the return or follow-up date.
+  const stagedDates = await stagedForecastDates(live.map((r) => r.job.id));
+
   for (const row of live) {
     const job = row.job;
     const conf = confidenceForStage(row.stage ?? "open", row.statusName ?? "")!;
+    const staged = job.completedAt ? undefined : stagedDates.get(job.id);
     const terms = resolveTerms(job.companyId, job.id, byJob, byCompany, { deposits, contactId: job.contactId });
 
     const start = job.scheduledStart ? iso(job.scheduledStart) : null;
     const completion = job.completedAt
       ? iso(job.completedAt)
-      : (lastTaskDate.get(job.id) ??
-        (start ? addDays(start, 2) : addDays(now, 21)));
+      : staged
+        ? maxDate(now, staged.date)
+        : (lastTaskDate.get(job.id) ??
+          (start ? addDays(start, 2) : addDays(now, 21)));
     const completionBasis = job.completedAt
       ? `completed ${completion}`
-      : lastTaskDate.get(job.id)
+      : staged
+        ? `staged job, ${staged.basis}`
+        : lastTaskDate.get(job.id)
         ? `last scheduled task ${completion}`
         : start
           ? `starts ${start}, allowing 3 days`

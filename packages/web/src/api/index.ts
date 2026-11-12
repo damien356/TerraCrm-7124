@@ -70,6 +70,7 @@ import { places } from "./routes/places";
 import { callbacks } from "./routes/callbacks";
 import { quoteSend } from "./routes/quoteSend";
 import { clientInvoices } from "./routes/clientInvoices";
+import { stages } from "./routes/stages";
 import { delivery } from "./routes/delivery";
 import { productSales } from "./routes/productSales";
 import { stock } from "./routes/stock";
@@ -269,6 +270,8 @@ export const router = {
   quoteSend,
   /** IQ invoices to the client: deposit, variations, final. Admin and Office mark paid, Admin voids. */
   clientInvoices,
+  /** Staged jobs and progress payments: split into stages, progress invoices, stage pay claims (Damien, 12 Nov 2026). */
+  stages,
   delivery,
   productSales,
   /** Warehouse stock: register, holds, deposits for stock, returns. Switches S1 to S5 start off. */

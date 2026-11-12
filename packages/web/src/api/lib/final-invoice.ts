@@ -7,6 +7,7 @@ import { raiseInvoice } from "./client-invoices";
 import { loadDepositMaps, loadTermsMaps, resolveTerms, settleDate, termsLabel, today } from "./cashflow";
 import { quoteRefOf } from "./quote-number";
 import { jobText } from "./refs";
+import { openStaging } from "./staged-guard";
 
 /* ---------------------------------------------------------------------------
  * The final and progress invoices (188001 fix list items 9 and 13).
@@ -137,6 +138,10 @@ export async function raiseJobInvoice(args: {
 }) {
   const bill = await billingOnJob(args.jobId);
   if (!bill.canRaise) throw bad(bill.reason ?? "Nothing to bill.");
+  // Staged (Damien, 12 Nov 2026): no Final while work remains. The last stage raises it from the Stages card.
+  if (args.kind === "final" && (await openStaging(args.jobId))) {
+    throw bad("This job is being done in stages and work remains. Raise the progress invoice from the Stages card. The final comes after the last stage.");
+  }
   if (args.kind === "final" && bill.finalRef) {
     throw bad(`Final invoice ${bill.finalRef} is already raised. Raise a progress invoice, or void ${bill.finalRef} first.`);
   }

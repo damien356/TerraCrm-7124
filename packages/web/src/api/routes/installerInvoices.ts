@@ -14,6 +14,7 @@ import { abnView } from "../lib/abn-check";
 import { EMPLOYEE_NO_INVOICE, isEmployee } from "../lib/worker-type";
 import { unsetPayLines } from "../lib/line-rates";
 import { PAY_NOT_SET, visitSkillIds } from "../lib/pay-status";
+import { hasStagePayOn, openStaging, stagedClaimRows } from "../lib/staged-guard";
 
 /**
  * The installer's own invoice to Terra for a completed task. Installers can
@@ -28,9 +29,34 @@ const BILLING_EMAIL = "billing@terraflooring.com.au";
 /** Notes 18.64: neutral on purpose. He never sees the check itself. */
 const ABN_BLOCK = "Ask Terra office to check your ABN before you invoice.";
 
+/**
+ * Staged jobs (Damien, 12 Nov 2026): he keeps his finished stages after the
+ * rest of the task goes to someone else, so he can still open it to claim them.
+ */
+async function claimTaskOrThrow(taskId: number, installerId: number) {
+  try {
+    return await ownTaskOrThrow(taskId, installerId);
+  } catch (e) {
+    if (!(await hasStagePayOn(taskId, installerId))) throw e;
+    const [task] = await db.select().from(schema.jobTasks).where(eq(schema.jobTasks.id, taskId));
+    if (!task) throw e;
+    return task;
+  }
+}
+
+const STAGE_NOTHING_YET = "Nothing to claim yet. This job is being done in stages: Terra office approves your pay for each finished stage, then you can claim it here.";
+
 async function taskInvoiceContext(taskId: number, installerId: number) {
-  const task = await ownTaskOrThrow(taskId, installerId);
-  if (task.status !== "complete") {
+  const task = await claimTaskOrThrow(taskId, installerId);
+  /*
+   * Staged jobs: he claims the pay the office approved for each finished
+   * stage, each claim its own invoice, without waiting for the whole task.
+   * Once the task is staged there is no whole-task claim. Hourly work stays
+   * on approved timesheets only.
+   */
+  const stageRows = task.payType === "hourly" ? null : await stagedClaimRows(taskId, installerId);
+  const stagedHourly = task.payType === "hourly" && !!(await openStaging(task.jobId));
+  if (task.status !== "complete" && !stageRows && !stagedHourly) {
     throw new ORPCError("BAD_REQUEST", { message: "This task isn't marked complete yet." });
   }
 
@@ -60,7 +86,12 @@ async function taskInvoiceContext(taskId: number, installerId: number) {
    */
   const hourly = task.payType === "hourly" ? await hourlyInvoiceLines(task.id, installerId) : null;
   if (hourly) lineItems.push(...hourly.lines);
-  if (!hourly && task.labourBreakdown) {
+  if (stageRows) {
+    for (const r of stageRows) {
+      lineItems.push({ description: `${r.stageName}: ${r.pay.description}`, unit: r.pay.unit, qty: r.pay.qty, rate: r.pay.rate, total: r.pay.amount });
+    }
+  }
+  if (!hourly && !stageRows && task.labourBreakdown) {
     try {
       const parsed = JSON.parse(task.labourBreakdown) as Array<{
         name: string;
@@ -83,7 +114,7 @@ async function taskInvoiceContext(taskId: number, installerId: number) {
    */
   let payNotSetBlock: string | null = null;
   const visit = task.skillId != null && (await visitSkillIds()).has(task.skillId);
-  if (!hourly && !visit && lineItems.length === 0) {
+  if (!hourly && !stageRows && !visit && lineItems.length === 0) {
     if (task.payAmount != null && task.payAmount > 0) {
       lineItems.push({ description: task.title, unit: "job", qty: 1, rate: task.payAmount, total: task.payAmount });
     } else if (task.payAmount == null) {
@@ -112,8 +143,14 @@ async function taskInvoiceContext(taskId: number, installerId: number) {
     gstAmount,
     total,
     hourlySessionIds: hourly?.sessionIds ?? [],
+    /** Staged: the approved stage pay rows on this claim. Null when the task is not staged. */
+    stagePayIds: stageRows ? stageRows.map((r) => r.pay.id) : null,
     // Hourly: the time checks. Lines: a line at $0.00 is "Rate not set", never free work.
-    hourlyBlock: hourly ? hourly.block : (payNotSetBlock ?? payLineBlock(lineItems)),
+    hourlyBlock: hourly
+      ? hourly.block
+      : stageRows && lineItems.length === 0
+        ? STAGE_NOTHING_YET
+        : (payNotSetBlock ?? payLineBlock(lineItems)),
   };
 }
 
@@ -184,6 +221,12 @@ async function priorInvoices(taskId: number, installerId: number) {
     .orderBy(asc(schema.installerInvoices.part), asc(schema.installerInvoices.id));
 }
 
+/** Staged jobs (Damien, 12 Nov 2026): which stage this claim is for, on the PDF and the email. */
+function stageClaimNote(part: number, lines: InvoiceLineItem[]) {
+  const stages = [...new Set(lines.filter((l) => !l.description.startsWith("Approved extra:")).map((l) => l.description.split(":")[0]!.trim()))];
+  return `Stage claim${part > 1 ? ` part ${part}` : ""}: ${stages.join(", ") || "approved stage pay"}. Approved by Terra office for finished work only.`;
+}
+
 /**
  * Damien, 11 Nov 2026: hourly time approved after the task was invoiced goes on
  * its own later invoice holding only those hours. Nothing billed before is
@@ -195,15 +238,15 @@ const laterHoursNote = (part: number, first: number | null) =>
 export const installerInvoices = {
   /** Read-only preview shown before CREATE MY INVOICE. */
   preview: installerOnly.input(z.object({ taskId: z.number() })).handler(async ({ input, context }) => {
-    const { task, job, site, installer, lineItems, subtotal, gstAmount, total, hourlyBlock, hourlySessionIds } = await taskInvoiceContext(
+    const { task, job, site, installer, lineItems, subtotal, gstAmount, total, hourlyBlock, hourlySessionIds, stagePayIds } = await taskInvoiceContext(
       input.taskId,
       context.installerId,
     );
 
     const prior = await priorInvoices(input.taskId, context.installerId);
     const latest = prior[prior.length - 1] ?? null;
-    // A later part only for hourly work with approved hours not billed yet.
-    const newPart = task.payType === "hourly" && prior.length > 0 && hourlySessionIds.length > 0;
+    // A later part only for hourly work with approved hours not billed yet, or approved stage pay not claimed yet.
+    const newPart = (task.payType === "hourly" && prior.length > 0 && hourlySessionIds.length > 0) || (stagePayIds != null && stagePayIds.length > 0);
     const existing = newPart ? null : latest;
     const part = prior.length ? Math.max(...prior.map((p) => p.part ?? 1)) + 1 : 1;
 
@@ -216,7 +259,7 @@ export const installerInvoices = {
       existingInvoiceId: existing?.id ?? null,
       /** 1 for a first invoice, 2 and up for hours approved after it. */
       part: existing ? (existing.part ?? 1) : part,
-      partNote: existing ? null : laterHoursNote(part, prior[0]?.invoiceNumber ?? null),
+      partNote: existing ? null : stagePayIds ? stageClaimNote(part, lineItems) : laterHoursNote(part, prior[0]?.invoiceNumber ?? null),
       earlierInvoices: prior.map((p) => ({ id: p.id, part: p.part ?? 1, invoiceNumber: p.invoiceNumber, status: p.status, total: p.total })),
       /** Submitted is not the same as received. The screen says which of the two. */
       emailedToTerra: existing ? !!existing.emailedToTerraAt : false,
@@ -275,16 +318,20 @@ export const installerInvoices = {
     const prior = await priorInvoices(input.taskId, context.installerId);
     const latest = prior[prior.length - 1] ?? null;
     if (latest) {
-      // A repeat tap returns what exists. Only hourly hours approved since can make a later part.
+      // A repeat tap returns what exists. Only hourly hours approved since, or stage pay approved since, make a later part.
       const [tp] = await db.select({ payType: schema.jobTasks.payType }).from(schema.jobTasks).where(eq(schema.jobTasks.id, input.taskId));
-      if (tp?.payType !== "hourly") return latest;
-      if (!(await hourlyInvoiceLines(input.taskId, context.installerId)).sessionIds.length) return latest;
+      if (tp?.payType === "hourly") {
+        if (!(await hourlyInvoiceLines(input.taskId, context.installerId)).sessionIds.length) return latest;
+      } else {
+        const rows = await stagedClaimRows(input.taskId, context.installerId);
+        if (!rows?.length) return latest;
+      }
     }
     const part = prior.length ? Math.max(...prior.map((p) => p.part ?? 1)) + 1 : 1;
-    const note = laterHoursNote(part, prior[0]?.invoiceNumber ?? null);
 
-    const { task, job, site, installer, usableVariations, lineItems, subtotal, gstAmount, total, hourlySessionIds, hourlyBlock } =
+    const { task, job, site, installer, usableVariations, lineItems, subtotal, gstAmount, total, hourlySessionIds, hourlyBlock, stagePayIds } =
       await taskInvoiceContext(input.taskId, context.installerId);
+    const note = stagePayIds ? stageClaimNote(part, lineItems) : laterHoursNote(part, prior[0]?.invoiceNumber ?? null);
     // Worker type (Damien, 2 Nov): employees never raise a contractor invoice or bill.
     if (isEmployee(installer)) throw new ORPCError("BAD_REQUEST", { message: EMPLOYEE_NO_INVOICE });
     if (hourlyBlock) throw new ORPCError("BAD_REQUEST", { message: hourlyBlock });
@@ -388,6 +435,25 @@ export const installerInvoices = {
       throw e;
     }
     const row = inserted[0];
+
+    if (stagePayIds?.length) {
+      // Claimed once: each approved stage line can sit on one invoice only. Two claims racing, the second gives way.
+      const taken = await db
+        .update(schema.jobStagePay)
+        .set({ claimInvoiceId: row!.id, updatedAt: now })
+        .where(and(inArray(schema.jobStagePay.id, stagePayIds), isNull(schema.jobStagePay.claimInvoiceId)))
+        .returning({ id: schema.jobStagePay.id });
+      if (taken.length !== stagePayIds.length) {
+        if (taken.length) {
+          await db.update(schema.jobStagePay).set({ claimInvoiceId: null }).where(inArray(schema.jobStagePay.id, taken.map((t) => t.id)));
+        }
+        await db.delete(schema.installerInvoices).where(eq(schema.installerInvoices.id, row!.id));
+        const again = await priorInvoices(input.taskId, context.installerId);
+        const last = again[again.length - 1];
+        if (last) return last;
+        throw new ORPCError("CONFLICT", { message: "That stage pay was claimed a moment ago. Refresh to see your invoice." });
+      }
+    }
 
     await db
       .update(schema.installers)

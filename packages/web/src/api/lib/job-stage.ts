@@ -1,6 +1,7 @@
 import { and, eq, ne, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
+import { openStaging } from "./staged-guard";
 
 /* ---------------------------------------------------------------------------
  * A quote linked to a job has gone out, so the job is no longer just a lead.
@@ -154,6 +155,8 @@ export async function syncJobFromTasks(jobId: number, actor: Actor) {
   if (tasks.length === 0) return null;
 
   if (tasks.every((t) => t.status === "complete")) {
+    // Staged (Damien, 12 Nov 2026): never Complete while a stage is still open. The office records the last one.
+    if (await openStaging(jobId)) return null;
     return moveJobForward({ jobId, target: "complete", why: "every task complete", actor });
   }
   if (tasks.some((t) => t.status === "in_progress" || t.status === "complete")) {

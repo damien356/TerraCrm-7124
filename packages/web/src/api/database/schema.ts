@@ -5967,3 +5967,166 @@ export const jobManagers = sqliteTable("job_managers", {
   setByName: text("set_by_name").notNull().default(""),
   ...timestamps,
 });
+
+/* ---------------------------------------------------------------------------
+ * STAGED JOBS AND PROGRESS PAYMENTS (2026-12-08-staged-jobs.sql, Damien 12 Nov 2026).
+ *
+ * One job, several visits. The customer or builder asks for the work in
+ * stages, or the site is not ready part way through. The full agreed material
+ * selling amount is billed when the staging is agreed, labour as each stage is
+ * finished, and the installer claims only the pay the office approved for the
+ * work he finished. Everything here sits beside the accepted quote. The quote,
+ * its invoices and its payments are never rewritten. lib/staged-jobs.ts.
+ * ------------------------------------------------------------------------- */
+
+/** The arrangement on one job. One open plan (draft or agreed) per job. */
+export const jobStagePlans = sqliteTable(
+  "job_stage_plans",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    /** The accepted quote the selling values come from. */
+    quoteId: integer("quote_id").references(() => quotes.id, { onDelete: "set null" }),
+    /** planned: agreed before work starts · hold: the rest is held after work started */
+    kind: text("kind").notNull().default("planned"),
+    /** client_requested · kitchen_not_ready · other_trades · site_not_ready · other */
+    reason: text("reason").notNull().default("client_requested"),
+    reasonNote: text("reason_note").notNull().default(""),
+    /** Who asked for it, in plain words, and the day (YYYY-MM-DD). */
+    requestedBy: text("requested_by").notNull().default(""),
+    requestedOn: text("requested_on"),
+    /** The agreed arrangement, in plain words. */
+    arrangement: text("arrangement").notNull().default(""),
+    /** draft · agreed · complete · cancelled */
+    status: text("status").notNull().default("draft"),
+    /**
+     * The selling split, GST inclusive, adding back exactly to the accepted
+     * quote total. Worked out from the quote's own material and labour lines,
+     * with any rounding cent on labour, unless the office typed its own.
+     */
+    materialsInc: real("materials_inc").notNull().default(0),
+    labourInc: real("labour_inc").notNull().default(0),
+    /** quote_lines · office */
+    splitSource: text("split_source").notNull().default("quote_lines"),
+    splitNote: text("split_note").notNull().default(""),
+    splitApprovedByName: text("split_approved_by_name"),
+    splitApprovedAt: integer("split_approved_at", { mode: "timestamp" }),
+    /** Approved customer variations: final (the standing rule, billed at the end) · with_materials (their material part now). */
+    variationTiming: text("variation_timing").notNull().default("final"),
+    /** YYYY-MM-DD the office looks at it again, so unfinished work never drops out of sight. */
+    followUpDate: text("follow_up_date"),
+    /**
+     * Where the material for the remaining work is, in plain words, e.g. "8 boxes
+     * in the client's garage". The material itself stays on job_materials and its
+     * POs, so it is never ordered or charged twice.
+     */
+    materialsLocation: text("materials_location").notNull().default(""),
+    /** The customer's written confirmation, kept beside the accepted quote. */
+    confirmedByName: text("confirmed_by_name"),
+    confirmedOn: text("confirmed_on"),
+    /** email · sms · signed · letter · other */
+    confirmedHow: text("confirmed_how"),
+    confirmationText: text("confirmation_text"),
+    confirmationRecordedByName: text("confirmation_recorded_by_name"),
+    confirmationRecordedAt: integer("confirmation_recorded_at", { mode: "timestamp" }),
+    /** Bumped by every progress invoice raise, compare and set, so two clicks raise one invoice. */
+    invoiceSeq: integer("invoice_seq").notNull().default(0),
+    /** The materials claim raised when the staging was agreed. */
+    materialsInvoiceId: integer("materials_invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+    createdByName: text("created_by_name").notNull().default(""),
+    closedAt: integer("closed_at", { mode: "timestamp" }),
+    cancelledAt: integer("cancelled_at", { mode: "timestamp" }),
+    cancelledReason: text("cancelled_reason"),
+    ...timestamps,
+  },
+  (t) => [
+    index("job_stage_plans_job_idx").on(t.jobId),
+    uniqueIndex("job_stage_plans_open_uq").on(t.jobId).where(sql`status in ('draft','agreed')`),
+  ],
+);
+
+/** One visit or part of the work. Two or more per plan. */
+export const jobStages = sqliteTable(
+  "job_stages",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    planId: integer("plan_id").notNull().references(() => jobStagePlans.id, { onDelete: "cascade" }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull().default(1),
+    name: text("name").notNull().default(""),
+    /** Rooms, areas and what is in this stage, in plain words. */
+    scope: text("scope").notNull().default(""),
+    /** YYYY-MM-DD expected. Null with awaitingReadiness when the site is not ready and nobody knows when. */
+    plannedDate: text("planned_date"),
+    awaitingReadiness: integer("awaiting_readiness", { mode: "boolean" }).notNull().default(false),
+    /** open · complete */
+    status: text("status").notNull().default("open"),
+    completedOn: text("completed_on"),
+    completedByName: text("completed_by_name"),
+    completedAt: integer("completed_at", { mode: "timestamp" }),
+    /** The progress invoice raised when this stage was finished. */
+    invoiceId: integer("invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (t) => [index("job_stages_plan_idx").on(t.planId), unique("job_stages_plan_seq_uq").on(t.planId, t.seq)],
+);
+
+/** Customer labour selling value per stage, off one accepted quote labour line. GST inclusive. */
+export const jobStageLines = sqliteTable(
+  "job_stage_lines",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    planId: integer("plan_id").notNull().references(() => jobStagePlans.id, { onDelete: "cascade" }),
+    stageId: integer("stage_id").notNull().references(() => jobStages.id, { onDelete: "cascade" }),
+    /** The accepted quote's labour line. No FK on purpose: the quote is never touched. */
+    quoteItemId: integer("quote_item_id").notNull(),
+    description: text("description").notNull().default(""),
+    unit: text("unit").notNull().default("m2"),
+    qty: real("qty").notNull().default(0),
+    amountInc: real("amount_inc").notNull().default(0),
+    /** True when the office typed the amount rather than it following the quantity. */
+    amountTyped: integer("amount_typed", { mode: "boolean" }).notNull().default(false),
+    ...timestamps,
+  },
+  (t) => [index("job_stage_lines_plan_idx").on(t.planId), unique("job_stage_lines_uq").on(t.stageId, t.quoteItemId)],
+);
+
+/**
+ * Installer pay per stage, off one line of the task's locked pay. Ex GST, the
+ * same basis as his invoice. Claimable once the office approved it, and only
+ * once: claimInvoiceId is set when it goes on his invoice, submitted or paid.
+ */
+export const jobStagePay = sqliteTable(
+  "job_stage_pay",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    planId: integer("plan_id").notNull().references(() => jobStagePlans.id, { onDelete: "cascade" }),
+    stageId: integer("stage_id").notNull().references(() => jobStages.id, { onDelete: "cascade" }),
+    taskId: integer("task_id").notNull().references(() => jobTasks.id, { onDelete: "cascade" }),
+    /** Who earns it. Moves only when the office reassigns the remaining work. */
+    installerId: integer("installer_id").references(() => installers.id, { onDelete: "set null" }),
+    /** "line:<n>" for the n-th locked pay line, "flat" for a flat task amount, "hourly" for timesheet pay. */
+    lineKey: text("line_key").notNull(),
+    description: text("description").notNull().default(""),
+    unit: text("unit").notNull().default("m2"),
+    qty: real("qty").notNull().default(0),
+    rate: real("rate"),
+    /** Ex GST. Null on hourly work: approved timesheets are the pay, never an estimate. */
+    amount: real("amount"),
+    /** Hourly only: the hours planned for this stage, an estimate and never an entitlement. */
+    estimatedHours: real("estimated_hours"),
+    amountTyped: integer("amount_typed", { mode: "boolean" }).notNull().default(false),
+    approvedByName: text("approved_by_name"),
+    approvedAt: integer("approved_at", { mode: "timestamp" }),
+    claimInvoiceId: integer("claim_invoice_id").references(() => installerInvoices.id, { onDelete: "set null" }),
+    reassignedFromInstallerId: integer("reassigned_from_installer_id").references(() => installers.id, { onDelete: "set null" }),
+    /** The office's own words for any change of rate or budget. */
+    changeNote: text("change_note"),
+    ...timestamps,
+  },
+  (t) => [
+    index("job_stage_pay_plan_idx").on(t.planId),
+    index("job_stage_pay_installer_idx").on(t.installerId, t.taskId),
+    unique("job_stage_pay_uq").on(t.stageId, t.taskId, t.lineKey),
+  ],
+);

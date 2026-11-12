@@ -32,6 +32,7 @@ import { SiteVisitCard } from "@/components/site-visit";
 import { ClientPrepCard } from "@/components/client-prep";
 import { useVoiceSettings } from "@/queries/crew";
 import { HourlyTimeSection } from "@/components/hourly-time";
+import { StagePaySection } from "@/components/stage-pay";
 import { useMyTime } from "@/queries/hourly";
 
 const c = Colors.light;
@@ -774,6 +775,9 @@ export default function TaskScreen() {
           // Hourly work: his own time controls and approved pay. Anything else, the pay card as before.
           return t.payType === "hourly" ? <HourlyTimeSection taskId={t.id} closed={done} fallback={pay} beforeStart={beforeClockOn} /> : pay;
         })()}
+
+        {/* a job done in stages (Damien, 12 Nov 2026): his finished stage, what he can claim, what is left */}
+        <StagePaySection taskId={t.id} gstRegistered={!!t.gstRegistered} />
 
         <View style={{ flexDirection: "row", gap: 10, marginTop: 18 }}>
           <Pressable

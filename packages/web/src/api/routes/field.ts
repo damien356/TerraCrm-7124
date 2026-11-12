@@ -20,6 +20,7 @@ import { crewPeopleFor } from "../lib/crew-people";
 import { redactCards, redactHistory, redactMe, redactOffers } from "../lib/hourly-crew";
 import { notPerJobPeople, PAY_NOT_SET, payStatusOf } from "../lib/pay-status";
 import { PAY_TO_CONFIRM, payToConfirmTaskIds } from "../lib/assign-check";
+import { openStaging, stagedFinishBlock } from "../lib/staged-guard";
 
 /**
  * THE INSTALLER API. Every single query here filters by `context.installerId`.
@@ -638,6 +639,9 @@ export const field = {
     .handler(async ({ input, context }) => {
       const task = await ownTaskOrThrow(input.taskId, context.installerId);
       await assertSwmsDone(task.jobId, context.installerId, "finish");
+      // Staged jobs (Damien, 12 Nov 2026): a visit that is not the last stage is recorded by the office, not finished here.
+      const stagedBlock = await stagedFinishBlock(task);
+      if (stagedBlock) throw new ORPCError("BAD_REQUEST", { message: stagedBlock });
 
       // Hourly: the clock is stopped first, so no time is left running on a closed job.
       const [onClock] = await db
@@ -711,7 +715,20 @@ export const field = {
             inArray(schema.jobTasks.status, ["unassigned", "offered", "assigned", "in_progress"]),
           ),
         );
-      if (remaining.length === 0) {
+      // Staged: the job is finished when the office records the last stage, not before (lib/staged-jobs.ts completeStage).
+      const staged = remaining.length === 0 ? await openStaging(task.jobId) : null;
+      if (staged) {
+        await db.insert(schema.activityLog).values({
+          jobId: task.jobId,
+          entityType: "job",
+          entityId: task.jobId,
+          action: "staged_tasks_finished",
+          detail: "Every task is finished. The job is staged: record the last stage as finished to complete it",
+          actorName: "System",
+          actorRole: "system",
+        });
+      }
+      if (remaining.length === 0 && !staged) {
         await db
           .update(schema.jobs)
           .set({ completedAt: new Date(), updatedAt: new Date() })
