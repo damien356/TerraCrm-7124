@@ -8,6 +8,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { getObject } from "./s3";
 import { logFileAccess } from "./file-access";
+import { hasTestLeadTag } from "./lead-codes";
 
 /* ---------------------------------------------------------------------------
  * Reading a file before anyone outside the office may see it (Damien, 9 Nov
@@ -305,7 +306,11 @@ export async function checksSettled() {
 
 /** One open office task per job, however many files or re-checks. No push, no email. */
 export async function askOfficeToCheck(jobId: number) {
-  const [job] = await db.select({ number: schema.jobs.number, displayNumber: schema.jobs.displayNumber }).from(schema.jobs).where(eq(schema.jobs.id, jobId)).limit(1);
+  const [job] = await db
+    .select({ number: schema.jobs.number, displayNumber: schema.jobs.displayNumber, tags: schema.jobs.tags })
+    .from(schema.jobs)
+    .where(eq(schema.jobs.id, jobId))
+    .limit(1);
   const ref = String(job?.displayNumber || job?.number || jobId);
   const waiting = await db
     .select({ id: schema.jobMedia.id })
@@ -337,6 +342,8 @@ export async function askOfficeToCheck(jobId: number) {
     if (open.detail !== detail) await db.update(schema.officeTasks).set({ detail, updatedAt: new Date() }).where(eq(schema.officeTasks.id, open.id));
     return open.id;
   }
+  // Damien, 12 Nov 2026: a TEST enquiry's photos never put a task on the office list. They still wait office only.
+  if (hasTestLeadTag(job?.tags)) return null;
   const [t] = await db.insert(schema.officeTasks).values({ jobId, title, detail, createdByName: "Terra Ops" }).returning({ id: schema.officeTasks.id });
   return t?.id ?? null;
 }
