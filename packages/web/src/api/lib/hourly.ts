@@ -174,12 +174,28 @@ export async function taskPay(taskIds: number[]) {
   const ids = [...new Set(taskIds.filter((t): t is number => t != null))];
   if (!ids.length) return new Map<number, TaskPay>();
   const rows = await db
-    .select({ id: schema.jobTasks.id, payType: schema.jobTasks.payType, labourCost: schema.jobTasks.labourCost, agreedHourlyRate: schema.jobTasks.agreedHourlyRate })
+    .select({
+      id: schema.jobTasks.id,
+      payType: schema.jobTasks.payType,
+      payAmount: schema.jobTasks.payAmount,
+      labourCost: schema.jobTasks.labourCost,
+      agreedHourlyRate: schema.jobTasks.agreedHourlyRate,
+      assignedInstallerId: schema.jobTasks.assignedInstallerId,
+      secondInstallerId: schema.jobTasks.secondInstallerId,
+    })
     .from(schema.jobTasks)
     .where(inArray(schema.jobTasks.id, ids));
   return new Map(rows.map((r) => [r.id, r]));
 }
-export type TaskPay = { id: number; payType: string; labourCost: number | null; agreedHourlyRate: number | null };
+export type TaskPay = {
+  id: number;
+  payType: string;
+  labourCost: number | null;
+  agreedHourlyRate: number | null;
+  payAmount?: number | null;
+  assignedInstallerId?: number | null;
+  secondInstallerId?: number | null;
+};
 
 /** Terms as they apply to one session: the rate agreed for its allocation wins over the terms of the day. */
 export function termsForTask(terms: TermsRow | null, task: TaskPay | null | undefined): TermsRow | null {
@@ -187,6 +203,42 @@ export function termsForTask(terms: TermsRow | null, task: TaskPay | null | unde
   if (task?.agreedHourlyRate != null) return { ...terms, baseRate: task.agreedHourlyRate };
   return terms;
 }
+
+/**
+ * Damien, 11 Nov 2026: an hourly job with no agreed rate reads "Rate to
+ * confirm". Never the standard $50, never $0. Time can still be recorded;
+ * approval waits until the rate is confirmed.
+ */
+export const RATE_TO_CONFIRM = "Rate to confirm";
+
+/** His rates as they apply to one task, or null when the rate is still to confirm. */
+export function taskRatesView(terms: TermsRow | null, task: TaskPay | null | undefined) {
+  const t = termsForTask(terms, task);
+  if (!t || !(t.baseRate > 0)) return null;
+  return ownRatesView(t);
+}
+
+/**
+ * Damien, 11 Nov 2026: the same person is never paid a fixed price and by the
+ * hour for the same work. Only the person the fixed-price work is given to is
+ * blocked: an hourly helper beside him (the second body, or anyone else with no
+ * fixed pay of his own on it) is allowed. Extra hourly work by that person goes
+ * on its own hourly task the office approves, and the time moves there. The
+ * time record is always kept.
+ */
+export function flatPayClash(task: TaskPay | null | undefined, installerId: number): string | null {
+  if (!task || task.payType === "hourly") return null;
+  if (task.assignedInstallerId == null) {
+    // Older rows with no assignee on record: the unit-rate lines are the pay.
+    return (task.labourCost ?? 0) > 0 ? LINES_CLASH : null;
+  }
+  if (task.assignedInstallerId !== installerId) return null;
+  // Unit-rate lines priced for him keep their own wording: the lines are the pay.
+  return (task.labourCost ?? 0) > 0 ? LINES_CLASH : FLAT_CLASH;
+}
+export const LINES_CLASH = "This work is paid by its agreed lines, not by the hour. Approving hours on it would pay it twice.";
+export const FLAT_CLASH =
+  "This person is paid a fixed price for this work, so approving hours on it would pay it twice. If it was extra work, add it as its own hourly task for the office to approve and move this time there. The time is kept.";
 
 const termsOf = (t: Pick<TermsRow, "baseRate" | "weekendMultiplier" | "nightMultiplier">): Terms => ({
   baseRate: t.baseRate,
@@ -340,12 +392,11 @@ export function viewSession(s: Session, breaks: Break[], settings: HourlySetting
     );
   }
   if (catPay === "pending") blockers.push(`Not confirmed whether "${CATEGORY_LABEL[category]}" is paid.`);
-  if (!terms) blockers.push("No hourly pay terms for this worker on this date.");
-  else if (!(terms.baseRate > 0)) blockers.push(`${HOURLY_ITEM}: Rate not set ($0.00). Set the agreed hourly rate before approving.`);
-  // No hourly pay on top of work already paid by its agreed unit-rate lines.
-  if (task && task.payType !== "hourly" && (task.labourCost ?? 0) > 0) {
-    blockers.push("This work is paid by its agreed lines, not by the hour. Approving hours on it would pay it twice.");
-  }
+  if (!terms) blockers.push(`${RATE_TO_CONFIRM}: no hourly pay terms for this worker on this date. Confirm the rate before approving.`);
+  else if (!(terms.baseRate > 0)) blockers.push(`${RATE_TO_CONFIRM}. ${HOURLY_ITEM}: Rate not set ($0.00). Set the agreed hourly rate before approving.`);
+  // No hourly pay on top of fixed-price pay to the same person for the same work.
+  const clash = flatPayClash(task, s.installerId);
+  if (clash) blockers.push(clash);
   const payableMinutes = suggestion.minutes;
   if (catPay !== "unpaid") {
     if (!confirmed && !settings.nightWindow) blockers.push("Rate band not confirmed. Night hours are not set, so the office confirms the band.");
@@ -617,7 +668,11 @@ export async function jobHourlyCosting(jobId: number) {
     const ss = sessionsAll.filter((s) => s.taskId === t.id);
     const approved = ss.filter((s) => s.status === "approved");
     const pending = ss.filter((s) => s.status !== "approved");
-    const leadTerms = t.assignedInstallerId ? await termsOn(t.assignedInstallerId) : null;
+    const leadTerms0 = t.assignedInstallerId ? await termsOn(t.assignedInstallerId) : null;
+    // The plan is priced at the hourly person's agreed rate: the lead on hourly
+    // work, the hourly helper (second body) beside a fixed-price lead.
+    const helperTerms = t.payType !== "hourly" && t.secondInstallerId ? await termsOn(t.secondInstallerId) : null;
+    const leadTerms = t.payType === "hourly" ? termsForTask(leadTerms0, t) : (helperTerms ?? leadTerms0);
 
     // By worker and band.
     const byWorker = new Map<number, { installerId: number; name: string; approved: Record<Band, { minutes: number; pay: number }>; recordedMinutes: number; estimate: number; approvedPay: number; approvedMinutes: number; unpaidMinutes: number }>();
@@ -643,6 +698,8 @@ export async function jobHourlyCosting(jobId: number) {
 
     const approvedLabour = round2(approved.reduce((a, s) => a + (s.approvedPay ?? 0), 0));
     const recordedEstimate = round2(pending.reduce((a, s) => a + (s.estimate?.total ?? 0), 0));
+    // Logged time with no rate yet: counted in hours, never priced at a guessed rate.
+    const uncostedMinutes = pending.filter((s) => !(s.estimate && s.estimate.total > 0) && s.categoryPay !== "unpaid").reduce((a, s) => a + s.payableMinutes, 0);
     const vehicleRows = alloc.rows.filter((r) => r.taskId === t.id);
     const vehicle = round2(vehicleRows.reduce((a, r) => a + r.share, 0));
     const vehicleDaysUsed = new Set(vehicleRows.map((r) => r.vehicleDayId)).size;
@@ -667,12 +724,14 @@ export async function jobHourlyCosting(jobId: number) {
 
     // Contractor invoices matched to approved time, never added to it.
     const recon = [...byWorker.values()].map((w) => {
-      const inv = invoices.find((i) => i.installerId === w.installerId && i.taskId === t.id);
+      // Later-approved hours go on a later invoice (part 2, 3 ...), never a rebill.
+      const invs = invoices.filter((i) => i.installerId === w.installerId && i.taskId === t.id).sort((a, b) => (a.part ?? 1) - (b.part ?? 1));
+      const inv = invs[invs.length - 1] ?? null;
       let invoicedHours = 0;
       let invoicedHourly = 0;
-      if (inv) {
+      for (const one of invs) {
         try {
-          for (const l of JSON.parse(inv.lineItems) as Array<{ unit: string; qty: number; total: number | null }>) {
+          for (const l of JSON.parse(one.lineItems) as Array<{ unit: string; qty: number; total: number | null }>) {
             if (l.unit === "hour") {
               invoicedHours += l.qty;
               invoicedHourly += l.total ?? 0;
@@ -682,7 +741,8 @@ export async function jobHourlyCosting(jobId: number) {
           /* unreadable lines: shown as nothing matched */
         }
       }
-      const linked = approved.filter((s) => s.installerId === w.installerId && inv && s.invoiceId === inv.id);
+      const invIds = new Set(invs.map((i) => i.id));
+      const linked = approved.filter((s) => s.installerId === w.installerId && s.invoiceId != null && invIds.has(s.invoiceId));
       const unbilled = approved.filter((s) => s.installerId === w.installerId && !s.invoiceId && s.payable !== false);
       const linkedPay = round2(linked.reduce((a, s) => a + (s.approvedPay ?? 0), 0));
       return {
@@ -691,13 +751,15 @@ export async function jobHourlyCosting(jobId: number) {
         /** Employees never invoice. Their approved time is internal labour cost only. */
         employee: people.find((p) => p.id === w.installerId)?.workerType === "employee",
         invoice: inv ? { id: inv.id, number: inv.invoiceNumber, status: inv.status, subtotal: inv.subtotal, gst: inv.gstAmount, total: inv.total } : null,
+        /** Every invoice for this person on this task, part 1 first. */
+        invoices: invs.map((i) => ({ id: i.id, part: i.part ?? 1, number: i.invoiceNumber, status: i.status, subtotal: i.subtotal, gst: i.gstAmount, total: i.total })),
         approvedPay: w.approvedPay,
         invoicedHourly: round2(invoicedHourly),
         invoicedHours: round2(invoicedHours),
         linkedPay,
         unbilledPay: round2(unbilled.reduce((a, s) => a + (s.approvedPay ?? 0), 0)),
         unbilledSessions: unbilled.length,
-        matched: inv ? round2(invoicedHourly) === linkedPay : null,
+        matched: invs.length ? round2(invoicedHourly) === linkedPay : null,
       };
     });
 
@@ -734,6 +796,7 @@ export async function jobHourlyCosting(jobId: number) {
         approvedMinutes: approved.reduce((a, s) => a + (s.approvedMinutes ?? 0), 0),
         recordedMinutes: pending.reduce((a, s) => a + s.payableMinutes, 0),
         recordedEstimate,
+        uncostedMinutes,
         vehicle,
         vehicleDays: vehicleDaysUsed,
         combined: round2(approvedLabour + vehicle),
@@ -768,6 +831,7 @@ export async function jobHourlyCosting(jobId: number) {
   const vehicleAll = round2(taskViews.reduce((a, t) => a + t.projected.vehicle, 0));
   const totalCost = round2(materials + otherLabour + hourlyLabour + vehicleAll + other);
   const allFinal = taskViews.length > 0 && taskViews.every((t) => t.final);
+  const budget = jobHourlyBudget(taskViews);
 
   return {
     jobId,
@@ -775,6 +839,7 @@ export async function jobHourlyCosting(jobId: number) {
     settings,
     pending: pendingSettings(settings),
     tasks: taskViews,
+    budget,
     unallocatedVehicleDays: alloc.unallocated,
     margin: {
       revenue,
@@ -792,6 +857,39 @@ export async function jobHourlyCosting(jobId: number) {
     },
   };
 }
+
+/**
+ * Damien, 11 Nov 2026: the whole job's estimated hourly-labour budget, counting
+ * every hourly worker and helper on it. Approved cost and logged time not yet
+ * approved are kept apart; the forecast is both added together, so a warning
+ * comes in time. Logged time with no rate yet is counted in hours only. Never
+ * stops a timer, removes hours or changes the customer's price.
+ */
+export function jobHourlyBudget(
+  tasks: Array<{ plan: { labour: number | null; hours: number | null }; soFar: { approvedLabour: number; recordedEstimate: number; uncostedMinutes: number; approvedMinutes: number; recordedMinutes: number } }>,
+) {
+  const planned = tasks.filter((t) => t.plan.labour != null && t.plan.labour > 0);
+  const amount = planned.length ? round2(planned.reduce((a, t) => a + (t.plan.labour ?? 0), 0)) : null;
+  const approved = round2(tasks.reduce((a, t) => a + t.soFar.approvedLabour, 0));
+  const unapproved = round2(tasks.reduce((a, t) => a + t.soFar.recordedEstimate, 0));
+  const forecast = round2(approved + unapproved);
+  const pct = amount ? Math.round((forecast / amount) * 1000) / 10 : null;
+  return {
+    /** Null: no planned hours with a rate on any hourly task, so no alerts. */
+    amount,
+    plannedHours: round2(tasks.reduce((a, t) => a + (t.plan.hours ?? 0), 0)),
+    tasksWithoutPlan: tasks.length - planned.length,
+    approved,
+    unapproved,
+    forecast,
+    pct,
+    uncostedMinutes: tasks.reduce((a, t) => a + t.soFar.uncostedMinutes, 0),
+    approvedMinutes: tasks.reduce((a, t) => a + t.soFar.approvedMinutes, 0),
+    unapprovedMinutes: tasks.reduce((a, t) => a + t.soFar.recordedMinutes, 0),
+    reached: pct == null ? [] : BUDGET_THRESHOLDS.filter((th) => pct >= th),
+  };
+}
+export const BUDGET_THRESHOLDS = [80, 100] as const;
 
 /* ------------------------------------------------------------------ *
  * The worker's own view
@@ -833,8 +931,12 @@ export async function myHourlySummary(installerId: number) {
   const views = await viewSessions(and(eq(schema.workSessions.installerId, installerId), sql`${schema.workSessions.status} != 'rejected'`));
   const approved = views.filter((v) => v.status === "approved");
   const recorded = views.filter((v) => v.status !== "approved");
+  const terms = await termsOn(installerId);
+  const rated = terms && terms.baseRate > 0 ? terms : null;
   return {
-    rates: ownRatesView(await termsOn(installerId)),
+    rates: ownRatesView(rated),
+    /** Damien, 11 Nov 2026: no agreed rate reads "Rate to confirm", never $0. */
+    rateToConfirm: !rated,
     approvedMinutes: approved.reduce((a, v) => a + (v.approvedMinutes ?? 0), 0),
     approvedPay: round2(approved.reduce((a, v) => a + (v.approvedPay ?? 0), 0)),
     recordedMinutes: recorded.reduce((a, v) => a + v.payableMinutes, 0),

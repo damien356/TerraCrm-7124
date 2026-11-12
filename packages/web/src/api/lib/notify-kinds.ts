@@ -36,6 +36,7 @@ export const ALERT_KINDS = {
   ready_to_invoice: { label: "Job ready to invoice", group: "Crew", urgent: false },
   running_late: { label: "Crew running late", group: "Crew", urgent: false },
   crew_note: { label: "Voice note from the crew", group: "Crew", urgent: false },
+  hourly_budget: { label: "Hourly labour reached 80% or 100% of a job's budget", group: "Crew", urgent: false },
   stock_reserved: { label: "Stock reserved after a deposit", group: "Stock", urgent: true },
   stock_short: { label: "Paid order short of stock", group: "Stock", urgent: true },
   stock_full: { label: "Order now fully reserved", group: "Stock", urgent: false },

@@ -14,3 +14,17 @@ export function fixedPay(tasks: FieldTask[]) {
   }
   return sum;
 }
+
+/**
+ * The Today pay tile. Damien, 11 Nov 2026: an hourly day never reads
+ * "$0 fixed-price work". Hourly work shows as hourly; both together say so.
+ */
+export function payTile(tasks: FieldTask[]): { amount: number | null; label: string } {
+  const fixed = fixedPay(tasks);
+  const hourlyJobs = new Set(tasks.filter((t) => t.payType === "hourly").map((t) => t.id)).size;
+  const fixedJobs = new Set(tasks.filter((t) => t.payType === "per_job").map((t) => t.id)).size;
+  if (!hourlyJobs) return { amount: fixed, label: "fixed-price work" };
+  const hourlyWord = hourlyJobs === 1 ? "1 hourly job" : `${hourlyJobs} hourly jobs`;
+  if (!fixedJobs) return { amount: null, label: hourlyWord };
+  return { amount: fixed, label: `fixed-price, plus ${hourlyWord}` };
+}

@@ -205,6 +205,10 @@ export default function InvoiceScreen() {
         {p.job.siteAddress ? (
           <Text style={{ fontFamily: Fonts.sans, fontSize: 13, color: c.mutedForeground }}>{p.job.siteAddress}</Text>
         ) : null}
+        {/* Hours approved after the first invoice go on their own later invoice (Damien, 11 Nov 2026). */}
+        {!locked && p.partNote ? (
+          <Text style={{ fontFamily: Fonts.medium, fontSize: 13, color: c.primary, marginTop: 6 }}>{p.partNote}</Text>
+        ) : null}
 
         {locked ? (
           <Card>

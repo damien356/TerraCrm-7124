@@ -3617,6 +3617,12 @@ export const installerInvoices = sqliteTable(
       .notNull()
       .references(() => installers.id, { onDelete: "cascade" }),
     invoiceNumber: integer("invoice_number").notNull(),
+    /**
+     * 1 for the first invoice on a task. Hourly time approved after that goes
+     * on part 2, 3 ... holding only the hours not billed before
+     * (2026-12-07-hourly-invoice-parts.sql, Damien 11 Nov 2026).
+     */
+    part: integer("part").notNull().default(1),
     /** submitted · approved · scheduled_for_payment · paid */
     status: text("status").notNull().default("submitted"),
     /* Snapshot of the installer's contractor profile at submission time. */
@@ -3663,7 +3669,7 @@ export const installerInvoices = sqliteTable(
     ...timestamps,
   },
   (t) => [
-    unique("installer_invoice_task_unique").on(t.taskId, t.installerId),
+    unique("installer_invoice_task_part_unique").on(t.taskId, t.installerId, t.part),
     unique("installer_invoice_number_unique").on(t.installerId, t.invoiceNumber),
     index("installer_invoices_installer_idx").on(t.installerId, t.status),
     index("installer_invoices_job_idx").on(t.jobId),

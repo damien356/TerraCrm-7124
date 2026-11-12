@@ -43,6 +43,7 @@ export function HourlyJobCard({ jobId }: { jobId: number }) {
         }
       />
       <div className="grid gap-4 px-4 py-3">
+        <BudgetPanel b={d.budget} />
         {d.tasks.map((t) => (
           <HourlyTask key={t.taskId} t={t} />
         ))}
@@ -86,6 +87,47 @@ export function HourlyJobCard({ jobId }: { jobId: number }) {
 
 type JobData = NonNullable<ReturnType<typeof useHourlyJob>["data"]>;
 type TaskView = JobData["tasks"][number];
+
+/**
+ * Damien, 11 Nov 2026: the whole job's hourly-labour budget, every hourly
+ * worker and helper. Approved cost and logged time not yet approved are shown
+ * apart. The office is alerted once at 80% and once at 100%. Nothing is
+ * stopped and the customer's price never changes.
+ */
+function BudgetPanel({ b }: { b: JobData["budget"] }) {
+  const pct = b.pct;
+  const tone = pct == null ? "#6B7280" : pct >= 100 ? "#B42318" : pct >= 80 ? "#B7791F" : "#3E6B4F";
+  return (
+    <div className="rounded-md border border-border px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs font-semibold">Hourly labour budget (whole job)</p>
+        {pct == null ? <Badge colour="#6B7280">no planned hours yet</Badge> : <Badge colour={tone}>{pct}% used so far</Badge>}
+      </div>
+      {b.amount == null ? (
+        <p className="mt-1 text-xs text-muted-foreground">Set planned hours on the hourly tasks below to get the 80% and 100% alerts.</p>
+      ) : (
+        <>
+          <div className="mt-2 h-2 w-full overflow-hidden rounded bg-muted">
+            <div className="h-full" style={{ width: `${Math.min(100, pct ?? 0)}%`, background: tone }} />
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
+            <Row label="Budget" value={money(b.amount)} hint={`${b.plannedHours} h planned`} />
+            <Row label="Approved cost" value={money(b.approved)} hint={hours(b.approvedMinutes)} />
+            <Row label="Logged, not approved" value={money(b.unapproved)} hint={`${hours(b.unapprovedMinutes)}, estimate`} />
+            <Row label="Forecast so far" value={money(b.forecast)} strong />
+          </div>
+        </>
+      )}
+      {b.uncostedMinutes > 0 ? (
+        <p className="mt-1 text-xs text-[#8a5a12]">{hours(b.uncostedMinutes)} logged with the rate or a pay setting still to confirm. Counted in hours, not in dollars.</p>
+      ) : null}
+      {b.amount != null && b.tasksWithoutPlan > 0 ? (
+        <p className="mt-1 text-xs text-muted-foreground">{b.tasksWithoutPlan} hourly task(s) have no planned hours and are not in the budget.</p>
+      ) : null}
+      <p className="mt-1 text-[11px] text-muted-foreground">The office is alerted once at 80% and once at 100%. Timers keep running and the customer&apos;s price is not changed.</p>
+    </div>
+  );
+}
 
 function HourlyTask({ t }: { t: TaskView }) {
   const [editing, setEditing] = React.useState(false);
@@ -209,13 +251,17 @@ function HourlyTask({ t }: { t: TaskView }) {
           {t.reconciliation.map((r) =>
             r.invoice ? (
               <p key={r.installerId}>
-                {r.name}: invoice {r.invoice.number ?? r.invoice.id}, {money(r.invoicedHourly)} for {r.invoicedHours} h, GST {money(r.invoice.gst)}.{" "}
+                {r.name}:{" "}
+                {r.invoices.length > 1
+                  ? `invoices ${r.invoices.map((i) => `${i.number ?? i.id} (part ${i.part})`).join(", ")}`
+                  : `invoice ${r.invoice.number ?? r.invoice.id}`}
+                , {money(r.invoicedHourly)} for {r.invoicedHours} h, GST {money(r.invoices.reduce((a, i) => a + (i.gst ?? 0), 0))}.{" "}
                 {r.matched ? (
                   <span className="text-[#3E6B4F]">Matches approved time.</span>
                 ) : (
                   <span className="text-[#B4472E]">Does not match. Approved time on this invoice is {money(r.linkedPay)}.</span>
                 )}
-                {r.unbilledPay ? ` ${money(r.unbilledPay)} approved but not billed yet.` : ""}
+                {r.unbilledPay ? ` ${money(r.unbilledPay)} approved but not billed yet. He can send it as a later invoice holding only those hours.` : ""}
               </p>
             ) : r.unbilledPay && r.employee ? (
               <p key={r.installerId} className="text-muted-foreground">

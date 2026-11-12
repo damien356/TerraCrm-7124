@@ -292,7 +292,15 @@ export function HourlyTimeSection({
               {gst ? "Rates are ex GST. GST is added on your invoice." : "Not GST registered, so no GST on this pay."}
             </Text>
           </View>
-        ) : null}
+        ) : (
+          // Damien, 11 Nov 2026: no agreed rate yet. Never $0, never the standard rate.
+          <View style={{ marginBottom: 10 }}>
+            <Text style={{ fontFamily: Fonts.bold, fontSize: 20, color: c.warning }}>Rate to confirm</Text>
+            <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: c.mutedForeground, marginTop: 3 }}>
+              You can still record your time. The office confirms your rate before this time is approved.
+            </Text>
+          </View>
+        )}
 
         {here ? (
           <View style={{ backgroundColor: "#F7E6DC", borderRadius: 10, padding: 10, marginBottom: 10 }}>

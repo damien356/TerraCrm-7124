@@ -2,7 +2,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { round2 } from "./hourly-calc";
-import { crewSessionView, isHourlyContractor, ownRatesView, termsOn, viewSessions } from "./hourly";
+import { RATE_TO_CONFIRM, crewSessionView, isHourlyContractor, ownRatesView, taskPay, taskRatesView, termsOn, viewSessions } from "./hourly";
 
 /**
  * WHAT AN HOURLY CONTRACTOR'S PHONE IS ALLOWED TO RECEIVE.
@@ -18,13 +18,18 @@ import { crewSessionView, isHourlyContractor, ownRatesView, termsOn, viewSession
  * so phone builds 13, 14 and 15 keep working: an hourly task reads as
  * "$47 /hr" on an old build because payAmount is his ordinary hourly rate and
  * there is no breakdown.
+ *
+ * Damien, 11 Nov 2026: the rate shown is the one agreed for THAT task (or his
+ * terms when none was copied onto it). With no agreed rate, or $0, payAmount
+ * is null and payNote reads "Rate to confirm": never the standard $50, never
+ * $0.00.
  */
 
 export type CrewHourly = Awaited<ReturnType<typeof crewHourlyContext>>;
 
 /** Null for a per-unit installer. For an hourly man, his rates and his time per task. */
-export async function crewHourlyContext(installerId: number, taskIds: number[] = []) {
-  if (!(await isHourlyContractor(installerId))) return null;
+export async function crewHourlyContext(installerId: number, taskIds: number[] = [], force = false) {
+  if (!force && !(await isHourlyContractor(installerId))) return null;
   const terms = await termsOn(installerId);
   const rates = ownRatesView(terms);
   const ids = [...new Set(taskIds)];
@@ -39,7 +44,10 @@ export async function crewHourlyContext(installerId: number, taskIds: number[] =
     : [];
   const perTask = new Map<number, ReturnType<typeof timeOf>>();
   for (const id of ids) perTask.set(id, timeOf(views.filter((v) => v.taskId === id)));
-  return { rates, gstRegistered: Boolean(terms?.gstRegistered), perTask };
+  const pay = await taskPay(ids);
+  const taskRates = new Map<number, ReturnType<typeof taskRatesView>>();
+  for (const id of ids) taskRates.set(id, taskRatesView(terms, pay.get(id)));
+  return { rates, gstRegistered: Boolean(terms?.gstRegistered), perTask, taskRates };
 }
 
 function timeOf(views: Awaited<ReturnType<typeof viewSessions>>) {
@@ -58,6 +66,7 @@ type CardLike = {
   id: number;
   payType: string;
   payAmount: number | null;
+  payNote?: string | null;
   labourCost?: number | null;
   payBreakdown?: unknown;
   payTotal?: number | null;
@@ -68,6 +77,7 @@ type CardLike = {
 export function redactCard<T extends CardLike>(card: T, ctx: NonNullable<CrewHourly>) {
   const isHourly = card.payType === "hourly";
   const time = ctx.perTask.get(card.id) ?? null;
+  const rates = isHourly ? (ctx.taskRates.has(card.id) ? (ctx.taskRates.get(card.id) ?? null) : ctx.rates) : null;
   return {
     ...card,
     // Never a per-unit schedule, on any task, hourly or not.
@@ -75,13 +85,15 @@ export function redactCard<T extends CardLike>(card: T, ctx: NonNullable<CrewHou
     labourCost: null,
     // An hourly task shows his ordinary rate per hour; a task agreed at a flat
     // amount before he went hourly keeps that agreed amount.
-    payAmount: isHourly ? (ctx.rates?.standardRate ?? null) : card.payAmount,
+    payAmount: isHourly ? (rates?.standardRate ?? null) : card.payAmount,
+    payNote: isHourly && !rates ? RATE_TO_CONFIRM : (card.payNote ?? null),
     payTotal: isHourly ? (time?.approvedPay ?? null) : (card.payAmount ?? null),
     ...("payTotalExGst" in card ? { payTotalExGst: isHourly ? (time?.approvedPay ?? null) : (card.payAmount ?? null) } : {}),
     gstRegistered: ctx.gstRegistered,
     hourly: isHourly
       ? {
-          rates: ctx.rates,
+          rates,
+          rateToConfirm: !rates,
           approvedMinutes: time?.approvedMinutes ?? 0,
           approvedPay: time?.approvedPay ?? 0,
           recordedMinutes: time?.recordedMinutes ?? 0,
@@ -97,8 +109,14 @@ export async function redactCards<T extends CardLike>(installerId: number, cards
     installerId,
     cards.filter((c) => c.payType === "hourly").map((c) => c.id),
   );
-  if (!ctx) return cards;
-  return cards.map((c) => redactCard(c, ctx));
+  if (ctx) return cards.map((c) => redactCard(c, ctx));
+  // Damien, 11 Nov 2026: an hourly task given to someone with no hourly terms
+  // yet reads "Rate to confirm", never $0 or the standard rate. His other
+  // (fixed-price) cards are left exactly as they were.
+  const hourlyIds = cards.filter((c) => c.payType === "hourly").map((c) => c.id);
+  if (!hourlyIds.length) return cards;
+  const forced = (await crewHourlyContext(installerId, hourlyIds, true))!;
+  return cards.map((c) => (c.payType === "hourly" ? { ...redactCard(c, forced), payBreakdown: c.payBreakdown ?? null, labourCost: c.labourCost ?? null } : c));
 }
 
 /** Finished work list. payAmount is what he was paid on it: approved hours for hourly work. */
@@ -156,7 +174,8 @@ export async function redactMe<
     skills: me.skills.map((s) => ({ ...s, rateType: "hourly", rate: null })),
     stats: { ...me.stats, earned: round2(Number(flat?.earned ?? 0) + approvedPay) },
     hourly: {
-      rates: ownRatesView(terms),
+      rates: terms && terms.baseRate > 0 ? ownRatesView(terms) : null,
+      rateToConfirm: !(terms && terms.baseRate > 0),
       approvedPay,
       approvedMinutes: Number(hrs?.minutes ?? 0),
     },
@@ -168,21 +187,30 @@ export async function redactOffers<T extends { taskId: number; payType: string; 
   installerId: number,
   rows: T[],
 ) {
-  if (!(await isHourlyContractor(installerId))) return rows;
-  const rates = ownRatesView(await termsOn(installerId));
-  return rows.map((r) => ({
-    ...r,
-    payType: r.payType === "hourly" ? "hourly" : r.payType,
-    payAmount: r.payType === "hourly" ? (rates?.standardRate ?? null) : r.payAmount,
-    hourly: r.payType === "hourly" ? { rates } : null,
-  }));
+  if (!(await isHourlyContractor(installerId))) {
+    // No hourly terms on record: an hourly offer still never reads $0.
+    return rows.map((r) => (r.payType === "hourly" ? { ...r, payAmount: null, payNote: RATE_TO_CONFIRM, hourly: { rates: null, rateToConfirm: true } } : r));
+  }
+  const terms = await termsOn(installerId);
+  const pay = await taskPay(rows.map((r) => r.taskId));
+  return rows.map((r) => {
+    const rates = r.payType === "hourly" ? taskRatesView(terms, pay.get(r.taskId)) : null;
+    return {
+      ...r,
+      payType: r.payType === "hourly" ? "hourly" : r.payType,
+      payAmount: r.payType === "hourly" ? (rates?.standardRate ?? null) : r.payAmount,
+      payNote: r.payType === "hourly" && !rates ? RATE_TO_CONFIRM : null,
+      hourly: r.payType === "hourly" ? { rates, rateToConfirm: !rates } : null,
+    };
+  });
 }
 
 /** His rate card: his own three hourly rates, as rows every app build can show. */
 export async function hourlyRateCard(installerId: number, on: string) {
   if (!(await isHourlyContractor(installerId))) return null;
   const terms = await termsOn(installerId, on);
-  const r = ownRatesView(terms);
+  // $0 is never shown as a rate: no rows, and the card reads Rate to confirm.
+  const r = terms && terms.baseRate > 0 ? ownRatesView(terms) : null;
   const rows = r
     ? [
         { itemId: -1, name: "Ordinary hours", groupName: "other", kind: "work", unit: "hour", amount: r.standardRate, minimumCharge: null, effectiveFrom: r.effectiveFrom },

@@ -112,6 +112,8 @@ export type NotifyMessage = {
   path?: string;
   /** Email even when the kind is not on the urgent list. */
   forceEmail?: boolean;
+  /** What the phone push says instead of body. Pushes reach every office phone, so a kind with costs in its body sends a plain one (Damien, 11 Nov 2026). */
+  pushBody?: string;
 };
 
 /**
@@ -129,7 +131,7 @@ export async function notifyOffice(kind: AlertKind, msg: NotifyMessage) {
       .returning({ id: schema.alerts.id });
     out.alertId = row?.id ?? null;
 
-    out.pushed = await pushToOffice({ title: msg.title, body: msg.body, data: { ...data, alertId: out.alertId } });
+    out.pushed = await pushToOffice({ title: msg.title, body: msg.pushBody ?? msg.body, data: { ...data, alertId: out.alertId } });
 
     const s = await notifySettings();
     if (msg.forceEmail || s.urgent.includes(kind)) {

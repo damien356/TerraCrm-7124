@@ -14,7 +14,7 @@ import { emailConfigured } from "../lib/email";
  * ------------------------------------------------------------------------- */
 
 /** Supplier cost detail. Office logins that cannot see costs never see these. */
-const COST_KINDS: AlertKind[] = ["price_flag", "price_flag_big", "missing_invoice"];
+const COST_KINDS: AlertKind[] = ["price_flag", "price_flag_big", "missing_invoice", "hourly_budget"];
 
 const hiddenFor = (canSeeCosts: boolean) => (canSeeCosts ? [] : COST_KINDS);
 

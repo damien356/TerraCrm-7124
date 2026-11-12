@@ -792,8 +792,23 @@ function SettingsTab({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <Card>
-      <CardHeader title="Hourly settings" subtitle={isAdmin ? "Each answer left 'not decided' keeps blocking the time it affects." : "Admin changes these. Shown so you know what is still undecided."} />
+      <CardHeader title="Hourly settings" subtitle={isAdmin ? "Every pay choice still to make is on this page. Each answer left 'not decided' keeps blocking approval of the time it affects. Recorded time is always kept." : "Admin changes these. Shown so you know what is still undecided."} />
       <div className="grid gap-5 px-4 py-4 text-sm">
+        {d.pending.length || d.ratesToConfirm.length ? (
+          <div className="rounded-md bg-[#B7791F]/10 px-3 py-2 text-xs text-[#8a5a12]">
+            <p className="font-semibold">Before hourly pay can be approved</p>
+            <ul className="mt-1 list-disc pl-4">
+              {d.pending.map((p) => (
+                <li key={p}>{p}</li>
+              ))}
+              {d.ratesToConfirm.map((r) => (
+                <li key={r.taskId}>
+                  Rate to confirm: {r.name} on {r.ref}. Add his hourly pay terms in the Pay terms tab.
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <section>
           <p className="font-medium">Night / after-hours</p>
           <p className="text-xs text-muted-foreground">Night replaces the weekend rate, never on top of it. Until set, the office confirms the band on every entry.</p>
@@ -830,7 +845,11 @@ function SettingsTab({ isAdmin }: { isAdmin: boolean }) {
 
         <section>
           <p className="font-medium">Time off site</p>
-          <p className="text-xs text-muted-foreground">Which of these are paid. Home to work travel is kept separate.</p>
+          <p className="text-xs text-muted-foreground">
+            Which of these are paid. Loading and collecting materials stay as their own entries. Travel to the next job is recorded on that next job from
+            when he leaves, then switched to work on arrival: that only says which job the time belongs to, not whether it is paid. Home to work travel
+            (the first trip of the day and the last trip home) is kept separate.
+          </p>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
             {Object.entries(d.categoryLabels)
               .filter(([k]) => k !== "site")
@@ -887,16 +906,6 @@ function SettingsTab({ isAdmin }: { isAdmin: boolean }) {
           </div>
         ) : null}
 
-        {d.pending.length ? (
-          <div className="rounded-md bg-[#B7791F]/10 px-3 py-2 text-xs text-[#8a5a12]">
-            <p className="font-semibold">Still not decided</p>
-            <ul className="mt-1 list-disc pl-4">
-              {d.pending.map((p) => (
-                <li key={p}>{p}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
       </div>
     </Card>
   );

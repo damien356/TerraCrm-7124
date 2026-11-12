@@ -7,7 +7,7 @@ import { EmptyState, TaskCard, type FieldTask } from "@/components/task-card";
 import { MonthGrid, ViewModeToggle, WeekStrip } from "@/components/calendar";
 import { addDaysISO, fmtDayLabel, fmtLongDate, fmtMoney, startOfMonthISO, startOfWeekISO, todayISO } from "@/lib/format";
 import { useMe, useOffers, useScheduleRange, useToday } from "@/queries/field";
-import { fixedPay } from "@/lib/pay";
+import { payTile } from "@/lib/pay";
 
 const c = Colors.light;
 
@@ -60,7 +60,7 @@ export default function TodayScreen() {
 
   // A job's pay is for the whole job, so a 6 day lay counts once, at its full
   // amount, on any day it is on (notes 18.61).
-  const dayPay = useMemo(() => fixedPay(tasks), [tasks]);
+  const dayPay = useMemo(() => payTile(tasks), [tasks]);
   const outstanding = tasks.filter((t) => t.status !== "complete").length;
   const firstName = (me.data?.name ?? "").split(" ")[0];
 
@@ -125,9 +125,9 @@ export default function TodayScreen() {
               YOUR PAY
             </Text>
             <Text style={{ fontFamily: Fonts.bold, fontSize: 24, color: c.foreground, marginTop: 4 }}>
-              {fmtMoney(dayPay)}
+              {dayPay.amount == null ? "Hourly" : fmtMoney(dayPay.amount)}
             </Text>
-            <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground }}>fixed-price work</Text>
+            <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground }}>{dayPay.label}</Text>
           </View>
         </View>
 

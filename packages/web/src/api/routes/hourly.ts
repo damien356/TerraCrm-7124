@@ -7,6 +7,7 @@ import { adminOnly, installerOnly, staffOnly, type Actor } from "../middleware/a
 import { ownTaskOrThrow } from "./field";
 import { addLocalDays, localDate } from "../lib/local-date";
 import { jobText, taskRef } from "../lib/refs";
+import { checkJobBudget } from "../lib/hourly-budget";
 import { BANDS, CATEGORIES, CATEGORY_LABEL, BAND_LABEL, type SplitPart } from "../lib/hourly-calc";
 import {
   BREAK_POLICIES,
@@ -22,6 +23,8 @@ import {
   pendingSettings,
   putSetting,
   snap,
+  taskPay,
+  taskRatesView,
   termsOn,
   tidyVehicleDays,
   unapproveSession,
@@ -147,6 +150,26 @@ async function officeRows(views: SessionView[], canSeeCosts: boolean) {
   });
 }
 
+/**
+ * Damien, 11 Nov 2026: open hourly tasks whose rate is still to confirm (no
+ * hourly pay terms for the person, or a $0 rate). Their time can be recorded
+ * but not approved, so they are listed with the other pay choices.
+ */
+async function ratesToConfirm() {
+  const rows = await db
+    .select({ id: schema.jobTasks.id, seq: schema.jobTasks.seq, jobId: schema.jobTasks.jobId, number: schema.jobs.number, displayNumber: schema.jobs.displayNumber, installerId: schema.jobTasks.assignedInstallerId, name: schema.installers.name, agreedHourlyRate: schema.jobTasks.agreedHourlyRate, payType: schema.jobTasks.payType, labourCost: schema.jobTasks.labourCost })
+    .from(schema.jobTasks)
+    .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
+    .innerJoin(schema.installers, eq(schema.installers.id, schema.jobTasks.assignedInstallerId))
+    .where(and(eq(schema.jobTasks.payType, "hourly"), sql`${schema.jobTasks.status} not in ('complete','cancelled')`));
+  const out = [];
+  for (const r of rows) {
+    if (taskRatesView(await termsOn(r.installerId!), { id: r.id, payType: r.payType, labourCost: r.labourCost, agreedHourlyRate: r.agreedHourlyRate })) continue;
+    out.push({ taskId: r.id, jobId: r.jobId, ref: taskRef(jobText(r), r.seq), installerId: r.installerId, name: r.name });
+  }
+  return out;
+}
+
 /* ================================================================== *
  * The worker
  * ================================================================== */
@@ -156,23 +179,28 @@ const crew = {
   myTime: installerOnly.input(z.object({ taskId: z.number() })).handler(async ({ input, context }) => {
     const task = await ownTaskOrThrow(input.taskId, context.installerId);
     const terms = await termsOn(context.installerId);
+    // Damien, 11 Nov 2026: an hourly task with no agreed rate still records
+    // time. The rate reads "Rate to confirm"; approval waits for it.
+    const rates = taskRatesView(terms, (await taskPay([task.id])).get(task.id));
+    const hourlyHere = Boolean(terms) || task.payType === "hourly";
     const views = await viewSessions(
       and(eq(schema.workSessions.installerId, context.installerId), sql`${schema.workSessions.status} != 'rejected'`),
     );
     const here = views.filter((v) => v.taskId === task.id);
     const openAnywhere = views.find((v) => v.status === "open") ?? null;
     return {
-      enabled: Boolean(terms),
+      enabled: hourlyHere,
       taskId: task.id,
       taskStatus: task.status,
-      rates: ownRatesView(terms),
+      rates,
+      rateToConfirm: hourlyHere && !rates,
       sessions: here.map(crewSessionView),
       open: openAnywhere ? crewSessionView(openAnywhere) : null,
       openElsewhere: Boolean(openAnywhere && openAnywhere.taskId !== task.id),
       approvedMinutes: here.filter((v) => v.status === "approved").reduce((a, v) => a + (v.approvedMinutes ?? 0), 0),
       approvedPay: Math.round(here.filter((v) => v.status === "approved").reduce((a, v) => a + (v.approvedPay ?? 0), 0) * 100) / 100,
       recordedMinutes: here.filter((v) => v.status !== "approved").reduce((a, v) => a + v.payableMinutes, 0),
-      vehicles: terms ? await crewVehicles(context.installerId) : [],
+      vehicles: hourlyHere ? await crewVehicles(context.installerId) : [],
       categories: CATEGORIES.map((c) => ({ id: c, label: CATEGORY_LABEL[c] })),
     };
   }),
@@ -204,7 +232,8 @@ const crew = {
       }
       const at = tapTime(input.at);
       const terms = await termsOn(installerId, localDate(at));
-      if (!terms) throw new ORPCError("FORBIDDEN", { message: "You are not set up for hourly time. Talk to the office." });
+      // Rate still to confirm on an hourly task: the time is recorded anyway.
+      if (!terms && task.payType !== "hourly") throw new ORPCError("FORBIDDEN", { message: "You are not set up for hourly time. Talk to the office." });
 
       const [open] = await db
         .select()
@@ -319,6 +348,7 @@ const crew = {
         .where(and(eq(schema.workSessions.id, s.id), eq(schema.workSessions.status, "open")));
       const after = await sessionOr404(s.id);
       await logTime({ session: s, action: "finish", actor: actorOf(context.actor), before: snap(s), after: snap(after) });
+      await checkJobBudget(s.jobId);
       return { session: await crewView(s.id), repeated: false };
     }),
 
@@ -328,6 +358,7 @@ const crew = {
     .handler(async ({ input, context }) => {
       const s = await mineOr403(input.sessionId, context.installerId);
       if (s.invoiceId) throw new ORPCError("BAD_REQUEST", { message: "This time is already on your invoice. Talk to the office." });
+      if (s.status === "approved") throw new ORPCError("BAD_REQUEST", { message: "This time is already approved. Talk to the office." });
       await db
         .update(schema.workSessions)
         .set({ correctionRequestedAt: new Date(), correctionNote: input.note, updatedAt: new Date() })
@@ -471,6 +502,7 @@ const office = {
       await tidyVehicleDays([s.vehicleId, vehicleId]);
       const after = await sessionOr404(s.id);
       await logTime({ session: after, action: "corrected", actor: actorOf(context.actor), before: snap(s), after: snap(after), reason: input.reason });
+      await checkJobBudget(after.jobId);
       const [v] = await viewSessions(and(eq(schema.workSessions.id, s.id)));
       return (await officeRows([v!], context.actor.canSeeCosts))[0]!;
     }),
@@ -548,6 +580,7 @@ const office = {
     .handler(async ({ input, context }) => {
       await approveSession(input.sessionId, actorOf(context.actor), input.split ?? null);
       const [v] = await viewSessions(and(eq(schema.workSessions.id, input.sessionId)));
+      if (v) await checkJobBudget(v.jobId);
       return (await officeRows([v!], context.actor.canSeeCosts))[0]!;
     }),
 
@@ -606,7 +639,7 @@ const office = {
       if (end.getTime() <= start.getTime()) throw new ORPCError("BAD_REQUEST", { message: "Finish must be after start." });
       if (end.getTime() - start.getTime() > 24 * 60 * 60 * 1000) throw new ORPCError("BAD_REQUEST", { message: "One entry can't be longer than 24 hours." });
       if (end.getTime() > Date.now() + 60_000) throw new ORPCError("BAD_REQUEST", { message: "Finish is in the future." });
-      if (!(await termsOn(input.installerId, localDate(start)))) {
+      if (t.payType !== "hourly" && !(await termsOn(input.installerId, localDate(start)))) {
         throw new ORPCError("BAD_REQUEST", { message: "This worker has no hourly pay terms on that date." });
       }
       await assertNoOverlap(input.installerId, start, end, null);
@@ -643,6 +676,7 @@ const office = {
       }
       await ensureVehicleDay(input.vehicleId, workDate);
       await logTime({ session: row!, action: "manual_entry", actor: actorOf(context.actor), after: snap(row!), reason: input.reason });
+      await checkJobBudget(t.jobId);
       const [v] = await viewSessions(and(eq(schema.workSessions.id, row!.id)));
       return (await officeRows([v!], context.actor.canSeeCosts))[0]!;
     }),
@@ -809,7 +843,7 @@ const costs = {
   settings: staffOnly.handler(async ({ context }) => {
     needCosts(context.actor);
     const s = await hourlySettings();
-    return { ...s, pending: pendingSettings(s), breakPolicies: BREAK_POLICIES, categoryLabels: CATEGORY_LABEL };
+    return { ...s, pending: pendingSettings(s), breakPolicies: BREAK_POLICIES, categoryLabels: CATEGORY_LABEL, ratesToConfirm: await ratesToConfirm() };
   }),
 
   /** Admin only. Each unanswered question stays "pending" and keeps blocking the time it affects. */

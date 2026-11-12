@@ -1,7 +1,7 @@
 import { jobRef } from "../lib/job-ref";
 import { taskRef } from "../lib/refs";
 import { z } from "zod";
-import { and, asc, desc, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -117,6 +117,14 @@ async function taskInvoiceContext(taskId: number, installerId: number) {
   };
 }
 
+function parseLines(json: string): InvoiceLineItem[] {
+  try {
+    return JSON.parse(json) as InvoiceLineItem[];
+  } catch {
+    return [];
+  }
+}
+
 /** Damien, 7 Nov 2026: $0.00 means "Rate not set". Nothing is invoiced or approved at it. */
 function payLineBlock(lines: InvoiceLineItem[], doing = "this work can be invoiced"): string | null {
   const unset = unsetPayLines(lines);
@@ -167,18 +175,37 @@ async function hourlyInvoiceLines(taskId: number, installerId: number) {
   };
 }
 
+/** His invoices on one task, part 1 first. */
+async function priorInvoices(taskId: number, installerId: number) {
+  return db
+    .select()
+    .from(schema.installerInvoices)
+    .where(and(eq(schema.installerInvoices.taskId, taskId), eq(schema.installerInvoices.installerId, installerId)))
+    .orderBy(asc(schema.installerInvoices.part), asc(schema.installerInvoices.id));
+}
+
+/**
+ * Damien, 11 Nov 2026: hourly time approved after the task was invoiced goes on
+ * its own later invoice holding only those hours. Nothing billed before is
+ * billed again: each session is linked to the one invoice that bills it.
+ */
+const laterHoursNote = (part: number, first: number | null) =>
+  part > 1 ? `Part ${part}: hours approved after invoice${first != null ? ` #${first}` : ""}. Earlier hours are not billed again.` : null;
+
 export const installerInvoices = {
   /** Read-only preview shown before CREATE MY INVOICE. */
   preview: installerOnly.input(z.object({ taskId: z.number() })).handler(async ({ input, context }) => {
-    const { task, job, site, installer, lineItems, subtotal, gstAmount, total, hourlyBlock } = await taskInvoiceContext(
+    const { task, job, site, installer, lineItems, subtotal, gstAmount, total, hourlyBlock, hourlySessionIds } = await taskInvoiceContext(
       input.taskId,
       context.installerId,
     );
 
-    const [existing] = await db
-      .select()
-      .from(schema.installerInvoices)
-      .where(and(eq(schema.installerInvoices.taskId, input.taskId), eq(schema.installerInvoices.installerId, context.installerId)));
+    const prior = await priorInvoices(input.taskId, context.installerId);
+    const latest = prior[prior.length - 1] ?? null;
+    // A later part only for hourly work with approved hours not billed yet.
+    const newPart = task.payType === "hourly" && prior.length > 0 && hourlySessionIds.length > 0;
+    const existing = newPart ? null : latest;
+    const part = prior.length ? Math.max(...prior.map((p) => p.part ?? 1)) + 1 : 1;
 
     const logoUrl = installer.logoUrl ? await signGet(installer.logoUrl) : null;
     const abn = abnView(installer);
@@ -187,6 +214,10 @@ export const installerInvoices = {
       alreadySubmitted: !!existing,
       existingStatus: existing?.status ?? null,
       existingInvoiceId: existing?.id ?? null,
+      /** 1 for a first invoice, 2 and up for hours approved after it. */
+      part: existing ? (existing.part ?? 1) : part,
+      partNote: existing ? null : laterHoursNote(part, prior[0]?.invoiceNumber ?? null),
+      earlierInvoices: prior.map((p) => ({ id: p.id, part: p.part ?? 1, invoiceNumber: p.invoiceNumber, status: p.status, total: p.total })),
       /** Submitted is not the same as received. The screen says which of the two. */
       emailedToTerra: existing ? !!existing.emailedToTerraAt : false,
       emailError: existing?.emailError ?? null,
@@ -226,10 +257,11 @@ export const installerInvoices = {
         bankAccountNumber: installer.bankAccountNumber,
         nextInvoiceNumber: installer.nextInvoiceNumber,
       },
-      lineItems,
-      subtotal,
-      gstAmount,
-      total,
+      // A submitted invoice shows what it billed, not what is left to bill.
+      lineItems: existing ? parseLines(existing.lineItems) : lineItems,
+      subtotal: existing ? existing.subtotal : subtotal,
+      gstAmount: existing ? existing.gstAmount : gstAmount,
+      total: existing ? existing.total : total,
     };
   }),
 
@@ -240,11 +272,16 @@ export const installerInvoices = {
    * the invoice that already exists rather than creating a second one.
    */
   submit: installerOnly.input(z.object({ taskId: z.number() })).handler(async ({ input, context }) => {
-    const [existing] = await db
-      .select()
-      .from(schema.installerInvoices)
-      .where(and(eq(schema.installerInvoices.taskId, input.taskId), eq(schema.installerInvoices.installerId, context.installerId)));
-    if (existing) return existing;
+    const prior = await priorInvoices(input.taskId, context.installerId);
+    const latest = prior[prior.length - 1] ?? null;
+    if (latest) {
+      // A repeat tap returns what exists. Only hourly hours approved since can make a later part.
+      const [tp] = await db.select({ payType: schema.jobTasks.payType }).from(schema.jobTasks).where(eq(schema.jobTasks.id, input.taskId));
+      if (tp?.payType !== "hourly") return latest;
+      if (!(await hourlyInvoiceLines(input.taskId, context.installerId)).sessionIds.length) return latest;
+    }
+    const part = prior.length ? Math.max(...prior.map((p) => p.part ?? 1)) + 1 : 1;
+    const note = laterHoursNote(part, prior[0]?.invoiceNumber ?? null);
 
     const { task, job, site, installer, usableVariations, lineItems, subtotal, gstAmount, total, hourlySessionIds, hourlyBlock } =
       await taskInvoiceContext(input.taskId, context.installerId);
@@ -294,7 +331,7 @@ export const installerInvoices = {
       bankAccountNumber: installer.bankAccountNumber,
       jobNumber: jobRef(job),
       siteAddress: site?.address ?? null,
-      taskTitle: task.title,
+      taskTitle: note ? `${task.title} (${note})` : task.title,
       lineItems,
       subtotal,
       gstAmount,
@@ -306,13 +343,16 @@ export const installerInvoices = {
     // saves "invoice-1001.pdf" instead of opening the storage key in a tab.
     await putObject(pdfKey, pdfBuffer, "application/pdf", `invoice-${invoiceNumber}.pdf`);
 
-    const [row] = await db
+    let inserted: Array<typeof schema.installerInvoices.$inferSelect>;
+    try {
+      inserted = await db
       .insert(schema.installerInvoices)
       .values({
         taskId: input.taskId,
         jobId: job.id,
         installerId: context.installerId,
         invoiceNumber,
+        part,
         status: "submitted",
         tradingName: abn.businessName ?? "",
         installerName: installer.name,
@@ -338,6 +378,16 @@ export const installerInvoices = {
         submittedAt: now,
       })
       .returning();
+    } catch (e) {
+      // Two taps racing: the unique index on (task, person, part) decides. The loser gets the winner's invoice.
+      const [won] = await db
+        .select()
+        .from(schema.installerInvoices)
+        .where(and(eq(schema.installerInvoices.taskId, input.taskId), eq(schema.installerInvoices.installerId, context.installerId), eq(schema.installerInvoices.part, part)));
+      if (won) return won;
+      throw e;
+    }
+    const row = inserted[0];
 
     await db
       .update(schema.installers)
@@ -349,7 +399,7 @@ export const installerInvoices = {
       await db
         .update(schema.workSessions)
         .set({ invoiceId: row!.id, updatedAt: now })
-        .where(inArray(schema.workSessions.id, hourlySessionIds));
+        .where(and(inArray(schema.workSessions.id, hourlySessionIds), isNull(schema.workSessions.invoiceId)));
     }
 
     if (usableVariations.length > 0) {
@@ -360,9 +410,9 @@ export const installerInvoices = {
     }
 
     const attachments = [{ filename: `invoice-${invoiceNumber}.pdf`, content: pdfBuffer.toString("base64") }];
-    const subject = `Invoice #${invoiceNumber} from ${abn.billName}, Job #${jobRef(job)}`;
-    const bodyHtml = `<p>Invoice #${invoiceNumber} for job ${jobRef(job)}, task ${taskRef(jobRef(job), task.seq)} "${task.title}".</p><p>Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.</p>`;
-    const bodyText = `Invoice #${invoiceNumber} for job ${jobRef(job)}, task ${taskRef(jobRef(job), task.seq)} "${task.title}". Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.`;
+    const subject = `Invoice #${invoiceNumber} from ${abn.billName}, Job #${jobRef(job)}${part > 1 ? ` (part ${part})` : ""}`;
+    const bodyHtml = `<p>Invoice #${invoiceNumber} for job ${jobRef(job)}, task ${taskRef(jobRef(job), task.seq)} "${task.title}".</p>${note ? `<p>${note}</p>` : ""}<p>Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.</p>`;
+    const bodyText = `Invoice #${invoiceNumber} for job ${jobRef(job)}, task ${taskRef(jobRef(job), task.seq)} "${task.title}".${note ? ` ${note}` : ""} Total: $${total.toFixed(2)}${installer.gstRegistered ? " inc GST" : ""}.`;
 
     /*
      * Submitting and DELIVERING are two different things. The row and the PDF

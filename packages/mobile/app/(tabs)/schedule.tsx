@@ -5,7 +5,7 @@ import { Colors, Fonts } from "@/constants/theme";
 import { EmptyState, TaskCard, type FieldTask } from "@/components/task-card";
 import { fmtDayLabel, fmtMoney } from "@/lib/format";
 import { useUpcoming } from "@/queries/field";
-import { fixedPay } from "@/lib/pay";
+import { payTile } from "@/lib/pay";
 
 const c = Colors.light;
 
@@ -24,7 +24,7 @@ export default function ScheduleScreen() {
   }, [upcoming.data]);
 
   // One card per day on site, but each job is counted once (notes 18.61).
-  const total = fixedPay(upcoming.data ?? []);
+  const total = payTile(upcoming.data ?? []);
   const jobCount = new Set((upcoming.data ?? []).map((t) => t.id)).size;
 
   return (
@@ -42,7 +42,7 @@ export default function ScheduleScreen() {
         <Text style={{ fontFamily: Fonts.bold, fontSize: 26, color: c.foreground }}>Coming up</Text>
         <Text style={{ fontFamily: Fonts.sans, fontSize: 14, color: c.mutedForeground, marginTop: 4 }}>
           Next four weeks. {jobCount} job{jobCount === 1 ? "" : "s"} booked,{" "}
-          {fmtMoney(total)} in fixed-price work.
+          {total.amount == null ? `${total.label}.` : total.label === "fixed-price work" ? `${fmtMoney(total.amount)} in fixed-price work.` : `${fmtMoney(total.amount)} ${total.label}.`}
         </Text>
 
         {upcoming.isLoading ? (
