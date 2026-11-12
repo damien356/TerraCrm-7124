@@ -16,6 +16,27 @@ import * as schema from "../database/schema";
 
 export const PART_COMPLETE_STATUS = "Part complete, awaiting client/builder";
 
+/*
+ * Until the staged-jobs database step has been applied, the stage tables do not
+ * exist. Every check here then answers "not staged", so publishing the code
+ * first changes nothing for the rest of Ops (Damien, 12 Nov 2026).
+ * Once seen, the tables are remembered; a miss is looked at again after 30s.
+ */
+let tablesSeen = false;
+let lastMiss = 0;
+export async function stagingReady(): Promise<boolean> {
+  if (tablesSeen) return true;
+  if (Date.now() - lastMiss < 30_000) return false;
+  try {
+    const rows = await db.all<{ n: number }>(sql`select count(*) as n from sqlite_master where type = 'table' and name in ('job_stage_plans', 'job_stages', 'job_stage_pay')`);
+    tablesSeen = Number(rows[0]?.n ?? 0) === 3;
+  } catch {
+    tablesSeen = false;
+  }
+  if (!tablesSeen) lastMiss = Date.now();
+  return tablesSeen;
+}
+
 export type OpenStaging = {
   planId: number;
   kind: string;
@@ -29,6 +50,7 @@ export type OpenStaging = {
 
 /** The agreed plan on this job with work still open, or null. */
 export async function openStaging(jobId: number): Promise<OpenStaging | null> {
+  if (!(await stagingReady())) return null;
   const [plan] = await db
     .select()
     .from(schema.jobStagePlans)
@@ -71,7 +93,7 @@ export async function stagedFinishBlock(task: { id: number; jobId: number; labou
 /** Forecast: when the remaining work is expected, job by job. The return date, else the follow-up date. */
 export async function stagedForecastDates(jobIds: number[]) {
   const out = new Map<number, { date: string; basis: string }>();
-  if (!jobIds.length) return out;
+  if (!jobIds.length || !(await stagingReady())) return out;
   const plans = await db
     .select()
     .from(schema.jobStagePlans)
@@ -97,6 +119,7 @@ export async function stagedForecastDates(jobIds: number[]) {
  * An empty list means it IS staged and nothing is claimable right now.
  */
 export async function stagedClaimRows(taskId: number, installerId: number) {
+  if (!(await stagingReady())) return null;
   const plans = await db
     .select({ id: schema.jobStagePay.planId })
     .from(schema.jobStagePay)
@@ -123,6 +146,7 @@ export async function stagedClaimRows(taskId: number, installerId: number) {
 
 /** Does this person have staged pay on this task (so he keeps access after the rest is reassigned)? */
 export async function hasStagePayOn(taskId: number, installerId: number) {
+  if (!(await stagingReady())) return false;
   const [row] = await db
     .select({ id: schema.jobStagePay.id })
     .from(schema.jobStagePay)
