@@ -791,6 +791,11 @@ export type SupplierChargeRule = {
   /**
    * Charged once for every block of this many units, a part block counting as
    * a whole one. Victoria Carpets: $35 per 40 lm or part of 40 lm. Null = per unit.
+   *
+   * On a percentage charge with a maximum it means something else: an order of
+   * this many m² or more pays the maximum as a flat amount, whatever the
+   * percentage comes to (Damien, 12 Nov 2026: Forbo, "$180 flat rate for orders
+   * over 400 m²"). See percentFlatFromM2.
    */
   unitBlock?: number | null;
   amountIncludesGst: boolean;
@@ -875,15 +880,48 @@ export function percentCapExGst(rule: Pick<SupplierChargeRule, "basis" | "amount
   return round2(rule.amountIncludesGst ? a / 1.1 : a);
 }
 
-/** A percentage worked out on `base`, held to the rule's maximum. Damien, 12 Nov 2026. */
+/**
+ * The order size, in m², from which a percentage charge is its maximum as a
+ * flat amount (Damien, 12 Nov 2026). Forbo: "1.5% surcharge, capped at $180
+ * per order, for orders under 400 m². $180 flat rate for orders over 400 m²."
+ * Held in the rule's `unitBlock`, which a percentage charge never used, so no
+ * database step. Only counts when the rule has a maximum. Null = no flat rate.
+ */
+export function percentFlatFromM2(
+  rule: Pick<SupplierChargeRule, "basis" | "amount" | "amountIncludesGst" | "unitBlock">,
+): number | null {
+  if (percentCapExGst(rule) == null) return null;
+  const n = rule.unitBlock;
+  if (n == null || !Number.isFinite(n) || !(n > 0)) return null;
+  return n;
+}
+
+/**
+ * True when an order of `m2` is big enough to pay the flat amount. 400 m² and
+ * over counts, as the notice only gives the percentage "under 400 m²".
+ * Damien, 12 Nov 2026. No m² known = not flat, the percentage and maximum apply.
+ */
+export function isFlatOrder(flatFromM2: number | null, m2: number | null | undefined): boolean {
+  return flatFromM2 != null && m2 != null && Number.isFinite(m2) && m2 >= flatFromM2 - 1e-9;
+}
+
+/**
+ * A percentage worked out on `base`, held to the rule's maximum. Damien, 12 Nov 2026.
+ * With `m2` given and the rule's flat size reached, the maximum is charged flat.
+ */
 export function cappedPercentExGst(
-  rule: Pick<SupplierChargeRule, "basis" | "amount" | "amountIncludesGst" | "percent">,
+  rule: Pick<SupplierChargeRule, "basis" | "amount" | "amountIncludesGst" | "percent"> & { unitBlock?: number | null },
   base: number,
-): { exGst: number; uncappedExGst: number; capExGst: number | null; capped: boolean } {
+  m2?: number | null,
+): { exGst: number; uncappedExGst: number; capExGst: number | null; capped: boolean; flat: boolean; flatFromM2: number | null } {
   const uncappedExGst = round2((base * (rule.percent ?? 0)) / 100);
   const capExGst = percentCapExGst(rule);
+  const flatFromM2 = percentFlatFromM2(rule);
+  if (capExGst != null && isFlatOrder(flatFromM2, m2)) {
+    return { exGst: capExGst, uncappedExGst, capExGst, capped: false, flat: true, flatFromM2 };
+  }
   const capped = capExGst != null && uncappedExGst > capExGst;
-  return { exGst: capped ? capExGst : uncappedExGst, uncappedExGst, capExGst, capped };
+  return { exGst: capped ? capExGst : uncappedExGst, uncappedExGst, capExGst, capped, flat: false, flatFromM2 };
 }
 
 /** Inside the charge's dated window today. No end date = until further notice. */
@@ -913,6 +951,10 @@ export type ResolvedCharge = {
   capExGst?: number | null;
   /** true when the percentage came to more than the maximum, so the maximum was charged. */
   capped?: boolean;
+  /** true when the order was big enough that the maximum is charged flat. Damien, 12 Nov 2026. */
+  flat?: boolean;
+  /** The m² from which the maximum is charged flat. Null = no flat rate. */
+  flatFromM2?: number | null;
 };
 
 export type SupplierChargeQuote = {
@@ -1028,7 +1070,7 @@ export function resolveSupplierCharges(
     }
     // A percentage reads off the GOODS only. Charges never compound.
     // It never comes to more than the rule's maximum, when it has one (Damien, 12 Nov 2026).
-    const pct = isPercent ? cappedPercentExGst(r, goodsExGst) : null;
+    const pct = isPercent ? cappedPercentExGst(r, goodsExGst, order.m2) : null;
     const gross = pct ? pct.exGst : (r.amount ?? 0) * units;
     // Everything normalises to ex-GST here; GST is added once, at the end.
     const exGst = round2(r.amountIncludesGst && !isPercent ? gross / 1.1 : gross);
@@ -1047,13 +1089,15 @@ export function resolveSupplierCharges(
       note: pct ? percentNote(r, goodsExGst, "goods", pct) : chargeNote(r, units, exGst, goodsExGst),
       capExGst: pct?.capExGst ?? null,
       capped: pct?.capped ?? false,
+      flat: pct?.flat ?? false,
+      flatFromM2: pct?.flatFromM2 ?? null,
     });
   }
 
   if (onCharges.length) {
     const base = round2(goodsExGst + charges.filter((c) => !c.isCredit && !FREIGHT_KINDS.has(c.kind)).reduce((t, c) => t + c.exGst, 0));
     for (const r of onCharges) {
-      const pct = cappedPercentExGst(r, base);
+      const pct = cappedPercentExGst(r, base, order.m2);
       const exGst = pct.exGst;
       const signed = r.isCredit ? -exGst : exGst;
       charges.push({
@@ -1069,6 +1113,8 @@ export function resolveSupplierCharges(
         note: percentNote(r, base, "goods and charges", pct),
         capExGst: pct.capExGst,
         capped: pct.capped,
+        flat: pct.flat,
+        flatFromM2: pct.flatFromM2,
       });
     }
   }
@@ -1104,8 +1150,13 @@ export function resolveSupplierCharges(
 function percentNote(r: SupplierChargeRule, base: number, on: string, pct: ReturnType<typeof cappedPercentExGst>) {
   const money = (n: number) => `\u0024${n.toFixed(2)}`;
   const head = `${r.percent ?? 0}% of ${money(base)} ${on}`;
-  if (pct.capped) return `${head} is ${money(pct.uncappedExGst)}, over the ${money(pct.capExGst ?? 0)} maximum per order, so ${money(pct.exGst)}.`;
-  if (pct.capExGst != null) return `${head} = ${money(pct.exGst)} (maximum ${money(pct.capExGst)} per order).`;
+  const m2 = (n: number) => `${Number(n.toFixed(2))} m²`;
+  if (pct.flat && pct.flatFromM2 != null) {
+    return `Order is ${pct.flatFromM2} m² or more, so ${money(pct.exGst)} flat (${head} would be ${money(pct.uncappedExGst)}).`;
+  }
+  const flatTail = pct.flatFromM2 != null ? ` ${money(pct.capExGst ?? 0)} flat from ${m2(pct.flatFromM2)}.` : "";
+  if (pct.capped) return `${head} is ${money(pct.uncappedExGst)}, over the ${money(pct.capExGst ?? 0)} maximum per order, so ${money(pct.exGst)}.${flatTail}`;
+  if (pct.capExGst != null) return `${head} = ${money(pct.exGst)} (maximum ${money(pct.capExGst)} per order).${flatTail}`;
   return `${head} = ${money(pct.exGst)}.`;
 }
 

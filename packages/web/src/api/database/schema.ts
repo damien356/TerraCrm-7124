@@ -1334,7 +1334,12 @@ export const supplierFeeRules = sqliteTable(
      * Only ever changed by Damien approving a price check, never by itself.
      */
     percentBase: text("percent_base").notNull().default("goods"),
-    /** Charged once per block of this many units, part blocks count whole. Victoria: 40 lm. Null = per unit. */
+    /**
+     * Charged once per block of this many units, part blocks count whole. Victoria: 40 lm. Null = per unit.
+     * On a percentage fee with a maximum it is the order size in m² from which the
+     * maximum is charged flat (Damien, 12 Nov 2026: Forbo, "$180 flat rate for
+     * orders over 400 m²"). Read through percentFlatFromM2 in api/lib/pricing.ts.
+     */
     unitBlock: real("unit_block"),
     /** false = `amount` is ex-GST (the normal case on a supplier schedule). */
     amountIncludesGst: integer("amount_includes_gst", { mode: "boolean" }).notNull().default(false),

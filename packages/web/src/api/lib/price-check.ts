@@ -1,7 +1,7 @@
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { isChargeLive, percentCapExGst, priceProduct, sellExGst, todayISO, type SpecialRow } from "./pricing";
+import { isChargeLive, isFlatOrder, percentCapExGst, percentFlatFromM2, priceProduct, sellExGst, todayISO, type SpecialRow } from "./pricing";
 import { notifyOffice } from "./notify";
 import { FREIGHT_KINDS, type Row } from "./charge-match";
 import { compareInvoice } from "./invoice-compare";
@@ -361,8 +361,25 @@ export async function draftFlags(invoiceId: number): Promise<FlagDraft[]> {
       const cap = percentCapExGst(r);
       const held = (n: number) => (cap != null ? Math.min(n, cap) : n);
       const raw = r2((opsBase * pct) / 100);
-      const expected = held(raw);
+      // Damien, 12 Nov 2026: a big enough order pays the maximum flat (Forbo, $180 from 400 m²).
+      const flatFrom = percentFlatFromM2(r);
+      const m2 = goodsQty.get("m2") ?? null;
+      const flatNow = cap != null && isFlatOrder(flatFrom, m2);
+      const expected = flatNow && cap != null ? cap : held(raw);
       if (!worthFlagging(expected, billed)) continue;
+      if (flatNow && cap != null) {
+        flags.push({
+          ...base,
+          kind: "fee_percent",
+          opsValue: expected,
+          unit: "%",
+          impactExGst: r2(billed - expected),
+          title: `${whose} ${lc(r.name)}: ${$(billed)} billed, Ops expects ${$(expected)} flat`,
+          detail: `${Ref} charges ${$(billed)}. This order is ${Number((m2 ?? 0).toFixed(2))} m², so Ops expects the flat ${$(cap)} for ${flatFrom} m² or more. Check it with ${who}. Nothing is changed by itself.`,
+          change: null,
+        });
+        continue;
+      }
       const altBase = onCharges ? goodsTotal : goodsTotal + others;
       const altExpected = held(r2((altBase * pct) / 100));
       const impact = r2(billed - expected);
@@ -454,10 +471,17 @@ export async function draftFlags(invoiceId: number): Promise<FlagDraft[]> {
     const qty = r.basis === "percent_of_order" || flat ? null : (goodsQty.get(r.basis) ?? null);
     if (r.basis !== "percent_of_order" && !flat && qty == null) continue; // no goods in that unit to work it out on
     const cap = percentCapExGst(r);
+    const flatFrom = percentFlatFromM2(r);
+    const flatNow = r.basis === "percent_of_order" && cap != null && isFlatOrder(flatFrom, goodsQty.get("m2") ?? null);
     const pctOf = r2((goodsTotal * (r.percent ?? 0)) / 100);
-    const expected = r.basis === "percent_of_order" ? (cap != null ? Math.min(pctOf, cap) : pctOf) : r2(ruleAmountEx(r) * (qty ?? 1));
+    const expected =
+      r.basis === "percent_of_order" ? (flatNow && cap != null ? cap : cap != null ? Math.min(pctOf, cap) : pctOf) : r2(ruleAmountEx(r) * (qty ?? 1));
     if (expected < 0.5) continue;
-    const rate = r.basis === "percent_of_order" ? `${r.percent}%${cap != null ? ` (maximum ${$(cap)} per order)` : ""}` : `${$(ruleAmountEx(r))} ${per(r.basis)}`;
+    const flatWords = flatFrom != null && cap != null ? `, ${$(cap)} flat from ${flatFrom} m²` : "";
+    const rate =
+      r.basis === "percent_of_order"
+        ? `${r.percent}%${cap != null ? ` (maximum ${$(cap)} per order${flatWords})` : ""}`
+        : `${$(ruleAmountEx(r))} ${per(r.basis)}`;
     flags.push({
       kind: "missing_charge",
       key: `${invoiceId}:f:${r.id}`,

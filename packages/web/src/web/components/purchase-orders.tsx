@@ -709,7 +709,7 @@ function PoEditor({
                   // Damien, 12 Nov 2026: on a percentage charge the amount is its maximum per order.
                   const rate =
                     r.basis === "percent_of_order"
-                      ? `${r.percent ?? 0}%${(r.amount ?? 0) > 0 ? `, max $${(r.amount ?? 0).toFixed(2)}` : ""}`
+                      ? `${r.percent ?? 0}%${(r.amount ?? 0) > 0 ? `, max $${(r.amount ?? 0).toFixed(2)}${(r.unitBlock ?? 0) > 0 ? `, flat from ${r.unitBlock} m²` : ""}` : ""}`
                       : `$${(r.amount ?? 0).toFixed(2)}${r.basis === "order" ? "" : ` / ${r.basis}`}`;
                   return (
                     <li key={r.id}>

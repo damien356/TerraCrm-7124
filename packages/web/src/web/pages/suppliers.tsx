@@ -237,7 +237,14 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
       // Damien, 12 Nov 2026: on a percentage the amount is its maximum per order. Blank = no maximum.
       amount: isPercent ? (Number(form.amount) > 0 ? Number(form.amount) : null) : Number(form.amount || 0),
       percent: isPercent ? Number(form.percent || 0) : null,
-      unitBlock: !isPercent && Number(form.unitBlock) > 0 ? Number(form.unitBlock) : null,
+      // Damien, 12 Nov 2026: on a percentage with a maximum, unitBlock is the m² from which the maximum is charged flat.
+      unitBlock: isPercent
+        ? Number(form.amount) > 0 && Number(form.unitBlock) > 0
+          ? Number(form.unitBlock)
+          : null
+        : Number(form.unitBlock) > 0
+          ? Number(form.unitBlock)
+          : null,
       amountIncludesGst: form.amountIncludesGst,
       isCredit: form.isCredit,
       autoApply: form.autoApply,
@@ -312,6 +319,21 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
                 value={form.amount}
                 onChange={(e) => setForm({ ...form, amount: e.target.value })}
                 placeholder="180.00"
+              />
+            </Field>
+            {/* Damien, 12 Nov 2026: Forbo, "$180 flat rate for orders over 400 m²". */}
+            <Field
+              label="Flat maximum from (m², optional)"
+              hint="Orders this many m² or more pay the maximum as a flat amount, whatever the percentage comes to. Needs a maximum. Blank = none."
+            >
+              <Input
+                type="number"
+                step="1"
+                min="0"
+                value={form.unitBlock}
+                disabled={!(Number(form.amount) > 0)}
+                onChange={(e) => setForm({ ...form, unitBlock: e.target.value })}
+                placeholder="400"
               />
             </Field>
           </div>
@@ -1143,6 +1165,23 @@ export default function SuppliersPage() {
                                   if (next !== ((f.amount ?? 0) > 0 ? f.amount : null)) feeUpdate.mutate({ id: f.id, amount: next });
                                 }}
                               />
+                              {/* Damien, 12 Nov 2026: orders this many m² or more pay the maximum flat. Blank = no flat rate. */}
+                              <Input
+                                type="number"
+                                step="1"
+                                min="0"
+                                className="mt-1.5 h-8 text-right"
+                                aria-label={`${f.name} flat maximum from m²`}
+                                title="Orders this many m² or more pay the maximum as a flat amount. Needs a maximum. Leave blank for none."
+                                placeholder="Flat from m²"
+                                disabled={!((f.amount ?? 0) > 0)}
+                                defaultValue={(f.unitBlock ?? 0) > 0 ? String(f.unitBlock) : ""}
+                                onBlur={(e) => {
+                                  const v = Number(e.target.value);
+                                  const next = v > 0 ? v : null;
+                                  if (next !== ((f.unitBlock ?? 0) > 0 ? f.unitBlock : null)) feeUpdate.mutate({ id: f.id, unitBlock: next });
+                                }}
+                              />
                             </>
                           ) : (
                             <Input
@@ -1156,7 +1195,8 @@ export default function SuppliersPage() {
                           <p className="mt-1 text-right text-[11px] text-muted-foreground">
                             {f.basis === "percent_of_order" && f.percentBase === "goods_and_charges" ? "% of goods and charges" : BASIS_LABEL[f.basis]}
                             {f.basis === "percent_of_order" && (f.amount ?? 0) > 0 ? ` · max ${money(f.amount ?? 0)} an order` : ""}
-                            {f.unitBlock ? ` · per ${f.unitBlock} or part` : ""}
+                            {f.unitBlock && f.basis !== "percent_of_order" ? ` · per ${f.unitBlock} or part` : ""}
+                            {f.unitBlock && f.basis === "percent_of_order" && (f.amount ?? 0) > 0 ? ` · flat from ${f.unitBlock} m²` : ""}
                             {f.amountIncludesGst ? " · inc GST" : ""}
                           </p>
                         </div>

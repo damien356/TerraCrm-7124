@@ -7,6 +7,10 @@
  * the rule's amount, which a percentage charge never used, so there is no
  * database step.
  *
+ * The same notice: "$180 flat rate for orders over 400 m²". A percentage with a
+ * maximum can also take a size in m², held in the rule's unitBlock. An order of
+ * that size or more pays the maximum flat (Damien, 12 Nov 2026).
+ *
  * Part 1 is pure: the rule maths, and the quote and sale charge lines.
  * Part 2 runs the real PO pricing and the invoice price check on a throwaway
  * database file built from schema.ts. Network is blocked and office alerts are
@@ -36,7 +40,7 @@ process.env.VITE_RUNABLE_AUTH_ISSUER ??= "https://auth.example.invalid";
 delete process.env.XERO_CLIENT_ID;
 delete process.env.XERO_CLIENT_SECRET;
 
-const { cappedPercentExGst, percentCapExGst, resolveSupplierCharges } = await import("../src/api/lib/pricing");
+const { cappedPercentExGst, isFlatOrder, percentCapExGst, percentFlatFromM2, resolveSupplierCharges } = await import("../src/api/lib/pricing");
 const { planQuoteFreight } = await import("../src/api/lib/quote-freight");
 
 const TODAY = "2026-11-12";
@@ -71,10 +75,11 @@ describe("the maximum on the rule", () => {
     expect(percentCapExGst(fuel({ amount: 198, amountIncludesGst: true }))).toBe(180);
   });
   test("whichever is less", () => {
-    expect(cappedPercentExGst(fuel(), 1000)).toEqual({ exGst: 15, uncappedExGst: 15, capExGst: 180, capped: false });
-    expect(cappedPercentExGst(fuel(), 15000)).toEqual({ exGst: 180, uncappedExGst: 225, capExGst: 180, capped: true });
+    const none = { flat: false, flatFromM2: null };
+    expect(cappedPercentExGst(fuel(), 1000)).toEqual({ exGst: 15, uncappedExGst: 15, capExGst: 180, capped: false, ...none });
+    expect(cappedPercentExGst(fuel(), 15000)).toEqual({ exGst: 180, uncappedExGst: 225, capExGst: 180, capped: true, ...none });
     // Exactly at the maximum is not "capped": the percentage already came to it.
-    expect(cappedPercentExGst(fuel(), 12000)).toEqual({ exGst: 180, uncappedExGst: 180, capExGst: 180, capped: false });
+    expect(cappedPercentExGst(fuel(), 12000)).toEqual({ exGst: 180, uncappedExGst: 180, capExGst: 180, capped: false, ...none });
   });
 });
 
@@ -145,6 +150,57 @@ describe("quote and Sell products charge lines", () => {
   });
 });
 
+/*
+ * Flat over a size (Damien, 12 Nov 2026). Forbo: "$180 flat rate for orders
+ * over 400 m²". The m² is held in the rule's unitBlock. 400 m² and over is flat.
+ */
+describe("flat maximum from a size", () => {
+  const flat = (o: Partial<SupplierChargeRule> = {}) => fuel({ unitBlock: 400, ...o });
+  test("only with a maximum, and only a real size", () => {
+    expect(percentFlatFromM2(flat())).toBe(400);
+    expect(percentFlatFromM2(flat({ amount: null }))).toBeNull();
+    expect(percentFlatFromM2(flat({ unitBlock: 0 }))).toBeNull();
+    expect(percentFlatFromM2(fuel())).toBeNull();
+    expect(percentFlatFromM2(flat({ basis: "lm", percent: null }))).toBeNull();
+  });
+  test("400 m² and over is flat, 399.99 m² is not, no m² known is not", () => {
+    expect(isFlatOrder(400, 400)).toBe(true);
+    expect(isFlatOrder(400, 650)).toBe(true);
+    expect(isFlatOrder(400, 399.99)).toBe(false);
+    expect(isFlatOrder(400, undefined)).toBe(false);
+    expect(isFlatOrder(null, 900)).toBe(false);
+  });
+  test("a big cheap order pays $180 flat even though 1.5% is less", () => {
+    expect(cappedPercentExGst(flat(), 6000, 450)).toEqual({ exGst: 180, uncappedExGst: 90, capExGst: 180, capped: false, flat: true, flatFromM2: 400 });
+    expect(cappedPercentExGst(flat(), 6000, 399)).toEqual({ exGst: 90, uncappedExGst: 90, capExGst: 180, capped: false, flat: false, flatFromM2: 400 });
+    expect(cappedPercentExGst(flat(), 15000, 399).exGst).toBe(180);
+    expect(cappedPercentExGst(flat(), 6000).exGst).toBe(90);
+  });
+  test("a size with no maximum does nothing", () => {
+    expect(cappedPercentExGst(flat({ amount: null }), 6000, 900)).toEqual({ exGst: 90, uncappedExGst: 90, capExGst: null, capped: false, flat: false, flatFromM2: null });
+  });
+  test("on an order, with the line saying why", () => {
+    const big = resolve([flat()], 9000, { m2: 450 });
+    expect(big.charges[0]!.exGst).toBe(180);
+    expect(big.charges[0]!.flat).toBe(true);
+    expect(big.charges[0]!.note).toBe("Order is 400 m² or more, so $180.00 flat (1.5% of $9000.00 goods would be $135.00).");
+    const small = resolve([flat()], 5000, { m2: 250 });
+    expect(small.charges[0]!.exGst).toBe(75);
+    expect(small.charges[0]!.note).toBe("1.5% of $5000.00 goods = $75.00 (maximum $180.00 per order). $180.00 flat from 400 m².");
+  });
+  test("a fixed charge with a block of 40 lm still bills per block", () => {
+    const q = resolve([{ ...fuel({ id: 5, name: "Cut", kind: "cutting", basis: "lm", amount: 35, percent: null, unitBlock: 40 }) }], 1000, { lm: 41 });
+    expect(q.charges[0]!.exGst).toBe(70);
+  });
+  test("quote line says flat", () => {
+    const product: FreightProduct = { id: 1, supplierId: 7, category: "vinyl", unit: "m2" };
+    const l: FreightLine = { id: 1, productId: 1, lineType: "material", kind: "supply", qty: 450, unitCost: 20, unitPrice: 32, listUnitPrice: null, freightUnitCost: null };
+    const p = planQuoteFreight([l], new Map([[1, product]]), new Map([[7, { id: 7, name: "Flooring Distributors" }]]), [{ ...flat(), supplierId: 7, appliesTo: "both" } as FreightRule], 0, TODAY);
+    expect(p.charges[0]!.unitCost).toBe(180);
+    expect(p.charges[0]!.description).toBe("Supplier charge: Flooring Distributors, Fuel Surcharge (flat $180.00, 400 m² or more)");
+  });
+});
+
 /* ================================ part 2 ================================ */
 
 const realFetch = globalThis.fetch;
@@ -159,6 +215,8 @@ let m: {
 const SUP = 70;
 const FUEL = 700;
 const RAW = 701;
+const SUP2 = 71;
+const FLAT = 710;
 
 beforeAll(async () => {
   globalThis.fetch = (async (input: unknown) => {
@@ -179,6 +237,10 @@ beforeAll(async () => {
   await m.db.insert(schema.supplierFeeRules).values([
     { id: FUEL, supplierId: SUP, name: "Fuel Surcharge", kind: "fuel", basis: "percent_of_order", amount: 180, percent: 1.5, autoApply: true, active: true, effectiveFrom: "2026-10-28", appliesTo: "both" },
     { id: RAW, supplierId: SUP, name: "Raw material surcharge", kind: "other", basis: "percent_of_order", amount: null, percent: 6.1, autoApply: true, active: true, effectiveFrom: "2026-10-28", appliesTo: "both" },
+  ] as any);
+  await m.db.insert(schema.suppliers).values({ id: SUP2, name: "Flat Test Flooring", code: "flattest", deliversTo: "both", deliversDirect: true } as any);
+  await m.db.insert(schema.supplierFeeRules).values([
+    { id: FLAT, supplierId: SUP2, name: "Fuel Surcharge", kind: "fuel", basis: "percent_of_order", amount: 180, percent: 1.5, unitBlock: 400, autoApply: true, active: true, effectiveFrom: "2026-10-28", appliesTo: "both" },
   ] as any);
 }, 60_000);
 
@@ -206,24 +268,32 @@ describe("purchase order", () => {
     const p = await m.po.pricePo({ supplierId: SUP, deliverTo: "site", lines: [goods(100, 20)] }, TODAY);
     expect(p.lines.find((l) => l.description === "Fuel Surcharge")!.totalExGst).toBe(30);
   });
+  test("flat from 400 m²: 450 m² at $20 is $180 flat, 399 m² at $20 is 1.5%", async () => {
+    const big = await m.po.pricePo({ supplierId: SUP2, deliverTo: "warehouse", lines: [goods(450, 20)] }, TODAY);
+    const f = big.lines.find((l) => l.description === "Fuel Surcharge")!;
+    expect(f.totalExGst).toBe(180);
+    expect(f.note).toContain("400 m² or more, so $180.00 flat");
+    const small = await m.po.pricePo({ supplierId: SUP2, deliverTo: "warehouse", lines: [goods(399, 20)] }, TODAY);
+    expect(small.lines.find((l) => l.description === "Fuel Surcharge")!.totalExGst).toBe(119.7);
+  });
 });
 
 let invSeq = 0;
-async function invoice(lines: { description: string; qty: number | null; unit: string | null; unitPriceExGst: number | null; totalExGst: number | null }[]) {
+async function invoice(lines: { description: string; qty: number | null; unit: string | null; unitPriceExGst: number | null; totalExGst: number | null }[], sup = SUP) {
   const n = ++invSeq;
   const goodsEx = lines[0]!.totalExGst!;
   const total = lines.reduce((a, l) => a + (l.totalExGst ?? 0), 0);
   const [po] = await m.db
     .insert(schema.purchaseOrders)
-    .values({ number: `PO18899${n}-1`, supplierId: SUP, status: "invoiced", kind: "job", totalExGst: total, goodsExGst: goodsEx } as any)
+    .values({ number: `PO18899${n}-1`, supplierId: sup, status: "invoiced", kind: "job", totalExGst: total, goodsExGst: goodsEx } as any)
     .returning();
   const [inv] = await m.db
     .insert(schema.supplierInvoices)
     .values({
-      supplierId: SUP,
-      supplierNameRaw: "Cap Test Flooring",
+      supplierId: sup,
+      supplierNameRaw: sup === SUP ? "Cap Test Flooring" : "Flat Test Flooring",
       invoiceNumber: `CT${n}`,
-      dedupeKey: `${SUP}|ct${n}|${n}`,
+      dedupeKey: `${sup}|ct${n}|${n}`,
       poRefRaw: po!.number,
       poId: po!.id,
       invoiceDate: TODAY,
@@ -266,6 +336,33 @@ describe("invoice price check", () => {
     expect(f[0]!.kind).toBe("missing_charge");
     expect(f[0]!.opsValue).toBe(180);
     expect(f[0]!.detail).toContain("1.5% (maximum $180.00 per order)");
+  });
+  const cheap = { description: "Test sheet vinyl", qty: 450, unit: "m2", unitPriceExGst: 20, totalExGst: 9000 };
+  const flatFlags = async (id: number) => (await m.pc.draftFlags(id)).filter((f) => f.feeRuleId === FLAT);
+  test("flat: 450 m² billed $180 is right, nothing to flag", async () => {
+    const id = await invoice([cheap, { description: "Fuel Surcharge", qty: 1, unit: null, unitPriceExGst: 180, totalExGst: 180 }], SUP2);
+    expect(await flatFlags(id)).toEqual([]);
+  });
+  test("flat: 450 m² billed 1.5% ($135) is flagged against $180, nothing offered to change", async () => {
+    const id = await invoice([cheap, { description: "Fuel Surcharge", qty: 1, unit: null, unitPriceExGst: 135, totalExGst: 135 }], SUP2);
+    const f = await flatFlags(id);
+    expect(f).toHaveLength(1);
+    expect(f[0]!.opsValue).toBe(180);
+    expect(f[0]!.impactExGst).toBe(-45);
+    expect(f[0]!.change).toBeNull();
+    expect(f[0]!.detail).toContain("This order is 450 m², so Ops expects the flat $180.00 for 400 m² or more");
+  });
+  test("flat: 399 m² billed 1.5% is right", async () => {
+    const id = await invoice([{ ...cheap, qty: 399, totalExGst: 7980 }, { description: "Fuel Surcharge", qty: 1, unit: null, unitPriceExGst: 119.7, totalExGst: 119.7 }], SUP2);
+    expect(await flatFlags(id)).toEqual([]);
+  });
+  test("flat: no fuel line on 450 m² is missing at $180", async () => {
+    const id = await invoice([cheap], SUP2);
+    const f = await flatFlags(id);
+    expect(f).toHaveLength(1);
+    expect(f[0]!.kind).toBe("missing_charge");
+    expect(f[0]!.opsValue).toBe(180);
+    expect(f[0]!.detail).toContain("1.5% (maximum $180.00 per order, $180.00 flat from 400 m²)");
   });
   test("nothing left the machine", () => {
     expect(blocked).toEqual([]);

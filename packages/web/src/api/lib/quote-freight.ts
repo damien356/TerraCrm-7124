@@ -191,7 +191,10 @@ const lineUnitOf = (basis: string) =>
 /** "(1 pallet)", "(2.1%)", "(1.5%, capped at $180.00)", or nothing for a flat charge. */
 function countText(c: ResolvedCharge) {
   // Damien, 12 Nov 2026: a percentage held to its maximum says so on the line.
-  if (c.basis === "percent_of_order") return ` (${c.percent ?? 0}%${c.capped && c.capExGst != null ? `, capped at \u0024${c.capExGst.toFixed(2)}` : ""})`;
+  if (c.basis === "percent_of_order") {
+    if (c.flat && c.capExGst != null) return ` (flat \u0024${c.capExGst.toFixed(2)}, ${c.flatFromM2} m² or more)`;
+    return ` (${c.percent ?? 0}%${c.capped && c.capExGst != null ? `, capped at \u0024${c.capExGst.toFixed(2)}` : ""})`;
+  }
   const u = UNIT_OF[c.basis];
   if (!u) return "";
   return ` (${r2(c.units)} ${c.units === 1 ? u[0] : u[1]})`;
