@@ -20,6 +20,7 @@ import {
   toLocalInput,
   useAddPayTerms,
   useApproveTime,
+  useBulkApproveTime,
   useCorrectTime,
   useDecideBreak,
   useHourlyQueue,
@@ -97,6 +98,16 @@ function TimeTab({ canSeeCosts }: { canSeeCosts: boolean }) {
   const workers = useHourlyWorkers();
   const q = useHourlyQueue({ status, installerId: installerId ? Number(installerId) : undefined, jobId: jobParam ? Number(jobParam) : undefined });
   const d = q.data;
+  const [picked, setPicked] = React.useState<Set<number>>(new Set());
+  const ready = React.useMemo(() => (d ? d.rows.filter(canBulkApprove) : []), [d]);
+  const pickedRows = ready.filter((r) => picked.has(r.id));
+  const toggle = (id: number) =>
+    setPicked((p) => {
+      const n = new Set(p);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
 
   return (
     <>
@@ -130,6 +141,7 @@ function TimeTab({ canSeeCosts }: { canSeeCosts: boolean }) {
               <Field label="Show" className="w-[150px]">
                 <Select value={status} onChange={(e) => setStatus(e.target.value as QueueStatus)} className="h-8">
                   <option value="todo">To check</option>
+                  <option value="disputed">He asked for a fix</option>
                   <option value="approved">Approved</option>
                   <option value="rejected">Rejected</option>
                   <option value="all">Everything</option>
@@ -151,14 +163,17 @@ function TimeTab({ canSeeCosts }: { canSeeCosts: boolean }) {
             </div>
           }
         />
+        {d && ready.length ? (
+          <BulkBar rows={ready} picked={pickedRows} canSeeCosts={canSeeCosts} onPickAll={(all) => setPicked(all ? new Set(ready.map((r) => r.id)) : new Set())} onDone={() => setPicked(new Set())} />
+        ) : null}
         {q.isLoading ? (
           <Loading />
         ) : !d || !d.rows.length ? (
-          <Empty>{status === "todo" ? "Nothing waiting to be checked." : "No time entries here."}</Empty>
+          <Empty>{status === "todo" ? "Nothing waiting to be checked." : status === "disputed" ? "No corrections asked for." : "No time entries here."}</Empty>
         ) : (
           <ul className="divide-y divide-border">
             {d.rows.map((r) => (
-              <SessionRow key={r.id} r={r} q={d} canSeeCosts={canSeeCosts} />
+              <SessionRow key={r.id} r={r} q={d} canSeeCosts={canSeeCosts} pick={canBulkApprove(r) ? { on: picked.has(r.id), toggle: () => toggle(r.id) } : null} />
             ))}
           </ul>
         )}
@@ -170,7 +185,83 @@ function TimeTab({ canSeeCosts }: { canSeeCosts: boolean }) {
 
 const BAND_BLOCKER = /^Rate band not confirmed|^Confirmed band minutes/;
 
-function SessionRow({ r, q, canSeeCosts }: { r: Row; q: Queue; canSeeCosts: boolean }) {
+/** The split shown on the row: confirmed, or the suggested one. */
+const shownSplit = (r: Row) => r.confirmedSplit ?? r.suggestedSplit;
+
+/**
+ * Can go in a bulk approval (Damien, 13 Nov 2026): finished, nothing left to
+ * decide but the band, and the shown split adds up. Anything else is approved
+ * one at a time, after it is checked.
+ */
+function canBulkApprove(r: Row) {
+  if (r.status !== "recorded") return false;
+  if (r.blockers.some((b) => !BAND_BLOCKER.test(b))) return false;
+  return shownSplit(r).reduce((a, p) => a + p.minutes, 0) === r.payableMinutes;
+}
+
+function BulkBar({ rows, picked, canSeeCosts, onPickAll, onDone }: { rows: Row[]; picked: Row[]; canSeeCosts: boolean; onPickAll: (all: boolean) => void; onDone: () => void }) {
+  const bulk = useBulkApproveTime();
+  const [result, setResult] = React.useState<{ approved: number; skipped: Array<{ sessionId: number; reason: string }> } | null>(null);
+  const mins = picked.reduce((a, r) => a + r.payableMinutes, 0);
+  const amount = picked.reduce((a, r) => a + (r.estimate?.total ?? 0), 0);
+  const allOn = picked.length === rows.length;
+  const who = (id: number) => rows.find((r) => r.id === id);
+  return (
+    <div className="border-b border-border bg-secondary/40 px-4 py-2.5 text-xs">
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="inline-flex items-center gap-2 font-medium">
+          <Checkbox checked={allOn && rows.length > 0} onChange={(e) => onPickAll(e.target.checked)} />
+          Select all ready ({rows.length})
+        </label>
+        <span className="text-muted-foreground">
+          {picked.length} selected · {hours(mins)}
+          {canSeeCosts && picked.length ? ` · about ${money(amount)} excl GST` : ""}
+        </span>
+        <Button
+          size="sm"
+          disabled={!picked.length || bulk.isPending}
+          onClick={() =>
+            bulk.mutate(
+              { items: picked.map((r) => ({ sessionId: r.id, split: shownSplit(r).filter((p) => p.minutes > 0) })) },
+              {
+                onSuccess: (res) => {
+                  setResult({ approved: res.approved.length, skipped: res.skipped });
+                  onDone();
+                },
+              },
+            )
+          }
+        >
+          Approve selected
+        </Button>
+        <span className="text-muted-foreground">Each one gets the same checks as approving it on its own.</span>
+      </div>
+      {bulk.error ? <p className="mt-1 text-destructive">{bulk.error.message}</p> : null}
+      {result ? (
+        <div className="mt-1.5">
+          <p className="text-[#3E6B4F]">
+            Approved {result.approved}.{result.skipped.length ? ` ${result.skipped.length} left as they were:` : ""}
+          </p>
+          {result.skipped.length ? (
+            <ul className="mt-0.5 list-disc pl-5 text-[#8a5a12]">
+              {result.skipped.map((x) => {
+                const r = who(x.sessionId);
+                return (
+                  <li key={x.sessionId}>
+                    {r ? `${dayLabel(r.workDate)}, ${r.installerName}, ${r.taskRef}: ` : ""}
+                    {x.reason}
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SessionRow({ r, q, canSeeCosts, pick }: { r: Row; q: Queue; canSeeCosts: boolean; pick?: { on: boolean; toggle: () => void } | null }) {
   const [mode, setMode] = React.useState<null | "correct" | "reject" | "unapprove" | "history">(null);
   const decide = useDecideBreak();
   const approve = useApproveTime();
@@ -190,6 +281,7 @@ function SessionRow({ r, q, canSeeCosts }: { r: Row; q: Queue; canSeeCosts: bool
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
+            {pick ? <Checkbox checked={pick.on} onChange={pick.toggle} aria-label="Select for bulk approval" /> : null}
             <span className="text-sm font-semibold">{dayLabel(r.workDate)}</span>
             <span className="text-sm">{r.installerName}</span>
             <span className="tabular text-xs text-muted-foreground">{r.taskRef}</span>
@@ -286,7 +378,12 @@ function SessionRow({ r, q, canSeeCosts }: { r: Row; q: Queue; canSeeCosts: bool
               <p className="text-muted-foreground">by {r.approvedByName}</p>
             </>
           ) : canSeeCosts && r.estimate ? (
-            <p className="tabular text-muted-foreground">about {money(r.estimate.total)} at today's terms</p>
+            <>
+              <p className="tabular text-muted-foreground">about {money(r.estimate.total)} at today's terms</p>
+              {r.estimate.lines.length ? (
+                <p className="tabular text-muted-foreground">{r.estimate.lines.some((l) => !(l.rate > 0)) ? "Rate to confirm" : `${[...new Set(r.estimate.lines.map((l) => `${money(l.rate)}/h`))].join(", ")} excl GST`}</p>
+              ) : null}
+            </>
           ) : null}
         </div>
       </div>
@@ -920,7 +1017,7 @@ function TermsTab() {
   const [installerId, setInstallerId] = React.useState("");
   const terms = usePayTerms(installerId ? Number(installerId) : null);
   const add = useAddPayTerms();
-  const [f, setF] = React.useState({ baseRate: "47", weekend: "1.5", night: "2", gst: false, gstNote: "", from: "", note: "" });
+  const [f, setF] = React.useState({ baseRate: "", weekend: "1.5", night: "2", gst: false, gstNote: "", from: "", note: "" });
   const base = Number(f.baseRate) || 0;
   const r2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -950,7 +1047,7 @@ function TermsTab() {
             <Loading />
           ) : !terms.data?.length ? (
             <p className="text-sm text-muted-foreground">
-              Contractor labor - per hour: <span className="tabular">$0.00</span> <span className="font-medium text-warning">Rate not set</span>. He is paid the usual way,
+              Contractor labour — per hour: <span className="font-medium text-warning">Rate to confirm</span>. He is paid the usual way,
               and hourly work can't be offered, approved or invoiced for him until a rate is added below.
             </p>
           ) : (
@@ -1005,7 +1102,11 @@ function TermsTab() {
               </label>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              {money(base)} standard, {money(r2(base * (Number(f.weekend) || 1)))} weekend, {money(r2(base * (Number(f.night) || 1)))} night. Night replaces weekend.
+              {/* Damien, 13 Nov 2026: no default rate, and never an apparent $0.00. Saved to the rate card item too. */}
+              {base > 0
+                ? `${money(base)} standard, ${money(r2(base * (Number(f.weekend) || 1)))} weekend, ${money(r2(base * (Number(f.night) || 1)))} night. Night replaces weekend.`
+                : "Type the agreed hourly rate. There is no default."}{" "}
+              The rate is also saved on his rate card as Contractor labour — per hour.
             </p>
             <div className="mt-2 grid gap-3 sm:grid-cols-2">
               <Field label="GST note (who confirmed it, when)">

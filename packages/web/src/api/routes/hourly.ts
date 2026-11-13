@@ -8,6 +8,8 @@ import { ownTaskOrThrow } from "./field";
 import { addLocalDays, localDate } from "../lib/local-date";
 import { jobText, taskRef } from "../lib/refs";
 import { checkJobBudget } from "../lib/hourly-budget";
+import { accessOn, itemOpenTo } from "../lib/rate-access";
+import { rateBook } from "./labour";
 import { BANDS, CATEGORIES, CATEGORY_LABEL, BAND_LABEL, type SplitPart } from "../lib/hourly-calc";
 import {
   BREAK_POLICIES,
@@ -18,6 +20,7 @@ import {
   hourlySettings,
   jobHourlyCosting,
   logTime,
+  hourlyItemId,
   myHourlySummary,
   ownRatesView,
   pendingSettings,
@@ -358,7 +361,8 @@ const crew = {
     .handler(async ({ input, context }) => {
       const s = await mineOr403(input.sessionId, context.installerId);
       if (s.invoiceId) throw new ORPCError("BAD_REQUEST", { message: "This time is already on your invoice. Talk to the office." });
-      if (s.status === "approved") throw new ORPCError("BAD_REQUEST", { message: "This time is already approved. Talk to the office." });
+      // Damien, 13 Nov 2026: approved but not invoiced goes back to the office to approve again.
+      if (s.status === "approved") await unapproveSession(s.id, actorOf(context.actor), `Correction asked for: ${input.note}`);
       await db
         .update(schema.workSessions)
         .set({ correctionRequestedAt: new Date(), correctionNote: input.note, updatedAt: new Date() })
@@ -377,7 +381,8 @@ const office = {
   queue: staffOnly
     .input(
       z.object({
-        status: z.enum(["open", "recorded", "approved", "rejected", "todo", "all"]).default("todo"),
+        /** disputed: he asked for a correction (Damien, 13 Nov 2026). */
+        status: z.enum(["open", "recorded", "approved", "rejected", "todo", "disputed", "all"]).default("todo"),
         installerId: z.number().optional(),
         jobId: z.number().optional(),
         taskId: z.number().optional(),
@@ -389,7 +394,9 @@ const office = {
       const conds = [
         input.status === "todo"
           ? sql`${schema.workSessions.status} in ('open','recorded')`
-          : input.status === "all"
+          : input.status === "disputed"
+            ? sql`${schema.workSessions.status} = 'recorded' and ${schema.workSessions.correctionRequestedAt} is not null`
+            : input.status === "all"
             ? sql`1 = 1`
             : eq(schema.workSessions.status, input.status),
       ];
@@ -582,6 +589,42 @@ const office = {
       const [v] = await viewSessions(and(eq(schema.workSessions.id, input.sessionId)));
       if (v) await checkJobBudget(v.jobId);
       return (await officeRows([v!], context.actor.canSeeCosts))[0]!;
+    }),
+
+  /**
+   * Approve many at once (Damien, 13 Nov 2026). Each one goes through the
+   * same checks as a single approval; any that can't be approved are left as
+   * they are and come back with the reason. The split sent is the one shown on
+   * the row (confirmed, or the suggested one), as the single Approve does.
+   */
+  bulkApprove: staffOnly
+    .input(
+      z.object({
+        items: z
+          .array(z.object({ sessionId: z.number().int(), split: split.optional() }))
+          .min(1)
+          .max(200),
+      }),
+    )
+    .handler(async ({ input, context }) => {
+      const done: number[] = [];
+      const skipped: Array<{ sessionId: number; reason: string }> = [];
+      const jobs = new Set<number>();
+      const seenIds = new Set<number>();
+      for (const item of input.items) {
+        const id = item.sessionId;
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+        try {
+          const s = await approveSession(id, actorOf(context.actor), item.split?.length ? item.split : null);
+          done.push(id);
+          jobs.add(s.jobId);
+        } catch (e) {
+          skipped.push({ sessionId: id, reason: String((e as Error)?.message ?? e) });
+        }
+      }
+      for (const j of jobs) await checkJobBudget(j);
+      return { approved: done, skipped };
     }),
 
   unapprove: staffOnly
@@ -953,8 +996,26 @@ const costs = {
         after: row,
         reason: input.note,
       });
+      await mirrorToRateCard(input.installerId, input.baseRate, input.effectiveFrom, actorOf(context.actor).name);
       return row!;
     }),
 };
+
+/**
+ * Damien, 13 Nov 2026: the hourly rate lives on the rate card item
+ * "Contractor labour — per hour". A rate typed on the pay terms is written
+ * there too, from the same date, so the two never disagree. Nothing happens
+ * before the item exists.
+ */
+async function mirrorToRateCard(installerId: number, amount: number, effectiveFrom: string, actorName: string) {
+  const itemId = await hourlyItemId();
+  if (itemId == null) return;
+  const [item] = await db.select({ id: schema.labourRateItems.id, restricted: schema.labourRateItems.restricted }).from(schema.labourRateItems).where(eq(schema.labourRateItems.id, itemId));
+  if (!item) return;
+  await rateBook.writeRate({ itemId, installerId, amount, minimumCharge: null, effectiveFrom, note: "From his hourly pay terms", actorName });
+  if (item.restricted && !itemOpenTo(item, installerId, await accessOn([installerId], effectiveFrom))) {
+    await db.insert(schema.installerRateItemAccess).values({ installerId, itemId, enabled: true, effectiveFrom, note: "Hourly pay terms", createdByName: actorName });
+  }
+}
 
 export const hourly = { ...crew, ...office, ...costs };

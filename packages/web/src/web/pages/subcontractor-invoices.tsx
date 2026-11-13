@@ -17,6 +17,20 @@ import {
   useSubcontractorInvoices,
   useVariationRequests,
 } from "../queries/installerInvoices";
+import { useInvoiceBalances, useInvoiceEntries, useRecordPayment } from "../queries/hourlyInvoices";
+
+type Balance = NonNullable<ReturnType<typeof useInvoiceBalances>["data"]>[number];
+
+const STATE_COLOUR: Record<string, string> = { awaiting_payment: "#C0603F", part_paid: "#D08A1E", paid: "#3F7D3A" };
+
+function sayYmd(ymd: string | null | undefined) {
+  if (!ymd) return "";
+  return new Date(`${ymd}T12:00:00+10:00`).toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short", year: "numeric" });
+}
+
+function todayBrisbane() {
+  return new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
 
 /**
  * SUBCONTRACTOR INVOICES.
@@ -154,10 +168,15 @@ function VariationQueue({ installerName }: { installerName: (id: number) => stri
 function InvoiceRow({
   row,
   installerName,
+  bal,
+  canSeeCosts,
 }: {
   row: NonNullable<ReturnType<typeof useSubcontractorInvoices>["data"]>[number];
   installerName: (id: number) => string;
+  bal: Balance | null;
+  canSeeCosts: boolean;
 }) {
+  const byDates = bal?.kind === "period";
   const setStatus = useSetInvoiceStatus();
   const pdf = useInvoicePdfUrl();
   const [open, setOpen] = React.useState(false);
@@ -204,10 +223,21 @@ function InvoiceRow({
         </td>
         <td className="px-4 py-2.5 text-[13px]">{installerName(row.installerId)}</td>
         <td className="px-4 py-2.5 text-xs text-muted-foreground">
-          <Link to={`/jobs/${row.jobId}`} className="text-primary hover:underline">
-            #{row.jobNumber}
-          </Link>
-          <p className="truncate">{row.taskTitle}</p>
+          {byDates ? (
+            <>
+              <p className="font-medium text-foreground">Hourly, by dates</p>
+              <p className="truncate">
+                {bal!.periodFrom === bal!.periodTo ? sayYmd(bal!.periodFrom) : `${sayYmd(bal!.periodFrom)} to ${sayYmd(bal!.periodTo)}`}
+              </p>
+            </>
+          ) : (
+            <>
+              <Link to={`/jobs/${row.jobId}`} className="text-primary hover:underline">
+                #{row.jobNumber}
+              </Link>
+              <p className="truncate">{row.taskTitle}</p>
+            </>
+          )}
         </td>
         <td className="tabular px-4 py-2.5 text-[13px]">{stamp(row.submittedAt)}</td>
         <td className="tabular px-4 py-2.5 text-right text-muted-foreground">{moneyExact(row.subtotal)}</td>
@@ -217,6 +247,13 @@ function InvoiceRow({
         <td className="tabular px-4 py-2.5 text-right font-semibold">{moneyExact(row.total)}</td>
         <td className="px-4 py-2.5">
           <Badge colour={STATUS_COLOUR[row.status]}>{STATUS_LABEL[row.status] ?? row.status}</Badge>
+          {bal && bal.state !== "awaiting_payment" && row.status !== "paid" ? (
+            <p className="mt-1">
+              <Badge colour={STATE_COLOUR[bal.state]}>{bal.label}</Badge>
+            </p>
+          ) : null}
+          {bal && bal.state === "part_paid" ? <p className="tabular mt-0.5 text-xs text-muted-foreground">{moneyExact(bal.balance)} left</p> : null}
+          {bal?.dueDate && bal.state !== "paid" ? <p className="mt-0.5 text-xs text-muted-foreground">Due {sayYmd(bal.dueDate)}</p> : null}
         </td>
         <td className="px-4 py-2.5">
           <div className="flex items-center justify-end gap-1.5">
@@ -257,6 +294,7 @@ function InvoiceRow({
                 </table>
               </div>
               <div className="text-[13px]">
+                {bal ? <PaymentsBlock row={row} bal={bal} canSeeCosts={canSeeCosts} /> : null}
                 <p className="label-xs">Their business details, as invoiced</p>
                 <dl className="mt-1.5 space-y-1">
                   <div className="flex justify-between gap-4">
@@ -286,10 +324,114 @@ function InvoiceRow({
                 </dl>
               </div>
             </div>
+            {byDates ? <LinkedEntries invoiceId={row.id} /> : null}
           </td>
         </tr>
       ) : null}
     </>
+  );
+}
+
+/* ------------------- money paid, and the time it bills ------------------- */
+
+/**
+ * Damien, 13 Nov 2026: what has been paid, what is left, and recording a
+ * payment as Xero shows it. Nothing is read from or written to Xero here.
+ */
+function PaymentsBlock({ row, bal, canSeeCosts }: { row: { id: number; total: number }; bal: Balance; canSeeCosts: boolean }) {
+  const record = useRecordPayment();
+  const [amount, setAmount] = React.useState("");
+  const [paidOn, setPaidOn] = React.useState(todayBrisbane());
+  const [note, setNote] = React.useState("");
+  return (
+    <div className="mb-4">
+      <p className="label-xs">Payment</p>
+      <dl className="mt-1.5 space-y-1">
+        {bal.kind === "period" ? (
+          <div className="flex justify-between gap-4">
+            <dt className="text-muted-foreground">Terms</dt>
+            <dd>
+              {bal.termsDays != null ? `${bal.termsDays} days` : "not set"}
+              {bal.dueDate ? `, due ${sayYmd(bal.dueDate)}` : ""}
+            </dd>
+          </div>
+        ) : null}
+        <div className="flex justify-between gap-4">
+          <dt className="text-muted-foreground">Paid so far</dt>
+          <dd className="tabular">{moneyExact(bal.paid)}</dd>
+        </div>
+        <div className="flex justify-between gap-4">
+          <dt className="text-muted-foreground">Left to pay</dt>
+          <dd className="tabular font-semibold">{moneyExact(bal.balance)}</dd>
+        </div>
+        {bal.payments.map((p) => (
+          <div key={p.id} className="flex justify-between gap-4 text-xs text-muted-foreground">
+            <dt>
+              {sayYmd(p.paidOn)}
+              {p.by ? `, recorded by ${p.by}` : ""}
+              {p.note ? `: ${p.note}` : ""}
+            </dt>
+            <dd className="tabular">{moneyExact(p.amount)}</dd>
+          </div>
+        ))}
+      </dl>
+      {canSeeCosts && bal.balance > 0 ? (
+        <div className="mt-2 flex flex-wrap items-end gap-2">
+          <Field label="Amount paid" className="w-[120px]">
+            <Input type="number" step="0.01" min="0" placeholder={bal.balance.toFixed(2)} value={amount} onChange={(e) => setAmount(e.target.value)} />
+          </Field>
+          <Field label="Paid on" className="w-[150px]">
+            <Input type="date" value={paidOn} max={todayBrisbane()} onChange={(e) => setPaidOn(e.target.value)} />
+          </Field>
+          <Field label="Note (optional)" className="min-w-[140px] flex-1">
+            <Input value={note} maxLength={300} placeholder="Xero payment ref" onChange={(e) => setNote(e.target.value)} />
+          </Field>
+          <Button
+            disabled={record.isPending || !(Number(amount || bal.balance) > 0) || !paidOn}
+            onClick={() =>
+              record.mutate(
+                { invoiceId: row.id, amount: Number(amount || bal.balance), paidOn, note: note.trim() || null },
+                { onSuccess: () => { setAmount(""); setNote(""); } },
+              )
+            }
+          >
+            Record payment
+          </Button>
+          {record.error ? <p className="w-full text-xs text-destructive">{record.error.message}</p> : null}
+          <p className="w-full text-xs text-muted-foreground">Leave the amount empty to record the full {moneyExact(bal.balance)} left. Enter what Xero shows as paid.</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function LinkedEntries({ invoiceId }: { invoiceId: number }) {
+  const q = useInvoiceEntries(invoiceId);
+  const rows = q.data ?? [];
+  if (q.isLoading) return <p className="mt-3 text-xs text-muted-foreground">Loading the time entries…</p>;
+  if (!rows.length) return null;
+  return (
+    <div className="mt-4">
+      <p className="label-xs">Time entries on this invoice ({rows.length})</p>
+      <table className="mt-1.5 w-full text-[13px]">
+        <tbody>
+          {rows.map((e) => (
+            <tr key={e.sessionId} className="border-b border-border/60 last:border-0">
+              <td className="tabular py-1 pr-3">{sayYmd(e.workDate)}</td>
+              <td className="py-1 pr-3">
+                <Link to={`/jobs/${e.jobId}`} className="text-primary hover:underline">
+                  Job {e.jobId}
+                </Link>
+              </td>
+              <td className="tabular py-1 pr-3 text-muted-foreground">
+                {Math.floor(e.minutes / 60)}h{e.minutes % 60 ? ` ${e.minutes % 60}m` : ""}
+              </td>
+              <td className="tabular py-1 text-right">{e.amount == null ? "" : moneyExact(e.amount)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -320,6 +462,15 @@ export default function SubcontractorInvoicesPage() {
     from: from || undefined,
     to: to || undefined,
   });
+
+  const bootstrap = useBootstrap();
+  const canSeeCosts = Boolean(bootstrap.data?.actor.canSeeCosts);
+  const ids = React.useMemo(() => (q.data ?? []).map((r) => r.id), [q.data]);
+  const balances = useInvoiceBalances(ids);
+  const balOf = React.useMemo(() => {
+    const m = new Map((balances.data ?? []).map((b) => [b.invoiceId, b]));
+    return (id: number) => m.get(id) ?? null;
+  }, [balances.data]);
 
   const nameById = React.useMemo(() => {
     const m = new Map((installers.data ?? []).map((i) => [i.id, i.name]));
@@ -432,7 +583,7 @@ export default function SubcontractorInvoicesPage() {
                   </thead>
                   <tbody>
                     {rows.map((r) => (
-                      <InvoiceRow key={r.id} row={r} installerName={nameById} />
+                      <InvoiceRow key={r.id} row={r} installerName={nameById} bal={balOf(r.id)} canSeeCosts={canSeeCosts} />
                     ))}
                   </tbody>
                 </table>

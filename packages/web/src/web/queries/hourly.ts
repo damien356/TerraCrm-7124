@@ -8,7 +8,8 @@ import { orpc } from "../lib/api";
  * are Admin only. The server enforces every one of these.
  */
 
-export type QueueStatus = "open" | "recorded" | "approved" | "rejected" | "todo" | "all";
+/** disputed: he asked for a correction (Damien, 13 Nov 2026). */
+export type QueueStatus = "open" | "recorded" | "approved" | "rejected" | "todo" | "disputed" | "all";
 
 export function useHourlyQueue(input: { status?: QueueStatus; installerId?: number; jobId?: number; taskId?: number; from?: string; to?: string }) {
   return useQuery(orpc.hourly.queue.queryOptions({ input: { status: input.status ?? "todo", ...input }, staleTime: 5_000 }));
@@ -74,6 +75,12 @@ export function useConfirmBand() {
 export function useApproveTime() {
   const onSuccess = useRefresh();
   return useMutation(orpc.hourly.approve.mutationOptions({ onSuccess }));
+}
+
+/** Approve many at once. Any that can't be approved come back with the reason (Damien, 13 Nov 2026). */
+export function useBulkApproveTime() {
+  const onSuccess = useRefresh();
+  return useMutation(orpc.hourly.bulkApprove.mutationOptions({ onSuccess }));
 }
 
 export function useUnapproveTime() {

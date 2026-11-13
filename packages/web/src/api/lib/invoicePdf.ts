@@ -54,6 +54,20 @@ export interface InvoicePdfInput {
   subtotal: number;
   gstAmount: number;
   total: number;
+  /*
+   * Hourly invoices by dates (Damien, 13 Nov 2026). All optional, so a task
+   * invoice prints exactly as before when they are left out.
+   */
+  /** First and last service date, YYYY-MM-DD. */
+  serviceFrom?: string | null;
+  serviceTo?: string | null;
+  /** Payment terms in days, and the due date (YYYY-MM-DD). */
+  termsDays?: number | null;
+  dueDate?: string | null;
+  /** Replaces the "Job #" line in the Job block, for an invoice across jobs. */
+  periodLabel?: string | null;
+  /** Print "No GST charged. Not registered for GST." when he is not registered. */
+  noGstLine?: boolean;
 }
 
 const TERRA_BILL_TO = {
@@ -299,6 +313,19 @@ export async function renderInvoicePdf(input: InvoicePdfInput): Promise<Buffer> 
   rightY -= 12;
   textRight(ctx, `Date ${auDay(input.invoiceDate)}`, { x: 0, w: CONTENT_WIDTH, size: 9, color: MUTED, y: rightY });
   rightY -= 12;
+  if (input.serviceFrom) {
+    const svc = input.serviceTo && input.serviceTo !== input.serviceFrom ? `${auDay(input.serviceFrom)} to ${auDay(input.serviceTo)}` : auDay(input.serviceFrom);
+    textRight(ctx, `Service dates ${svc}`, { x: 0, w: CONTENT_WIDTH, size: 9, color: MUTED, y: rightY });
+    rightY -= 12;
+  }
+  if (input.termsDays != null) {
+    textRight(ctx, `Terms ${input.termsDays} days`, { x: 0, w: CONTENT_WIDTH, size: 9, color: MUTED, y: rightY });
+    rightY -= 12;
+  }
+  if (input.dueDate) {
+    textRight(ctx, `Due ${auDay(input.dueDate)}`, { x: 0, w: CONTENT_WIDTH, size: 9, bold: true, y: rightY });
+    rightY -= 12;
+  }
 
   ctx.y = Math.min(leftY, rightY) - 12;
 
@@ -321,7 +348,7 @@ export async function renderInvoicePdf(input: InvoicePdfInput): Promise<Buffer> 
   const jobBottom = block(
     rightBlockX,
     "Job",
-    [`Job #${input.jobNumber}`, input.taskTitle, input.siteAddress].filter((v): v is string => Boolean(v)),
+    [input.periodLabel ? input.periodLabel : `Job #${input.jobNumber}`, input.taskTitle, input.siteAddress].filter((v): v is string => Boolean(v)),
   );
 
   ctx.y = Math.min(billBottom, jobBottom) - 14;
@@ -363,6 +390,7 @@ export async function renderInvoicePdf(input: InvoicePdfInput): Promise<Buffer> 
 
   totalsRow("Subtotal", money(input.subtotal));
   if (input.gstRegistered) totalsRow("GST (10%)", money(input.gstAmount));
+  else if (input.noGstLine) totalsRow("GST", money(0));
 
   ctx.page.drawLine({
     start: { x: MARGIN + totalsX, y: ctx.y },
@@ -374,6 +402,10 @@ export async function renderInvoicePdf(input: InvoicePdfInput): Promise<Buffer> 
   text(ctx, "Total due", { x: totalsX, size: 12, bold: true });
   textRight(ctx, money(input.total), { x: totalsX, w: 220, size: 12, bold: true });
   ctx.y -= 20;
+  if (!input.gstRegistered && input.noGstLine) {
+    text(ctx, "No GST charged. Not registered for GST.", { x: totalsX, size: 9, color: MUTED });
+    ctx.y -= 14;
+  }
 
   /* How to pay them, only when they have given bank details. */
   if (input.bankBsb && input.bankAccountNumber) {

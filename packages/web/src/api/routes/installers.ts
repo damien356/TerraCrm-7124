@@ -8,7 +8,7 @@ import { blockedInstallerIds } from "../lib/availability";
 import { namesFor, sayList, skillsForTask } from "../lib/task-skills";
 import { accessOn, itemOpenTo } from "../lib/rate-access";
 import { todayLocal } from "../lib/local-date";
-import { termsFor } from "../lib/hourly";
+import { RATE_TO_CONFIRM, termsFor } from "../lib/hourly";
 import { unsetRates } from "../lib/line-rates";
 import { assignWarnings, payMethodOf, warningText } from "../lib/assign-check";
 import { mayWorkBetween, slotCols, workSlots } from "../lib/task-run";
@@ -435,7 +435,7 @@ export const installers = {
         const reasons: string[] = [];
         if (r.missing.length) reasons.push(`Not ticked for ${sayList(r.missing.map((m) => m.name))}`);
         if (r.locked.length) reasons.push(`${sayList(r.locked.map((l) => l.name))} not switched on for them`);
-        if (r.noRate) reasons.push("Hourly rate not set ($0.00)");
+        if (r.noRate) reasons.push(`Hourly rate: ${RATE_TO_CONFIRM}`);
         if (r.noLineRate.length) reasons.push(`Rate not set for ${sayList(r.noLineRate)} ($0.00)`);
         if (off) reasons.push("Unavailable that day");
         if (!alone) reasons.push("Needs a second person for a 2-man job");

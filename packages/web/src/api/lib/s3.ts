@@ -70,6 +70,11 @@ export function invoicePdfKey(installerId: number, taskId: number) {
   return `installers/${installerId}/invoices/task-${taskId}-${Date.now()}.pdf`;
 }
 
+/** Where an hourly invoice by dates is stored (Damien, 13 Nov 2026). */
+export function periodInvoicePdfKey(installerId: number, from: string, to: string) {
+  return `installers/${installerId}/invoices/period-${from}-${to}-${Date.now()}.pdf`;
+}
+
 /** Read a stored file back into memory, to re-attach a generated PDF to an email. */
 export async function getObject(key: string) {
   const res = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: scoped(key) }));

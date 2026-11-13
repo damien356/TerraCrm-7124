@@ -11,6 +11,7 @@ import { syncJobForTask } from "./job-stage";
 import { jobText, taskRef } from "./refs";
 import { sayClock, sayDay } from "./work-hours";
 import { acceptedQuoteFor } from "./variations";
+import { linksForTasks, taskInvoicesOnly } from "./period-invoices";
 
 /* ---------------------------------------------------------------------------
  * Installers & bookings on the job (Damien, 11 Nov 2026, job 188070).
@@ -69,9 +70,11 @@ async function factsFor(ids: number[]): Promise<Facts> {
       .from(schema.taskDays)
       .where(and(inArray(schema.taskDays.taskId, ids), eq(schema.taskDays.status, "booked")))
       .orderBy(asc(schema.taskDays.date)),
-    db.select({ taskId: schema.installerInvoices.taskId }).from(schema.installerInvoices).where(inArray(schema.installerInvoices.taskId, ids)),
+    db.select({ id: schema.installerInvoices.id, taskId: schema.installerInvoices.taskId }).from(schema.installerInvoices).where(inArray(schema.installerInvoices.taskId, ids)),
   ]);
-  return { offers, days, billed: new Set(bills.map((b) => b.taskId)) };
+  // Damien, 13 Nov 2026: an invoice by dates counts for each task it billed time on, not the task it is stored on.
+  const [taskBills, links] = await Promise.all([taskInvoicesOnly(bills), linksForTasks(ids)]);
+  return { offers, days, billed: new Set([...taskBills.map((b) => b.taskId), ...links.map((l) => l.taskId)]) };
 }
 
 function stateOf(task: Task, f: Facts): LineState {

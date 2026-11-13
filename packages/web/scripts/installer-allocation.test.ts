@@ -18,7 +18,7 @@
  *   4  Outside 6:00 am-6:00 pm needs a confirm, and it is recorded
  *   5  Never a silent swap of installer
  *   6  Day rates per contractor, off by default, history kept
- *   7  Contractor labor - per hour: $0.00 blocks, agreed rate kept, no double pay
+ *   7  Contractor labour — per hour: $0.00 blocks (Rate to confirm), agreed rate kept, no double pay
  *   8  Nosing never paid on top of a stair rate; the migration file
  *   9  $0.00 is "Rate not set" (Damien, 7 Nov): blocks the picker, offers,
  *      booking, allocation and pay approval, never an hourly man's hourly
@@ -643,10 +643,10 @@ describe("6. Day rates 73, 74 and 103: per contractor, off by default", () => {
   });
 });
 
-describe("7. Contractor labor - per hour", () => {
-  test("$0.00 shows as Rate not set: offers and approval stay blocked, booking asks the check (Pay to confirm)", async () => {
+describe("7. Contractor labour — per hour", () => {
+  test("$0.00 shows as Rate to confirm: offers and approval stay blocked, booking asks the check (Pay to confirm)", async () => {
     expect(await m.hourly.hourlyRateBarrier(NORATE)).toBe(
-      "Contractor labor - per hour: Rate not set ($0.00). Set the agreed hourly rate before giving this person hourly work.",
+      "Contractor labour — per hour: Rate to confirm. Set the agreed hourly rate before giving this person hourly work.",
     );
     expect(await m.hourly.hourlyRateBarrier(HOURLY)).toBeNull();
     expect(await m.hourly.hourlyRateBarrier(FAB)).toBeNull();
@@ -655,8 +655,8 @@ describe("7. Contractor labor - per hour", () => {
     const t = await newTask(j, "Hourly hybrid", SK.hybrid, [[IT.hybrid, 20]]);
     const rows = await run<any[]>(m.installers.eligible, { taskId: t });
     const nr = rows.find((r) => r.id === NORATE)!;
-    expect([nr.eligible, nr.reasons]).toEqual([false, ["Hourly rate not set ($0.00)"]]);
-    expect((await failure(run(m.offers.sendDirect, { taskId: t, installerId: NORATE }))).message).toContain("Rate not set ($0.00)");
+    expect([nr.eligible, nr.reasons]).toEqual([false, ["Hourly rate: Rate to confirm"]]);
+    expect((await failure(run(m.offers.sendDirect, { taskId: t, installerId: NORATE }))).message).toContain("Rate to confirm");
     const ask = await failure(run(m.tasksRoute.tasks.assign, { id: t, installerId: NORATE }));
     expect(ask.data?.reason).toBe("assign_check");
     expect(ask.message).toContain("Pay to confirm: no hourly rate is set for");
@@ -671,7 +671,7 @@ describe("7. Contractor labor - per hour", () => {
       } as any)
       .returning();
     const e = await failure(m.hourly.approveSession(s!.id, { name: "Test Admin", role: "admin" }));
-    expect(e.message).toContain("Contractor labor - per hour: Rate not set ($0.00). Set the agreed hourly rate before approving.");
+    expect(e.message).toContain("Contractor labour — per hour: Rate to confirm. Set the agreed hourly rate before approving.");
   });
 
   test("approved time at $0.00 can't be invoiced", async () => {
@@ -684,8 +684,8 @@ describe("7. Contractor labor - per hour", () => {
       payLines: JSON.stringify([{ label: "Ordinary", minutes: 240, rate: 0, total: 0 }]),
     } as any);
     const preview = await as(NORATE_LOGIN, () => run<any>(m.invoices.preview, { taskId: t }));
-    expect(JSON.stringify(preview)).toContain("Rate not set ($0.00)");
-    expect((await failure(as(NORATE_LOGIN, () => run(m.invoices.submit, { taskId: t })))).message).toContain("Rate not set ($0.00)");
+    expect(JSON.stringify(preview)).toContain("Rate to confirm");
+    expect((await failure(as(NORATE_LOGIN, () => run(m.invoices.submit, { taskId: t })))).message).toContain("Rate to confirm");
   });
 
   test("the rate agreed when the work is allocated is kept on the dispatch, whatever his terms say later", async () => {

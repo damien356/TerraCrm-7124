@@ -895,4 +895,4 @@ export const labour = {
 };
 
 /** Shared with the job costing route so both price work the same way. */
-export const rateBook = { pick, loadRates, today, dayBefore };
+export const rateBook = { pick, loadRates, today, dayBefore, writeRate };

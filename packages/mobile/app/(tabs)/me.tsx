@@ -10,6 +10,8 @@ import { forgetSignedIn } from "@/lib/crash-guard";
 import { crewLabel, daysUntil, fmtDateTime, fmtDayLabel, fmtMoney } from "@/lib/format";
 import { useHistory, useMe, useSetLocationConsent } from "@/queries/field";
 import { dollars, hrsMins, useMyHourlySummary } from "@/queries/hourly";
+import { useMyHourlyJobs } from "@/queries/hourly-invoices";
+import { useClockOutReminder } from "@/lib/clock-reminder";
 import { HandsFreeCard } from "@/components/hands-free-card";
 import { BankDetailsCard } from "@/components/bank-details";
 import { useWhoami } from "@/queries/session";
@@ -182,6 +184,11 @@ function CrewMe() {
   const history = useHistory();
   // Hourly men only. Old servers and per-unit installers answer with nothing to show.
   const hourly = useMyHourlySummary();
+  // Damien, 13 Nov 2026: My hours & invoices, for anyone on hourly terms or booked on an hourly job.
+  const hourlyJobs = useMyHourlyJobs();
+  const showHours = Boolean(hourly.data?.rates) || (hourlyJobs.data?.length ?? 0) > 0;
+  const openNow = hourly.data?.open ?? null;
+  useClockOutReminder(hourly.data ? (openNow ? { id: openNow.id, start: openNow.start } : null) : undefined);
   const setConsent = useSetLocationConsent();
   const sharingOn = Boolean(me.data?.locationConsentAt);
 
@@ -200,6 +207,7 @@ function CrewMe() {
               void me.refetch();
               void history.refetch();
               void hourly.refetch();
+              void hourlyJobs.refetch();
             }}
             tintColor={c.primary}
           />
@@ -253,6 +261,34 @@ function CrewMe() {
                   hint={hourly.data.open ? "on the clock now" : "for the office to check"}
                 />
               </View>
+            ) : null}
+
+            {showHours ? (
+              <Pressable
+                onPress={() => router.push("/hours")}
+                accessibilityRole="button"
+                style={({ pressed }) => ({
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 10,
+                  backgroundColor: c.card,
+                  borderWidth: 1,
+                  borderColor: c.primary,
+                  borderRadius: 14,
+                  padding: 14,
+                  marginTop: 10,
+                  opacity: pressed ? 0.7 : 1,
+                })}
+              >
+                <Ionicons name="time-outline" size={20} color={c.primary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontFamily: Fonts.medium, fontSize: 15, color: c.foreground }}>My hours & invoices</Text>
+                  <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground }}>
+                    {hourly.data?.open ? "On the clock now" : "Start work, breaks, and invoice Terra by dates"}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={c.mutedForeground} />
+              </Pressable>
             ) : null}
 
             <View

@@ -15,6 +15,8 @@ import { EMPLOYEE_NO_INVOICE, isEmployee } from "../lib/worker-type";
 import { unsetPayLines } from "../lib/line-rates";
 import { PAY_NOT_SET, visitSkillIds } from "../lib/pay-status";
 import { hasStagePayOn, openStaging, stagedClaimRows } from "../lib/staged-guard";
+import { HOURLY_ITEM, RATE_TO_CONFIRM } from "../lib/hourly";
+import { hourlyInvoicingReady, taskInvoicesOnly } from "../lib/period-invoices";
 
 /**
  * The installer's own invoice to Terra for a completed task. Installers can
@@ -203,7 +205,7 @@ async function hourlyInvoiceLines(taskId: number, installerId: number) {
     sessionIds: billable.map((s) => s.id),
     gstRegistered: billable.length > 0 && billable.every((s) => s.gstRegistered === true),
     block: billable.some((s) => !((s.rateBase ?? 0) > 0))
-      ? "Contractor labor - per hour: Rate not set ($0.00). Terra office must set the agreed hourly rate before this time can be invoiced."
+      ? `${HOURLY_ITEM}: ${RATE_TO_CONFIRM}. Terra office must set the agreed hourly rate before this time can be invoiced.`
       : waiting
       ? `${waiting} time ${waiting === 1 ? "entry is" : "entries are"} still waiting for Terra office to approve. Invoice once they are approved.`
       : billable.length === 0
@@ -212,13 +214,27 @@ async function hourlyInvoiceLines(taskId: number, installerId: number) {
   };
 }
 
-/** His invoices on one task, part 1 first. */
+/**
+ * His invoices on one task, part 1 first. An hourly invoice by dates stored on
+ * this task is left out (Damien, 13 Nov 2026): it is not this task's invoice,
+ * and the time it billed is already marked so it is never billed here again.
+ */
 async function priorInvoices(taskId: number, installerId: number) {
+  return taskInvoicesOnly(await allOnTask(taskId, installerId));
+}
+
+async function allOnTask(taskId: number, installerId: number) {
   return db
     .select()
     .from(schema.installerInvoices)
     .where(and(eq(schema.installerInvoices.taskId, taskId), eq(schema.installerInvoices.installerId, installerId)))
     .orderBy(asc(schema.installerInvoices.part), asc(schema.installerInvoices.id));
+}
+
+/** The part number to store: after every invoice on the task, invoices by dates included, so the unique index never clashes. */
+async function storePartOf(taskId: number, installerId: number) {
+  const all = await allOnTask(taskId, installerId);
+  return all.length ? Math.max(...all.map((p) => p.part ?? 1)) + 1 : 1;
 }
 
 /** Staged jobs (Damien, 12 Nov 2026): which stage this claim is for, on the PDF and the email. */
@@ -332,6 +348,7 @@ export const installerInvoices = {
     const { task, job, site, installer, usableVariations, lineItems, subtotal, gstAmount, total, hourlySessionIds, hourlyBlock, stagePayIds } =
       await taskInvoiceContext(input.taskId, context.installerId);
     const note = stagePayIds ? stageClaimNote(part, lineItems) : laterHoursNote(part, prior[0]?.invoiceNumber ?? null);
+    const storePart = await storePartOf(input.taskId, context.installerId);
     // Worker type (Damien, 2 Nov): employees never raise a contractor invoice or bill.
     if (isEmployee(installer)) throw new ORPCError("BAD_REQUEST", { message: EMPLOYEE_NO_INVOICE });
     if (hourlyBlock) throw new ORPCError("BAD_REQUEST", { message: hourlyBlock });
@@ -399,7 +416,7 @@ export const installerInvoices = {
         jobId: job.id,
         installerId: context.installerId,
         invoiceNumber,
-        part,
+        part: storePart,
         status: "submitted",
         tradingName: abn.businessName ?? "",
         installerName: installer.name,
@@ -430,7 +447,7 @@ export const installerInvoices = {
       const [won] = await db
         .select()
         .from(schema.installerInvoices)
-        .where(and(eq(schema.installerInvoices.taskId, input.taskId), eq(schema.installerInvoices.installerId, context.installerId), eq(schema.installerInvoices.part, part)));
+        .where(and(eq(schema.installerInvoices.taskId, input.taskId), eq(schema.installerInvoices.installerId, context.installerId), eq(schema.installerInvoices.part, storePart)));
       if (won) return won;
       throw e;
     }
@@ -455,18 +472,42 @@ export const installerInvoices = {
       }
     }
 
+    if (hourlySessionIds.length > 0) {
+      // Billed once: this time can never land on a second invoice. Every entry
+      // shown must be claimed (Damien, 13 Nov 2026): if one went on an invoice
+      // by dates a moment ago, this invoice is taken back and nothing is billed.
+      const claimed = await db
+        .update(schema.workSessions)
+        .set({ invoiceId: row!.id, updatedAt: now })
+        .where(and(inArray(schema.workSessions.id, hourlySessionIds), isNull(schema.workSessions.invoiceId)))
+        .returning({ id: schema.workSessions.id, taskId: schema.workSessions.taskId, jobId: schema.workSessions.jobId, workDate: schema.workSessions.workDate, minutes: schema.workSessions.approvedMinutes, pay: schema.workSessions.approvedPay });
+      let linkFailed = false;
+      if (claimed.length === hourlySessionIds.length && (await hourlyInvoicingReady())) {
+        try {
+          await db.insert(schema.installerInvoiceSessions).values(
+            claimed.map((c) => ({ invoiceId: row!.id, sessionId: c.id, taskId: c.taskId, jobId: c.jobId, workDate: c.workDate, minutes: c.minutes ?? 0, amount: Math.round((c.pay ?? 0) * 100) / 100 })),
+          );
+        } catch {
+          linkFailed = true;
+        }
+      }
+      if (claimed.length !== hourlySessionIds.length || linkFailed) {
+        if (claimed.length) {
+          await db.update(schema.workSessions).set({ invoiceId: null }).where(and(inArray(schema.workSessions.id, claimed.map((c) => c.id)), eq(schema.workSessions.invoiceId, row!.id)));
+        }
+        // Any stage pay claimed just above goes back too, so nothing points at the removed invoice.
+        if (stagePayIds?.length) {
+          await db.update(schema.jobStagePay).set({ claimInvoiceId: null }).where(eq(schema.jobStagePay.claimInvoiceId, row!.id));
+        }
+        await db.delete(schema.installerInvoices).where(eq(schema.installerInvoices.id, row!.id));
+        throw new ORPCError("CONFLICT", { message: "Some of this time was invoiced a moment ago. Nothing was issued. Open the job again to see what is left." });
+      }
+    }
+
     await db
       .update(schema.installers)
       .set({ nextInvoiceNumber: invoiceNumber + 1, updatedAt: now })
       .where(eq(schema.installers.id, context.installerId));
-
-    if (hourlySessionIds.length > 0) {
-      // Billed once: this time can never land on a second invoice.
-      await db
-        .update(schema.workSessions)
-        .set({ invoiceId: row!.id, updatedAt: now })
-        .where(and(inArray(schema.workSessions.id, hourlySessionIds), isNull(schema.workSessions.invoiceId)));
-    }
 
     if (usableVariations.length > 0) {
       await db

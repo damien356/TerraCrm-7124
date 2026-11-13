@@ -22,6 +22,7 @@ import {
   type SplitPart,
   type Terms,
 } from "./hourly-calc";
+import { linksForTasks, periodInvoiceIds } from "./period-invoices";
 
 /**
  * HOURLY CONTRACTORS: the database side. Pay terms, settings, the time
@@ -50,6 +51,8 @@ export const SETTING_KEYS = {
   categories: "hourly_paid_categories",
   vehicleDefault: "hourly_vehicle_allowance",
   benchmarkVehicle: "hourly_benchmark_vehicle_default",
+  /** Id of the rate card item "Contractor labour — per hour" (Damien, 13 Nov 2026). */
+  labourItem: "hourly_labour_item_id",
 } as const;
 
 export const BREAK_POLICIES = ["pending", "per_break", "paid", "unpaid"] as const;
@@ -134,6 +137,54 @@ export async function termsFor(installerIds: number[], on: string = todayLocal()
     )
     .orderBy(asc(schema.installerPayTerms.effectiveFrom), asc(schema.installerPayTerms.id));
   for (const r of rows) out.set(r.installerId, r);
+  if (!out.size) return out;
+  // Damien, 13 Nov 2026: the hourly rate comes from his own row for the rate
+  // card item "Contractor labour — per hour". Weekend and night multipliers
+  // and GST still come from the pay terms.
+  const card = await rateCardBase([...out.keys()], on);
+  for (const [id, t] of out) {
+    const c = card.get(id);
+    if (c) out.set(id, { ...t, baseRate: c.amount, effectiveFrom: c.effectiveFrom > t.effectiveFrom ? c.effectiveFrom : t.effectiveFrom });
+  }
+  return out;
+}
+
+/** The rate card item the hourly rate is read from, or null before it exists. */
+export async function hourlyItemId(): Promise<number | null> {
+  const [set] = await db.select({ value: schema.settings.value }).from(schema.settings).where(eq(schema.settings.key, SETTING_KEYS.labourItem)).limit(1);
+  const fromSetting = Number(set?.value);
+  if (Number.isInteger(fromSetting) && fromSetting > 0) return fromSetting;
+  const [item] = await db
+    .select({ id: schema.labourRateItems.id })
+    .from(schema.labourRateItems)
+    .where(and(eq(schema.labourRateItems.name, HOURLY_ITEM), eq(schema.labourRateItems.unit, "hour")))
+    .orderBy(asc(schema.labourRateItems.id))
+    .limit(1);
+  return item?.id ?? null;
+}
+
+/**
+ * Each person's own hourly rate on the rate card, live on that date. Terra's
+ * default row (no installer) is ignored: the rate is agreed per person, and a
+ * missing one reads "Rate to confirm", never a default.
+ */
+async function rateCardBase(installerIds: number[], on: string): Promise<Map<number, { amount: number; effectiveFrom: string }>> {
+  const out = new Map<number, { amount: number; effectiveFrom: string }>();
+  const itemId = await hourlyItemId();
+  if (itemId == null || !installerIds.length) return out;
+  const rows = await db
+    .select({ installerId: schema.labourRates.installerId, amount: schema.labourRates.amount, effectiveFrom: schema.labourRates.effectiveFrom })
+    .from(schema.labourRates)
+    .where(
+      and(
+        eq(schema.labourRates.itemId, itemId),
+        inArray(schema.labourRates.installerId, [...new Set(installerIds)]),
+        lte(schema.labourRates.effectiveFrom, on),
+        or(isNull(schema.labourRates.effectiveTo), gte(schema.labourRates.effectiveTo, on)),
+      ),
+    )
+    .orderBy(asc(schema.labourRates.effectiveFrom), asc(schema.labourRates.id));
+  for (const r of rows) if (r.installerId != null) out.set(r.installerId, { amount: r.amount, effectiveFrom: r.effectiveFrom });
   return out;
 }
 
@@ -155,8 +206,8 @@ export async function isHourlyContractor(installerId: number): Promise<boolean> 
   return Boolean(r);
 }
 
-/** The name the brief gives the hourly pay item on each contractor's record. */
-export const HOURLY_ITEM = "Contractor labor - per hour";
+/** The rate card item the hourly rate comes from. The exact name Damien gave (13 Nov 2026). */
+export const HOURLY_ITEM = "Contractor labour — per hour";
 
 /**
  * Why this installer can't be given hourly work now, or null. Hourly work
@@ -166,7 +217,7 @@ export async function hourlyRateBarrier(installerId: number, on: string = todayL
   const terms = await termsOn(installerId, on);
   if (!terms || !terms.defaultForNew) return null;
   if (terms.baseRate > 0) return null;
-  return `${HOURLY_ITEM}: Rate not set ($0.00). Set the agreed hourly rate before giving this person hourly work.`;
+  return `${HOURLY_ITEM}: ${RATE_TO_CONFIRM}. Set the agreed hourly rate before giving this person hourly work.`;
 }
 
 /** Each task's agreed hourly rate and pay basis, for the session views. */
@@ -393,7 +444,7 @@ export function viewSession(s: Session, breaks: Break[], settings: HourlySetting
   }
   if (catPay === "pending") blockers.push(`Not confirmed whether "${CATEGORY_LABEL[category]}" is paid.`);
   if (!terms) blockers.push(`${RATE_TO_CONFIRM}: no hourly pay terms for this worker on this date. Confirm the rate before approving.`);
-  else if (!(terms.baseRate > 0)) blockers.push(`${RATE_TO_CONFIRM}. ${HOURLY_ITEM}: Rate not set ($0.00). Set the agreed hourly rate before approving.`);
+  else if (!(terms.baseRate > 0)) blockers.push(`${HOURLY_ITEM}: ${RATE_TO_CONFIRM}. Set the agreed hourly rate before approving.`);
   // No hourly pay on top of fixed-price pay to the same person for the same work.
   const clash = flatPayClash(task, s.installerId);
   if (clash) blockers.push(clash);
@@ -648,9 +699,20 @@ export async function jobHourlyCosting(jobId: number) {
         .where(inArray(schema.installers.id, installerIds))
     : [];
   const nameOf = (id: number) => people.find((p) => p.id === id)?.name ?? `Installer ${id}`;
-  const invoices = hourlyTasks.length
+  const onTasks = hourlyTasks.length
     ? await db.select().from(schema.installerInvoices).where(inArray(schema.installerInvoices.taskId, hourlyTasks.map((t) => t.id)))
     : [];
+  /*
+   * Damien, 13 Nov 2026: an hourly invoice by dates can bill many tasks and
+   * jobs. It is matched to each task through the entries it billed (link
+   * rows), never by the task it happens to be stored on.
+   */
+  const periodIds = await periodInvoiceIds(onTasks.map((i) => i.id));
+  const links = await linksForTasks(hourlyTasks.map((t) => t.id));
+  const extraIds = [...new Set(links.map((l) => l.invoiceId))].filter((id) => !onTasks.some((i) => i.id === id));
+  const linkedInvoices = extraIds.length ? await db.select().from(schema.installerInvoices).where(inArray(schema.installerInvoices.id, extraIds)) : [];
+  for (const id of await periodInvoiceIds(extraIds)) periodIds.add(id);
+  const invoices = [...onTasks, ...linkedInvoices];
 
   // Days a worker has time with no vehicle on any of his entries that day. The
   // allowance is per actual vehicle, so a missing one makes the costing
@@ -725,11 +787,23 @@ export async function jobHourlyCosting(jobId: number) {
     // Contractor invoices matched to approved time, never added to it.
     const recon = [...byWorker.values()].map((w) => {
       // Later-approved hours go on a later invoice (part 2, 3 ...), never a rebill.
-      const invs = invoices.filter((i) => i.installerId === w.installerId && i.taskId === t.id).sort((a, b) => (a.part ?? 1) - (b.part ?? 1));
+      const periodHere = new Set(links.filter((l) => l.taskId === t.id && periodIds.has(l.invoiceId)).map((l) => l.invoiceId));
+      const invs = invoices
+        .filter((i) => i.installerId === w.installerId && (periodIds.has(i.id) ? periodHere.has(i.id) : i.taskId === t.id))
+        .sort((a, b) => (a.submittedAt?.getTime() ?? 0) - (b.submittedAt?.getTime() ?? 0) || (a.part ?? 1) - (b.part ?? 1));
       const inv = invs[invs.length - 1] ?? null;
       let invoicedHours = 0;
       let invoicedHourly = 0;
       for (const one of invs) {
+        if (periodIds.has(one.id)) {
+          // Only the part of it that billed this task.
+          for (const l of links) {
+            if (l.invoiceId !== one.id || l.taskId !== t.id) continue;
+            invoicedHours += l.minutes / 60;
+            invoicedHourly += l.amount;
+          }
+          continue;
+        }
         try {
           for (const l of JSON.parse(one.lineItems) as Array<{ unit: string; qty: number; total: number | null }>) {
             if (l.unit === "hour") {
@@ -923,6 +997,8 @@ export function crewSessionView(v: SessionView) {
     approvedMinutes: v.status === "approved" ? v.approvedMinutes : null,
     approvedPay: v.status === "approved" ? v.approvedPay : null,
     payLines: v.status === "approved" ? v.payLines : null,
+    /** On an invoice already: a correction then goes through the office by phone (Damien, 13 Nov 2026). */
+    invoiced: v.invoiceId != null,
   };
 }
 

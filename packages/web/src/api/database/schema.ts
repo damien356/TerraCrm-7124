@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, real, sqliteTable, text, unique, uniqueIndex, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
+import { check, index, integer, real, sqliteTable, text, unique, uniqueIndex, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 
 export * from "./auth-schema";
 
@@ -3841,6 +3841,94 @@ export const workTimeEvents = sqliteTable(
     ...timestamps,
   },
   (t) => [index("work_time_events_session_idx").on(t.sessionId, t.createdAt)],
+);
+
+/* ---------------------------------------------------------------------------
+ * Hourly contractor invoicing (2026-12-09-hourly-invoicing.sql, Damien, 13 Nov 2026).
+ *
+ * Side tables beside installer_invoices, so nothing already stored moves and
+ * code published before the database step still reads every invoice.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The paperwork facts of one invoice that the old row has no column for:
+ * what kind it is, the service dates, the payment terms and due date, and the
+ * phone's request key so a retry returns the same invoice.
+ *
+ * sessionsClaimed must equal sessionsExpected. It is counted inside the same
+ * write that claims the time, so if any entry was claimed, un-approved or
+ * rejected a moment before, the whole write is refused and nothing is issued.
+ */
+export const installerInvoiceDetails = sqliteTable(
+  "installer_invoice_details",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    invoiceId: integer("invoice_id").notNull().references(() => installerInvoices.id, { onDelete: "cascade" }),
+    installerId: integer("installer_id").notNull().references(() => installers.id, { onDelete: "cascade" }),
+    /** task: one task, from the task screen. period: chosen dates, any number of jobs. */
+    kind: text("kind").notNull().default("task"),
+    /** YYYY-MM-DD, Brisbane. The first and last work date billed. */
+    periodFrom: text("period_from"),
+    periodTo: text("period_to"),
+    termsDays: integer("terms_days").notNull().default(7),
+    /** YYYY-MM-DD. Issue date plus the terms. */
+    dueDate: text("due_date"),
+    /** Made by the phone once per Issue tap. A retry with the same key gets the same invoice. */
+    requestKey: text("request_key"),
+    sessionsExpected: integer("sessions_expected").notNull().default(0),
+    sessionsClaimed: integer("sessions_claimed").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [
+    unique("installer_invoice_details_invoice_unique").on(t.invoiceId),
+    unique("installer_invoice_details_request_unique").on(t.installerId, t.requestKey),
+    check("installer_invoice_details_claim_check", sql`${t.sessionsClaimed} = ${t.sessionsExpected}`),
+  ],
+);
+
+/**
+ * Which time entries an invoice bills. One entry, one invoice, enforced by the
+ * unique index, so double taps, retries or two phones can never bill it twice.
+ */
+export const installerInvoiceSessions = sqliteTable(
+  "installer_invoice_sessions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    invoiceId: integer("invoice_id").notNull().references(() => installerInvoices.id, { onDelete: "cascade" }),
+    sessionId: integer("session_id").notNull().references(() => workSessions.id, { onDelete: "cascade" }),
+    taskId: integer("task_id").notNull(),
+    jobId: integer("job_id").notNull(),
+    workDate: text("work_date").notNull(),
+    minutes: integer("minutes").notNull().default(0),
+    amount: real("amount").notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [unique("installer_invoice_sessions_session_unique").on(t.sessionId), index("installer_invoice_sessions_invoice_idx").on(t.invoiceId)],
+);
+
+/**
+ * Money paid against a contractor invoice. Xero stays the source of truth for
+ * bills and payments: the office records here what Xero shows, and a later
+ * read-only Xero match can fill it with source "xero". Never written to Xero.
+ */
+export const installerInvoicePayments = sqliteTable(
+  "installer_invoice_payments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    invoiceId: integer("invoice_id").notNull().references(() => installerInvoices.id, { onDelete: "cascade" }),
+    installerId: integer("installer_id").notNull().references(() => installers.id, { onDelete: "cascade" }),
+    amount: real("amount").notNull(),
+    /** YYYY-MM-DD the money left Terra. */
+    paidOn: text("paid_on").notNull(),
+    /** office · xero */
+    source: text("source").notNull().default("office"),
+    /** The Xero payment id, when it came from Xero. */
+    externalId: text("external_id"),
+    note: text("note"),
+    recordedByName: text("recorded_by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [index("installer_invoice_payments_invoice_idx").on(t.invoiceId), unique("installer_invoice_payments_external_unique").on(t.externalId)],
 );
 
 /** One vehicle on one working day. The allowance is copied here when first used. */

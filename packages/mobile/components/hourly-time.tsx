@@ -23,6 +23,7 @@ import {
   useResumeWork,
   useStartWork,
 } from "@/queries/hourly";
+import { useClockOutReminder } from "@/lib/clock-reminder";
 
 const c = Colors.light;
 
@@ -34,6 +35,14 @@ const TAP_LABEL: Record<TapKind, string> = {
   pause: "Break",
   resume: "Resume",
   finish: "Finish my time today",
+};
+
+// Damien, 13 Nov 2026: the words from the brief, on My hours & invoices. There is no Start installation button there to confuse it with.
+const HOURS_LABEL: Record<TapKind, string> = {
+  start: "Start work",
+  pause: "Start break",
+  resume: "End break",
+  finish: "Finish work",
 };
 
 function Big({
@@ -150,7 +159,7 @@ function EntryRow({ e, first, onFix }: { e: Entry; first: boolean; onFix: (e: En
         </View>
       ) : e.status === "open" ? (
         <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: c.mutedForeground, marginTop: 3 }}>
-          Still running. Tap Finish my time today when you stop.
+          Still running. Tap Finish when you stop.
         </Text>
       ) : e.recordedMinutes != null ? (
         <Text style={{ fontFamily: Fonts.sans, fontSize: 12.5, color: c.mutedForeground, marginTop: 3 }}>
@@ -161,10 +170,13 @@ function EntryRow({ e, first, onFix }: { e: Entry; first: boolean; onFix: (e: En
         <Text style={{ fontFamily: Fonts.medium, fontSize: 12, color: "#8A5A11", marginTop: 4 }}>
           You asked the office to fix this one.
         </Text>
-      ) : e.status !== "approved" && e.status !== "open" ? (
+      ) : e.status === "recorded" || (e.status === "approved" && e.invoiced === false) ? (
+        // Damien, 13 Nov 2026: approved but not invoiced can be fixed too. It goes back to the office to approve again.
         <Pressable onPress={() => onFix(e)} style={{ marginTop: 6, alignSelf: "flex-start" }}>
           <Text style={{ fontFamily: Fonts.medium, fontSize: 12.5, color: c.primary }}>Wrong? Ask the office to fix it</Text>
         </Pressable>
+      ) : e.status === "approved" && e.invoiced ? (
+        <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground, marginTop: 4 }}>On an invoice. Ring the office if it is wrong.</Text>
       ) : null}
     </View>
   );
@@ -180,13 +192,17 @@ export function HourlyTimeSection({
   closed,
   fallback,
   beforeStart,
+  wording = "task",
 }: {
   taskId: number;
   closed: boolean;
   fallback: React.ReactNode;
   /** A check before clocking on (today's SWMS for site work). False means stop here. */
   beforeStart?: (category: string) => Promise<boolean>;
+  /** "hours" on My hours & invoices: Start work, Start break, End break, Finish work. */
+  wording?: "task" | "hours";
 }) {
+  const L = wording === "hours" ? HOURS_LABEL : TAP_LABEL;
   const time = useMyTime(taskId);
   const start = useStartWork();
   const pause = usePauseWork();
@@ -201,6 +217,8 @@ export function HourlyTimeSection({
   const [fixing, setFixing] = useState<Entry | null>(null);
   const [fixText, setFixText] = useState("");
   const [fixSent, setFixSent] = useState(false);
+  // The forgotten clock-out reminder follows whichever job he is on the clock for.
+  useClockOutReminder(time.data ? (time.data.open ? { id: time.data.open.id, start: time.data.open.start } : null) : undefined);
 
   if (time.isLoading) return <ActivityIndicator color={c.primary} style={{ marginTop: 22 }} />;
   const d = time.data;
@@ -253,7 +271,7 @@ export function HourlyTimeSection({
         setPending(null);
         setError(errorText(e, "That didn't go through."));
       } else {
-        setError(`No signal. Your ${TAP_LABEL[kind]} at ${clock(tap.at)} is saved on this phone. Tap ${TAP_LABEL[kind]} again to send it.`);
+        setError(`No signal. Your ${L[kind]} at ${clock(tap.at)} is saved on this phone. Tap ${L[kind]} again to send it.`);
       }
     }
   }
@@ -348,23 +366,27 @@ export function HourlyTimeSection({
           <View style={{ gap: 8 }}>
             {!here && !d.openElsewhere ? (
               <View style={{ flexDirection: "row" }}>
-                <Big label={TAP_LABEL.start} icon="play" busy={busy} onPress={() => void send("start")} />
+                <Big label={L.start} icon="play" busy={busy} onPress={() => void send("start")} />
               </View>
             ) : null}
             {here ? (
               <View style={{ flexDirection: "row", gap: 8 }}>
                 {onBreak ? (
-                  <Big label={TAP_LABEL.resume} icon="play" busy={busy} onPress={() => void send("resume")} />
+                  <Big label={L.resume} icon="play" busy={busy} onPress={() => void send("resume")} />
                 ) : (
-                  <Big label={TAP_LABEL.pause} icon="cafe-outline" tone="plain" busy={busy} onPress={() => void send("pause")} />
+                  <Big label={L.pause} icon="cafe-outline" tone="plain" busy={busy} onPress={() => void send("pause")} />
                 )}
-                <Big label={TAP_LABEL.finish} icon="stop" tone={onBreak ? "plain" : "primary"} busy={busy} onPress={() => void send("finish")} />
+                <Big label={L.finish} icon="stop" tone={onBreak ? "plain" : "primary"} busy={busy} onPress={() => void send("finish")} />
               </View>
             ) : null}
             <Text style={{ fontFamily: Fonts.sans, fontSize: 11.5, color: c.mutedForeground }}>
-              {here
-                ? "This is your paid time only. Finish my time today stops it. It does not finish the installation."
-                : "Start my time records your paid time only, like arrival or loading. It does not start the installation. The site walk and SWMS are still needed before Start installation."}
+              {wording === "hours"
+                ? here
+                  ? "This is your paid time only. Finish work stops it. Breaks are taken off."
+                  : "Start work records your paid time only, like arrival or loading. It does not start the installation. Site work on a SWMS job needs today's SWMS first."
+                : here
+                  ? "This is your paid time only. Finish my time today stops it. It does not finish the installation."
+                  : "Start my time records your paid time only, like arrival or loading. It does not start the installation. The site walk and SWMS are still needed before Start installation."}
             </Text>
           </View>
         ) : null}
@@ -372,8 +394,8 @@ export function HourlyTimeSection({
         {live && !error ? (
           <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: busy ? c.mutedForeground : "#8A5A11", marginTop: 8 }}>
             {busy
-              ? `Sending your ${TAP_LABEL[live.kind]} from ${clock(live.at)}...`
-              : `Your ${TAP_LABEL[live.kind]} from ${clock(live.at)} has not reached the office yet. Tap ${TAP_LABEL[live.kind]} again to send it.`}
+              ? `Sending your ${L[live.kind]} from ${clock(live.at)}...`
+              : `Your ${L[live.kind]} from ${clock(live.at)} has not reached the office yet. Tap ${L[live.kind]} again to send it.`}
           </Text>
         ) : null}
         {error ? (
@@ -422,6 +444,7 @@ export function HourlyTimeSection({
           </Text>
           <Text style={{ fontFamily: Fonts.sans, fontSize: 12, color: c.mutedForeground, marginTop: 2 }}>
             For example: I forgot to tap Finish, I left at 3:30pm.
+            {fixing.status === "approved" ? " This one is approved, so it goes back to the office to approve again. Your original times are kept." : ""}
           </Text>
           <TextInput
             value={fixText}

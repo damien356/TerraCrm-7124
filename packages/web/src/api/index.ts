@@ -27,6 +27,7 @@ import { quotePacks } from "./routes/quotePacks";
 import { quoteAgent } from "./routes/quoteAgent";
 import { field } from "./routes/field";
 import { installerInvoices } from "./routes/installerInvoices";
+import { hourlyInvoices } from "./routes/hourlyInvoices";
 import { upload } from "./routes/upload";
 import { areas } from "./routes/areas";
 import { media } from "./routes/media";
@@ -187,6 +188,8 @@ export const router = {
   visits,
   /** The installer's own invoice to Terra for a completed task. */
   installerInvoices,
+  /** Hourly contractor invoices by dates, across jobs, and payments recorded (13 Nov 2026). */
+  hourlyInvoices,
   /** Presigned direct-to-storage uploads for photos, video and plans. */
   upload,
   /** Rooms and zones the work covers — photos hang off these. */

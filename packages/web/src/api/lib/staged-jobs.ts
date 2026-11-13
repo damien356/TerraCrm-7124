@@ -7,6 +7,7 @@ import { quoteRefOf } from "./quote-number";
 import { isEmployee } from "./worker-type";
 import { COUNTED_STATUSES, WORK_KINDS } from "./variations";
 import { PART_COMPLETE_STATUS } from "./staged-guard";
+import { taskInvoicesOnly } from "./period-invoices";
 
 /* ---------------------------------------------------------------------------
  * STAGED JOBS AND PROGRESS PAYMENTS (Damien, 12 Nov 2026).
@@ -277,7 +278,8 @@ export async function loadJobContext(jobId: number, opts: { planId?: number } = 
   const instIds = [...new Set([...tasks.map((t) => t.assignedInstallerId), ...pay.map((p) => p.installerId)].filter((x): x is number => x != null))];
   const [installers, priorClaims, extras, varItems] = await Promise.all([
     instIds.length ? db.select().from(schema.installers).where(inArray(schema.installers.id, instIds)) : [],
-    taskIds.length ? db.select().from(schema.installerInvoices).where(inArray(schema.installerInvoices.taskId, taskIds)) : [],
+    // Hourly invoices by dates are not a claim on the task they are stored on (Damien, 13 Nov 2026).
+    taskIds.length ? db.select().from(schema.installerInvoices).where(inArray(schema.installerInvoices.taskId, taskIds)).then(taskInvoicesOnly) : [],
     taskIds.length
       ? db
           .select()
