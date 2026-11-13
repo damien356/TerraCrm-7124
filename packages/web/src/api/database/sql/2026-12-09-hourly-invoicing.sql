@@ -89,9 +89,9 @@ SELECT 'Contractor labour — per hour', 'other', 'work', 'hour', 'Hourly contra
 WHERE NOT EXISTS (SELECT 1 FROM `labour_rate_items` WHERE `name` = 'Contractor labour — per hour' AND `unit` = 'hour');
 --> statement-breakpoint
 INSERT INTO `settings` (`key`, `value`, `updated_at`)
-SELECT 'hourly_labour_item_id', CAST(MIN(`id`) AS TEXT), unixepoch() FROM `labour_rate_items` WHERE `name` = 'Contractor labour — per hour' AND `unit` = 'hour'
-HAVING MIN(`id`) IS NOT NULL
-ON CONFLICT(`key`) DO NOTHING;
+SELECT 'hourly_labour_item_id', CAST(`id` AS TEXT), unixepoch() FROM `labour_rate_items` WHERE `name` = 'Contractor labour — per hour' AND `unit` = 'hour'
+  AND NOT EXISTS (SELECT 1 FROM `settings` WHERE `key` = 'hourly_labour_item_id')
+ORDER BY `id` LIMIT 1;
 --> statement-breakpoint
 INSERT INTO `labour_rates` (`item_id`, `installer_id`, `amount`, `effective_from`, `note`, `created_by_name`, `created_at`, `updated_at`)
 SELECT CAST(s.`value` AS INTEGER), t.`installer_id`, t.`base_rate`, t.`effective_from`, 'From his hourly pay terms', 'Terra office', unixepoch(), unixepoch()
