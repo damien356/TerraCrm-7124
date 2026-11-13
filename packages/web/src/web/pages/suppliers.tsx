@@ -234,7 +234,8 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
       invoiceNames: form.invoiceNames,
       kind: form.kind as "fuel",
       basis: form.basis as "lm",
-      amount: isPercent ? null : Number(form.amount || 0),
+      // Damien, 12 Nov 2026: on a percentage the amount is its maximum per order. Blank = no maximum.
+      amount: isPercent ? (Number(form.amount) > 0 ? Number(form.amount) : null) : Number(form.amount || 0),
       percent: isPercent ? Number(form.percent || 0) : null,
       unitBlock: !isPercent && Number(form.unitBlock) > 0 ? Number(form.unitBlock) : null,
       amountIncludesGst: form.amountIncludesGst,
@@ -292,15 +293,28 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
           </Field>
         </div>
         {isPercent ? (
-          <Field label="Percentage" hint="Read off the goods total, never off the other charges.">
-            <Input
-              type="number"
-              step="0.1"
-              value={form.percent}
-              onChange={(e) => setForm({ ...form, percent: e.target.value })}
-              placeholder="15"
-            />
-          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Percentage" hint="Read off the goods total, never off the other charges.">
+              <Input
+                type="number"
+                step="0.1"
+                value={form.percent}
+                onChange={(e) => setForm({ ...form, percent: e.target.value })}
+                placeholder="15"
+              />
+            </Field>
+            {/* Damien, 12 Nov 2026: Forbo, "1.5% surcharge, capped at $180 per order". */}
+            <Field label="Maximum per order (optional)" hint="The most it can come to on one order. Ex GST, unless you tick the box below. Blank = no maximum.">
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                value={form.amount}
+                onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                placeholder="180.00"
+              />
+            </Field>
+          </div>
         ) : (
           <Field label={`Amount ${BASIS_SHORT[form.basis] ?? ""}`} hint="Ex GST, unless you tick the box below.">
             <Input
@@ -371,9 +385,9 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
               id="fee_inc_gst"
               checked={form.amountIncludesGst}
               onChange={(e) => setForm({ ...form, amountIncludesGst: e.target.checked })}
-              disabled={isPercent}
+              disabled={isPercent && !(Number(form.amount) > 0)}
             />
-            The amount above already includes GST
+            {isPercent ? "The maximum above already includes GST" : "The amount above already includes GST"}
           </label>
           <label htmlFor="fee_is_credit" className="flex items-center gap-2 text-sm">
             <Checkbox
@@ -1104,13 +1118,32 @@ export default function SuppliersPage() {
                         </div>
                         <div className="w-[130px] shrink-0">
                           {f.basis === "percent_of_order" ? (
-                            <Input
-                              type="number"
-                              step="0.1"
-                              className="h-8 text-right"
-                              defaultValue={f.percent ?? 0}
-                              onBlur={(e) => feeUpdate.mutate({ id: f.id, percent: Number(e.target.value || 0) })}
-                            />
+                            <>
+                              <Input
+                                type="number"
+                                step="0.1"
+                                className="h-8 text-right"
+                                aria-label={`${f.name} percentage`}
+                                defaultValue={f.percent ?? 0}
+                                onBlur={(e) => feeUpdate.mutate({ id: f.id, percent: Number(e.target.value || 0) })}
+                              />
+                              {/* Damien, 12 Nov 2026: the most this percentage can come to on one order. Blank = no maximum. */}
+                              <Input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                className="mt-1.5 h-8 text-right"
+                                aria-label={`${f.name} maximum per order`}
+                                title="Maximum per order, $. Leave blank for no maximum."
+                                placeholder="No max $"
+                                defaultValue={(f.amount ?? 0) > 0 ? String(f.amount) : ""}
+                                onBlur={(e) => {
+                                  const v = Number(e.target.value);
+                                  const next = v > 0 ? v : null;
+                                  if (next !== ((f.amount ?? 0) > 0 ? f.amount : null)) feeUpdate.mutate({ id: f.id, amount: next });
+                                }}
+                              />
+                            </>
                           ) : (
                             <Input
                               type="number"
@@ -1122,6 +1155,7 @@ export default function SuppliersPage() {
                           )}
                           <p className="mt-1 text-right text-[11px] text-muted-foreground">
                             {f.basis === "percent_of_order" && f.percentBase === "goods_and_charges" ? "% of goods and charges" : BASIS_LABEL[f.basis]}
+                            {f.basis === "percent_of_order" && (f.amount ?? 0) > 0 ? ` · max ${money(f.amount ?? 0)} an order` : ""}
                             {f.unitBlock ? ` · per ${f.unitBlock} or part` : ""}
                             {f.amountIncludesGst ? " · inc GST" : ""}
                           </p>

@@ -188,9 +188,10 @@ const UNIT_OF: Record<string, [string, string]> = {
 const lineUnitOf = (basis: string) =>
   basis === "pallet" ? "pallet" : basis === "roll" ? "roll" : basis === "box" ? "box" : basis === "lm" ? "lm" : basis === "m2" ? "m2" : basis === "each" ? "each" : basis === "week" ? "week" : "order";
 
-/** "(1 pallet)", "(2.1%)", or nothing for a flat charge. */
+/** "(1 pallet)", "(2.1%)", "(1.5%, capped at $180.00)", or nothing for a flat charge. */
 function countText(c: ResolvedCharge) {
-  if (c.basis === "percent_of_order") return ` (${c.percent ?? 0}%)`;
+  // Damien, 12 Nov 2026: a percentage held to its maximum says so on the line.
+  if (c.basis === "percent_of_order") return ` (${c.percent ?? 0}%${c.capped && c.capExGst != null ? `, capped at \u0024${c.capExGst.toFixed(2)}` : ""})`;
   const u = UNIT_OF[c.basis];
   if (!u) return "";
   return ` (${r2(c.units)} ${c.units === 1 ? u[0] : u[1]})`;

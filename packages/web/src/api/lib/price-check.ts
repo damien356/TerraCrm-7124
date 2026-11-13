@@ -1,7 +1,7 @@
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { isChargeLive, priceProduct, sellExGst, todayISO, type SpecialRow } from "./pricing";
+import { isChargeLive, percentCapExGst, priceProduct, sellExGst, todayISO, type SpecialRow } from "./pricing";
 import { notifyOffice } from "./notify";
 import { FREIGHT_KINDS, type Row } from "./charge-match";
 import { compareInvoice } from "./invoice-compare";
@@ -357,11 +357,33 @@ export async function draftFlags(invoiceId: number): Promise<FlagDraft[]> {
       const others = r2(otherRows.reduce((a, o) => a + o.invoice!.total, 0));
       const onCharges = r.percentBase === "goods_and_charges";
       const opsBase = onCharges ? goodsTotal + others : goodsTotal;
-      const expected = r2((opsBase * pct) / 100);
+      // Damien, 12 Nov 2026: a percentage with a maximum per order never expects more than the maximum.
+      const cap = percentCapExGst(r);
+      const held = (n: number) => (cap != null ? Math.min(n, cap) : n);
+      const raw = r2((opsBase * pct) / 100);
+      const expected = held(raw);
       if (!worthFlagging(expected, billed)) continue;
       const altBase = onCharges ? goodsTotal : goodsTotal + others;
-      const altExpected = r2((altBase * pct) / 100);
+      const altExpected = held(r2((altBase * pct) / 100));
       const impact = r2(billed - expected);
+      // At the maximum, or billed over it, the percentage cannot be read back off
+      // the invoice, so nothing is offered to change. A person checks it.
+      if (cap != null && (raw >= cap || billed > cap)) {
+        flags.push({
+          ...base,
+          kind: "fee_percent",
+          opsValue: expected,
+          unit: "%",
+          impactExGst: impact,
+          title: `${whose} ${lc(r.name)}: ${$(billed)} billed, Ops expects ${$(expected)}`,
+          detail:
+            billed > cap
+              ? `${Ref} charges ${$(billed)}, more than the ${$(cap)} maximum per order Ops has for ${lc(r.name)}. ${pct}% of ${$(opsBase)} is ${$(raw)}. Check it with ${who}. Nothing is changed by itself.`
+              : `${Ref} charges ${$(billed)}. ${pct}% of ${$(opsBase)} is ${$(raw)}, over the ${$(cap)} maximum per order, so Ops expects ${$(cap)}. Check it with ${who}. Nothing is changed by itself.`,
+          change: null,
+        });
+        continue;
+      }
       if (others > 0 && Math.abs(altExpected - billed) <= Math.max(0.05, billed * 0.001)) {
         const to = onCharges ? "goods" : "goods_and_charges";
         const otherNames = otherRows.map((o) => o.label.toLowerCase());
@@ -431,9 +453,11 @@ export async function draftFlags(invoiceId: number): Promise<FlagDraft[]> {
     const flat = r.basis === "order" || r.basis === "shipment";
     const qty = r.basis === "percent_of_order" || flat ? null : (goodsQty.get(r.basis) ?? null);
     if (r.basis !== "percent_of_order" && !flat && qty == null) continue; // no goods in that unit to work it out on
-    const expected = r.basis === "percent_of_order" ? r2((goodsTotal * (r.percent ?? 0)) / 100) : r2(ruleAmountEx(r) * (qty ?? 1));
+    const cap = percentCapExGst(r);
+    const pctOf = r2((goodsTotal * (r.percent ?? 0)) / 100);
+    const expected = r.basis === "percent_of_order" ? (cap != null ? Math.min(pctOf, cap) : pctOf) : r2(ruleAmountEx(r) * (qty ?? 1));
     if (expected < 0.5) continue;
-    const rate = r.basis === "percent_of_order" ? `${r.percent}%` : `${$(ruleAmountEx(r))} ${per(r.basis)}`;
+    const rate = r.basis === "percent_of_order" ? `${r.percent}%${cap != null ? ` (maximum ${$(cap)} per order)` : ""}` : `${$(ruleAmountEx(r))} ${per(r.basis)}`;
     flags.push({
       kind: "missing_charge",
       key: `${invoiceId}:f:${r.id}`,

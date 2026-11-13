@@ -1316,7 +1316,12 @@ export const supplierFeeRules = sqliteTable(
      *   week              $ per pallet per week     (storage)
      */
     basis: text("basis").notNull().default("order"),
-    /** Dollar amount for a fixed fee. NULL when the fee is a percentage. */
+    /**
+     * Dollar amount for a fixed fee. On a percentage fee it is the MOST the fee
+     * can come to on one order, NULL for no maximum (Damien, 12 Nov 2026: Forbo,
+     * "1.5% surcharge, capped at $180 per order"). Read through
+     * percentCapExGst in api/lib/pricing.ts when working out money.
+     */
     amount: real("amount"),
     /** Percentage for percent_of_order fees, e.g. 15 for a part-roll cutting fee. */
     percent: real("percent"),

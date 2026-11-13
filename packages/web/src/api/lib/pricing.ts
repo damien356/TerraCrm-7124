@@ -779,6 +779,11 @@ export type SupplierChargeRule = {
   name: string;
   kind: string;
   basis: string;
+  /**
+   * The dollar rate for a fixed charge. On a percentage charge it is the most
+   * the charge can come to on one order, or null for no maximum (Damien,
+   * 12 Nov 2026: Forbo, 1.5% capped at $180 per order). See percentCapExGst.
+   */
   amount: number | null;
   percent: number | null;
   /** "goods" (default) or "goods_and_charges". See supplier_fee_rules.percent_base. */
@@ -857,6 +862,30 @@ export function blockUnits(rule: Pick<SupplierChargeRule, "basis" | "unitBlock">
   return Math.ceil(units / block - 1e-9);
 }
 
+/**
+ * The most a percentage charge can come to on one order, ex GST (Damien,
+ * 12 Nov 2026). Forbo: "1.5% surcharge, capped at $180 per order". Held in the
+ * rule's `amount`, which a percentage charge never used. Null, 0 or blank =
+ * no maximum. Ticking "already includes GST" takes the GST back off it.
+ */
+export function percentCapExGst(rule: Pick<SupplierChargeRule, "basis" | "amount" | "amountIncludesGst">): number | null {
+  if (rule.basis !== "percent_of_order") return null;
+  const a = rule.amount;
+  if (a == null || !Number.isFinite(a) || !(a > 0)) return null;
+  return round2(rule.amountIncludesGst ? a / 1.1 : a);
+}
+
+/** A percentage worked out on `base`, held to the rule's maximum. Damien, 12 Nov 2026. */
+export function cappedPercentExGst(
+  rule: Pick<SupplierChargeRule, "basis" | "amount" | "amountIncludesGst" | "percent">,
+  base: number,
+): { exGst: number; uncappedExGst: number; capExGst: number | null; capped: boolean } {
+  const uncappedExGst = round2((base * (rule.percent ?? 0)) / 100);
+  const capExGst = percentCapExGst(rule);
+  const capped = capExGst != null && uncappedExGst > capExGst;
+  return { exGst: capped ? capExGst : uncappedExGst, uncappedExGst, capExGst, capped };
+}
+
 /** Inside the charge's dated window today. No end date = until further notice. */
 export function isChargeLive(rule: SupplierChargeRule, today = todayISO()): boolean {
   if (rule.active === false) return false;
@@ -880,6 +909,10 @@ export type ResolvedCharge = {
   isCredit: boolean;
   /** Why it applied, in the words the office needs: "$2.00/lm × 15 lm". */
   note: string;
+  /** A percentage charge's maximum per order, ex GST. Null = no maximum. Damien, 12 Nov 2026. */
+  capExGst?: number | null;
+  /** true when the percentage came to more than the maximum, so the maximum was charged. */
+  capped?: boolean;
 };
 
 export type SupplierChargeQuote = {
@@ -994,7 +1027,9 @@ export function resolveSupplierCharges(
       continue;
     }
     // A percentage reads off the GOODS only. Charges never compound.
-    const gross = isPercent ? (goodsExGst * (r.percent ?? 0)) / 100 : (r.amount ?? 0) * units;
+    // It never comes to more than the rule's maximum, when it has one (Damien, 12 Nov 2026).
+    const pct = isPercent ? cappedPercentExGst(r, goodsExGst) : null;
+    const gross = pct ? pct.exGst : (r.amount ?? 0) * units;
     // Everything normalises to ex-GST here; GST is added once, at the end.
     const exGst = round2(r.amountIncludesGst && !isPercent ? gross / 1.1 : gross);
     const signed = r.isCredit ? -exGst : exGst;
@@ -1009,14 +1044,17 @@ export function resolveSupplierCharges(
       percent: isPercent ? (r.percent ?? 0) : null,
       exGst: signed,
       isCredit: r.isCredit,
-      note: chargeNote(r, units, exGst, goodsExGst),
+      note: pct ? percentNote(r, goodsExGst, "goods", pct) : chargeNote(r, units, exGst, goodsExGst),
+      capExGst: pct?.capExGst ?? null,
+      capped: pct?.capped ?? false,
     });
   }
 
   if (onCharges.length) {
     const base = round2(goodsExGst + charges.filter((c) => !c.isCredit && !FREIGHT_KINDS.has(c.kind)).reduce((t, c) => t + c.exGst, 0));
     for (const r of onCharges) {
-      const exGst = round2((base * (r.percent ?? 0)) / 100);
+      const pct = cappedPercentExGst(r, base);
+      const exGst = pct.exGst;
       const signed = r.isCredit ? -exGst : exGst;
       charges.push({
         id: r.id,
@@ -1028,7 +1066,9 @@ export function resolveSupplierCharges(
         percent: r.percent ?? 0,
         exGst: signed,
         isCredit: r.isCredit,
-        note: `${r.percent ?? 0}% of \u0024${base.toFixed(2)} goods and charges = \u0024${exGst.toFixed(2)}.`,
+        note: percentNote(r, base, "goods and charges", pct),
+        capExGst: pct.capExGst,
+        capped: pct.capped,
       });
     }
   }
@@ -1058,6 +1098,15 @@ export function resolveSupplierCharges(
     excluded,
     note: chargesNote(charges, excluded, goodsExGst, chargesExGst),
   };
+}
+
+/** "1.5% of $15,000.00 goods is $225.00, over the $180.00 maximum, so $180.00." Damien, 12 Nov 2026. */
+function percentNote(r: SupplierChargeRule, base: number, on: string, pct: ReturnType<typeof cappedPercentExGst>) {
+  const money = (n: number) => `\u0024${n.toFixed(2)}`;
+  const head = `${r.percent ?? 0}% of ${money(base)} ${on}`;
+  if (pct.capped) return `${head} is ${money(pct.uncappedExGst)}, over the ${money(pct.capExGst ?? 0)} maximum per order, so ${money(pct.exGst)}.`;
+  if (pct.capExGst != null) return `${head} = ${money(pct.exGst)} (maximum ${money(pct.capExGst)} per order).`;
+  return `${head} = ${money(pct.exGst)}.`;
 }
 
 function chargeNote(r: SupplierChargeRule, units: number, exGst: number, goodsExGst: number) {

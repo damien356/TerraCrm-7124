@@ -706,7 +706,11 @@ function PoEditor({
                     deliverTo === "pickup" ? r.kind === "delivery" : r.appliesTo === "warehouse" || r.appliesTo === "site" ? r.appliesTo !== deliverTo : false;
                   const byTick = !r.autoApply || pickupOneWay;
                   const checked = byTick ? picked.has(r.id) : !skipped.has(r.id);
-                  const rate = r.basis === "percent_of_order" ? `${r.percent ?? 0}%` : `$${(r.amount ?? 0).toFixed(2)}${r.basis === "order" ? "" : ` / ${r.basis}`}`;
+                  // Damien, 12 Nov 2026: on a percentage charge the amount is its maximum per order.
+                  const rate =
+                    r.basis === "percent_of_order"
+                      ? `${r.percent ?? 0}%${(r.amount ?? 0) > 0 ? `, max $${(r.amount ?? 0).toFixed(2)}` : ""}`
+                      : `$${(r.amount ?? 0).toFixed(2)}${r.basis === "order" ? "" : ` / ${r.basis}`}`;
                   return (
                     <li key={r.id}>
                       <label className={off ? "flex items-center gap-2.5 text-sm opacity-50" : "flex cursor-pointer items-center gap-2.5 text-sm"}>
