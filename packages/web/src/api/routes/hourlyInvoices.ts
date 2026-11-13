@@ -22,6 +22,7 @@ import {
   previewPeriod,
   recordPayment,
 } from "../lib/hourly-invoice";
+import { xeroPaymentCheck } from "../lib/hourly-xero-check";
 
 /**
  * HOURLY CONTRACTOR INVOICING (Damien, 13 Nov 2026).
@@ -34,7 +35,8 @@ import {
  *    with Admin.
  *
  * The rules (what can be billed, one write, no double billing) live in
- * lib/hourly-invoice.ts. Nothing here talks to Xero.
+ * lib/hourly-invoice.ts. The one Xero call is xeroCheck, which only reads
+ * bills (lib/hourly-xero-check.ts, Damien, 13 Nov 2026).
  */
 
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -169,6 +171,15 @@ const office = {
       if (!context.actor.canSeeCosts) throw new ORPCError("FORBIDDEN", { message: "Costs access required" });
       return recordPayment({ invoiceId: input.invoiceId, amount: input.amount, paidOn: input.paidOn, note: input.note ?? null }, context.actor.name || context.actor.email || "Office");
     }),
+
+  /**
+   * Damien, 13 Nov 2026: read Xero bills and flag invoices that look paid
+   * there. Read only. Nothing is recorded: the office presses Record payment.
+   */
+  xeroCheck: staffOnly.input(z.object({ invoiceIds: z.array(z.number().int()).max(500) })).handler(async ({ input, context }) => {
+    if (!context.actor.canSeeCosts) throw new ORPCError("FORBIDDEN", { message: "Costs access required" });
+    return xeroPaymentCheck(input.invoiceIds);
+  }),
 };
 
 export const hourlyInvoices = { ...crew, ...office };

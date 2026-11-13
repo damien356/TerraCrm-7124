@@ -17,9 +17,10 @@ import {
   useSubcontractorInvoices,
   useVariationRequests,
 } from "../queries/installerInvoices";
-import { useInvoiceBalances, useInvoiceEntries, useRecordPayment } from "../queries/hourlyInvoices";
+import { useInvoiceBalances, useInvoiceEntries, useRecordPayment, useXeroPaymentCheck } from "../queries/hourlyInvoices";
 
 type Balance = NonNullable<ReturnType<typeof useInvoiceBalances>["data"]>[number];
+type XeroRow = NonNullable<ReturnType<typeof useXeroPaymentCheck>["data"]>["rows"][number];
 
 const STATE_COLOUR: Record<string, string> = { awaiting_payment: "#C0603F", part_paid: "#D08A1E", paid: "#3F7D3A" };
 
@@ -170,11 +171,13 @@ function InvoiceRow({
   installerName,
   bal,
   canSeeCosts,
+  xero,
 }: {
   row: NonNullable<ReturnType<typeof useSubcontractorInvoices>["data"]>[number];
   installerName: (id: number) => string;
   bal: Balance | null;
   canSeeCosts: boolean;
+  xero: XeroRow | null;
 }) {
   const byDates = bal?.kind === "period";
   const setStatus = useSetInvoiceStatus();
@@ -254,6 +257,15 @@ function InvoiceRow({
           ) : null}
           {bal && bal.state === "part_paid" ? <p className="tabular mt-0.5 text-xs text-muted-foreground">{moneyExact(bal.balance)} left</p> : null}
           {bal?.dueDate && bal.state !== "paid" ? <p className="mt-0.5 text-xs text-muted-foreground">Due {sayYmd(bal.dueDate)}</p> : null}
+          {xero?.looksPaid ? (
+            <p className="mt-1">
+              <Badge colour="#3F7D3A">Looks paid in Xero</Badge>
+            </p>
+          ) : xero?.match === "check" ? (
+            <p className="mt-1">
+              <Badge colour="#D08A1E">Check in Xero</Badge>
+            </p>
+          ) : null}
         </td>
         <td className="px-4 py-2.5">
           <div className="flex items-center justify-end gap-1.5">
@@ -294,7 +306,7 @@ function InvoiceRow({
                 </table>
               </div>
               <div className="text-[13px]">
-                {bal ? <PaymentsBlock row={row} bal={bal} canSeeCosts={canSeeCosts} /> : null}
+                {bal ? <PaymentsBlock row={row} bal={bal} canSeeCosts={canSeeCosts} xero={xero} /> : null}
                 <p className="label-xs">Their business details, as invoiced</p>
                 <dl className="mt-1.5 space-y-1">
                   <div className="flex justify-between gap-4">
@@ -336,9 +348,12 @@ function InvoiceRow({
 
 /**
  * Damien, 13 Nov 2026: what has been paid, what is left, and recording a
- * payment as Xero shows it. Nothing is read from or written to Xero here.
+ * payment as Xero shows it. If "Check Xero for payments" was pressed, what
+ * the matching Xero bill shows sits here too, with a button that fills the
+ * form in. Nothing is recorded until Record payment is pressed, and nothing
+ * is ever written to Xero.
  */
-function PaymentsBlock({ row, bal, canSeeCosts }: { row: { id: number; total: number }; bal: Balance; canSeeCosts: boolean }) {
+function PaymentsBlock({ row, bal, canSeeCosts, xero }: { row: { id: number; total: number }; bal: Balance; canSeeCosts: boolean; xero: XeroRow | null }) {
   const record = useRecordPayment();
   const [amount, setAmount] = React.useState("");
   const [paidOn, setPaidOn] = React.useState(todayBrisbane());
@@ -346,6 +361,34 @@ function PaymentsBlock({ row, bal, canSeeCosts }: { row: { id: number; total: nu
   return (
     <div className="mb-4">
       <p className="label-xs">Payment</p>
+      {xero && xero.match !== "none" ? (
+        <div className="mt-1.5 rounded-md border border-border bg-background px-3 py-2 text-xs">
+          <p className="font-medium">
+            {xero.looksPaid ? "Looks paid in Xero" : xero.match === "matched" ? "Found in Xero" : "Check in Xero"}
+          </p>
+          <p className="text-muted-foreground">{xero.why}</p>
+          {xero.bill ? (
+            <p className="tabular mt-0.5 text-muted-foreground">
+              Bill {xero.bill.number || "with no number"}, {xero.bill.contact || "no contact"}, {xero.bill.status.toLowerCase()}. Total{" "}
+              {moneyExact(xero.bill.total)}, paid {moneyExact(xero.bill.paid)}, due {moneyExact(xero.bill.due)}
+              {xero.bill.paidOn ? `, last paid ${sayYmd(xero.bill.paidOn)}` : ""}.
+            </p>
+          ) : null}
+          {canSeeCosts && xero.looksPaid && xero.toRecord > 0 ? (
+            <Button
+              variant="ghost"
+              className="mt-1"
+              onClick={() => {
+                setAmount(xero.toRecord.toFixed(2));
+                if (xero.bill?.paidOn && xero.bill.paidOn <= todayBrisbane()) setPaidOn(xero.bill.paidOn);
+                setNote(`Xero bill ${xero.bill?.number ?? ""}`.trim());
+              }}
+            >
+              Fill in {moneyExact(xero.toRecord)} from Xero
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       <dl className="mt-1.5 space-y-1">
         {bal.kind === "period" ? (
           <div className="flex justify-between gap-4">
@@ -467,6 +510,12 @@ export default function SubcontractorInvoicesPage() {
   const canSeeCosts = Boolean(bootstrap.data?.actor.canSeeCosts);
   const ids = React.useMemo(() => (q.data ?? []).map((r) => r.id), [q.data]);
   const balances = useInvoiceBalances(ids);
+  const xeroCheck = useXeroPaymentCheck();
+  const xeroOf = React.useMemo(() => {
+    const m = new Map((xeroCheck.data?.rows ?? []).map((r) => [r.invoiceId, r]));
+    return (id: number) => m.get(id) ?? null;
+  }, [xeroCheck.data]);
+  const unpaidIds = React.useMemo(() => (balances.data ?? []).filter((b) => b.balance > 0).map((b) => b.invoiceId), [balances.data]);
   const balOf = React.useMemo(() => {
     const m = new Map((balances.data ?? []).map((b) => [b.invoiceId, b]));
     return (id: number) => m.get(id) ?? null;
@@ -558,8 +607,29 @@ export default function SubcontractorInvoicesPage() {
             <CardHeader
               title={status === "all" ? "All invoices" : (STATUS_LABEL[status] ?? "Invoices")}
               subtitle="Click an invoice number to see the lines and the business details it was issued with."
-              action={<Badge>{rows.length}</Badge>}
+              action={
+                <div className="flex items-center gap-2">
+                  {canSeeCosts ? (
+                    <Button
+                      variant="ghost"
+                      disabled={xeroCheck.isPending || unpaidIds.length === 0}
+                      onClick={() => xeroCheck.mutate({ invoiceIds: unpaidIds })}
+                      title="Reads Xero bills only. Nothing is recorded or changed."
+                    >
+                      {xeroCheck.isPending ? <Spinner /> : null}
+                      Check Xero for payments
+                    </Button>
+                  ) : null}
+                  <Badge>{rows.length}</Badge>
+                </div>
+              }
             />
+            {xeroCheck.data || xeroCheck.error ? (
+              <p className={`border-b border-border px-4 py-2 text-xs ${xeroCheck.error ? "text-destructive" : "text-muted-foreground"}`}>
+                {xeroCheck.error ? xeroCheck.error.message : xeroCheck.data!.message}
+                {xeroCheck.data?.rows.some((r) => r.looksPaid || r.match === "check") ? " Open an invoice to see the Xero bill." : ""}
+              </p>
+            ) : null}
             {rows.length === 0 ? (
               <Empty>
                 No invoices match that. An invoice appears here the moment an installer presses submit in Terra
@@ -583,7 +653,7 @@ export default function SubcontractorInvoicesPage() {
                   </thead>
                   <tbody>
                     {rows.map((r) => (
-                      <InvoiceRow key={r.id} row={r} installerName={nameById} bal={balOf(r.id)} canSeeCosts={canSeeCosts} />
+                      <InvoiceRow key={r.id} row={r} installerName={nameById} bal={balOf(r.id)} canSeeCosts={canSeeCosts} xero={xeroOf(r.id)} />
                     ))}
                   </tbody>
                 </table>

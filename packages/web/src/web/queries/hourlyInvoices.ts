@@ -29,3 +29,8 @@ export function useRecordPayment() {
     }),
   );
 }
+
+/** Damien, 13 Nov 2026: read Xero bills and flag invoices that look paid. Read only, nothing recorded. */
+export function useXeroPaymentCheck() {
+  return useMutation(orpc.hourlyInvoices.xeroCheck.mutationOptions());
+}

@@ -22,6 +22,7 @@
  *   7  Privacy: each contractor sees only his own; costs stay with costs access
  *   8  Payments: Part paid, then Paid
  *   9  The task invoice and an invoice by dates never bill the same time
+ *  10  Xero payment check: reads bills only, flags what looks paid, records nothing
  *
  * Unsynced taps live on the phone (its offline queue and the dot on each
  * entry). On the server they arrive later with the same key, and an Issue
@@ -667,6 +668,102 @@ describe("9. The task invoice and invoices by dates", () => {
   });
 
   test("nothing left the machine", () => {
+    expect(blocked).toEqual([]);
+  });
+});
+
+/* ---- 10. Xero payment check (Damien, 13 Nov 2026). Read only, Xero faked. ---- */
+
+describe("10. Xero payment check, read only", () => {
+  type Inv = { id: number; total: number; invoice_number: number; installer_id: number };
+  let open: Inv[] = [];
+  const calls: Array<{ path: string; query: Record<string, string> }> = [];
+  const fake = (bills: any[], ready = true) => ({
+    ready: async () => (ready ? { tenantId: "t" } : null),
+    api: async (path: string, init: { query: Record<string, string> }) => {
+      calls.push({ path, query: init.query });
+      return { Invoices: init.query.page === "1" ? bills : [] } as any;
+    },
+  });
+  let billNo = 0;
+  const bill = (over: Record<string, unknown>) => ({ InvoiceID: `x-${++billNo}`, Type: "ACCPAY", Status: "AUTHORISED", AmountPaid: 0, AmountDue: 0, ...over });
+  let mod: typeof import("../src/api/lib/hourly-xero-check");
+  const nameOf = async (inv: Inv) => (await q("SELECT name FROM installers WHERE id = ?", [inv.installer_id]))[0].name as string;
+
+  beforeAll(async () => {
+    mod = await import("../src/api/lib/hourly-xero-check");
+    open = (await q("SELECT id, total, invoice_number, installer_id FROM installer_invoices WHERE status <> 'paid' ORDER BY id")) as Inv[];
+  });
+
+  test("there are unpaid invoices to check", () => {
+    expect(open.length).toBeGreaterThan(0);
+  });
+
+  test("Xero not connected: nothing checked, Xero never called", async () => {
+    calls.length = 0;
+    const r = await mod.xeroPaymentCheck(open.map((i) => i.id), fake([], false));
+    expect([r.connected, r.checked, calls.length]).toEqual([false, 0, 0]);
+  });
+
+  test("a paid bill with the same total, number and name looks paid; nothing is recorded", async () => {
+    const inv = open[0]!;
+    const name = await nameOf(inv);
+    const before = await q("SELECT count(*) n FROM installer_invoice_payments");
+    calls.length = 0;
+    const r = await mod.xeroPaymentCheck([inv.id], fake([
+      bill({ InvoiceNumber: `INV-00${inv.invoice_number}`, Contact: { Name: `${name} Flooring` }, Status: "PAID", Total: inv.total, AmountPaid: inv.total, FullyPaidOnDate: "/Date(1794787200000+0000)/" }),
+    ]));
+    expect(r.rows).toHaveLength(1);
+    expect([r.rows[0]!.match, r.rows[0]!.looksPaid, r.rows[0]!.toRecord, r.rows[0]!.bill!.paidOn]).toEqual(["matched", true, inv.total, "2026-11-16"]);
+    expect(calls[0]!.path).toBe("Invoices");
+    expect(calls[0]!.query.where).toStartWith('Type=="ACCPAY" AND Date>=DateTime(');
+    expect(await q("SELECT count(*) n FROM installer_invoice_payments")).toEqual(before);
+  });
+
+  test("same total and number but another contact: check it, never called paid", async () => {
+    const inv = open[0]!;
+    const r = await mod.xeroPaymentCheck([inv.id], fake([bill({ InvoiceNumber: String(inv.invoice_number), Contact: { Name: "Someone Else Pty Ltd" }, Status: "PAID", Total: inv.total, AmountPaid: inv.total })]));
+    expect([r.rows[0]!.match, r.rows[0]!.looksPaid, r.rows[0]!.toRecord]).toEqual(["check", false, 0]);
+  });
+
+  test("a different total is no match; two bills that fit equally are not guessed", async () => {
+    const inv = open[0]!;
+    const name = await nameOf(inv);
+    const off = await mod.xeroPaymentCheck([inv.id], fake([bill({ InvoiceNumber: String(inv.invoice_number), Contact: { Name: name }, Total: inv.total + 1, AmountPaid: inv.total + 1 })]));
+    expect(off.rows[0]!.match).toBe("none");
+    const two = await mod.xeroPaymentCheck([inv.id], fake([
+      bill({ InvoiceNumber: String(inv.invoice_number), Contact: { Name: name }, Total: inv.total, AmountPaid: inv.total }),
+      bill({ InvoiceNumber: String(inv.invoice_number), Contact: { Name: name }, Total: inv.total, AmountPaid: inv.total }),
+    ]));
+    expect([two.rows[0]!.match, two.rows[0]!.looksPaid, two.rows[0]!.bill]).toEqual(["check", false, null]);
+  });
+
+  test("part paid in Xero offers only what is beyond what the office recorded; deleted bills are ignored", async () => {
+    const inv = open[0]!;
+    const name = await nameOf(inv);
+    const r = await mod.xeroPaymentCheck([inv.id], fake([bill({ InvoiceNumber: String(inv.invoice_number), Contact: { Name: name }, Total: inv.total, AmountPaid: 50, AmountDue: inv.total - 50 })]));
+    expect([r.rows[0]!.looksPaid, r.rows[0]!.toRecord]).toEqual([true, 50]);
+    const deleted = await mod.xeroPaymentCheck([inv.id], fake([bill({ InvoiceNumber: String(inv.invoice_number), Contact: { Name: name }, Status: "DELETED", Total: inv.total, AmountPaid: inv.total })]));
+    expect(deleted.rows[0]!.match).toBe("none");
+  });
+
+  test("invoices already paid in Ops are not checked; the route needs costs access", async () => {
+    const r = await mod.xeroPaymentCheck([aInvoiceId], fake([]));
+    expect(r.checked).toBe(0);
+    expect((await failure(as(OFFICE_NO_COSTS, () => run(m.hi.xeroCheck, { invoiceIds: [open[0]!.id] })))).message).toBe("Costs access required");
+    // Xero is not set up in tests, so the real route reads nothing and says so.
+    const real = await run<any>(m.hi.xeroCheck, { invoiceIds: [open[0]!.id] });
+    expect(real.connected).toBe(false);
+  });
+
+  test("name matching", () => {
+    expect(mod.nameLooksLike("HOURLY A FLOORING", ["Hourly A"])).toBe(true);
+    expect(mod.nameLooksLike("Tester, Hourly Bee", ["Hourly Bee Tester"])).toBe(true);
+    expect(mod.nameLooksLike("Hourly Mate", ["Hourly Bee Tester"])).toBe(false);
+    expect(mod.nameLooksLike("", ["Hourly A"])).toBe(false);
+  });
+
+  test("still nothing left the machine", () => {
     expect(blocked).toEqual([]);
   });
 });
