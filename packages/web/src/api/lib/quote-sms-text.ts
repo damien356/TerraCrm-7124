@@ -66,6 +66,15 @@ export function showMobile(e164: string | null | undefined) {
 }
 
 /** The email scope typed in place of the fill-in, found from the words either side of it. */
+/**
+ * Damien, 14 Nov 2026: puts the words written for the text into the email's
+ * fill-in spot. No words, no change, so the spot stays and Send stays off.
+ */
+export function fillScopeWithText(text: string, description: string, fill: string) {
+  const words = smsDescription(description);
+  return words ? text.split(fill).join(words) : text;
+}
+
 export function scopeFromBody(template: string, edited: string, fill: string) {
   const at = template.indexOf(fill);
   if (at < 0) return "";

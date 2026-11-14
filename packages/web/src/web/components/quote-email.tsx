@@ -12,7 +12,7 @@ import { EmailInput } from "./email-input";
 import { CcList, EmailAttachments, NO_ATTACHMENTS, type MailAttachments } from "./email-attachments";
 import { SendResult, SmsPanel, type SmsPerson, type SmsState } from "./quote-send-parts";
 import { QuoteSupplyShort } from "./stock-supply-short";
-import { mobileForSms, scopeFromBody, showMobile } from "../../api/lib/quote-sms-text";
+import { fillScopeWithText, mobileForSms, scopeFromBody, showMobile, smsDescription } from "../../api/lib/quote-sms-text";
 
 /** Same check as EMAIL_RE on the server. */
 const EMAIL_OK = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
@@ -84,8 +84,16 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
   const d = draft.data;
   const toValue = to ?? d?.to ?? "";
   const picked = d?.recipients.find((r) => r.email === toValue);
-  const subjectValue = subject ?? d?.subject ?? "";
-  const bodyValue = body ?? d?.body ?? "";
+  /*
+   * Damien, 14 Nov 2026: the email's [what the quote is for] spot takes the
+   * words written for the text, until the subject or message is typed into.
+   * Still editable. With no words for the text, the spot stays and Send stays off.
+   */
+  const textWords = smsDescription(sms?.description ?? "");
+  const fillFromText = (t: string) => fillScopeWithText(t, sms?.description ?? "", SCOPE_FILL);
+  const autoFilled = !!d && body === null && !!textWords && d.body.includes(SCOPE_FILL);
+  const subjectValue = subject ?? fillFromText(d?.subject ?? "");
+  const bodyValue = body ?? fillFromText(d?.body ?? "");
   const emailOk = EMAIL_OK.test(toValue.trim());
   const unfilled = !!d && emailOk && needsScope(subjectValue, bodyValue);
   const person: SmsPerson | null = d ? (d.sms.byEmail[toValue.trim().toLowerCase()] ?? d.sms.fallback) : null;
@@ -120,18 +128,21 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
     setSms((cur) => (cur ? { ...cur, description: scope || d.sms.description } : cur));
   }, [d, bodyValue, smsTouched.description]);
 
-  // Opens with the fill-in spot selected, so typing replaces it.
+  // Opens with the fill-in spot (or the words filled into it) selected, so typing replaces it.
   const bodyRef = React.useRef<HTMLTextAreaElement>(null);
   const selected = React.useRef(false);
+  const smsReady = !!sms;
   React.useEffect(() => {
     const el = bodyRef.current;
-    if (!d || !el || selected.current) return;
-    const at = el.value.indexOf(SCOPE_FILL);
+    if (!d || !smsReady || !el || selected.current) return;
+    const target = el.value.includes(SCOPE_FILL) ? SCOPE_FILL : autoFilled ? textWords : "";
+    const at = target ? el.value.indexOf(target) : -1;
     if (at < 0) return;
     selected.current = true;
     el.focus();
-    el.setSelectionRange(at, at + SCOPE_FILL.length);
-  }, [d]);
+    el.setSelectionRange(at, at + target.length);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d, smsReady]);
 
   const smsOn = !!sms?.on;
   const smsMobile = smsOn ? mobileForSms(sms!.to) : null;
@@ -276,6 +287,10 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
           {unfilled ? (
             <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
               Type what the quote is for in place of {SCOPE_FILL}, for example "carpet to 3 bedrooms and lounge". Send stays off until it is filled in.
+            </p>
+          ) : autoFilled ? (
+            <p className="text-xs text-muted-foreground">
+              What the quote is for is filled in from the text message: "{textWords}". Change it in the message if you like.
             </p>
           ) : null}
           <EmailAttachments jobId={d.jobId} value={files} onChange={setFiles} note="The quote PDF is attached already. Add anything else here." />
