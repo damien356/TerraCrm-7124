@@ -8,9 +8,9 @@ import { quoteRefOf } from "../lib/quote-number";
 import { linkSummary } from "../lib/quote-links";
 import { depositInvoiceFor } from "../lib/client-invoices";
 import { uploadInput } from "../lib/job-mail";
-import { EMAIL_RE, quoteEmailDraft } from "../lib/quote-email";
+import { EMAIL_RE, quoteEmailDraft, quoteEmailProblem } from "../lib/quote-email";
 import { needsScope, SCOPE_FILL } from "../lib/quote-email-template";
-import { claimSend, releaseSend, retryChannel, runSend, sendByKeySettled, sendsFor, sendSummary, quoteSmsDraft } from "../lib/quote-send";
+import { claimSend, releaseSend, retryChannel, runSend, sendByKeySettled, sendsFor, sendSummary, quoteSmsDraft, quoteSmsProblem } from "../lib/quote-send";
 import { ORPCError } from "@orpc/server";
 import { assertReadyToGoOut, editableQuoteOrThrow, quoteOrThrow, recordPriceHistory } from "./quotes";
 
@@ -111,6 +111,15 @@ export const quoteSend = {
         for (const c of input.cc ?? []) if (!EMAIL_RE.test(c.trim())) throw new ORPCError("BAD_REQUEST", { message: `"${c}" is not an email address.` });
       }
       if (input.sms && !input.sms.description.trim()) throw new ORPCError("BAD_REQUEST", { message: "Type a few words for the text about what the quote is for." });
+      /* Who gets what (Damien, 14 Nov 2026): every address and the mobile checked before anything is claimed or sent. */
+      if (wantsEmail && EMAIL_RE.test(input.to.trim())) {
+        const problem = await quoteEmailProblem(quote, [input.to, ...(input.cc ?? [])]);
+        if (problem) throw new ORPCError("BAD_REQUEST", { message: problem });
+      }
+      if (input.sms) {
+        const problem = await quoteSmsProblem(quote, input.sms.to);
+        if (problem) throw new ORPCError("BAD_REQUEST", { message: problem });
+      }
 
       const resend = quote.status === "accepted";
       const row = await claimSend({ quote, sendKey: input.sendKey, kind: resend ? "resend" : "first", byName: context.actor.name });

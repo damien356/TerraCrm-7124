@@ -8,6 +8,7 @@ import { ensureForJob } from "./conversations";
 import { pickedFiles, sendJobEmail, type MailUpload } from "./job-mail";
 import { INVOICE_KIND_LABEL } from "./client-invoices";
 import { SENDER_NAME } from "./material-selection";
+import { assertPaperwork, paperworkProblem } from "./paperwork";
 import { TERRA_PRINT } from "./quotePdf";
 import { cardPaymentsOn, owingOn, payUrl } from "./stripe";
 
@@ -22,15 +23,20 @@ const bad = (message: string) => new ORPCError("BAD_REQUEST", { message });
 const money = (n: number) => `$${n.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const EMAIL_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
 
-/** Who the invoice email goes to by default: the billed contact, else the company. */
+/**
+ * Who the invoice email goes to by default: the billed contact, else the
+ * company. Who gets what (Damien, 14 Nov 2026): only one ticked for Invoices
+ * on the job. Null when neither is, so the office picks someone who is.
+ */
 export async function invoiceRecipient(inv: typeof schema.invoices.$inferSelect) {
+  const allowed = async (email: string) => !inv.jobId || !(await paperworkProblem({ jobId: inv.jobId, doc: "invoice", emails: [email] }));
   if (inv.billToContactId) {
     const [c] = await db.select().from(schema.contacts).where(eq(schema.contacts.id, inv.billToContactId));
-    if (c?.email?.trim()) return { email: c.email.trim(), first: c.firstName?.trim() || "", contact: c };
+    if (c?.email?.trim() && (await allowed(c.email.trim()))) return { email: c.email.trim(), first: c.firstName?.trim() || "", contact: c };
   }
   if (inv.billToCompanyId) {
     const [co] = await db.select().from(schema.companies).where(eq(schema.companies.id, inv.billToCompanyId));
-    if (co?.email?.trim()) return { email: co.email.trim(), first: "", contact: null };
+    if (co?.email?.trim() && (await allowed(co.email.trim()))) return { email: co.email.trim(), first: "", contact: null };
   }
   return null;
 }
@@ -76,9 +82,11 @@ export async function sendInvoiceEmail(args: {
   if (!(owing > 0)) throw bad(inv.status === "void" ? "This invoice is void." : "Nothing is owing on this invoice.");
   const found = await invoiceRecipient(inv);
   const to = args.to?.trim() || found?.email || "";
-  if (!EMAIL_RE.test(to)) throw bad(to ? `"${to}" is not an email address.` : "No email address on file for this client. Type one in.");
+  if (!EMAIL_RE.test(to)) throw bad(to ? `"${to}" is not an email address.` : "No one on this job is ticked for Invoices with an email on file. Tick someone under Who gets what on the job, then send.");
 
   for (const c of args.cc ?? []) if (!EMAIL_RE.test(c.trim())) throw bad(`"${c}" is not an email address.`);
+  /* Who gets what (Damien, 14 Nov 2026): To and CC checked right before it goes. */
+  await assertPaperwork({ jobId: inv.jobId, doc: "invoice", emails: [to, ...(args.cc ?? [])] });
 
   const conv = await ensureForJob(inv.jobId);
   const url = cardPaymentsOn() ? payUrl(inv.id) : null;

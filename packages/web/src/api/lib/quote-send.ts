@@ -7,6 +7,7 @@ import { leadToQuotedOnSend } from "./job-stage";
 import type { MailUpload } from "./job-mail";
 import { syncJobValue } from "./job-value";
 import { notifyOffice } from "./notify";
+import { allowedFor, paperworkProblem } from "./paperwork";
 import { EMAIL_RE, quoteRecipients, sendQuoteEmail } from "./quote-email";
 import { onQuoteSent } from "./quote-followup";
 import { linkForQuote, quoteUrl } from "./quote-links";
@@ -85,6 +86,20 @@ async function emailWarnFor(contactId: number | null, email: string) {
 
 /* --------------------------- who and which ------------------------------- */
 
+/**
+ * Why this mobile can not get this quote by text, or null (Damien, 14 Nov
+ * 2026). On a job: Who gets what. With no job: only the quote's own people.
+ */
+export async function quoteSmsProblem(quote: Quote, raw: string | null | undefined): Promise<string | null> {
+  const mobile = normaliseMobile(raw);
+  if (!mobile) return null;
+  if (quote.jobId) return paperworkProblem({ jobId: quote.jobId, doc: "quote", mobiles: [mobile] });
+  const ids = [...new Set([...(await quoteRecipients(quote)).map((r) => r.contactId), quote.contactId].filter((v): v is number => !!v))];
+  const people = ids.length ? await db.select().from(schema.contacts).where(inArray(schema.contacts.id, ids)) : [];
+  const ok = people.some((c) => normaliseMobile(c.mobile) === mobile || normaliseMobile(c.phone) === mobile);
+  return ok ? null : "That mobile is not anyone on this quote, so no text went. Add them to the quote's people first.";
+}
+
 /** Which of the client's quotes this is, when they have more than one out (188048 had four). */
 export async function quoteOptionOf(quote: Quote) {
   const rows = await db
@@ -120,7 +135,9 @@ export async function quoteSmsDraft(quote: Quote, resend: boolean) {
   };
   const byEmail: Record<string, Awaited<ReturnType<typeof forPerson>>> = {};
   for (const r of recipients) byEmail[r.email.toLowerCase()] = await forPerson(r.contactId, r.name);
-  const fallback = quote.contactId ? await forPerson(quote.contactId, "") : null;
+  /* Who gets what (Damien, 14 Nov 2026): the quote's customer is only offered for the text when ticked for Quotes. */
+  const fallbackOk = quote.contactId && (!quote.jobId || (await allowedFor(quote.jobId, "quote")).some((r) => r.contactId === quote.contactId));
+  const fallback = quote.contactId && fallbackOk ? await forPerson(quote.contactId, "") : null;
   const emailWarn: Record<string, string> = {};
   for (const r of recipients) {
     const w = await emailWarnFor(r.contactId, r.email);
@@ -388,7 +405,7 @@ export async function runSend(args: { row: SendRow; quote: Quote; email: EmailPa
     if (c && (normaliseMobile(c.mobile) === mobile || normaliseMobile(c.phone) === mobile)) smsContactId = c.id;
   }
   if (mobile && !smsContactId) smsContactId = (await contactByMobile(mobile))?.id ?? null;
-  const blocked = mobile ? await smsBlockFor(smsContactId, mobile) : null;
+  const blocked = mobile ? ((await quoteSmsProblem(quote, mobile)) ?? (await smsBlockFor(smsContactId, mobile))) : null;
   row = await setRow(row.id, {
     emailTo: emailTo || null,
     emailStatus: emailOk ? "sending" : "skipped",
@@ -493,7 +510,7 @@ export async function retryChannel(args: { sendId: number; channel: "email" | "s
       await putBack();
       throw bad("The text details were not kept. Use Send again.");
     }
-    const blocked = await smsBlockFor(s.contactId, s.mobile);
+    const blocked = (await quoteSmsProblem(args.quote, s.mobile)) ?? (await smsBlockFor(s.contactId, s.mobile));
     if (blocked) return setRow(row.id, { smsStatus: "blocked", smsDetail: blocked });
     out = await doSms(row, args.quote, s, row.emailStatus === "sent", args.who);
     if (out.smsStatus === "sent") await afterWent(args.quote, out, "sms", args.who);

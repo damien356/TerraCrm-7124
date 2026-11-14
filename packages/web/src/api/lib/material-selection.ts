@@ -1,4 +1,5 @@
 import { ORPCError } from "@orpc/server";
+import { seesQuotePrices } from "./paperwork";
 import { and, asc, desc, eq, isNotNull } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -124,7 +125,7 @@ export async function sendSelection(selectionId: number, by: { name: string }): 
     "Before we order, please check the colour of each floor on your quote. If you would like a different colour from the same range, you can change it there. It takes a couple of minutes:",
     url,
     "",
-    ...(offers.length ? ["There is also an underlay upgrade offer on the form. Tap Yes or No thanks.", ""] : []),
+    ...(offers.length && (await seesQuotePrices(job.id, sel.contactId)) ? ["There is also an underlay upgrade offer on the form. Tap Yes or No thanks.", ""] : []),
     "If you are not sure yet, leave us a note on the form and we will call you.",
     "",
     "Kind regards,",

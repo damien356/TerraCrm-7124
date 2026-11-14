@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
+import { seesQuotePrices } from "./paperwork";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { isUnderlayCategory, underlayName, wholeUnits } from "./order-sizes";
@@ -185,7 +186,8 @@ const isAccepted = (v: Variation | undefined) => !!v && (v.status === "approved"
 /** The client's page. Nothing on a company billed job, even from a row made before it was billed to a company. */
 export async function publicOffers(sel: Selection, items: SelItem[]) {
   const rows = items.filter(isUpgradeRow);
-  if (!rows.length || (await companyBilled(sel.jobId, sel.quoteId))) return [];
+  /* Who gets what (Damien, 14 Nov 2026): priced offers only to someone ticked for Quotes on the job. */
+  if (!rows.length || (await companyBilled(sel.jobId, sel.quoteId)) || !(await seesQuotePrices(sel.jobId, sel.contactId))) return [];
   const byId = await productsById(rows.flatMap((i) => [i.quotedProductId, i.offerProductId]));
   const vars = await variationsById(rows.map((i) => i.variationId));
   return rows.flatMap((i) => {
@@ -256,7 +258,7 @@ export async function applyUpgradeAnswers(args: {
   const out: UpgradeOutcome = { report: [], log: [], upgraded: 0, declined: 0, toAccept: [] };
   const rows = (await db.select().from(schema.materialSelectionItems).where(eq(schema.materialSelectionItems.selectionId, args.sel.id))).filter(isUpgradeRow);
   // Homeowners only: a company billed job ignores any upgrade answer.
-  if (!rows.length || (await companyBilled(args.sel.jobId, args.sel.quoteId))) return out;
+  if (!rows.length || (await companyBilled(args.sel.jobId, args.sel.quoteId)) || !(await seesQuotePrices(args.sel.jobId, args.sel.contactId))) return out;
   const byId = await productsById(rows.flatMap((i) => [i.quotedProductId, i.offerProductId]));
   const vars = await variationsById(rows.map((i) => i.variationId));
 

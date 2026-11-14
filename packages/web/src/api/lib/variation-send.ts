@@ -9,6 +9,7 @@ import { todayISO } from "./pricing";
 import { quoteRefOf } from "./quote-number";
 import { jobText } from "./refs";
 import { sha256 } from "./doc-classify";
+import { allowedFor, assertPaperwork, paperworkProblem } from "./paperwork";
 import { getObject, putObject, signGet } from "./s3";
 import { normaliseMobile, sendSms, SMS_OPT_OUT } from "./sms";
 import { type Signature } from "./signature";
@@ -80,7 +81,11 @@ export async function variationRecipients(v: Variation): Promise<Recipient[]> {
       out.push({ contactId: null, name: co.name, email, mobile: null, why: "Company" });
     }
   }
-  return out;
+  /* Who gets what (Damien, 14 Nov 2026): only people and the company ticked for Variations are offered. */
+  const ok = await allowedFor(job.id, "variation");
+  const okIds = new Set(ok.map((r) => r.contactId).filter((x): x is number => !!x));
+  const okEmails = new Set(ok.filter((r) => r.kind === "company").flatMap((r) => r.emails));
+  return out.filter((o) => (o.contactId ? okIds.has(o.contactId) : !!o.email && okEmails.has(o.email.toLowerCase())));
 }
 
 /** Who it is addressed to and where, for the page and the PDF. */
@@ -237,6 +242,8 @@ export async function sendVariation(args: {
     if (!EMAIL_RE.test(to)) throw bad(`"${to}" is not an email address.`);
     const body = args.body.includes(url) ? args.body : `${args.body.trimEnd()}\n\nView and accept the variation online: ${url}`;
     for (const c of args.cc ?? []) if (!EMAIL_RE.test(c.trim())) throw bad(`"${c}" is not an email address.`);
+    /* Who gets what (Damien, 14 Nov 2026): To and CC checked right before it goes. */
+    await assertPaperwork({ jobId: v.jobId, doc: "variation", emails: [to, ...(args.cc ?? [])] });
     const { pdf, filename } = await variationPdfFor(v.id);
     const picked = await pickedFiles({ jobId: v.jobId, mediaIds: args.mediaIds, uploads: args.uploads, byName: args.byName, byProfileId: args.byProfileId });
     const [contact] = await db.select().from(schema.contacts).where(eq(schema.contacts.email, to)).limit(1);
@@ -261,6 +268,7 @@ export async function sendVariation(args: {
   } else {
     const mobile = normaliseMobile(args.to);
     if (!mobile) throw bad(`"${args.to}" is not an Australian mobile number.`);
+    await assertPaperwork({ jobId: v.jobId, doc: "variation", mobiles: [mobile] });
     const text = (args.body.includes(url) ? args.body.trim() : `${args.body.trim()} ${url}`) + SMS_OPT_OUT;
     const out = await sendSms({ to: mobile, body: text, sender: "number", needsReply: true });
     const [contact] = await db.select().from(schema.contacts).where(eq(schema.contacts.mobile, args.to.trim())).limit(1);
@@ -331,7 +339,12 @@ export async function sendVariationSignedCopy(args: {
   let emailed = false;
   let failed: string | null = null;
   const to = args.signerEmail?.trim() || null;
+  /* Who gets what (Damien, 14 Nov 2026): the signed copy has the price, so only an address ticked for Variations gets it. */
   if (to && EMAIL_RE.test(to)) {
+    const problem = await paperworkProblem({ jobId: v.jobId, doc: "variation", emails: [to] });
+    if (problem) failed = `Signed copy not emailed. ${problem}`;
+  }
+  if (to && EMAIL_RE.test(to) && !failed) {
     try {
       /* Sent and logged on the thread with the signed PDF, in one go. */
       await sendJobEmail({

@@ -15,6 +15,7 @@ function useRefresh(alsoPeopleCards = false) {
     qc.invalidateQueries({ queryKey: orpc.quotes.key() });
     qc.invalidateQueries({ queryKey: orpc.jobs.key() });
     qc.invalidateQueries({ queryKey: orpc.tasks.key() });
+    qc.invalidateQueries({ queryKey: orpc.paperwork.key() }); // Who gets what (Damien, 14 Nov 2026)
     if (alsoPeopleCards) qc.invalidateQueries({ queryKey: orpc.contacts.key() });
   };
 }

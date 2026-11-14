@@ -38,6 +38,9 @@ export type MailFile = {
   storageKey?: string | null;
   /** Where to store it when it is not stored yet. */
   storeAt?: string | null;
+  /** A restricted job file (quote, invoice, signed copy, supplier cost), with why. Checked against Who gets what. */
+  restricted?: boolean;
+  restrictReason?: string | null;
 };
 
 const safeName = (s: string) => s.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-80) || "file";
@@ -114,9 +117,35 @@ export async function filesFromMedia(jobId: number, mediaIds: number[], byProfil
       contentType: r.mime || "application/octet-stream",
       mediaId: r.id,
       storageKey: r.storageKey,
+      restricted: r.sensitivity === "restricted",
+      restrictReason: r.restrictReason ?? null,
     });
   }
   return out;
+}
+
+/* Customer price paperwork. Never to a supplier or installer (Damien, 14 Nov 2026). */
+const CUSTOMER_PRICE_REASONS = new Set(["customer_quote", "customer_invoice", "signed"]);
+
+/**
+ * Who gets what (Damien, 14 Nov 2026): a restricted job file only goes to a
+ * customer side address ticked for some paperwork on the job, and customer
+ * price paperwork never goes to a supplier or installer. Throws the reason.
+ */
+async function assertCostFiles(args: SendJobEmail, to: string, cc: string[]) {
+  const hot = (args.files ?? []).filter((f) => f.restricted);
+  if (!hot.length) return;
+  const audience = args.audience ?? "customer";
+  if (audience !== "customer") {
+    const f = hot.find((x) => CUSTOMER_PRICE_REASONS.has(x.restrictReason ?? ""));
+    if (f) throw new Error(`${f.filename} is a customer quote, invoice or signed copy, so it can not go to a ${audience}. Take it off. Nothing went.`);
+    return;
+  }
+  const jobId = args.jobId ?? args.conv.jobId;
+  if (!jobId) throw new Error("One of the files has prices or costs in it and this email is not on a job, so who gets it can not be checked. Take the file off. Nothing went.");
+  const { costFileProblem } = await import("./paperwork");
+  const problem = await costFileProblem(jobId, [to, ...cc]);
+  if (problem) throw new Error(problem);
 }
 
 /** A file the browser already put in storage, picked from the device. */
@@ -211,6 +240,7 @@ export async function sendJobEmail(args: SendJobEmail) {
   const to = args.to.trim();
   const cc = [...new Set((args.cc ?? []).map((c) => c.trim()).filter((c) => c && c.toLowerCase() !== to.toLowerCase()))];
 
+  await assertCostFiles(args, to, cc);
   const tag = await tagForJob(args.conv, args.jobId ?? args.conv.jobId);
   const subject = subjectWithRef(args.subject, tag.ref);
   const label = args.label ?? tag.label;

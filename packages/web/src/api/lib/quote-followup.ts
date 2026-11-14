@@ -8,7 +8,8 @@ import { contactsByEmails, sendJobEmail } from "./job-mail";
 import { addLocalDays, daysApart, localDate } from "./local-date";
 import { checkConsent, unsubscribeToken, unsubscribeUrl } from "./marketing";
 import { notifyOffice } from "./notify";
-import { EMAIL_RE } from "./quote-email";
+import { paperworkProblem } from "./paperwork";
+import { EMAIL_RE, quoteEmailProblem } from "./quote-email";
 import { blockFor, commsEvent, customerTypeOf, jobComms, snapshotChange, snapshotOf, type JobCommsContext } from "./comms-people";
 import { quoteUrl } from "./quote-links";
 import { isLiveServer } from "./runtime";
@@ -284,7 +285,7 @@ export type QuoteFacts = {
   recipientIssue: string | null;
   contact: Contact | null;
   /** Everyone copied in on the quote email, with their card when there is one. */
-  cc: Array<{ email: string; contact: Contact | null }>;
+  cc: Array<{ email: string; contact: Contact | null; notTicked?: string | null }>;
   jobStatusId: number | null;
   depositPaid: boolean;
   timeZone: string;
@@ -335,13 +336,18 @@ export async function quoteFacts(
   const chosen = opts.contactId ? ((await db.select().from(schema.contacts).where(eq(schema.contacts.id, opts.contactId)))[0] ?? null) : null;
   const contact: Contact | null =
     chosen && toEmail && (chosen.email ?? "").trim().toLowerCase() === toEmail ? chosen : toEmail ? cardFor(toEmail) : null;
-  const pick = toEmail && contact ? { contactId: contact.id, name: [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim(), email: toEmail } : null;
+  /* Who gets what (Damien, 14 Nov 2026): follow-ups follow the Quotes tick, To and CC. */
+  const toNotTicked = toEmail ? await quoteEmailProblem(quote, [toEmail]) : null;
+  const pick = toEmail && contact && !toNotTicked ? { contactId: contact.id, name: [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim(), email: toEmail } : null;
   const recipientIssue = pick
     ? null
-    : toEmail
+    : toNotTicked
+      ? `Follow-ups are on hold. ${toNotTicked}`
+      : toEmail
       ? `The quote went to ${toEmail}, which has no contact card, so they would have no way to unsubscribe. Add them as a contact.`
       : "Nobody picked yet. Choose who gets these.";
-  const cc = ccEmails.map((email) => ({ email, contact: cardFor(email) }));
+  const cc = [];
+  for (const email of ccEmails) cc.push({ email, contact: cardFor(email), notTicked: await quoteEmailProblem(quote, [email]) });
 
   const items = await db
     .select({ item: schema.quoteItems, product: schema.products, rate: schema.labourRateItems })
@@ -475,6 +481,10 @@ export async function ccPlanFor(qf: QuoteFacts, s: FollowupSettings): Promise<Cc
   const out: CcPlan = { send: [], leftOff: [] };
   const links: Array<{ email: string; url: string }> = [];
   for (const c of qf.cc) {
+    if (c.notTicked) {
+      out.leftOff.push({ email: c.email, why: "not ticked for Quotes under Who gets what on the job" });
+      continue;
+    }
     if (!c.contact) {
       out.leftOff.push({ email: c.email, why: "no contact card, so no unsubscribe link. Add them as a contact to copy them in" });
       continue;
@@ -1085,12 +1095,17 @@ export async function setFollowupRecipients(id: number, byName: string, toContac
   if (!to) throw new Error("Pick someone on this job.");
   const block = await blockFor(ctx, to, "followup", "email");
   if (block) throw new Error(block);
+  /* Who gets what (Damien, 14 Nov 2026): only people ticked for Quotes. */
+  const notTicked = await paperworkProblem({ jobId: seq.jobId, doc: "quote", emails: [to.email] });
+  if (notTicked) throw new Error(notTicked);
   const cc = [];
   for (const cid of [...new Set(ccContactIds)].filter((x) => x !== toContactId)) {
     const p = ctx.people.find((x) => x.contactId === cid);
     if (!p) throw new Error("Everyone copied in must be on this job.");
     const b = await blockFor(ctx, p, "followup", "email");
     if (b) throw new Error(`Can't copy in ${p.name}: ${b}`);
+    const n = await paperworkProblem({ jobId: seq.jobId, doc: "quote", emails: [p.email] });
+    if (n) throw new Error(`Can't copy in ${p.name}: ${n}`);
     if (p.email === to.email) continue;
     cc.push(p);
   }
@@ -1127,6 +1142,8 @@ export async function approveFollowups(id: number, byName: string, now: Date = n
   const to = ctx.people.find((p) => p.contactId === seq.contactId);
   if (!to) throw new Error("The person picked is no longer on this job. Pick again.");
   if (to.email !== seq.toAddress.toLowerCase()) throw new Error(`${to.name}'s email is now ${to.email || "blank"}. Pick again.`);
+  const notTicked = await paperworkProblem({ jobId: seq.jobId, doc: "quote", emails: [to.email] });
+  if (notTicked) throw new Error(notTicked);
   const block = await blockFor(ctx, to, "followup", "email");
   if (block) throw new Error(block);
   const ccIds: number[] = [];
@@ -1135,6 +1152,8 @@ export async function approveFollowups(id: number, byName: string, now: Date = n
     if (!p) throw new Error(`${email} is copied in but is not on this job. Change the recipients.`);
     const b = await blockFor(ctx, p, "followup", "email");
     if (b) throw new Error(`Can't copy in ${p.name}: ${b}`);
+    const n = await paperworkProblem({ jobId: seq.jobId, doc: "quote", emails: [p.email] });
+    if (n) throw new Error(`Can't copy in ${p.name}: ${n}`);
     ccIds.push(p.contactId);
   }
   const s = await followupSettings();

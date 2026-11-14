@@ -518,7 +518,7 @@ export async function approveRepairQuote(id: number, actor: Actor) {
   await assertReadyToGoOut(quote, actor);
   const ref = await quoteRefOf(quote);
   const draft = await quoteEmailDraft(quote, ref);
-  if (!draft.to) throw bad("The client has no email address. Add one on their card, or open the quote and send it another way.");
+  if (!draft.to) throw bad("Nobody ticked for Quotes on this job has an email address. Add one on their card or tick someone under Who gets what on the job, or open the quote and send it another way.");
   const scope = `the ${lineFor(req.repairType).toLowerCase()} to your timber floor`;
   const fill = (t: string) => t.split(SCOPE_FILL).join(scope);
   await recordPriceHistory(quote, actor.name);

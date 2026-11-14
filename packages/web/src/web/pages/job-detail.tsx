@@ -2,6 +2,7 @@ import * as React from "react";
 import { JobBillTo } from "../components/job-bill-to";
 import { DuplicateQuoteButton, JobCopyLinks } from "../components/quote-copy";
 import { CustomerCommsCard } from "../components/customer-comms";
+import { WhoGetsWhatCard } from "../components/who-gets-what";
 import { Link, Redirect, useParams, useSearch } from "wouter";
 import { AlertTriangle, ArrowLeft, LifeBuoy, MessagesSquare, Plus, Sofa, Trash2, Users } from "lucide-react";
 import { Page } from "../components/layout";
@@ -600,6 +601,9 @@ export default function JobDetailPage() {
             ) : null}
             <LeadFacts job={j} />
           </Card>
+
+          {/* who can be sent quotes, variations and invoices (Damien, 14 Nov 2026) */}
+          <WhoGetsWhatCard jobId={j.id} />
 
           {/* who does which work, and when (11 Nov, job 188070) */}
           {supplyOnly || productSale ? null : <InstallersBookingsCard jobId={j.id} onBook={setBooking} />}

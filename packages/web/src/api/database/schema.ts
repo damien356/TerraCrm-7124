@@ -806,6 +806,34 @@ export const jobContacts = sqliteTable(
   (t) => [unique("job_contact_person_uq").on(t.jobId, t.contactId)],
 );
 
+/**
+ * Who gets what on a job (Damien, 14 Nov 2026): quotes, variations and
+ * invoices, ticked per person and for the company. One row per person or
+ * company the office has changed. A null tick, or no row, means the default
+ * from their role on the job (lib/paperwork.ts). Every quote, variation and
+ * invoice send is checked against this on the server, To, CC and text.
+ */
+export const jobPaperwork = sqliteTable(
+  "job_paperwork",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    /** Exactly one of contactId and companyId is set. */
+    contactId: integer("contact_id").references(() => contacts.id, { onDelete: "cascade" }),
+    companyId: integer("company_id").references(() => companies.id, { onDelete: "cascade" }),
+    getsQuotes: integer("gets_quotes", { mode: "boolean" }),
+    getsVariations: integer("gets_variations", { mode: "boolean" }),
+    getsInvoices: integer("gets_invoices", { mode: "boolean" }),
+    setByName: text("set_by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("job_paperwork_person_uq").on(t.jobId, t.contactId).where(sql`contact_id is not null`),
+    uniqueIndex("job_paperwork_company_uq").on(t.jobId, t.companyId).where(sql`company_id is not null`),
+    check("job_paperwork_one_of", sql`(contact_id is null) <> (company_id is null)`),
+  ],
+);
+
 /* ---------------------------------------------------------------------------
  * Tasks — the dispatch unit. A job holds many tasks; tasks get assigned.
  * ------------------------------------------------------------------------- */

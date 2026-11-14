@@ -150,6 +150,16 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
   const smsGoing = smsOn && !!smsMobile && !smsBlocked && !!sms!.description.trim();
   const nothing = !emailOk && !smsGoing;
   const label = emailOk && smsGoing ? "Send email and text" : emailOk ? "Send email" : smsGoing ? "Send text only" : "Send";
+  /*
+   * Who gets what (Damien, 14 Nov 2026): the people offered are the ones
+   * ticked for Quotes. A typed address that is not one of them is refused by
+   * the server, so it is shown here first and the email can not go.
+   */
+  const allowed = new Set((d?.recipients ?? []).map((r) => r.email.trim().toLowerCase()));
+  const strangers = emailOk ? [toValue, ...cc].map((e) => e.trim().toLowerCase()).filter((e) => e && !allowed.has(e)) : [];
+  const emailHeld = unfilled || strangers.length > 0;
+  /* An unfinished or refused email never stops the text. */
+  const textOnlyToo = emailOk && emailHeld && smsGoing;
 
   function onSmsChange(v: SmsState) {
     if (!sms) return;
@@ -157,24 +167,25 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
     setSms(v.to !== sms.to ? { ...v, contactId: person && mobileForSms(v.to) === person.mobile ? person.contactId : null } : v);
   }
 
-  async function onSend() {
+  async function onSend(textOnly = false) {
     if (!d || send.isPending || result) return;
     setError(null);
+    const withEmail = emailOk && !textOnly;
     try {
       const out = await send.mutateAsync({
         quoteId,
         sendKey: sendKey.current,
-        to: emailOk ? toValue.trim() : "",
+        to: withEmail ? toValue.trim() : "",
         subject: subjectValue,
         body: bodyValue,
-        cc: emailOk ? cc.map((c) => c.trim()).filter(Boolean) : [],
+        cc: withEmail ? cc.map((c) => c.trim()).filter(Boolean) : [],
         mediaIds: files.mediaIds,
         uploads: files.uploads,
         sms: smsOn && sms ? { to: sms.to, contactId: sms.contactId, firstName: sms.firstName, description: sms.description, showOption: sms.showOption } : null,
       });
       const r = out.send;
       if (!r) return;
-      const emailFine = r.email.status === "sent" || (!emailOk && r.email.status === "skipped");
+      const emailFine = r.email.status === "sent" || (!withEmail && r.email.status === "skipped");
       const smsFine = r.sms.status === "sent" || (!smsOn && r.sms.status === "skipped");
       if (emailFine && smsFine) {
         const parts = [r.email.status === "sent" ? `emailed to ${r.email.to}` : "", r.sms.status === "sent" ? `texted to ${r.sms.toShown}` : ""].filter(Boolean).join(" and ");
@@ -208,7 +219,12 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
             <Button variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button onClick={onSend} disabled={!d || send.isPending || nothing || unfilled}>
+            {textOnlyToo ? (
+              <Button variant="outline" onClick={() => onSend(true)} disabled={!d || send.isPending}>
+                Send text only
+              </Button>
+            ) : null}
+            <Button onClick={() => onSend()} disabled={!d || send.isPending || nothing || emailHeld}>
               {send.isPending ? <Spinner /> : <Mail className="size-4" />}
               {send.isPending ? "Sending…" : label}
             </Button>
@@ -255,7 +271,7 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
               </Select>
             </Field>
           ) : (
-            <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">Nobody on this quote has an email address. Type one below, or send the text only.</p>
+            <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">Nobody ticked for Quotes has an email address. Tick someone under Who gets what on the job, or send the text only.</p>
           )}
           <Field label="Email address">
             <EmailInput value={toValue} onValueChange={setTo} placeholder="name@example.com" />
@@ -263,6 +279,12 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
           {toValue.trim() && !emailOk ? (
             <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
               "{toValue.trim()}" is not a valid email address, so no email will go.{smsGoing ? " The text still goes." : ""}
+            </p>
+          ) : null}
+          {strangers.length ? (
+            <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm font-medium text-destructive">
+              {strangers.join(", ")} {strangers.length > 1 ? "are" : "is"} not ticked for Quotes on this job, so the email can not go to them. Only people on the job ticked under Who gets what can get the quote. Add them to the job's People and tick Quotes, or pick someone from the list.
+              {smsGoing ? " The text can still go on its own." : ""}
             </p>
           ) : null}
           {emailWarn ? <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">{emailWarn}</p> : null}
@@ -286,7 +308,7 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
           </Field>
           {unfilled ? (
             <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              Type what the quote is for in place of {SCOPE_FILL}, for example "carpet to 3 bedrooms and lounge". Send stays off until it is filled in.
+              Type what the quote is for in place of {SCOPE_FILL}, for example "carpet to 3 bedrooms and lounge". The email stays off until it is filled in.{smsGoing ? " Send text only sends the text now." : ""}
             </p>
           ) : autoFilled ? (
             <p className="text-xs text-muted-foreground">

@@ -11,6 +11,7 @@ import { linkForQuote, quoteUrl } from "./quote-links";
 import { SENDER_NAME } from "./material-selection";
 import { TERRA_PRINT } from "./quotePdf";
 import { putObject } from "./s3";
+import { allowedFor, paperworkProblem } from "./paperwork";
 import {
   DEFAULT_QUOTE_EMAIL_BODY,
   DEFAULT_QUOTE_EMAIL_SUBJECT,
@@ -86,7 +87,26 @@ export async function quoteRecipients(quote: Quote) {
       out.push({ contactId: null, name: co.name, email, why: "Company" });
     }
   }
+  /* Who gets what (Damien, 14 Nov 2026): on a job, only people and the
+     company ticked for Quotes are offered. An owner on a builder job is not. */
+  if (quote.jobId) {
+    const ok = new Set((await allowedFor(quote.jobId, "quote")).flatMap((r) => r.emails));
+    return out.filter((o) => ok.has(o.email.toLowerCase()));
+  }
   return out;
+}
+
+/**
+ * Why these addresses can not get this quote, or null (Damien, 14 Nov 2026).
+ * On a job: Who gets what. With no job: only the quote's own people.
+ */
+export async function quoteEmailProblem(quote: Quote, emails: string[]): Promise<string | null> {
+  const list = emails.map((e) => e.trim().toLowerCase()).filter(Boolean);
+  if (!list.length) return null;
+  if (quote.jobId) return paperworkProblem({ jobId: quote.jobId, doc: "quote", emails: list });
+  const ok = new Set((await quoteRecipients(quote)).map((r) => r.email.toLowerCase()));
+  const stranger = list.find((e) => !ok.has(e));
+  return stranger ? `${stranger} is not on this quote, so nothing went. Add them to the quote's people first.` : null;
 }
 
 async function templates() {
@@ -158,6 +178,9 @@ export async function sendQuoteEmail(args: {
   if (!EMAIL_RE.test(to)) throw bad(`"${to}" is not an email address.`);
   for (const c of args.cc ?? []) if (!EMAIL_RE.test(c.trim())) throw bad(`"${c}" is not an email address.`);
   if (needsScope(args.subject, args.body)) throw bad(`Type what the quote is for in place of ${SCOPE_FILL} before sending.`);
+  /* Who gets what (Damien, 14 Nov 2026): checked right before it goes, To and CC. */
+  const problem = await quoteEmailProblem(args.quote, [to, ...(args.cc ?? [])]);
+  if (problem) throw bad(problem);
   const { pdf, filename, ref } = await clientPdfFor(args.quote.id);
   const link = await linkForQuote(args.quote.id);
   const url = quoteUrl(link.token);
@@ -225,7 +248,14 @@ export async function sendSignedCopy(args: {
 
   let failed: string | null = null;
   const to = args.signerEmail?.trim() || null;
+  /* Who gets what (Damien, 14 Nov 2026): the signed copy has the prices, so
+     it only goes to an address ticked for Quotes. Otherwise it is logged as
+     failed with the reason and the office sends it on by hand. */
   if (to && EMAIL_RE.test(to)) {
+    const problem = await quoteEmailProblem(args.quote, [to]);
+    if (problem) failed = `Signed copy not emailed. ${problem}`;
+  }
+  if (to && EMAIL_RE.test(to) && !failed) {
     try {
       /* Sent and logged on the thread, with the signed PDF, in one go. */
       await sendJobEmail({

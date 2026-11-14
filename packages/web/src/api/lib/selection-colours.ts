@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
+import { seesQuotePrices } from "./paperwork";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { categoryLabel, isAccessoryCategory } from "./product-categories";
@@ -221,11 +222,18 @@ export async function productItemsFor(jobId: number, selectionId: number) {
   };
 }
 
-/** Whether the client may see dollar figures: not on a company billed job, unless they work at that company. */
+/**
+ * Whether the client may see dollar figures: not on a company billed job,
+ * unless they work at that company. Who gets what (Damien, 14 Nov 2026, Syed
+ * on 188101): and never unless the person the form is for is ticked for
+ * Quotes on the job. They still pick colours, with no prices shown.
+ */
 export async function pricesShownTo(sel: Selection) {
   const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.id, sel.jobId));
   const quote = await acceptedQuoteFor(sel.jobId);
   const companyId = quote?.companyId ?? (job?.billToType === "company" ? (job.billToCompanyId ?? job.companyId) : null);
+  const [co0] = companyId ? await db.select({ name: schema.companies.name }).from(schema.companies).where(eq(schema.companies.id, companyId)) : [];
+  if (!(await seesQuotePrices(sel.jobId, sel.contactId))) return { show: false, company: co0?.name ?? (null as string | null) };
   if (!companyId) return { show: true, company: null as string | null };
   const [co] = await db.select({ name: schema.companies.name }).from(schema.companies).where(eq(schema.companies.id, companyId));
   if (sel.contactId) {

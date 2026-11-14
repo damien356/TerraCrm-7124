@@ -101,6 +101,7 @@ import { bootPrep } from "./lib/prep";
 import { prep } from "./routes/prep";
 import { quoteFollowups } from "./routes/quoteFollowups";
 import { customerComms } from "./routes/customerComms";
+import { paperwork } from "./routes/paperwork";
 import { bootQuoteFollowups } from "./lib/quote-followup";
 import { bootReviews } from "./lib/comms-review";
 import { xero } from "./routes/xero";
@@ -173,6 +174,7 @@ export const router = {
   /** Quote follow-up emails, days 3, 7, 14 and 28 after a quote goes (28 Oct). Off until switched on. */
   quoteFollowups,
   customerComms,
+  paperwork,
   /** Staff invites: download page and one-time set-up link (notes 18.55). */
   invites,
   alerts,
