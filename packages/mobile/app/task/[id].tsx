@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -34,6 +34,8 @@ import { useVoiceSettings } from "@/queries/crew";
 import { HourlyTimeSection } from "@/components/hourly-time";
 import { StagePaySection } from "@/components/stage-pay";
 import { useMyTime } from "@/queries/hourly";
+import { authClient } from "@/lib/auth";
+import { forgetWidgetTask } from "@/lib/widget-sync";
 
 const c = Colors.light;
 
@@ -75,13 +77,52 @@ function Card({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * The directions link for a site, in the maps app they picked on the Me tab,
+ * same as Siri's "direct me". Shared by the Directions button and the
+ * home-screen widget's Directions (Damien, 14 Nov 2026). Null with no address.
+ */
+function mapsUrl(site: {
+  address: string;
+  navApp: string | null | undefined;
+  lat: number | null | undefined;
+  lng: number | null | undefined;
+  placeId: string | null | undefined;
+}) {
+  if (!site.address) return null;
+  const q = encodeURIComponent(site.address);
+  const picked = site.navApp ?? "apple";
+  const app = picked === "apple" && Platform.OS !== "ios" ? "google" : picked;
+  // A site checked with Google has a map pin. Go to the pin, not the typed text.
+  const ll = site.lat != null && site.lng != null ? `${site.lat},${site.lng}` : null;
+  return ll
+    ? app === "waze"
+      ? `https://waze.com/ul?ll=${ll}&navigate=yes`
+      : app === "google"
+        ? site.placeId
+          ? `https://www.google.com/maps/dir/?api=1&destination=${q}&destination_place_id=${encodeURIComponent(site.placeId)}&travelmode=driving`
+          : `https://www.google.com/maps/dir/?api=1&destination=${ll}&travelmode=driving`
+        : `https://maps.apple.com/?daddr=${ll}&dirflg=d`
+    : app === "waze"
+      ? `https://waze.com/ul?q=${q}&navigate=yes`
+      : app === "google"
+        ? `https://www.google.com/maps/dir/?api=1&destination=${q}&travelmode=driving`
+        : `https://maps.apple.com/?daddr=${q}&dirflg=d`;
+}
+
+/** The address the way the job screen shows it. */
+function siteAddress(t: { siteAddress?: string | null; siteSuburb?: string | null; sitePostcode?: string | null }) {
+  return [t.siteAddress, t.siteSuburb, t.sitePostcode].filter(Boolean).join(", ");
+}
+
 export default function TaskScreen() {
   const bottomGap = useBottomGap();
   const bottomInset = useBottomInset();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, go, at } = useLocalSearchParams<{ id: string; go?: string; at?: string }>();
   const router = useRouter();
   const task = useTask(Number(id));
   const me = useMe();
+  const session = authClient.useSession();
 
   const tick = useTickChecklistItem();
   const start = useStartTask();
@@ -105,6 +146,32 @@ export default function TaskScreen() {
   const [noteSent, setNoteSent] = useState(false);
 
   const t = task.data;
+
+  // Directions from the home-screen widget: open maps once the job has
+  // loaded fresh and their maps choice is known. Once per tap (Damien, 14 Nov 2026).
+  const handledDirections = useRef<string | null>(null);
+  useEffect(() => {
+    if (go !== "directions" || !task.isFetchedAfterMount || !task.data || voiceSettings.isLoading) return;
+    const stamp = at ?? "first";
+    if (handledDirections.current === stamp) return;
+    handledDirections.current = stamp;
+    const d = task.data;
+    const url = mapsUrl({
+      address: siteAddress(d),
+      navApp: voiceSettings.data?.navApp,
+      lat: d.siteLat,
+      lng: d.siteLng,
+      placeId: d.sitePlaceId,
+    });
+    if (url) void Linking.openURL(url);
+  }, [go, at, task.isFetchedAfterMount, task.data, voiceSettings.isLoading, voiceSettings.data?.navApp]);
+
+  // A job he can no longer open comes off the home-screen widget.
+  const taskStatus = (task.error as { status?: number } | null)?.status;
+  const signedInAs = session.data?.user?.id ?? null;
+  useEffect(() => {
+    if (taskStatus === 403 || taskStatus === 404) void forgetWidgetTask(Number(id), signedInAs);
+  }, [taskStatus, id, signedInAs]);
 
   if (task.isLoading) {
     return (
@@ -132,7 +199,7 @@ export default function TaskScreen() {
   }
 
   const tint = tintFor(t.skillGroup);
-  const address = [t.siteAddress, t.siteSuburb, t.sitePostcode].filter(Boolean).join(", ");
+  const address = siteAddress(t);
   const running = t.status === "in_progress";
   const done = t.status === "complete";
   const outstanding = t.checklist.filter((i) => i.required && !i.done).length;
@@ -142,27 +209,8 @@ export default function TaskScreen() {
   const pinPlaceId = t.sitePlaceId;
 
   function openMaps() {
-    if (!address) return;
-    const q = encodeURIComponent(address);
-    // The maps app they picked on the Me tab, same as Siri's "direct me".
-    const picked = voiceSettings.data?.navApp ?? "apple";
-    const app = picked === "apple" && Platform.OS !== "ios" ? "google" : picked;
-    // A site checked with Google has a map pin. Go to the pin, not the typed text.
-    const ll = pinLat != null && pinLng != null ? `${pinLat},${pinLng}` : null;
-    const url = ll
-      ? app === "waze"
-        ? `https://waze.com/ul?ll=${ll}&navigate=yes`
-        : app === "google"
-          ? pinPlaceId
-            ? `https://www.google.com/maps/dir/?api=1&destination=${q}&destination_place_id=${encodeURIComponent(pinPlaceId)}&travelmode=driving`
-            : `https://www.google.com/maps/dir/?api=1&destination=${ll}&travelmode=driving`
-          : `https://maps.apple.com/?daddr=${ll}&dirflg=d`
-      : app === "waze"
-        ? `https://waze.com/ul?q=${q}&navigate=yes`
-        : app === "google"
-          ? `https://www.google.com/maps/dir/?api=1&destination=${q}&travelmode=driving`
-          : `https://maps.apple.com/?daddr=${q}&dirflg=d`;
-    void Linking.openURL(url);
+    const url = mapsUrl({ address, navApp: voiceSettings.data?.navApp, lat: pinLat, lng: pinLng, placeId: pinPlaceId });
+    if (url) void Linking.openURL(url);
   }
 
   const swmsDue = t.swmsRequired && !t.swmsSignedToday;

@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useBottomInset } from "@/hooks/use-bottom-gap";
 import { Colors, Fonts } from "@/constants/theme";
 import { addDaysISO, fmtDayLabel, todayISO } from "@/lib/format";
@@ -160,14 +160,22 @@ function Note({ text, tone = "muted" }: { text: string; tone?: "muted" | "warn" 
 
 /* ------------------------------ My time ------------------------------ */
 
-function MyTime({ openTaskId }: { openTaskId: number | null }) {
+function MyTime({ openTaskId, wantedTaskId }: { openTaskId: number | null; wantedTaskId: number | null }) {
   const router = useRouter();
   const jobs = useMyHourlyJobs();
   const [picked, setPicked] = useState<number | null>(null);
+  // Opened from the My Job widget's Time clock: show that job first. It only
+  // picks the job. Nothing starts until he taps Start (Damien, 14 Nov 2026).
+  const [pickedFor, setPickedFor] = useState(wantedTaskId);
+  if (pickedFor !== wantedTaskId) {
+    setPickedFor(wantedTaskId);
+    setPicked(null);
+  }
   const list = jobs.data ?? [];
   const today = todayISO();
   const fallback = list.find((j) => j.scheduledDate === today)?.taskId ?? list[0]?.taskId ?? null;
-  const chosenId = picked ?? (openTaskId && list.some((j) => j.taskId === openTaskId) ? openTaskId : fallback);
+  const inList = (id: number | null) => id != null && list.some((j) => j.taskId === id);
+  const chosenId = picked ?? (inList(wantedTaskId) ? wantedTaskId : inList(openTaskId) ? openTaskId : fallback);
   const chosen = list.find((j) => j.taskId === chosenId) ?? null;
   const unsent = list.filter((j) => savedTap(j.taskId));
 
@@ -607,6 +615,14 @@ export default function HoursScreen() {
   const router = useRouter();
   const bottomInset = useBottomInset();
   const [tab, setTab] = useState<Tab>("time");
+  const params = useLocalSearchParams<{ task?: string }>();
+  const wanted = Number(params.task);
+  const wantedTaskId = Number.isInteger(wanted) && wanted > 0 ? wanted : null;
+  const [tabFor, setTabFor] = useState(wantedTaskId);
+  if (tabFor !== wantedTaskId) {
+    setTabFor(wantedTaskId);
+    if (wantedTaskId != null) setTab("time");
+  }
   const summary = useMyInvoiceSummary();
   const hourly = useMyHourlySummary();
   const jobs = useMyHourlyJobs();
@@ -674,7 +690,7 @@ export default function HoursScreen() {
           ))}
         </View>
 
-        {tab === "time" ? <MyTime openTaskId={open?.taskId ?? null} /> : null}
+        {tab === "time" ? <MyTime openTaskId={open?.taskId ?? null} wantedTaskId={wantedTaskId} /> : null}
         {tab === "invoice" ? <CreateInvoice onIssued={() => setTab("invoices")} /> : null}
         {tab === "invoices" ? <MyInvoices /> : null}
       </ScrollView>

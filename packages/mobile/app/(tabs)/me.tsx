@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -7,6 +7,7 @@ import { Colors, Fonts, tintFor } from "@/constants/theme";
 import { authClient } from "@/lib/auth";
 import { releaseCrewPhone } from "@/lib/crew-phone";
 import { forgetSignedIn } from "@/lib/crash-guard";
+import { clearWidgets } from "@/lib/widget-sync";
 import { crewLabel, daysUntil, fmtDateTime, fmtDayLabel, fmtMoney } from "@/lib/format";
 import { useHistory, useMe, useSetLocationConsent } from "@/queries/field";
 import { dollars, hrsMins, useMyHourlySummary } from "@/queries/hourly";
@@ -83,10 +84,38 @@ function ExpiryRow({ label, value }: { label: string; value: Date | string | nul
   );
 }
 
-/** Sign out, the same way for every login. */
+/** Sign out, the same way for every login. The home-screen widgets are wiped too. */
 function signOutHere() {
   forgetSignedIn();
+  void clearWidgets();
   void releaseCrewPhone().finally(() => void authClient.signOut());
+}
+
+/** How to put Terra on the home screen (Damien, 14 Nov 2026). Phones only. */
+function WidgetsRow({ marginTop }: { marginTop: number }) {
+  const router = useRouter();
+  if (Platform.OS !== "ios" && Platform.OS !== "android") return null;
+  return (
+    <Pressable
+      onPress={() => router.push("/widgets-help")}
+      style={({ pressed }) => ({
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+        backgroundColor: c.card,
+        borderWidth: 1,
+        borderColor: c.border,
+        borderRadius: 14,
+        padding: 14,
+        marginTop,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      <Ionicons name="apps-outline" size={20} color={c.primary} />
+      <Text style={{ fontFamily: Fonts.medium, fontSize: 15, color: c.foreground, flex: 1 }}>Home-screen widgets</Text>
+      <Ionicons name="chevron-forward" size={18} color={c.mutedForeground} />
+    </Pressable>
+  );
 }
 
 /**
@@ -128,6 +157,8 @@ function OfficeMe({ name, email, role }: { name: string; email: string; role: st
         </View>
 
         <HandsFreeCard office />
+
+        <WidgetsRow marginTop={20} />
 
         <Pressable
           onPress={signOutHere}
@@ -510,11 +541,10 @@ function CrewMe() {
               ))
             )}
 
+            <WidgetsRow marginTop={20} />
+
             <Pressable
-              onPress={() => {
-                forgetSignedIn();
-                void releaseCrewPhone().finally(() => void authClient.signOut());
-              }}
+              onPress={signOutHere}
               style={({ pressed }) => ({
                 marginTop: 28,
                 borderWidth: 1,

@@ -101,7 +101,66 @@
         }
       ],
       "./plugins/terra-siri/app.plugin.js",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-widgets",
+        {
+          "groupIdentifier": "group.au.com.terraflooring.terra",
+          "widgets": [
+            {
+              "name": "TerraToday",
+              "displayName": "Terra Today",
+              "description": "Your next booking and what needs attention. Updates when Terra opens.",
+              "ios": {
+                "supportedFamilies": [
+                  "systemMedium"
+                ]
+              }
+            },
+            {
+              "name": "MyJob",
+              "displayName": "My Job",
+              "description": "Your next job, with directions and your time clock. Updates when Terra opens.",
+              "ios": {
+                "supportedFamilies": [
+                  "systemMedium"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      [
+        "react-native-android-widget",
+        {
+          "widgets": [
+            {
+              "name": "TerraToday",
+              "label": "Terra Today",
+              "description": "Your next booking and what needs attention. Updates when Terra opens.",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-preview-today.png"
+            },
+            {
+              "name": "MyJob",
+              "label": "My Job",
+              "description": "Your next job, with directions and your time clock. Updates when Terra opens.",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widget-preview-job.png"
+            }
+          ]
+        }
+      ]
     ],
     "owner": "terra-flooring",
     "updates": {

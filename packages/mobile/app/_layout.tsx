@@ -41,6 +41,8 @@ import {
 import { stageUpdate, updatesSupported } from "../lib/updates";
 // Defines the background geofence task at load, so iOS can wake Terra straight into it.
 import { fencesSupported, syncSiteFences } from "../lib/site-fences";
+// Registers the iPhone home-screen widgets at load, so they have a layout to draw.
+import { clearWidgets, syncWidgets } from "../lib/widget-sync";
 import { useWhoami } from "../queries/session";
 import { Colors } from "../constants/theme";
 import appJson from "../app.json";
@@ -104,7 +106,24 @@ function Navigation() {
       | { get: () => Record<string, unknown>; set: (v: Record<string, unknown>) => void }
       | undefined;
     atom?.set({ ...atom.get(), data: null, error: null, isPending: false, isRefetching: false });
+    void clearWidgets();
   }, [switchedOff]);
+
+  // Home-screen widgets (Damien, 14 Nov 2026). Fresh copy on sign-in and each
+  // time Terra comes back to the front. Signed out: wiped, never left showing
+  // the last person's jobs. No signal is not a sign-out, so that keeps them.
+  useEffect(() => {
+    if (!signedInAs || switchedOff) return;
+    void syncWidgets(signedInAs);
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") void syncWidgets(signedInAs);
+    });
+    return () => sub.remove();
+  }, [signedInAs, switchedOff]);
+  useEffect(() => {
+    if (session.isPending || unreachable || session.data) return;
+    void clearWidgets();
+  }, [session.isPending, session.data, unreachable]);
 
   // The first screen is up: later crashes get the recovery screen, not a close.
   useEffect(() => {
@@ -229,6 +248,7 @@ function Navigation() {
       <Stack.Screen name="hours" options={{ presentation: "card" }} />
       <Stack.Screen name="voice-quote" options={{ presentation: "card", gestureEnabled: false }} />
       <Stack.Screen name="site-arrival" options={{ presentation: "card" }} />
+      <Stack.Screen name="widgets-help" options={{ presentation: "card" }} />
     </Stack>
   );
 }

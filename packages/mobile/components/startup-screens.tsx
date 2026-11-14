@@ -5,6 +5,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { Colors, Fonts } from "@/constants/theme";
 import { authClient, forgetLoginOnPhone } from "@/lib/auth";
 import { forgetSignedIn, onFatal, queueProblem, setLoginNote } from "@/lib/crash-guard";
+import { clearWidgets } from "@/lib/widget-sync";
 
 /**
  * What the crew see instead of the app closing: a plain message and a way out.
@@ -98,6 +99,7 @@ export function CannotReachScreen({ onRetry, detail }: { onRetry: () => Promise<
 /** Wipe the login off the phone and go back to Sign in. Works with no signal. */
 export function startFresh(queryClient: QueryClient) {
   forgetLoginOnPhone();
+  void clearWidgets();
   forgetSignedIn();
   setLoginNote("reset");
   queryClient.clear();
