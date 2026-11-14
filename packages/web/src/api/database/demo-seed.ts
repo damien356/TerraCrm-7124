@@ -1,6 +1,7 @@
 import * as s from "./schema";
 import type { TerraDb } from "./routed";
-import { addLocalDays } from "../lib/local-date";
+import { addLocalDays, weekdayOf } from "../lib/local-date";
+import { DEMO_FILES, demoFileKey, loadDemoFiles } from "./demo-files";
 
 /**
  * Made up Terra for the Google Play reviewer. Nothing here is a real customer,
@@ -12,6 +13,12 @@ import { addLocalDays } from "../lib/local-date";
  * 18.58, Damien 17 Oct): the uplift he finished this morning (ready to
  * invoice), the carpet lay today, and an offer for the light prep. Every other
  * demo job and task belongs to the other demo crew, so Mick never sees it.
+ *
+ * Damien, 14 Nov 2026 (Google Play screenshots): Mick also has two bookings
+ * coming up (9231, 9233), a floor plan and four room photos on 9218, and two
+ * days of approved hourly prep on 9230, so My hours & invoices has real,
+ * invoiceable time on it. The plan and photos are files in
+ * public/demo-assets, copied to storage under demo/seed/ (demo-files.ts).
  */
 
 /** The demo crew member the reviewer is signed in as. */
@@ -43,6 +50,9 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
 
   await d.insert(s.settings).values([
     { key: "business_phone", value: "1300 183 772" },
+    /* Demo office's hourly settings, so his demo time can be approved like real time. */
+    { key: "hourly_night_window", value: JSON.stringify({ start: "18:00", end: "06:00" }) },
+    { key: "hourly_break_policy", value: "unpaid" },
   ]);
 
   /* ------------------------------------------------------------- crew */
@@ -65,6 +75,13 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
       bankBsb: "000-000",
       bankAccountNumber: "00000000",
       nextInvoiceNumber: 101,
+      /* A made up register result that matches his trading name, so invoicing is open to him. */
+      abnStatus: "Active",
+      abnLegalName: "Mick R Flooring (demo) Pty Ltd",
+      abnBusinessNames: '["Mick R Flooring (demo)"]',
+      abnEntityType: "Australian Private Company",
+      abnGstFrom: "2019-07-01",
+      abnCheckedAt: new Date(),
       locationConsentAt: new Date(),
       navApp: "google",
     },
@@ -127,6 +144,9 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
       { firstName: "Carol", lastName: "Nguyen", mobile: "0491 571 266", email: "carol@example.com", suburb: "Robina", source: "repeat" },
       { firstName: "Tom", lastName: "Baker", mobile: "0491 571 491", email: "tom@example.com", suburb: "Southport", source: "website" },
       { firstName: "Priya", lastName: "Shah", mobile: "0491 571 804", email: "priya@example.com", suburb: "Coomera", source: "google" },
+      { firstName: "Grace", lastName: "Lee", mobile: "0491 572 549", email: "grace@example.com", suburb: "Labrador", source: "website" },
+      { firstName: "Lena", lastName: "Fischer", mobile: "0491 572 665", email: "lena@example.com", suburb: "Ashmore", source: "referral" },
+      { firstName: "Ben", lastName: "Ortiz", mobile: "0491 572 983", email: "ben@example.com", suburb: "Varsity Lakes", source: "google" },
     ])
     .returning();
   const c = (first: string) => people.find((p) => p.firstName === first)!.id;
@@ -144,6 +164,9 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
       { address: "9 Example Ct", suburb: "Robina", postcode: "4226", contactId: c("Carol"), accessNotes: "Owner home. Garage access.", propertyType: "residential" },
       { address: "41 Example St", suburb: "Southport", postcode: "4215", contactId: c("Tom"), accessNotes: "Unit 2, ring on arrival.", propertyType: "residential" },
       { address: "7 Example Pl", suburb: "Coomera", postcode: "4209", contactId: c("Priya"), accessNotes: "", propertyType: "residential" },
+      { address: "16 Example Ln", suburb: "Labrador", postcode: "4215", contactId: c("Grace"), accessNotes: "Key in the lockbox, code from the office.", propertyType: "rental" },
+      { address: "22 Example Rd", suburb: "Ashmore", postcode: "4214", contactId: c("Lena"), accessNotes: "Owner home. Park on the street, not the drive.", propertyType: "residential" },
+      { address: "5 Example Way", suburb: "Varsity Lakes", postcode: "4227", contactId: c("Ben"), accessNotes: "Townhouse 3. Stairs only, no lift.", propertyType: "residential" },
     ])
     .returning();
   const site = (suburb: string) => siteRows.find((r) => r.suburb === suburb)!.id;
@@ -157,6 +180,9 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
       { number: 9224, title: "New build, carpet throughout", statusId: status("won", "Won"), siteId: site("Helensvale"), companyId: builder!.id, contactId: c("Rick"), billToType: "company", billToCompanyId: builder!.id, description: "Demo job. Stage 2 handover, carpet to 4 bedrooms.", accessNotes: "Key from Rick.", source: "repeat", value: 11400 },
       { number: 9226, title: "Measure and quote, carpet stairs", statusId: status("open", "Lead"), siteId: site("Robina"), contactId: c("Carol"), billToContactId: c("Carol"), description: "Demo job. 14 stairs and landing.", source: "repeat", value: 0 },
       { number: 9210, title: "Carpet, lounge room", statusId: status("complete", "Complete"), siteId: site("Southport"), contactId: c("Tom"), billToContactId: c("Tom"), description: "Demo job. Lounge 22 m2.", source: "website", value: 1980, completedAt: at(-1, 15) },
+      { number: 9230, title: "Vinyl prep, kitchen and dining", statusId: status("scheduled", "Scheduled"), siteId: site("Labrador"), contactId: c("Grace"), billToContactId: c("Grace"), description: "Demo job. Strip old vinyl, patch and level ready for new plank. Hourly.", accessNotes: "Lockbox.", source: "website", value: 2600 },
+      { number: 9231, title: "Carpet, 2 bedrooms", statusId: status("scheduled", "Scheduled"), siteId: site("Ashmore"), contactId: c("Lena"), billToContactId: c("Lena"), furnitureOnSite: true, description: "Demo job. Lift and lay, 2 bedrooms, 31 m2.", accessNotes: "Street parking.", source: "referral", value: 2480, depositAmount: 620, depositPaid: true },
+      { number: 9233, title: "Carpet, stairs and landing", statusId: status("scheduled", "Scheduled"), siteId: site("Varsity Lakes"), contactId: c("Ben"), billToContactId: c("Ben"), description: "Demo job. 13 stairs and the landing.", accessNotes: "Stairs only.", source: "google", value: 1650, depositAmount: 410, depositPaid: true },
       { number: 9229, title: "Hybrid plank, whole house", statusId: status("open", "Quoted"), siteId: site("Coomera"), contactId: c("Priya"), billToContactId: c("Priya"), description: "Demo job. Quote sent, waiting on the customer.", source: "google", value: 0 },
     ])
     .returning();
@@ -169,10 +195,28 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
     { jobId: job(9226), contactId: c("Carol"), role: "owner", tags: '["owner"]', isPrimary: true, onSiteContact: true, receivesSms: true, showToCrew: true },
     { jobId: job(9210), contactId: c("Tom"), role: "owner", tags: '["owner"]', isPrimary: true, onSiteContact: true, receivesSms: true, showToCrew: true },
     { jobId: job(9229), contactId: c("Priya"), role: "owner", tags: '["owner"]', isPrimary: true, receivesEmail: true, canApproveQuote: true },
+    { jobId: job(9230), contactId: c("Grace"), role: "property_manager", tags: '["property_manager"]', isPrimary: true, receivesEmail: true, canApproveQuote: true, showToCrew: true },
+    { jobId: job(9231), contactId: c("Lena"), role: "owner", tags: '["owner"]', isPrimary: true, onSiteContact: true, receivesSms: true, showToCrew: true },
+    { jobId: job(9233), contactId: c("Ben"), role: "owner", tags: '["owner"]', isPrimary: true, onSiteContact: true, receivesSms: true, showToCrew: true },
   ]);
 
   /* ------------------------------------------------------------ tasks */
   const mick = DEMO_INSTALLER_ID;
+  /* Working days (Mon to Fri) around today: n > 0 the nth one after, n < 0 the nth one before. */
+  const workDay = (n: number) => {
+    let k = 0;
+    let left = Math.abs(n);
+    while (left > 0) {
+      k += Math.sign(n);
+      const wd = weekdayOf(day(k));
+      if (wd !== 0 && wd !== 6) left--;
+    }
+    return { date: day(k), offset: k };
+  };
+  const nextA = workDay(1);
+  const nextB = workDay(2);
+  const prev1 = workDay(-1);
+  const prev2 = workDay(-2);
   const lay = (qty: number, rateEach: number, name: string, unit = "m2") =>
     JSON.stringify([{ itemId: 0, name, unit, qty, rate: rateEach, source: "standard", total: qty * rateEach }]);
 
@@ -188,6 +232,11 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
       { jobId: job(9210), seq: 1, skillId: skill("Broadloom"), title: "Lay carpet, lounge 22 m2", areaM2: 22, scheduledDate: day(-1), startTime: "08:00", durationHours: 3, crewSize: 1, status: "complete", assignedInstallerId: 3, payType: "per_m2", payAmount: 220, labourCost: 220, labourBreakdown: lay(22, 10, "Broadloom carpet lay"), labourPricedOn: day(-5), startedAt: at(-1, 8), completedAt: at(-1, 11, 30), signatureName: "Tom Baker", damageCheckedAt: at(-1, 8), damageNone: true },
       /* Offers: the stairs go to Sam, the light prep on 9218 to Mick and Dave */
       { jobId: job(9224), seq: 3, skillId: skill("Carpet stairs"), title: "Carpet stairs, 13 steps", areaM2: null, scheduledFrom: day(4), scheduledTo: day(6), startTime: "07:30", durationHours: 4, crewSize: 1, status: "offered", payType: "per_job", payAmount: 156 },
+      /* Mick, coming up: two bookings on the next working days */
+      { jobId: job(9231), seq: 1, skillId: skill("Broadloom"), title: "Lift and lay, 2 bedrooms, 31 m2", description: "Furniture on site. Owner home.", areaM2: 31, scheduledDate: nextA.date, startTime: "07:30", durationHours: 5, crewSize: 2, status: "assigned", assignedInstallerId: mick, payType: "per_m2", payAmount: 403, labourCost: 403, labourBreakdown: lay(31, 13, "Broadloom carpet lay"), labourPricedOn: day(-3) },
+      { jobId: job(9233), seq: 1, skillId: skill("Carpet stairs"), title: "Carpet stairs, 13 steps and landing", description: "Stairs only, carry everything up.", areaM2: null, scheduledDate: nextB.date, startTime: "08:00", durationHours: 4, crewSize: 1, status: "assigned", assignedInstallerId: mick, payType: "per_job", payAmount: 260 },
+      /* Mick, hourly prep on 9230, the last two working days, finished and approved below */
+      { jobId: job(9230), seq: 1, skillId: skill("Light prep"), title: "Strip old vinyl and level subfloor", description: "Hourly. Strip, scrape, patch and level the kitchen and dining.", areaM2: 28, scheduledDate: prev2.date, startTime: "07:00", durationHours: 8, crewSize: 1, status: "complete", assignedInstallerId: mick, payType: "hourly", payAmount: null, startedAt: at(prev2.offset, 7), completedAt: at(prev1.offset, 15, 30), damageCheckedAt: at(prev2.offset, 7), damageNone: true },
       { jobId: job(9218), seq: 3, skillId: skill("Light prep"), title: "Light prep before the lay", scheduledDate: day(2), startTime: "08:00", durationHours: 2, crewSize: 1, status: "offered", payType: "hourly", payAmount: 120 },
       /* Mick, done this morning on 9218, ready to invoice */
       { jobId: job(9218), seq: 1, skillId: skill("Carpet removal"), title: "Lift old carpet, 68 m2", areaM2: 68, scheduledDate: day(0), startTime: "06:30", durationHours: 1, crewSize: 1, status: "complete", assignedInstallerId: mick, payType: "per_m2", payAmount: 204, labourCost: 204, labourBreakdown: lay(68, 3, "Carpet uplift"), labourPricedOn: day(-3), startedAt: at(0, 6, 30), completedAt: at(0, 7, 20), damageCheckedAt: at(0, 6, 30), damageNone: true },
@@ -211,6 +260,16 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
         status: t.status === "complete" ? "complete" : "booked",
       })),
   );
+
+  /* The prep on 9230 ran over two days. */
+  await d.insert(s.taskDays).values({
+    taskId: task("Strip old vinyl and level subfloor").id,
+    date: prev1.date,
+    seq: 2,
+    arrivalStart: "07:00",
+    arrivalEnd: "09:00",
+    status: "complete",
+  });
 
   await d.insert(s.taskChecklistItems).values(
     [
@@ -304,5 +363,84 @@ export async function seedDemo(d: TerraDb, today: string, ref: Reference) {
     { jobId: job(9218), action: "deposit_paid", detail: "Deposit $1,240 received", actorName: "System" },
     { jobId: job(9210), action: "task_complete", detail: "Sam K. finished the lounge", actorName: "Sam K.", actorRole: "installer" },
     { jobId: job(9218), action: "task_complete", detail: "Mick R. lifted the old carpet", actorName: "Mick R.", actorRole: "installer" },
+    { jobId: job(9230), action: "task_complete", detail: "Mick R. finished the vinyl prep", actorName: "Mick R.", actorRole: "installer" },
   ]);
+
+  /* ------------------------------------------- hourly pay and his time */
+  /* Damien, 14 Nov 2026: invented $55 an hour, GST registered like his card. */
+  await d.insert(s.installerPayTerms).values({
+    installerId: mick,
+    basis: "hourly",
+    baseRate: 55,
+    gstRegistered: true,
+    gstNote: "Demo",
+    defaultForNew: false,
+    effectiveFrom: day(-60),
+    createdByName: "Demo",
+  });
+
+  /* Two finished days on 9230, 7:00 to 3:30 with a 30 minute unpaid lunch. */
+  const prep = task("Strip old vinyl and level subfloor");
+  const sessionIds: number[] = [];
+  for (const w of [prev2, prev1]) {
+    const [row] = await d
+      .insert(s.workSessions)
+      .values({
+        installerId: mick,
+        taskId: prep.id,
+        jobId: prep.jobId,
+        category: "site",
+        clientKey: `demo-${w.date}`,
+        workDate: w.date,
+        startedAt: at(w.offset, 7),
+        endedAt: at(w.offset, 15, 30),
+        source: "app",
+        status: "recorded",
+      })
+      .returning({ id: s.workSessions.id });
+    await d.insert(s.workBreaks).values({
+      sessionId: row!.id,
+      clientKey: `demo-lunch-${w.date}`,
+      startedAt: at(w.offset, 12),
+      endedAt: at(w.offset, 12, 30),
+      paid: false,
+      decidedByName: "Demo office",
+    });
+    sessionIds.push(row!.id);
+  }
+  /* Approved the real way, so the rate, bands and pay lines are what the office would see. */
+  const { approveSession } = await import("../lib/hourly");
+  const { runOnDemo } = await import("./routed");
+  await runOnDemo({ db: d, client: d.$client }, async () => {
+    for (const id of sessionIds) await approveSession(id, { name: "Demo office", role: "admin" });
+  });
+
+  /* ------------------------------------------------ plan and photos */
+  const files = await loadDemoFiles();
+  const lay68 = task("Lay carpet, 68 m2");
+  const shared = {
+    jobId: job(9218),
+    kind: "photo",
+    visibility: "crew",
+    sensitivity: "normal",
+    reviewStatus: "approved",
+    classifiedAt: at(-3, 9),
+    reviewedByName: "Demo office",
+    reviewedAt: at(-3, 9),
+  } as const;
+  const media = DEMO_FILES.filter((f) => files.has(f.name)).map((f) => ({
+    ...shared,
+    taskId: f.bucket === "plan" ? null : lay68.id,
+    bucket: f.bucket,
+    storageKey: demoFileKey(f.name),
+    url: demoFileKey(f.name),
+    filename: f.name,
+    mime: f.mime,
+    sizeBytes: files.get(f.name)!,
+    caption: f.caption,
+    capturedAt: f.bucket === "plan" ? at(-3, 9) : at(0, 6, 20 + DEMO_FILES.indexOf(f)),
+    uploadedByInstallerId: f.bucket === "plan" ? null : mick,
+    uploaderName: f.bucket === "plan" ? "Terra office (demo)" : "Mick R.",
+  }));
+  if (media.length) await d.insert(s.jobMedia).values(media);
 }
