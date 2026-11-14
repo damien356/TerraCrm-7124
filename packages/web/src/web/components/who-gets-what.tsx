@@ -48,18 +48,24 @@ export function WhoGetsWhatCard({ jobId }: { jobId: number }) {
         title={<span className="text-base font-bold">Who gets what</span>}
         subtitle={`Who can be sent quotes, variations and invoices on this ${q.data.typeLabel.toLowerCase()} job. Checked on every email and text. Anyone not on this list can never be sent them.`}
       />
-      <div className="overflow-x-auto px-4 py-3">
+      {/* Fits the narrow main column at 1024 px (Damien, 14 Nov 2026): fixed
+          tick columns, person details wrap, "Back to default" sits under the
+          person instead of in its own column. */}
+      <div className="px-4 py-3">
         {rows.length ? (
-          <table className="w-full text-sm">
+          <table className="w-full table-fixed text-sm">
+            <colgroup>
+              <col />
+              {COLS.map((c) => (
+                <col key={c.doc} className="w-[68px]" />
+              ))}
+            </colgroup>
             <thead>
               <tr className="text-left text-xs text-muted-foreground">
-                <th className="pb-2 pr-3 font-medium">Person</th>
+                <th className="pb-2 pr-2 font-medium">Person</th>
                 {COLS.map((c) => (
-                  <th key={c.doc} className="pb-2 px-2 text-center font-semibold text-foreground">{c.label}</th>
+                  <th key={c.doc} className="pb-2 px-0.5 text-center font-semibold text-foreground">{c.label}</th>
                 ))}
-                <th className="pb-2 pl-2">
-                  <span className="sr-only">Reset</span>
-                </th>
               </tr>
             </thead>
             <tbody>
@@ -67,19 +73,26 @@ export function WhoGetsWhatCard({ jobId }: { jobId: number }) {
                 const changed = r.quote.set || r.variation.set || r.invoice.set;
                 return (
                   <tr key={r.key} className="border-t border-border align-top">
-                    <td className="py-2 pr-3">
+                    <td className="min-w-0 py-2 pr-2 [overflow-wrap:anywhere]">
                       <p className="font-bold">{r.name}</p>
                       <p className="text-xs text-muted-foreground">
                         {r.roleLabel}
                         {r.kind === "person" && !r.onJob ? ", not on People yet" : ""}
                       </p>
-                      <p className="text-xs text-muted-foreground">{[r.email, r.mobileShown].filter(Boolean).join(" · ") || "No email or mobile"}</p>
+                      {r.email ? <p className="text-xs text-muted-foreground">{r.email}</p> : null}
+                      {r.mobileShown ? <p className="text-xs text-muted-foreground">{r.mobileShown}</p> : null}
+                      {!r.email && !r.mobileShown ? <p className="text-xs text-muted-foreground">No email or mobile</p> : null}
                       <p className="mt-0.5 text-xs text-muted-foreground">{changed ? "Changed by hand. " : "Default. "}{r.defaultWhy}</p>
+                      {changed ? (
+                        <Button size="sm" variant="outline" className="mt-1.5" disabled={set.isPending} onClick={() => reset(r)}>
+                          Back to default
+                        </Button>
+                      ) : null}
                     </td>
                     {COLS.map((c) => {
                       const t = r[c.doc];
                       return (
-                        <td key={c.doc} className="px-2 py-2 text-center">
+                        <td key={c.doc} className="px-0.5 py-2 text-center">
                           <label className="inline-flex cursor-pointer flex-col items-center gap-0.5">
                             <input
                               type="checkbox"
@@ -94,13 +107,6 @@ export function WhoGetsWhatCard({ jobId }: { jobId: number }) {
                         </td>
                       );
                     })}
-                    <td className="py-2 pl-2 text-right">
-                      {changed ? (
-                        <Button size="sm" variant="outline" disabled={set.isPending} onClick={() => reset(r)}>
-                          Back to default
-                        </Button>
-                      ) : null}
-                    </td>
                   </tr>
                 );
               })}

@@ -18,11 +18,11 @@ export const widget = {
   /** The "Needs attention" list the widget opens. Office and Admin only. */
   attention: staffOnly
     .input(z.object({ show: z.enum(ATTENTION_KEYS as [string, ...string[]]).optional() }).optional())
-    .handler(async () => {
+    .handler(async ({ context }) => {
       // Same as the dashboard: stale offers come off before anything is counted.
       await expireStale();
       const today = todayLocal();
-      const lists = await attentionLists(today);
+      const lists = await attentionLists(context.actor, today);
       return { today, sections: ATTENTION_KEYS.map((key) => ({ key, label: ATTENTION_LABEL[key], rows: lists[key] })) };
     }),
 };

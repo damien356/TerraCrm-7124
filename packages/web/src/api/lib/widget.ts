@@ -1,14 +1,17 @@
-import { and, asc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import type { Actor } from "../middleware/auth";
 import { normaliseRole } from "../middleware/auth";
 import { workDaysFor, type WorkDay } from "./crew-days";
 import { jobNumberSql, taskRefSql } from "./job-ref";
+import { QA_TEST_SOURCE, TEST_LEAD_TAG_LIKE } from "./lead-codes";
 import { addLocalDays, localDate, localDayBounds, localTimeOn, sayTime, TERRA_TZ, todayLocal } from "./local-date";
 import { isMeasureSkill } from "./property-types";
 import { termsOn } from "./hourly";
 import { crewBoard } from "./task-run";
+import { phoneTablesMissing } from "./phone/calls";
+import { loadPhoneConfig } from "./phone/config";
 
 /* ---------------------------------------------------------------------------
  * Home-screen widgets (Damien, 14 Nov 2026).
@@ -77,7 +80,7 @@ export interface WidgetSession {
 }
 
 export interface AttentionCounts {
-  /** Distinct tasks across every line below, so one task is never counted twice. */
+  /** Distinct items across every line below, so nothing is counted twice. */
   total: number;
   lines: { key: AttentionKey; label: string; count: number; path: string }[];
   path: string;
@@ -366,9 +369,10 @@ async function sessionFor(installerId: number): Promise<WidgetSession | null> {
 
 /* ------------------------------------------------------- needs attention */
 
-export type AttentionKey = "unfilled" | "offers" | "overdue" | "incomplete";
+export type AttentionKey = "enquiries" | "unfilled" | "offers" | "overdue" | "incomplete";
 
 export const ATTENTION_LABEL: Record<AttentionKey, string> = {
+  enquiries: "Enquiries needing action",
   unfilled: "Needs a body",
   offers: "Waiting on installers",
   overdue: "Overdue",
@@ -376,8 +380,14 @@ export const ATTENTION_LABEL: Record<AttentionKey, string> = {
 };
 
 export interface AttentionRow {
-  taskId: number;
-  jobId: number;
+  /** Unique across every line: "t:<dispatch>", "j:<job>" or "f:<phone follow-up>". The total counts each once. */
+  key: string;
+  /** The dispatch, for the booking lines. Null on enquiries. */
+  taskId: number | null;
+  /** Null only for a phone enquiry not on a job yet. */
+  jobId: number | null;
+  /** Where the row opens on the web. */
+  path: string;
   ref: string;
   title: string;
   suburb: string | null;
@@ -386,13 +396,150 @@ export interface AttentionRow {
   note: string | null;
 }
 
+/** Who is looking. Admin also sees admin-only office tasks, as on the dashboard. */
+export interface AttentionViewer {
+  role: string;
+}
+
+/**
+ * Enquiries needing action (Damien, 14 Nov 2026). His rule, built from what
+ * the office already works from, no separate widget rule:
+ *
+ * An enquiry is a job still on the open stage, Lead or Quoted, the same as
+ * the dashboard's Leads count. Not merged into another job, not a test.
+ * Won, cancelled and closed jobs are other stages, so never here. Spam
+ * never becomes a job.
+ *
+ * It counts only when Terra owes it something now:
+ * - an open office task on it that is due: no due date, or due today or
+ *   before, and not snoozed to later (routes/officeTasks.ts). Every new web
+ *   lead gets "Call new lead" (lib/lead-intake.ts), and the automatic
+ *   "We received your enquiry" email never closes it. Booking the measure
+ *   or site visit, or sending a quote, clears that first call;
+ * - or an open phone follow-up on it that is due or overdue. A phone
+ *   enquiry not on a job yet counts on its own.
+ * A future due date or reminder means it waits until then. An enquiry with
+ * nothing outstanding is not counted just for being there.
+ */
+async function enquiryRows(today: string, now: Date, viewer: AttentionViewer): Promise<AttentionRow[]> {
+  const activeEnquiry = and(
+    sql`coalesce(${schema.jobStatuses.stage}, 'open') = 'open'`,
+    isNull(schema.jobs.mergedIntoJobId),
+    sql`coalesce(${schema.jobs.source}, '') != ${QA_TEST_SOURCE} and coalesce(${schema.jobs.tags}, '') not like ${TEST_LEAD_TAG_LIKE}`,
+  );
+  const jobCols = {
+    jobId: schema.jobs.id,
+    // Sent the same way the leads report counts it.
+    quoteSent: sql<number>`exists (select 1 from ${schema.quotes} q where q.job_id = ${schema.jobs.id} and (q.sent_at is not null or q.status in ('sent', 'accepted')))`,
+    ref: jobNumberSql,
+    jobTitle: schema.jobs.title,
+    suburb: schema.sites.suburb,
+    createdAt: schema.jobs.createdAt,
+  };
+
+  const tasks = await db
+    .select({ ...jobCols, taskTitle: schema.officeTasks.title, dueDate: schema.officeTasks.dueDate })
+    .from(schema.officeTasks)
+    .innerJoin(schema.jobs, eq(schema.jobs.id, schema.officeTasks.jobId))
+    .leftJoin(schema.jobStatuses, eq(schema.jobStatuses.id, schema.jobs.statusId))
+    .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
+    .where(
+      and(
+        eq(schema.officeTasks.status, "open"),
+        viewer.role === "admin" ? undefined : eq(schema.officeTasks.adminOnly, false),
+        or(isNull(schema.officeTasks.dueDate), lte(schema.officeTasks.dueDate, today)),
+        or(isNull(schema.officeTasks.remindAt), lte(schema.officeTasks.remindAt, now)),
+        activeEnquiry,
+      ),
+    );
+
+  // Same test as the leads report: a measure or site visit with a day on it.
+  const firstCall = (title: string) => /^Call (new|recovered) lead\b/.test(title);
+  const askIds = [...new Set(tasks.filter((t) => firstCall(t.taskTitle) && !t.quoteSent).map((t) => t.jobId))];
+  const booked = new Set<number>();
+  if (askIds.length) {
+    const visits = await db
+      .select({ jobId: schema.jobTasks.jobId, skillName: schema.skills.name })
+      .from(schema.jobTasks)
+      .leftJoin(schema.skills, eq(schema.skills.id, schema.jobTasks.skillId))
+      .where(and(inArray(schema.jobTasks.jobId, askIds), sql`${schema.jobTasks.status} != 'cancelled'`, isNotNull(schema.jobTasks.scheduledDate)));
+    for (const v of visits) if (isMeasureSkill(v.skillName)) booked.add(v.jobId);
+  }
+
+  type Hit = { jobId: number | null; ref: string; title: string; suburb: string | null; date: string | null; why: Set<string> };
+  const hits = new Map<string, Hit>();
+  const onJob = (j: { jobId: number; ref: string; jobTitle: string; suburb: string | null; createdAt: Date }) => {
+    const key = `j:${j.jobId}`;
+    let h = hits.get(key);
+    if (!h) hits.set(key, (h = { jobId: j.jobId, ref: j.ref, title: j.jobTitle || "Enquiry", suburb: j.suburb, date: localDate(j.createdAt), why: new Set() }));
+    return h;
+  };
+  for (const t of tasks) {
+    if (firstCall(t.taskTitle) && (t.quoteSent || booked.has(t.jobId))) continue;
+    onJob(t).why.add(
+      firstCall(t.taskTitle)
+        ? "First call not made"
+        : t.dueDate && t.dueDate < today
+          ? "Office task overdue"
+          : /^Reply to email\b/.test(t.taskTitle)
+            ? "Email to answer"
+            : "Office task due",
+    );
+  }
+
+  // Phone follow-ups, for roles allowed to see AI phone calls.
+  if (await phoneVisible(viewer)) {
+    const due = and(inArray(schema.phoneFollowups.status, ["new", "assigned", "in_progress"]), or(isNull(schema.phoneFollowups.dueAt), lte(schema.phoneFollowups.dueAt, now)));
+    const [onJobs, loose] = await Promise.all([
+      db
+        .select({ ...jobCols, dueAt: schema.phoneFollowups.dueAt })
+        .from(schema.phoneFollowups)
+        .innerJoin(schema.jobs, eq(schema.jobs.id, schema.phoneFollowups.jobId))
+        .leftJoin(schema.jobStatuses, eq(schema.jobStatuses.id, schema.jobs.statusId))
+        .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
+        .where(and(due, activeEnquiry)),
+      db
+        .select({ id: schema.phoneFollowups.id, dueAt: schema.phoneFollowups.dueAt, createdAt: schema.phoneFollowups.createdAt })
+        .from(schema.phoneFollowups)
+        .where(and(due, isNull(schema.phoneFollowups.jobId), eq(schema.phoneFollowups.callType, "enquiry"))),
+    ]);
+    const callWhy = (dueAt: Date | null) => (dueAt && dueAt.getTime() < now.getTime() ? "Callback overdue" : "Callback due");
+    for (const f of onJobs) onJob(f).why.add(callWhy(f.dueAt));
+    for (const f of loose) {
+      hits.set(`f:${f.id}`, { jobId: null, ref: "Phone", title: "Phone enquiry, not on a job yet", suburb: null, date: localDate(f.createdAt), why: new Set([callWhy(f.dueAt)]) });
+    }
+  }
+
+  return [...hits.entries()]
+    .map(([key, h]) => ({
+      key,
+      taskId: null,
+      jobId: h.jobId,
+      path: h.jobId ? `/jobs/${h.jobId}` : `/phone-calls?tab=open&followup=${key.slice(2)}`,
+      ref: h.ref,
+      title: h.title,
+      suburb: h.suburb,
+      date: h.date,
+      note: [...h.why].join(", "),
+    }))
+    .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+}
+
+async function phoneVisible(viewer: AttentionViewer) {
+  if (viewer.role === "field" || (await phoneTablesMissing()).length) return false;
+  const cfg = await loadPhoneConfig();
+  return (cfg.permissions.viewCalls as string[]).includes(viewer.role);
+}
+
 /**
  * The office dashboard's own lists (routes/dashboard.ts), whole rather than
  * the first 20, and as tasks rather than offers. No new rule, no money.
+ * Enquiries needing action is listed first, see enquiryRows.
  */
-export async function attentionLists(today = todayLocal(), now = new Date()): Promise<Record<AttentionKey, AttentionRow[]>> {
+export async function attentionLists(viewer: AttentionViewer, today = todayLocal(), now = new Date()): Promise<Record<AttentionKey, AttentionRow[]>> {
   const weekEnd = addLocalDays(today, 7);
-  const [board, unfilled, offers] = await Promise.all([
+  const [enquiries, board, unfilled, offers] = await Promise.all([
+    enquiryRows(today, now, viewer),
     crewBoard(today),
     db
       .select({
@@ -442,15 +589,18 @@ export async function attentionLists(today = todayLocal(), now = new Date()): Pr
   for (const o of offers) {
     const row = offerRows.get(o.taskId);
     if (row) row.note = `${row.note}, ${o.installerName}`;
-    else offerRows.set(o.taskId, { taskId: o.taskId, jobId: o.jobId, ref: o.ref, title: o.title, suburb: o.suburb, date: o.date, note: `With ${o.installerName}` });
+    else offerRows.set(o.taskId, { key: `t:${o.taskId}`, taskId: o.taskId, jobId: o.jobId, path: `/jobs/${o.jobId}`, ref: o.ref, title: o.title, suburb: o.suburb, date: o.date, note: `With ${o.installerName}` });
   }
 
   return {
-    unfilled: unfilled.map((t) => ({ taskId: t.taskId, jobId: t.jobId, ref: t.ref, title: t.title, suburb: t.suburb, date: t.date, note: t.skillName })),
+    enquiries,
+    unfilled: unfilled.map((t) => ({ key: `t:${t.taskId}`, taskId: t.taskId, jobId: t.jobId, path: `/jobs/${t.jobId}`, ref: t.ref, title: t.title, suburb: t.suburb, date: t.date, note: t.skillName })),
     offers: [...offerRows.values()],
     overdue: board.late.map((t) => ({
+      key: `t:${t.id}`,
       taskId: t.id,
       jobId: t.jobId,
+      path: `/jobs/${t.jobId}`,
       ref: t.ref,
       title: t.title,
       suburb: t.siteSuburb,
@@ -458,8 +608,10 @@ export async function attentionLists(today = todayLocal(), now = new Date()): Pr
       note: t.installerName ?? "Unassigned",
     })),
     incomplete: board.incomplete.map((t) => ({
+      key: `t:${t.id}`,
       taskId: t.id,
       jobId: t.jobId,
+      path: `/jobs/${t.jobId}`,
       ref: t.ref,
       title: t.title,
       suburb: t.siteSuburb,
@@ -469,13 +621,13 @@ export async function attentionLists(today = todayLocal(), now = new Date()): Pr
   };
 }
 
-export const ATTENTION_KEYS: AttentionKey[] = ["unfilled", "offers", "overdue", "incomplete"];
+export const ATTENTION_KEYS: AttentionKey[] = ["enquiries", "unfilled", "offers", "overdue", "incomplete"];
 
 const attentionPath = (key?: AttentionKey) => `/office?path=${encodeURIComponent(key ? `/attention?show=${key}` : "/attention")}`;
 
 export function attentionCounts(lists: Record<AttentionKey, AttentionRow[]>): AttentionCounts {
-  const all = new Set<number>();
-  for (const k of ATTENTION_KEYS) for (const r of lists[k]) all.add(r.taskId);
+  const all = new Set<string>();
+  for (const k of ATTENTION_KEYS) for (const r of lists[k]) all.add(r.key);
   return {
     total: all.size,
     lines: ATTENTION_KEYS.map((key) => ({ key, label: ATTENTION_LABEL[key], count: lists[key].length, path: attentionPath(key) })).filter((l) => l.count > 0),
@@ -496,7 +648,7 @@ export async function widgetSnapshot(actor: Actor, at = new Date()): Promise<Wid
     const card = await widgetCardOf(actor);
     const [mine, lists] = await Promise.all([
       card ? itemsFor(card, { side: "office", now, today }) : Promise.resolve({ items: [], todayCount: 0 }),
-      attentionLists(today, at),
+      attentionLists(actor, today, at),
     ]);
     office = { bookable: card != null, items: mine.items, attention: attentionCounts(lists) };
   }
