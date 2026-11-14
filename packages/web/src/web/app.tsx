@@ -4,6 +4,7 @@ import { Layout } from "./components/layout";
 import { AgentFeedback } from "@runablehq/website-runtime";
 import { authClient } from "./lib/auth";
 import Index from "./pages/index";
+import AttentionPage from "./pages/attention";
 import LoginPage from "./pages/login";
 import SchedulePage from "./pages/schedule";
 import JobsPage from "./pages/jobs";
@@ -99,6 +100,7 @@ function App() {
             <Switch>
               <Route path="/login" component={LoginPage} />
               <Route path="/" component={Index} />
+              <Route path="/attention" component={AttentionPage} />
               <Route path="/conversations" component={ConversationsPage} />
               <Route path="/schedule" component={SchedulePage} />
               <Route path="/jobs" component={JobsPage} />

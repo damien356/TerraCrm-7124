@@ -35,6 +35,7 @@ import { accessNotes } from "./routes/access-notes";
 import { forms } from "./routes/forms";
 import { crew } from "./routes/crew";
 import { dashboard } from "./routes/dashboard";
+import { widget } from "./routes/widget";
 import { backups } from "./routes/backups";
 import { team } from "./routes/team";
 import { suppliers } from "./routes/suppliers";
@@ -192,6 +193,8 @@ export const router = {
   installerInvoices,
   /** Hourly contractor invoices by dates, across jobs, and payments recorded (13 Nov 2026). */
   hourlyInvoices,
+  /** Home-screen widgets: Terra Today and My Job (Damien, 14 Nov 2026). */
+  widget,
   /** Presigned direct-to-storage uploads for photos, video and plans. */
   upload,
   /** Rooms and zones the work covers — photos hang off these. */
