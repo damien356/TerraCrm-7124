@@ -153,12 +153,13 @@ export function UnfiledTray({ limit = 50, hideWhenEmpty = false }: { limit?: num
         <ul className="divide-y divide-border">
           {rows.slice(0, limit).map((r) => (
             <li key={r.conversationId} className="px-4 py-3">
-              <div className="flex flex-wrap items-baseline gap-2">
-                <span className="text-sm font-medium">{r.name || r.email || "Unknown sender"}</span>
-                {r.email && r.name !== r.email ? <span className="text-xs text-muted-foreground">{r.email}</span> : null}
+              {/* A long email address wraps onto the next line, never pushes the page sideways (Damien, 15 Nov 2026). */}
+              <div className="flex min-w-0 flex-wrap items-baseline gap-2">
+                <span className="min-w-0 text-sm font-medium [overflow-wrap:anywhere]">{r.name || r.email || "Unknown sender"}</span>
+                {r.email && r.name !== r.email ? <span className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">{r.email}</span> : null}
                 <span className="ml-auto text-[11px] text-muted-foreground">{when(r.lastMessageAt)}</span>
               </div>
-              <p className="mt-0.5 text-sm">{r.subject || "(no subject)"}</p>
+              <p className="mt-0.5 text-sm [overflow-wrap:anywhere]">{r.subject || "(no subject)"}</p>
               <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{r.preview}</p>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {r.jobs.slice(0, 6).map((j) => (

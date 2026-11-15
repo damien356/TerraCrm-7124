@@ -298,7 +298,8 @@ export default function DashboardPage() {
                     minute: "2-digit",
                   })}
                 </p>
-                <p className="min-w-0 flex-1 text-sm">
+                {/* Long words and addresses wrap, never push the page sideways (Damien, 15 Nov 2026). */}
+                <p className="min-w-0 flex-1 text-sm [overflow-wrap:anywhere]">
                   {a.detail}
                   <span className="ml-2 text-xs text-muted-foreground">{a.actorName}</span>
                 </p>
