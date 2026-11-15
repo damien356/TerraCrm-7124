@@ -48,70 +48,64 @@ export function WhoGetsWhatCard({ jobId }: { jobId: number }) {
         title={<span className="text-base font-bold">Who gets what</span>}
         subtitle={`Who can be sent quotes, variations and invoices on this ${q.data.typeLabel.toLowerCase()} job. Checked on every email and text. Anyone not on this list can never be sent them.`}
       />
-      {/* Fits the narrow main column at 1024 px (Damien, 14 Nov 2026): fixed
-          tick columns, person details wrap, "Back to default" sits under the
-          person instead of in its own column. */}
-      <div className="px-4 py-3">
+      {/* Stacks rather than shrinks (Damien, 14 Nov 2026). Each person is a
+          block: their details, then Quotes, Variations and Invoices as three
+          labelled ticks. When the card is wide enough the ticks sit to the
+          right of the person. It goes by the card's own width, so the narrow
+          job column at 1024 px stacks too. Text stays at normal sizes and
+          every tick keeps its label. */}
+      <div className="@container px-4 py-3">
         {rows.length ? (
-          <table className="w-full table-fixed text-sm">
-            <colgroup>
-              <col />
-              {COLS.map((c) => (
-                <col key={c.doc} className="w-[68px]" />
-              ))}
-            </colgroup>
-            <thead>
-              <tr className="text-left text-xs text-muted-foreground">
-                <th className="pb-2 pr-2 font-medium">Person</th>
-                {COLS.map((c) => (
-                  <th key={c.doc} className="pb-2 px-0.5 text-center font-semibold text-foreground">{c.label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const changed = r.quote.set || r.variation.set || r.invoice.set;
-                return (
-                  <tr key={r.key} className="border-t border-border align-top">
-                    <td className="min-w-0 py-2 pr-2 [overflow-wrap:anywhere]">
-                      <p className="font-bold">{r.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {r.roleLabel}
-                        {r.kind === "person" && !r.onJob ? ", not on People yet" : ""}
-                      </p>
-                      {r.email ? <p className="text-xs text-muted-foreground">{r.email}</p> : null}
-                      {r.mobileShown ? <p className="text-xs text-muted-foreground">{r.mobileShown}</p> : null}
-                      {!r.email && !r.mobileShown ? <p className="text-xs text-muted-foreground">No email or mobile</p> : null}
-                      <p className="mt-0.5 text-xs text-muted-foreground">{changed ? "Changed by hand. " : "Default. "}{r.defaultWhy}</p>
-                      {changed ? (
-                        <Button size="sm" variant="outline" className="mt-1.5" disabled={set.isPending} onClick={() => reset(r)}>
-                          Back to default
-                        </Button>
-                      ) : null}
-                    </td>
+          <ul className="divide-y divide-border">
+            {rows.map((r) => {
+              const changed = r.quote.set || r.variation.set || r.invoice.set;
+              return (
+                <li key={r.key} className="grid gap-2.5 py-3 first:pt-0 @xl:grid-cols-[minmax(0,1fr)_auto] @xl:items-start @xl:gap-4">
+                  <div className="min-w-0 [overflow-wrap:anywhere]">
+                    <p className="font-bold">{r.name}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {r.roleLabel}
+                      {r.kind === "person" && !r.onJob ? ", not on People yet" : ""}
+                    </p>
+                    {r.email ? <p className="text-sm text-muted-foreground">{r.email}</p> : null}
+                    {r.mobileShown ? <p className="text-sm text-muted-foreground">{r.mobileShown}</p> : null}
+                    {!r.email && !r.mobileShown ? <p className="text-sm text-muted-foreground">No email or mobile</p> : null}
+                    <p className="mt-0.5 text-xs text-muted-foreground">{changed ? "Changed by hand. " : "Default. "}{r.defaultWhy}</p>
+                    {changed ? (
+                      <Button size="sm" variant="outline" className="mt-1.5" disabled={set.isPending} onClick={() => reset(r)}>
+                        Back to default
+                      </Button>
+                    ) : null}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 @xl:w-[19rem]">
                     {COLS.map((c) => {
                       const t = r[c.doc];
                       return (
-                        <td key={c.doc} className="px-0.5 py-2 text-center">
-                          <label className="inline-flex cursor-pointer flex-col items-center gap-0.5">
-                            <input
-                              type="checkbox"
-                              className="h-5 w-5 accent-[var(--gold)]"
-                              checked={t.on}
-                              disabled={busy === `${r.key}:${c.doc}`}
-                              aria-label={`${r.name} gets ${c.label}`}
-                              onChange={(e) => change(r, c.doc, e.target.checked)}
-                            />
-                            <span className={t.on ? "text-[11px] font-semibold" : "text-[11px] font-semibold text-red-700"}>{t.on ? "Yes" : "Never"}</span>
-                          </label>
-                        </td>
+                        <label
+                          key={c.doc}
+                          className={
+                            "flex cursor-pointer flex-col items-center gap-1 rounded-md border px-1 py-2 text-center " +
+                            (t.on ? "border-border" : "border-red-300 bg-red-50")
+                          }
+                        >
+                          <span className="text-sm font-semibold">{c.label}</span>
+                          <input
+                            type="checkbox"
+                            className="h-5 w-5 accent-[var(--gold)]"
+                            checked={t.on}
+                            disabled={busy === `${r.key}:${c.doc}`}
+                            aria-label={`${r.name} gets ${c.label}`}
+                            onChange={(e) => change(r, c.doc, e.target.checked)}
+                          />
+                          <span className={t.on ? "text-xs font-semibold" : "text-xs font-semibold text-red-700"}>{t.on ? "Yes" : "Never"}</span>
+                        </label>
                       );
                     })}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
         ) : (
           <p className="text-sm text-muted-foreground">Nobody on this job yet. Add people under People.</p>
         )}

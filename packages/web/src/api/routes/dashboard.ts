@@ -17,7 +17,7 @@ export const dashboard = {
     const today = todayLocal();
     const weekEnd = addLocalDays(today, 7);
 
-    const [board, unfilled, pendingOffers, counts, revenue, recent] = await Promise.all([
+    const [board, unfilled, pendingOffers, offerCount, counts, revenue, recent] = await Promise.all([
       // Today, late and incomplete come from one rule (lib/task-run.ts),
       // the same one the 7am email uses.
       crewBoard(today),
@@ -70,6 +70,9 @@ export const dashboard = {
         .where(eq(schema.taskOffers.status, "pending"))
         .orderBy(asc(schema.taskOffers.expiresAt))
         .limit(20),
+
+      // Every pending offer, not just the 20 listed (Damien, 14 Nov 2026).
+      db.select({ n: sql<number>`count(*)` }).from(schema.taskOffers).where(eq(schema.taskOffers.status, "pending")),
 
       db
         .select({
@@ -124,6 +127,7 @@ export const dashboard = {
         openJobs: Number(counts[0]?.openJobs ?? 0),
         leads: Number(counts[0]?.leads ?? 0),
         scheduled: Number(counts[0]?.scheduled ?? 0),
+        pendingOffers: Number(offerCount[0]?.n ?? 0),
       },
       pipelineValue: Number(revenue[0]?.weekValue ?? 0),
       recent,

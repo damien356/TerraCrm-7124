@@ -65,10 +65,10 @@ export default function DashboardPage() {
           hint="next 7 days, nobody on it"
         />
         <Stat
-          label="Waiting on installers"
-          value={d.pendingOffers.length}
-          tone={d.pendingOffers.length ? "warning" : "default"}
-          hint="offers still open"
+          label="Pending installer offers"
+          value={d.counts.pendingOffers}
+          tone={d.counts.pendingOffers ? "warning" : "default"}
+          hint="offers, not jobs, still waiting for an answer"
         />
         <Stat
           label="Overdue"

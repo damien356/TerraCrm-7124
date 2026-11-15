@@ -1,3 +1,4 @@
+import { ORPCError } from "@orpc/server";
 import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -5,6 +6,7 @@ import type { Actor } from "../middleware/auth";
 import { normaliseRole } from "../middleware/auth";
 import { workDaysFor, type WorkDay } from "./crew-days";
 import { jobNumberSql, taskRefSql } from "./job-ref";
+import { quoteRef } from "./refs";
 import { QA_TEST_SOURCE, TEST_LEAD_TAG_LIKE } from "./lead-codes";
 import { addLocalDays, localDate, localDayBounds, localTimeOn, sayTime, TERRA_TZ, todayLocal } from "./local-date";
 import { isMeasureSkill } from "./property-types";
@@ -369,31 +371,42 @@ async function sessionFor(installerId: number): Promise<WidgetSession | null> {
 
 /* ------------------------------------------------------- needs attention */
 
-export type AttentionKey = "enquiries" | "unfilled" | "offers" | "overdue" | "incomplete";
+export type AttentionKey = "enquiries" | "quotes" | "unfilled" | "offers" | "overdue" | "incomplete";
 
+/**
+ * Every line counts jobs, each job once (Damien, 14 Nov 2026). The labels say
+ * so, because the dashboard tiles count dispatches and offers, and a number
+ * must never sit under a label that means something else on another screen.
+ */
 export const ATTENTION_LABEL: Record<AttentionKey, string> = {
   enquiries: "Enquiries needing action",
-  unfilled: "Needs a body",
-  offers: "Waiting on installers",
-  overdue: "Overdue",
-  incomplete: "Schedule incomplete",
+  quotes: "Measures awaiting a quote",
+  unfilled: "Jobs needing a body",
+  offers: "Jobs awaiting installer acceptance",
+  overdue: "Overdue jobs",
+  incomplete: "Jobs with schedule incomplete",
 };
 
 export interface AttentionRow {
-  /** Unique across every line: "t:<dispatch>", "j:<job>" or "f:<phone follow-up>". The total counts each once. */
+  /** "j:<job>", or "f:<phone follow-up>" for a phone enquiry not on a job yet. The total counts each once. */
   key: string;
-  /** The dispatch, for the booking lines. Null on enquiries. */
+  /** The first dispatch it is about, on the booking lines. Null otherwise. */
   taskId: number | null;
   /** Null only for a phone enquiry not on a job yet. */
   jobId: number | null;
   /** Where the row opens on the web. */
   path: string;
+  /** The job number. */
   ref: string;
   title: string;
   suburb: string | null;
   date: string | null;
-  /** Short, plain words: who it is with, or why it is listed. */
+  /** Short, plain words: which dispatches, who it is with, or why it is listed. */
   note: string | null;
+  /** "Awaiting quote" or "Overdue" on Measures awaiting a quote. */
+  badge: { label: string; tone: "warning" | "danger" } | null;
+  /** Jobs awaiting installer acceptance only: how many offers are pending on this job. */
+  pendingOffers?: number;
 }
 
 /** Who is looking. Admin also sees admin-only office tasks, as on the dashboard. */
@@ -521,6 +534,7 @@ async function enquiryRows(today: string, now: Date, viewer: AttentionViewer): P
       suburb: h.suburb,
       date: h.date,
       note: [...h.why].join(", "),
+      badge: null,
     }))
     .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
 }
@@ -531,15 +545,229 @@ async function phoneVisible(viewer: AttentionViewer) {
   return (cfg.permissions.viewCalls as string[]).includes(viewer.role);
 }
 
+/* ------------------------------------------------ measures awaiting a quote */
+
+/** A measure and quote visit. A site visit or inspection is a check, not a quote. */
+export const MEASURE_QUOTE = /\bmeasure/i;
+/** After this long without a quote going out, a measure reads Overdue. */
+export const QUOTE_DUE_MS = 24 * 3600_000;
+/** Activity on the job, newest wins: the office's own word on whether a quote is still owed. */
+export const QUOTE_NOT_NEEDED = "quote_not_needed";
+export const QUOTE_NEEDED_AGAIN = "quote_needed_again";
+/** A quote in one of these has been with the customer. */
+const BEEN_SENT = ["sent", "accepted", "declined", "expired", "replaced"];
+
+/** "Sat 14 Nov 3:10 pm", Brisbane time. */
+export function fmtWhen(d: Date): string {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-AU", { timeZone: TERRA_TZ, weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true })
+      .formatToParts(d)
+      .map((x) => [x.type, x.value]),
+  );
+  return `${p.weekday} ${p.day} ${p.month} ${p.hour}:${p.minute} ${String(p.dayPeriod).toLowerCase()}`;
+}
+
 /**
- * The office dashboard's own lists (routes/dashboard.ts), whole rather than
- * the first 20, and as tasks rather than offers. No new rule, no money.
- * Enquiries needing action is listed first, see enquiryRows.
+ * Measures awaiting a quote (Damien, 14 Nov 2026), his rule:
+ *
+ * A measure and quote visit marked completed (status complete, by the crew
+ * on the phone or the office on the job). A booked time passing proves
+ * nothing, so a measure still showing Booked in is never counted. Future,
+ * cancelled and site check visits are not counted either. The job is still
+ * live: not Complete, Invoiced, Paid or Cancelled, not merged, not a test.
+ *
+ * It counts until the quote for it has gone to the customer: a quote on the
+ * job sent on or after the day of the measure. "Sent" is what the Send
+ * screen records once the email or text went, or the office marking it as
+ * sent another way. A draft does not clear it and a failed send does not
+ * either, because neither sets it as sent. A quote sent before the measure
+ * was for something earlier, so it does not clear it. The office can also
+ * record that no quote is needed, with a reason (quoteNotNeeded below).
+ *
+ * "Awaiting quote" from the moment it is marked completed, "Overdue" once
+ * 24 hours have passed. Times read in Brisbane time.
+ */
+export async function measureQuoteRows(now: Date): Promise<AttentionRow[]> {
+  const done = await db
+    .select({
+      taskId: schema.jobTasks.id,
+      jobId: schema.jobTasks.jobId,
+      taskRef: taskRefSql,
+      taskTitle: schema.jobTasks.title,
+      skillName: schema.skills.name,
+      scheduledDate: schema.jobTasks.scheduledDate,
+      completedAt: schema.jobTasks.completedAt,
+      updatedAt: schema.jobTasks.updatedAt,
+      ref: jobNumberSql,
+      jobTitle: schema.jobs.title,
+      suburb: schema.sites.suburb,
+    })
+    .from(schema.jobTasks)
+    .leftJoin(schema.skills, eq(schema.skills.id, schema.jobTasks.skillId))
+    .innerJoin(schema.jobs, eq(schema.jobs.id, schema.jobTasks.jobId))
+    .leftJoin(schema.jobStatuses, eq(schema.jobStatuses.id, schema.jobs.statusId))
+    .leftJoin(schema.sites, eq(schema.sites.id, schema.jobs.siteId))
+    .where(
+      and(
+        eq(schema.jobTasks.status, "complete"),
+        sql`coalesce(${schema.jobStatuses.stage}, 'open') not in ('complete', 'closed')`,
+        isNull(schema.jobs.mergedIntoJobId),
+        sql`coalesce(${schema.jobs.source}, '') != ${QA_TEST_SOURCE} and coalesce(${schema.jobs.tags}, '') not like ${TEST_LEAD_TAG_LIKE}`,
+      ),
+    );
+  // The skill decides. A dispatch with no skill goes by its title.
+  const measures = done.filter((t) => MEASURE_QUOTE.test(t.skillName ?? t.taskTitle ?? ""));
+  if (!measures.length) return [];
+  const jobIds = [...new Set(measures.map((m) => m.jobId))];
+
+  const [quotes, failed, calls] = await Promise.all([
+    db
+      .select({
+        id: schema.quotes.id,
+        jobId: schema.quotes.jobId,
+        number: schema.quotes.number,
+        version: schema.quotes.version,
+        status: schema.quotes.status,
+        sentAt: schema.quotes.sentAt,
+        acceptedAt: schema.quotes.acceptedAt,
+        updatedAt: schema.quotes.updatedAt,
+        createdAt: schema.quotes.createdAt,
+      })
+      .from(schema.quotes)
+      .where(inArray(schema.quotes.jobId, jobIds)),
+    // Presses of Send where nothing went.
+    db
+      .select({ jobId: schema.quotes.jobId, at: schema.quoteSends.createdAt })
+      .from(schema.quoteSends)
+      .innerJoin(schema.quotes, eq(schema.quotes.id, schema.quoteSends.quoteId))
+      .where(and(inArray(schema.quotes.jobId, jobIds), sql`${schema.quoteSends.emailStatus} != 'sent' and ${schema.quoteSends.smsStatus} != 'sent'`)),
+    db
+      .select({ jobId: schema.activityLog.jobId, action: schema.activityLog.action, at: schema.activityLog.createdAt, id: schema.activityLog.id })
+      .from(schema.activityLog)
+      .where(and(inArray(schema.activityLog.jobId, jobIds), eq(schema.activityLog.entityType, "job"), inArray(schema.activityLog.action, [QUOTE_NOT_NEEDED, QUOTE_NEEDED_AGAIN]))),
+  ]);
+
+  const sentMoment = (q: (typeof quotes)[number]) =>
+    q.status === "cancelled" ? null : (q.sentAt ?? (BEEN_SENT.includes(q.status) ? (q.acceptedAt ?? q.updatedAt) : null));
+
+  type Open = { m: (typeof measures)[number]; doneAt: Date; overdue: boolean; quoteText: string };
+  const open = new Map<number, Open[]>();
+  for (const m of measures) {
+    const doneAt = m.completedAt ?? m.updatedAt;
+    const doneDay = localDate(doneAt);
+    const visitDay = m.scheduledDate && m.scheduledDate < doneDay ? m.scheduledDate : doneDay;
+    const from = localDayBounds(visitDay).start.getTime();
+    const mine = quotes.filter((q) => q.jobId === m.jobId);
+    if (mine.some((q) => (sentMoment(q)?.getTime() ?? -1) >= from)) continue;
+    const word = calls.filter((c) => c.jobId === m.jobId && c.at.getTime() >= from).sort((a, b) => a.at.getTime() - b.at.getTime() || a.id - b.id).at(-1);
+    if (word?.action === QUOTE_NOT_NEEDED) continue;
+
+    // What is on the job now, newest first.
+    const draft = mine.filter((q) => !sentMoment(q) && q.status !== "cancelled").sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+    const fail = failed.filter((f) => f.jobId === m.jobId && f.at.getTime() >= from).sort((a, b) => b.at.getTime() - a.at.getTime())[0];
+    const quoteText = fail
+      ? `Send failed ${fmtWhen(fail.at)}, not sent`
+      : draft
+        ? `Draft ${quoteRef(draft.number, draft.version, m.ref)} not sent yet`
+        : "No quote started";
+    const row = { m, doneAt, overdue: now.getTime() - doneAt.getTime() >= QUOTE_DUE_MS, quoteText };
+    if (!open.has(m.jobId)) open.set(m.jobId, []);
+    open.get(m.jobId)!.push(row);
+  }
+
+  return [...open.entries()]
+    .map(([jobId, list]) => {
+      list.sort((a, b) => a.doneAt.getTime() - b.doneAt.getTime());
+      const first = list[0]!;
+      const overdue = list.some((o) => o.overdue);
+      return {
+        key: `j:${jobId}`,
+        taskId: first.m.taskId,
+        jobId,
+        path: `/jobs/${jobId}`,
+        ref: first.m.ref,
+        title: first.m.jobTitle || "Job",
+        suburb: first.m.suburb,
+        date: localDate(first.doneAt),
+        note: [...list.map((o) => `${o.m.taskRef} measured ${fmtWhen(o.doneAt)}`), first.quoteText].join(" · "),
+        badge: overdue ? { label: "Overdue", tone: "danger" as const } : { label: "Awaiting quote", tone: "warning" as const },
+      };
+    })
+    .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+}
+
+/**
+ * The office records that this job's measure needs no quote, with a reason
+ * (Damien, 14 Nov 2026). Logged on the job's activity like everything else,
+ * so it is plain who said so and why. Nothing is sent to anyone.
+ */
+export async function setQuoteNeeded(jobId: number, needed: boolean, reason: string, actor: { name: string; role: string }) {
+  const [job] = await db.select({ id: schema.jobs.id, contactId: schema.jobs.contactId }).from(schema.jobs).where(eq(schema.jobs.id, jobId));
+  if (!job) throw new ORPCError("NOT_FOUND", { message: "That job is not there any more." });
+  const why = reason.trim();
+  await db.insert(schema.activityLog).values({
+    jobId,
+    contactId: job.contactId,
+    entityType: "job",
+    entityId: jobId,
+    action: needed ? QUOTE_NEEDED_AGAIN : QUOTE_NOT_NEEDED,
+    detail: needed ? `Quote needed after all${why ? `: ${why}` : ""}` : `No quote needed after the measure: ${why}`,
+    actorName: actor.name,
+    actorRole: actor.role,
+  });
+}
+
+/* --------------------------------------------------------- the booking lines */
+
+type DispatchHit = { taskId: number; jobId: number; ref: string; title: string; suburb: string | null; date: string | null; note: string | null };
+
+/** One row per job. Its dispatches are named in the note, earliest date first. */
+async function perJob(hits: DispatchHit[], say: (h: DispatchHit) => string): Promise<AttentionRow[]> {
+  if (!hits.length) return [];
+  const jobIds = [...new Set(hits.map((h) => h.jobId))];
+  const jobs = await db.select({ id: schema.jobs.id, ref: jobNumberSql, title: schema.jobs.title }).from(schema.jobs).where(inArray(schema.jobs.id, jobIds));
+  const jobOf = new Map(jobs.map((j) => [j.id, j]));
+  const byJob = new Map<number, DispatchHit[]>();
+  for (const h of hits) {
+    if (!byJob.has(h.jobId)) byJob.set(h.jobId, []);
+    byJob.get(h.jobId)!.push(h);
+  }
+  const rows: AttentionRow[] = [];
+  for (const [jobId, list] of byJob) {
+    list.sort((a, b) => (a.date ?? "9999").localeCompare(b.date ?? "9999") || a.ref.localeCompare(b.ref));
+    const j = jobOf.get(jobId);
+    rows.push({
+      key: `j:${jobId}`,
+      taskId: list[0]!.taskId,
+      jobId,
+      path: `/jobs/${jobId}`,
+      ref: j?.ref ?? list[0]!.ref.replace(/-[A-Z]+$/, ""),
+      title: j?.title || list[0]!.title,
+      suburb: list[0]!.suburb,
+      date: list.find((h) => h.date)?.date ?? null,
+      note: list.map(say).join(" · "),
+      badge: null,
+    });
+  }
+  return rows.sort((a, b) => (a.date ?? "9999").localeCompare(b.date ?? "9999"));
+}
+
+/** "Wed 30 Sept", or "not dated". */
+const dayText = (d: string | null) =>
+  d ? new Date(`${d}T12:00:00+10:00`).toLocaleDateString("en-AU", { timeZone: TERRA_TZ, weekday: "short", day: "numeric", month: "short" }).replace(",", "") : "not dated";
+
+/**
+ * Everything the widget counts and the page lists, from one place, so the two
+ * can never disagree. The booking lines are the office dashboard's own lists
+ * (routes/dashboard.ts), whole rather than the first 20, one row per job.
+ * No money. Enquiries needing action is first, see enquiryRows, then
+ * Measures awaiting a quote, see measureQuoteRows.
  */
 export async function attentionLists(viewer: AttentionViewer, today = todayLocal(), now = new Date()): Promise<Record<AttentionKey, AttentionRow[]>> {
   const weekEnd = addLocalDays(today, 7);
-  const [enquiries, board, unfilled, offers] = await Promise.all([
+  const [enquiries, quotes, board, unfilled, offers] = await Promise.all([
     enquiryRows(today, now, viewer),
+    measureQuoteRows(now),
     crewBoard(today),
     db
       .select({
@@ -584,47 +812,43 @@ export async function attentionLists(viewer: AttentionViewer, today = todayLocal
       .orderBy(asc(schema.taskOffers.expiresAt)),
   ]);
 
-  // One row per task on the offers line, naming everyone it is with.
-  const offerRows = new Map<number, AttentionRow>();
+  // One hit per dispatch on the offers line, naming everyone it is with.
+  const offerHits = new Map<number, DispatchHit & { names: string[] }>();
   for (const o of offers) {
-    const row = offerRows.get(o.taskId);
-    if (row) row.note = `${row.note}, ${o.installerName}`;
-    else offerRows.set(o.taskId, { key: `t:${o.taskId}`, taskId: o.taskId, jobId: o.jobId, path: `/jobs/${o.jobId}`, ref: o.ref, title: o.title, suburb: o.suburb, date: o.date, note: `With ${o.installerName}` });
+    const h = offerHits.get(o.taskId);
+    if (h) h.names.push(o.installerName);
+    else offerHits.set(o.taskId, { taskId: o.taskId, jobId: o.jobId, ref: o.ref, title: o.title, suburb: o.suburb, date: o.date, note: null, names: [o.installerName] });
+  }
+  const offerRows = await perJob([...offerHits.values()], (h) => `${h.ref} ${dayText(h.date)}, with ${(h as DispatchHit & { names: string[] }).names.join(", ")}`);
+  for (const r of offerRows) {
+    const n = offers.filter((o) => o.jobId === r.jobId).length;
+    r.pendingOffers = n;
+    r.note = `${n} pending ${n === 1 ? "offer" : "offers"} · ${r.note}`;
   }
 
-  return {
-    enquiries,
-    unfilled: unfilled.map((t) => ({ key: `t:${t.taskId}`, taskId: t.taskId, jobId: t.jobId, path: `/jobs/${t.jobId}`, ref: t.ref, title: t.title, suburb: t.suburb, date: t.date, note: t.skillName })),
-    offers: [...offerRows.values()],
-    overdue: board.late.map((t) => ({
-      key: `t:${t.id}`,
-      taskId: t.id,
-      jobId: t.jobId,
-      path: `/jobs/${t.jobId}`,
-      ref: t.ref,
-      title: t.title,
-      suburb: t.siteSuburb,
-      date: t.lastDay,
-      note: t.installerName ?? "Unassigned",
-    })),
-    incomplete: board.incomplete.map((t) => ({
-      key: `t:${t.id}`,
-      taskId: t.id,
-      jobId: t.jobId,
-      path: `/jobs/${t.jobId}`,
-      ref: t.ref,
-      title: t.title,
-      suburb: t.siteSuburb,
-      date: t.scheduledDate,
-      note: t.reason,
-    })),
-  };
+  const [unfilledRows, overdueRows, incompleteRows] = await Promise.all([
+    perJob(
+      unfilled.map((t) => ({ taskId: t.taskId, jobId: t.jobId, ref: t.ref, title: t.title, suburb: t.suburb, date: t.date, note: t.skillName })),
+      (h) => `${h.ref} ${dayText(h.date)}${h.note ? ` (${h.note})` : ""}`,
+    ),
+    perJob(
+      board.late.map((t) => ({ taskId: t.id, jobId: t.jobId, ref: t.ref, title: t.title, suburb: t.siteSuburb, date: t.lastDay, note: t.installerName ?? "Unassigned" })),
+      (h) => `${h.ref} last day ${dayText(h.date)}, ${h.note}`,
+    ),
+    perJob(
+      board.incomplete.map((t) => ({ taskId: t.id, jobId: t.jobId, ref: t.ref, title: t.title, suburb: t.siteSuburb, date: t.scheduledDate, note: t.reason })),
+      (h) => `${h.ref}: ${h.note}`,
+    ),
+  ]);
+
+  return { enquiries, quotes, unfilled: unfilledRows, offers: offerRows, overdue: overdueRows, incomplete: incompleteRows };
 }
 
-export const ATTENTION_KEYS: AttentionKey[] = ["enquiries", "unfilled", "offers", "overdue", "incomplete"];
+export const ATTENTION_KEYS: AttentionKey[] = ["enquiries", "quotes", "unfilled", "offers", "overdue", "incomplete"];
 
 const attentionPath = (key?: AttentionKey) => `/office?path=${encodeURIComponent(key ? `/attention?show=${key}` : "/attention")}`;
 
+/** Each line is its own list's length. The total is distinct jobs across them all, never the lines added up. */
 export function attentionCounts(lists: Record<AttentionKey, AttentionRow[]>): AttentionCounts {
   const all = new Set<string>();
   for (const k of ATTENTION_KEYS) for (const r of lists[k]) all.add(r.key);
