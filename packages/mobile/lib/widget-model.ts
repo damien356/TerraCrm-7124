@@ -297,7 +297,7 @@ export const EXAMPLE_TODAY: TodayProps = {
   updated: "Example",
   booking: { badge: "Today", isNow: false, when: "9:30 am", kind: "Measure", ref: "100001-A", suburb: "Sampletown", url: HOME },
   bookingNote: null,
-  attention: { total: 5, summary: "Needs a body 2 · Overdue 3", url: HOME },
+  attention: { total: 5, summary: "Jobs needing a body 2 · Overdue jobs 3", url: HOME },
 };
 
 export const EXAMPLE_JOB: MyJobProps = {

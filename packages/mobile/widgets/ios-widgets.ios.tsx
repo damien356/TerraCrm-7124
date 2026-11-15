@@ -45,7 +45,7 @@ const TerraToday = (props: TodayProps, environment: WidgetEnvironment) => {
           updated: "Example",
           booking: { badge: "Today", isNow: false, when: "9:30 am", kind: "Measure", ref: "100001-A", suburb: "Sampletown", url: home },
           bookingNote: null,
-          attention: { total: 5, summary: "Needs a body 2 · Overdue 3", url: home },
+          attention: { total: 5, summary: "Jobs needing a body 2 · Overdue jobs 3", url: home },
         };
 
   const one = (style: "headline" | "subheadline" | "footnote" | "caption" | "caption2", colour: string, weight?: "semibold" | "bold") => [
