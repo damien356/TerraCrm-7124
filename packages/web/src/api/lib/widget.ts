@@ -547,8 +547,12 @@ async function phoneVisible(viewer: AttentionViewer) {
 
 /* ------------------------------------------------ measures awaiting a quote */
 
-/** A measure and quote visit. A site visit or inspection is a check, not a quote. */
-export const MEASURE_QUOTE = /\bmeasure/i;
+/**
+ * A measure and quote visit. A site visit or inspection counts the same way
+ * (Damien, 15 Nov 2026): once it is marked completed a quote is owed, unless
+ * the office records that none is needed.
+ */
+export const MEASURE_QUOTE = /\bmeasure|site visit|inspection/i;
 /** After this long without a quote going out, a measure reads Overdue. */
 export const QUOTE_DUE_MS = 24 * 3600_000;
 /** Activity on the job, newest wins: the office's own word on whether a quote is still owed. */
@@ -573,7 +577,8 @@ export function fmtWhen(d: Date): string {
  * A measure and quote visit marked completed (status complete, by the crew
  * on the phone or the office on the job). A booked time passing proves
  * nothing, so a measure still showing Booked in is never counted. Future,
- * cancelled and site check visits are not counted either. The job is still
+ * and cancelled visits are not counted either. Site visits and inspections
+ * count like a measure (Damien, 15 Nov 2026). The job is still
  * live: not Complete, Invoiced, Paid or Cancelled, not merged, not a test.
  *
  * It counts until the quote for it has gone to the customer: a quote on the
@@ -689,7 +694,7 @@ export async function measureQuoteRows(now: Date): Promise<AttentionRow[]> {
         title: first.m.jobTitle || "Job",
         suburb: first.m.suburb,
         date: localDate(first.doneAt),
-        note: [...list.map((o) => `${o.m.taskRef} measured ${fmtWhen(o.doneAt)}`), first.quoteText].join(" · "),
+        note: [...list.map((o) => `${o.m.taskRef} ${kindOf(o.m.skillName ?? o.m.taskTitle) === "site_visit" ? "visited" : "measured"} ${fmtWhen(o.doneAt)}`), first.quoteText].join(" · "),
         badge: overdue ? { label: "Overdue", tone: "danger" as const } : { label: "Awaiting quote", tone: "warning" as const },
       };
     })

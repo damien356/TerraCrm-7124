@@ -21,7 +21,7 @@ import { auDay, cn } from "../lib/utils";
 
 const SUBTITLE: Record<string, string> = {
   enquiries: "Lead or Quoted, with a first call, office task or callback due now. The date is when it came in.",
-  quotes: "Measure marked completed, quote not sent to the customer yet. Overdue after 24 hours. The date is when it was measured.",
+  quotes: "Measure or site visit marked completed, quote not sent to the customer yet. Overdue after 24 hours. The date is when it was done.",
   unfilled: "Dispatches in the next week or not dated, with nobody on them",
   offers: "Offer sent to an installer, waiting for an answer",
   overdue: "Final working day has passed, still not finished",
