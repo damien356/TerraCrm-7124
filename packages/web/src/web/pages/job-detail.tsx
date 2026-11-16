@@ -18,6 +18,7 @@ import { PurchaseOrdersCard } from "../components/purchase-orders";
 import { StockPanelCard } from "../components/stock-panel";
 import { PaymentTermsCard } from "../components/payment-terms";
 import { ClientInvoicesCard, MaterialSelectionCard } from "../components/client-invoices";
+import { CrewScopeSelect, NeedsDispatchBanner, parseScope, scopeValue, useCrewScope } from "../components/crew-scope";
 import { StagesCard } from "../components/stages-card";
 import { DeliveryCard } from "../components/delivery";
 import { SaleOrderCard, priceRecordText } from "../components/sale-job";
@@ -337,6 +338,7 @@ export default function JobDetailPage() {
   const work = useJobDispatchLines(Number.isFinite(id) ? id : 0);
   const delivery = useDeliveryStatus(Number.isFinite(id) ? id : 0);
   const saleQ = useSaleForJob(Number.isFinite(id) ? id : 0);
+  const crew = useCrewScope(Number.isFinite(id) ? id : 0);
 
   // The inbox deep-links straight at the thread: /jobs/12?tab=conversation.
   const searchString = useSearch();
@@ -391,16 +393,25 @@ export default function JobDetailPage() {
           {productSale ? null : (
           <Card>
             <CardHeader title="Materials" subtitle="What has to be on site before anyone turns up." />
+            {crew.multiCrew ? <NeedsDispatchBanner count={crew.needs.materials.length} what={crew.needs.materials.length === 1 ? "material" : "materials"} /> : null}
             {j.materials.length > 0 ? (
               <ul className="divide-y divide-border">
                 {j.materials.map((m) => (
-                  <li key={m.id} className="flex items-center gap-3 px-4 py-2.5">
+                  <li key={m.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5" data-material-id={m.id}>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm break-words">{m.description}</p>
                       <p className="text-xs text-muted-foreground">
                         {m.qty} {m.unit}
                       </p>
                     </div>
+                    {/* More than one crew: which one this line is for (Damien, 15 Nov 2026). */}
+                    {crew.multiCrew ? (
+                      <CrewScopeSelect
+                        value={scopeValue(m, crew.options)}
+                        options={crew.options}
+                        onChange={(v) => updateMaterial.mutate({ id: m.id, ...parseScope(v) })}
+                      />
+                    ) : null}
                     <Select
                       className="w-auto"
                       value={m.status}

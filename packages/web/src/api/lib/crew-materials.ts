@@ -5,6 +5,7 @@ import { boxM2Of, FLOOR_TYPES } from "./flooring-qty";
 import { wholeUnits } from "./order-sizes";
 import { isCountedPack, packNameOf, packWord as packNameWord } from "./pack-name";
 import { singular } from "./stock/replenish";
+import { crewGets, type ViewerScope } from "./task-scope";
 
 /**
  * The materials list on the crew app (notes 18.61).
@@ -192,14 +193,28 @@ async function reservedFor(ids: number[]): Promise<{ jobMaterialId: number | nul
   }
 }
 
-/** Every supply line for these jobs, with where it is. `original` marks a callback's parent job. */
-export async function crewMaterials(jobId: number, parentJobId: number | null): Promise<CrewMaterial[]> {
+/** The rate items on these dispatches' labour lines: what his part of the job lays. */
+async function rateItemsOn(taskIds: number[]): Promise<Set<number>> {
+  if (!taskIds.length) return new Set();
+  const rows = await db.select({ itemId: schema.taskLabourLines.itemId }).from(schema.taskLabourLines).where(inArray(schema.taskLabourLines.taskId, taskIds));
+  return new Set(rows.map((r) => r.itemId));
+}
+
+/**
+ * Every supply line for these jobs, with where it is. `original` marks a callback's parent job.
+ *
+ * With a viewer (an installer), only his part of a job with more than one
+ * crew (lib/task-scope.ts, Damien, 15 Nov 2026). The callback's parent job is
+ * left as it was: it is the earlier job's record, not a split of this one.
+ */
+export async function crewMaterials(jobId: number, parentJobId: number | null, viewer?: ViewerScope): Promise<CrewMaterial[]> {
   const jobIds = parentJobId ? [jobId, parentJobId] : [jobId];
-  const rows = await db
+  const all = await db
     .select({ m: schema.jobMaterials, p: schema.products })
     .from(schema.jobMaterials)
     .leftJoin(schema.products, eq(schema.products.id, schema.jobMaterials.productId))
     .where(inArray(schema.jobMaterials.jobId, jobIds));
+  const rows = viewer ? all.filter(({ m }) => m.jobId !== jobId || crewGets(viewer, m)) : all;
 
   const ids = rows.map((r) => r.m.id);
   const [poLines, reserved] = await Promise.all([
@@ -283,7 +298,8 @@ export async function crewMaterials(jobId: number, parentJobId: number | null): 
 
   // A floor the quote lays but does not supply is still on the job: the crew
   // needs to know it is coming from the builder or the client, not from us.
-  const hasFloorSupply = rows.some(({ m, p }) => m.jobId === jobId && p && FLOORS.has(p.category));
+  // Read off every line on the job, not just his: another crew's floor supplied by us is not "supplied by others".
+  const hasFloorSupply = all.some(({ m, p }) => m.jobId === jobId && p && FLOORS.has(p.category));
   if (!hasFloorSupply) {
     const [quote] = await db
       .select({ id: schema.quotes.id })
@@ -293,11 +309,14 @@ export async function crewMaterials(jobId: number, parentJobId: number | null): 
       .limit(1);
     if (quote) {
       const lines = await db
-        .select({ id: schema.quoteItems.id, kind: schema.quoteItems.kind, description: schema.quoteItems.description, qty: schema.quoteItems.qty, unit: schema.quoteItems.unit })
+        .select({ id: schema.quoteItems.id, kind: schema.quoteItems.kind, description: schema.quoteItems.description, qty: schema.quoteItems.qty, unit: schema.quoteItems.unit, rateItemId: schema.quoteItems.rateItemId })
         .from(schema.quoteItems)
         .where(eq(schema.quoteItems.quoteId, quote.id));
+      // Another crew's floor is not his to see: only the ones his own labour lines lay.
+      const myRates = viewer && !viewer.coversAll ? await rateItemsOn([...viewer.mine]) : null;
       for (const l of lines) {
         if (l.kind !== "labour" || l.unit !== "m2" || !FLOOR_WORDS.test(l.description)) continue;
+        if (myRates && (l.rateItemId == null || !myRates.has(l.rateItemId))) continue;
         const name = l.description.split(",")[0]!.trim();
         out.push({
           // Negative so it can never collide with a real material id.

@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Archive, Camera, Eye, EyeOff, FileText, Lock, PlayCircle, Plus, RotateCcw, ShieldAlert, Trash2, Upload, Video } from "lucide-react";
 import { FileViewer } from "./file-viewer";
 import { AccessNoteProposals } from "./access-note-proposals";
+import { CrewScopeSelect, NeedsDispatchBanner, scopeValue, useCrewScope } from "./crew-scope";
 import { useBootstrap } from "../queries/settings";
 import { Card, CardHeader, Empty, Spinner } from "./ui/card";
 import { Button } from "./ui/button";
@@ -17,6 +18,7 @@ import {
   useJobAreas,
   useJobMedia,
   useRemoveArea,
+  useSetMediaScope,
 } from "../queries/media";
 
 /**
@@ -174,6 +176,10 @@ export function JobFile({ jobId, isCallback = false }: { jobId: number; isCallba
   const showToCrew = useApproveForCrew();
   const keepOffice = useKeepOffice();
   const reclassify = useReclassifyMedia();
+  const setScope = useSetMediaScope();
+  const crew = useCrewScope(jobId);
+  /** More than one crew: which dispatch new uploads are for. Blank waits for the office, like any untagged file. */
+  const [uploadFor, setUploadFor] = useState("");
   const boot = useBootstrap();
   const isAdmin = boot.data?.actor.role === "admin";
 
@@ -208,6 +214,8 @@ export function JobFile({ jobId, isCallback = false }: { jobId: number; isCallba
         const key = await uploadToStorage(file, jobId, bucket);
         await attach.mutateAsync({
           jobId,
+          taskId: uploadFor.startsWith("task:") ? Number(uploadFor.slice(5)) : null,
+          crewShared: uploadFor === "shared",
           bucket,
           kind: kindOf(file),
           storageKey: key,
@@ -274,12 +282,20 @@ export function JobFile({ jobId, isCallback = false }: { jobId: number; isCallba
         </div>
       ) : null}
 
+      {crew.multiCrew ? <NeedsDispatchBanner count={groups.flatMap((g) => g.items).filter((m) => m.needsDispatch).length} what={"file"} /> : null}
+
       {bucket === "area" ? <AreaManager jobId={jobId} /> : null}
 
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
         <p className="text-xs text-muted-foreground">{meta.blurb}</p>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {busy ? <Spinner /> : null}
+          {crew.multiCrew && bucket !== "access" && bucket !== "signed" ? (
+            <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              For dispatch
+              <CrewScopeSelect label="For dispatch" value={uploadFor} options={crew.options} onChange={setUploadFor} />
+            </span>
+          ) : null}
           <input
             ref={fileRef}
             id={`upload-${bucket}`}
@@ -359,6 +375,27 @@ export function JobFile({ jobId, isCallback = false }: { jobId: number; isCallba
                 </p>
                 <PrivacyBadge m={m} />
                 {m.reviewStatus === "needs_review" && m.classifyNote ? <p className="text-[10px] text-muted-foreground">Check: {m.classifyNote}</p> : null}
+                {/* More than one crew: which one this file is for. Site access goes to every crew on the job. */}
+                {crew.multiCrew && !m.archivedAt && m.sensitivity !== "restricted" && m.bucket !== "signed" ? (
+                  m.bucket === "access" ? (
+                    <p className="text-[10px] text-muted-foreground">Site access: every crew on this job</p>
+                  ) : (
+                    <CrewScopeSelect
+                      className="mt-1 w-full"
+                      value={scopeValue(m, crew.options)}
+                      options={crew.options}
+                      onChange={(v) =>
+                        void act(() =>
+                          setScope.mutateAsync({
+                            id: m.id,
+                            taskId: v.startsWith("task:") ? Number(v.slice(5)) : null,
+                            shared: v === "shared",
+                          }),
+                        )
+                      }
+                    />
+                  )
+                ) : null}
                 {!m.archivedAt && m.sensitivity !== "restricted" && m.bucket !== "signed" ? (
                   <div className="flex flex-wrap gap-x-2.5 gap-y-1 pt-0.5">
                     {m.visibility !== "crew" ? (

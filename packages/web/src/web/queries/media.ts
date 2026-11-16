@@ -40,6 +40,20 @@ export function useMoveMedia() {
   return useMutation(orpc.media.move.mutationOptions({ onSuccess: invalidate }));
 }
 
+/** Which crew a file is for, on a job with more than one crew. Refreshes the job too, for its count. */
+export function useSetMediaScope() {
+  const invalidate = useInvalidateJobFile();
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.media.setScope.mutationOptions({
+      onSuccess: () => {
+        invalidate();
+        queryClient.invalidateQueries({ queryKey: orpc.jobs.key() });
+      },
+    }),
+  );
+}
+
 /** "Show to crew": a person checked it. Refused for restricted files. */
 export function useApproveForCrew() {
   const invalidate = useInvalidateJobFile();

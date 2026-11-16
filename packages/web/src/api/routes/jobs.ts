@@ -14,6 +14,7 @@ import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
 import { addJobPerson, customerTag, personInput, removeJobTag, updateJobPerson } from "../lib/job-people";
 import { PERSON_TAGS, legacyRoleToTag, parseTags } from "../lib/person-tags";
 import { installerForStaff, taskForStaff } from "../lib/staff-view";
+import { assertTaskOnJob, jobScopeOf, needsDispatch, scopeWords } from "../lib/task-scope";
 
 const tagList = z.array(z.enum(PERSON_TAGS));
 
@@ -420,8 +421,41 @@ export const jobs = {
       .orderBy(desc(schema.repairRequests.id))
       .limit(1);
 
+    // Who on the crew sees what, on a job with more than one crew (Damien, 15 Nov 2026, lib/task-scope.ts).
+    const scope = jobScopeOf(
+      input.id,
+      tasks.map((t) => ({
+        id: t.task.id,
+        status: t.task.status,
+        assignedInstallerId: t.task.assignedInstallerId,
+        secondInstallerId: t.task.secondInstallerId,
+        skillName: t.skill?.name ?? null,
+        title: t.task.title,
+      })),
+    );
+    const mediaWaiting = scope.multiCrew
+      ? (
+          await db
+            .select({ id: schema.jobMedia.id, taskId: schema.jobMedia.taskId, crewShared: schema.jobMedia.crewShared, bucket: schema.jobMedia.bucket })
+            .from(schema.jobMedia)
+            .where(and(eq(schema.jobMedia.jobId, input.id), isNull(schema.jobMedia.archivedAt), eq(schema.jobMedia.visibility, "crew"), sql`${schema.jobMedia.sensitivity} <> 'restricted'`))
+        ).filter((m) => needsDispatch(scope, m))
+      : [];
+
     return {
       ...row.job,
+      /**
+       * More than one crew on the work: each crew only gets the materials and
+       * files tagged to its dispatch. Untagged ones wait here for the office.
+       */
+      crewScope: {
+        multiCrew: scope.multiCrew,
+        dispatches: scope.work.map((t) => t.id),
+        needsDispatch: {
+          materials: materials.filter((m) => needsDispatch(scope, m)).map((m) => m.id),
+          media: mediaWaiting.map((m) => m.id),
+        },
+      },
       /** The timber repair on this job, for the link to /repairs/:id. */
       repair: repair ?? null,
       /** Set on a merged job (notes 18.48). The job page opens this job instead. */
@@ -692,6 +726,9 @@ export const jobs = {
       }),
     )
     .handler(async ({ input }) => {
+      if (input.taskId != null && !(await assertTaskOnJob(input.taskId, input.jobId))) {
+        throw new ORPCError("BAD_REQUEST", { message: "That dispatch isn't on this job." });
+      }
       const [row] = await db.insert(schema.jobMaterials).values(input).returning();
       return row;
     }),
@@ -705,15 +742,37 @@ export const jobs = {
         unit: z.string().optional(),
         status: z.string().optional(),
         taskId: z.number().nullable().optional(),
+        /** "Every crew on this job" (Damien, 15 Nov 2026). */
+        crewShared: z.boolean().optional(),
       }),
     )
-    .handler(async ({ input }) => {
+    .handler(async ({ input, context }) => {
       const { id, ...rest } = input;
+      const [before] = await db.select().from(schema.jobMaterials).where(eq(schema.jobMaterials.id, id));
+      if (!before) throw new ORPCError("NOT_FOUND", { message: "That material is not there any more." });
+      if (rest.taskId != null && !(await assertTaskOnJob(rest.taskId, before.jobId))) {
+        throw new ORPCError("BAD_REQUEST", { message: "That dispatch isn't on this job." });
+      }
       const [row] = await db
         .update(schema.jobMaterials)
         .set({ ...rest, updatedAt: new Date() })
         .where(eq(schema.jobMaterials.id, id))
         .returning();
+      // Who the crew side of a line changed for, on the record.
+      const moved = (rest.taskId !== undefined && rest.taskId !== before.taskId) || (rest.crewShared !== undefined && rest.crewShared !== before.crewShared);
+      if (row && moved) {
+        const to = await scopeWords(row);
+        await db.insert(schema.activityLog).values({
+          jobId: row.jobId,
+          taskId: row.taskId,
+          entityType: "material",
+          entityId: row.id,
+          action: "material_crew_scope",
+          detail: `${row.description}: now for ${to}`,
+          actorName: context.actor.name || "Office",
+          actorRole: context.actor.role,
+        });
+      }
       return row;
     }),
 

@@ -7,6 +7,7 @@ import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
 import { signGet, signMany } from "../lib/s3";
 import { OFFICE_ONLY_BUCKETS, RESTRICT_LABELS, byLine, logFileAccess, outsideWhere, staffMayOpen } from "../lib/file-access";
 import { askOfficeToCheck, checkLater } from "../lib/doc-classify";
+import { assertTaskOnJob, jobScope, needsDispatch, scopeWords, type JobScope } from "../lib/task-scope";
 
 /**
  * THE JOB FILE. Every photo, video and document lives in exactly one named
@@ -42,8 +43,10 @@ type MediaRow = typeof schema.jobMedia.$inferSelect;
  * document, for office without "can see costs") gets the tile and the label,
  * never the link, the name, the caption or the note.
  */
-async function forStaff(r: MediaRow, actor: Actor) {
+async function forStaff(r: MediaRow, actor: Actor, scope?: JobScope) {
   const open = staffMayOpen(r, actor);
+  // A file the crew may have, on a job with more than one crew, that nobody has given a dispatch yet (Damien, 15 Nov 2026).
+  const crewCould = !r.archivedAt && r.visibility === "crew" && r.sensitivity !== "restricted";
   const restrictLabel = r.sensitivity === "restricted" ? (RESTRICT_LABELS[r.restrictReason ?? ""] ?? "Restricted") : null;
   const base = {
     id: r.id,
@@ -65,6 +68,8 @@ async function forStaff(r: MediaRow, actor: Actor) {
     reviewedByName: r.reviewedByName,
     reviewedAt: r.reviewedAt,
     locked: !open,
+    crewShared: r.crewShared,
+    needsDispatch: Boolean(scope && crewCould && needsDispatch(scope, r)),
   };
   if (!open) return { ...base, url: "", filename: null as string | null, caption: null as string | null, mime: null as string | null, classifyNote: null as string | null };
   return { ...base, url: await signGet(r.storageKey), filename: r.filename, caption: r.caption, mime: r.mime, classifyNote: r.classifyNote };
@@ -95,7 +100,8 @@ export const media = {
         )
         .orderBy(asc(schema.jobMedia.capturedAt));
 
-      const shown = await Promise.all(rows.map((r) => forStaff(r, context.actor)));
+      const scope = await jobScope(input.jobId);
+      const shown = await Promise.all(rows.map((r) => forStaff(r, context.actor, scope)));
       return BUCKETS.map((bucket) => ({
         bucket,
         label: BUCKET_LABELS[bucket],
@@ -113,6 +119,8 @@ export const media = {
       z.object({
         jobId: z.number(),
         taskId: z.number().nullable().optional(),
+        /** "Every crew on this job", on a job with more than one crew. */
+        crewShared: z.boolean().optional(),
         areaId: z.number().nullable().optional(),
         bucket: bucketEnum,
         kind: z.enum(["photo", "video", "doc"]).default("photo"),
@@ -127,6 +135,9 @@ export const media = {
     .handler(async ({ input, context }) => {
       if (!input.storageKey.startsWith(`jobs/${input.jobId}/`) || input.storageKey.includes("..")) {
         throw new ORPCError("BAD_REQUEST", { message: "That upload did not go to this job. Upload it again." });
+      }
+      if (input.taskId != null && !(await assertTaskOnJob(input.taskId, input.jobId))) {
+        throw new ORPCError("BAD_REQUEST", { message: "That dispatch isn't on this job." });
       }
       const [profile] = await db
         .select({ id: schema.profiles.id })
@@ -186,6 +197,37 @@ export const media = {
           mediaId: was.id,
           action: "file_moved",
           detail: `File ${was.id} moved from ${BUCKET_LABELS[was.bucket as Bucket] ?? was.bucket} to ${BUCKET_LABELS[input.bucket]} by ${byLine(context.actor)}`,
+          actor: { name: context.actor.name, role: context.actor.role },
+        });
+      }
+      return row;
+    }),
+
+  /**
+   * Which crew a file is for, on a job with more than one crew: one dispatch,
+   * or every crew on the job. Never changes whether the crew may see it at
+   * all; that is still Show to crew / Keep office only (Damien, 15 Nov 2026).
+   */
+  setScope: staffOnly
+    .input(z.object({ id: z.number(), taskId: z.number().nullable(), shared: z.boolean().default(false) }))
+    .handler(async ({ input, context }) => {
+      const was = await rowOrThrow(input.id);
+      mustOpen(was, context.actor);
+      if (input.taskId != null && !(await assertTaskOnJob(input.taskId, was.jobId))) {
+        throw new ORPCError("BAD_REQUEST", { message: "That dispatch isn't on this job." });
+      }
+      const next = { taskId: input.shared ? was.taskId : input.taskId, crewShared: input.shared };
+      const [row] = await db
+        .update(schema.jobMedia)
+        .set({ ...next, updatedAt: new Date() })
+        .where(eq(schema.jobMedia.id, input.id))
+        .returning();
+      if (was.taskId !== next.taskId || Boolean(was.crewShared) !== next.crewShared) {
+        await logFileAccess({
+          jobId: was.jobId,
+          mediaId: was.id,
+          action: "file_crew_scope",
+          detail: `File ${was.id} now for ${await scopeWords(next)} by ${byLine(context.actor)}`,
           actor: { name: context.actor.name, role: context.actor.role },
         });
       }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, isNull, ne } from "drizzle-orm";
 import { generateObject } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { z } from "zod";
@@ -275,7 +275,23 @@ export async function classifyMedia(mediaId: number, source: Source, by: { name:
       Object.assign(set, { visibility: "office", reviewStatus: "needs_review" });
     }
   }
-  await db.update(schema.jobMedia).set(set).where(eq(schema.jobMedia.id, mediaId));
+  // The office may approve or keep the file while this check runs. Only write a
+  // crew/office decision if nobody has reviewed it since we read it, so an approval
+  // is never undone a few seconds later. A restricted result always wins. Damien, 16 Nov 2026.
+  const decides = !restricted && "visibility" in set;
+  const done = await db
+    .update(schema.jobMedia)
+    .set(set)
+    .where(decides ? and(eq(schema.jobMedia.id, mediaId), isNull(schema.jobMedia.reviewedAt)) : eq(schema.jobMedia.id, mediaId))
+    .returning({ id: schema.jobMedia.id });
+  if (decides && !done.length) {
+    await db
+      .update(schema.jobMedia)
+      .set({ classifyNote: set.classifyNote, classifiedAt: set.classifiedAt, contentSha256: set.contentSha256, updatedAt: new Date() })
+      .where(eq(schema.jobMedia.id, mediaId));
+    const [now] = await db.select({ reviewStatus: schema.jobMedia.reviewStatus }).from(schema.jobMedia).where(eq(schema.jobMedia.id, mediaId)).limit(1);
+    return { ...c, reviewStatus: now?.reviewStatus ?? row.reviewStatus };
+  }
 
   const becameRestricted = restricted && row.sensitivity !== "restricted";
   if (becameRestricted && row.visibility === "crew") {

@@ -8,9 +8,10 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { installerOnly } from "../middleware/auth";
 import { notifyOffice } from "../lib/notify";
-import { signMany } from "../lib/s3";
+import { signGet, signMany } from "../lib/s3";
 import { acceptOffer, declineOffer, expireStale, releaseTask } from "./offers";
-import { CREW_BUCKETS, crewWhere } from "../lib/file-access";
+import { CREW_BUCKETS, crewMayOpen, crewWhere } from "../lib/file-access";
+import { crewGets, crewGetsFile, viewerScope } from "../lib/task-scope";
 import { addLocalDays, todayLocal } from "../lib/local-date";
 import { workDaysFor, type WorkDay } from "../lib/crew-days";
 import { crewMaterials } from "../lib/crew-materials";
@@ -448,6 +449,8 @@ export const field = {
     // A callback shows the original job's products too, read only, so the
     // crew knows exactly what went down. Never the cause or who pays.
     const parentId = await parentJobOf(card.jobId);
+    // Only his part of a job with more than one crew (Damien, 15 Nov 2026, lib/task-scope.ts).
+    const scope = await viewerScope(card.jobId, context.installerId);
     const [checklist, materials, photos, mate] = await Promise.all([
       db
         .select()
@@ -455,7 +458,7 @@ export const field = {
         .where(eq(schema.taskChecklistItems.taskId, input.id))
         .orderBy(asc(schema.taskChecklistItems.sortOrder)),
       // Materials only: product, colour, count, m2 and where it is. No costs, ever.
-      crewMaterials(card.jobId, parentId),
+      crewMaterials(card.jobId, parentId, scope),
       db.select().from(schema.taskPhotos).where(eq(schema.taskPhotos.taskId, input.id)),
       // Who else is on this task with me — name only, no rate.
       db
@@ -798,8 +801,11 @@ export const field = {
    */
   jobFile: installerOnly.input(z.object({ taskId: z.number() })).handler(async ({ input, context }) => {
     const task = await ownTaskOrThrow(input.taskId, context.installerId);
+    // On a job with more than one crew, only his dispatch's areas and files,
+    // plus Site access and his own uploads (Damien, 15 Nov 2026, lib/task-scope.ts).
+    const scope = await viewerScope(task.jobId, context.installerId);
 
-    const [areas, mediaRows] = await Promise.all([
+    const [allAreas, allMedia] = await Promise.all([
       db
         .select()
         .from(schema.jobAreas)
@@ -811,6 +817,9 @@ export const field = {
         .where(and(eq(schema.jobMedia.jobId, task.jobId), crewWhere(context.installerId)))
         .orderBy(asc(schema.jobMedia.capturedAt)),
     ]);
+
+    const areas = allAreas.filter((a) => crewGets(scope, { taskId: a.taskId, crewShared: false }));
+    const mediaRows = allMedia.filter((m) => crewGetsFile(scope, m));
 
     // On a callback, the original job's photos come along read only, as "original".
     const parentId = await parentJobOf(task.jobId);
@@ -882,6 +891,12 @@ export const field = {
       if (!input.storageKey.startsWith(`jobs/${task.jobId}/`) || input.storageKey.includes("..")) {
         throw new ORPCError("BAD_REQUEST", { message: "That upload didn't go to this job. Take it again." });
       }
+      if (input.areaId != null) {
+        const [area] = await db.select({ taskId: schema.jobAreas.taskId }).from(schema.jobAreas).where(and(eq(schema.jobAreas.id, input.areaId), eq(schema.jobAreas.jobId, task.jobId)));
+        if (!area || !crewGets(await viewerScope(task.jobId, context.installerId), { taskId: area.taskId, crewShared: false })) {
+          throw new ORPCError("BAD_REQUEST", { message: "That area isn't on your part of this job." });
+        }
+      }
 
       const [row] = await db
         .insert(schema.jobMedia)
@@ -938,6 +953,20 @@ export const field = {
 
       return row;
     }),
+
+  /**
+   * A fresh link to one file in the job file. The same checks as the list,
+   * on every request: on the job, his part of it, and a file the crew may
+   * see. Another crew's photo is refused even if he knows its number
+   * (Damien, 15 Nov 2026).
+   */
+  openFile: installerOnly.input(z.object({ mediaId: z.number() })).handler(async ({ input, context }) => {
+    const [row] = await db.select().from(schema.jobMedia).where(eq(schema.jobMedia.id, input.mediaId));
+    if (!row || !(await crewMayOpen(row, context.installerId))) {
+      throw new ORPCError("FORBIDDEN", { message: "That file isn't on your part of this job." });
+    }
+    return { id: row.id, url: await signGet(row.storageKey) };
+  }),
 
   /** "Walked it, nothing already damaged." Logged against their name. */
   noDamage: installerOnly.input(z.object({ taskId: z.number() })).handler(async ({ input, context }) => {
@@ -1161,6 +1190,18 @@ export const field = {
         const answered = given.some((a) => a.value.trim() !== "" || typeof a.mediaId === "number");
         if (!answered) {
           throw new ORPCError("BAD_REQUEST", { message: `"${f.label}" still needs an answer.` });
+        }
+      }
+
+      // A photo answer must be a file he could open himself: on this job, his part of it (Damien, 15 Nov 2026).
+      const mediaIds = [...new Set(input.answers.map((a) => a.mediaId).filter((v): v is number => typeof v === "number"))];
+      if (mediaIds.length) {
+        const media = await db.select().from(schema.jobMedia).where(inArray(schema.jobMedia.id, mediaIds));
+        for (const id of mediaIds) {
+          const m = media.find((r) => r.id === id);
+          if (!m || m.jobId !== task.jobId || !(await crewMayOpen(m, context.installerId))) {
+            throw new ORPCError("BAD_REQUEST", { message: "One of those photos isn't on your part of this job. Take it again." });
+          }
         }
       }
 

@@ -1117,6 +1117,13 @@ export const jobMedia = sqliteTable(
     /** Who released it to crew, or kept it office only, and when. */
     reviewedByName: text("reviewed_by_name"),
     reviewedAt: integer("reviewed_at", { mode: "timestamp" }),
+    /*
+     * Who on the crew (Damien, 15 Nov 2026). taskId says which dispatch a file
+     * belongs to. On a job with more than one crew, a file with no dispatch is
+     * office only until someone picks one, or ticks it for every crew on the
+     * job here. See lib/task-scope.ts.
+     */
+    crewShared: integer("crew_shared", { mode: "boolean" }).notNull().default(false),
     ...timestamps,
   },
   (t) => [
@@ -1840,9 +1847,11 @@ export const jobMaterials = sqliteTable(
     status: text("status").notNull().default("to_order"),
     /** Sell products (2026-11-19-product-sales.sql): the sale line this was ordered for. Null on everything else. */
     saleLineId: integer("sale_line_id"),
+    /* Every crew on the job sees this line, not just one dispatch (Damien, 15 Nov 2026). See lib/task-scope.ts. */
+    crewShared: integer("crew_shared", { mode: "boolean" }).notNull().default(false),
     ...timestamps,
   },
-  (t) => [index("materials_job_idx").on(t.jobId)],
+  (t) => [index("materials_job_idx").on(t.jobId), index("materials_task_idx").on(t.taskId)],
 );
 
 export const quotes = sqliteTable(

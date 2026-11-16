@@ -2,6 +2,7 @@ import { and, eq, isNotNull, isNull, ne, notInArray, or, sql, type SQL } from "d
 import { db } from "../database";
 import * as schema from "../database/schema";
 import type { Actor } from "../middleware/auth";
+import { crewGetsFile, viewerScope } from "./task-scope";
 
 /* ---------------------------------------------------------------------------
  * Who may retrieve a job file (Damien, 9 Nov 2026: document privacy).
@@ -112,10 +113,15 @@ export async function installerOnJob(installerId: number, jobId: number) {
   return Boolean(t);
 }
 
-/** May this installer have this one file? Assignment is checked on every request, so taking him off the job ends it. */
-export async function crewMayOpen(row: Row & { jobId: number }, installerId: number) {
+/**
+ * May this installer have this one file? Assignment is checked on every
+ * request, so taking him off the job ends it. On a job with more than one
+ * crew, only his own dispatch's files and the shared site ones (Damien, 15 Nov
+ * 2026, lib/task-scope.ts).
+ */
+export async function crewMayOpen(row: Row & { jobId: number; taskId: number | null; crewShared?: boolean | null }, installerId: number) {
   if (!crewMaySee(row, installerId)) return false;
-  if (await installerOnJob(installerId, row.jobId)) return true;
+  if (await installerOnJob(installerId, row.jobId)) return crewGetsFile(await viewerScope(row.jobId, installerId), row);
   // A callback's crew also get the original job's file, read only.
   const kids = await db
     .select({ id: schema.jobs.id })
