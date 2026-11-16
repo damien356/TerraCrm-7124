@@ -154,6 +154,23 @@ function Navigation() {
     }
   }, [session.isPending, session.data, sessionError, unreachable, switchedOff]);
 
+  // Nothing from one login is ever shown to the next (Damien, 15 Nov 2026).
+  // Signed out for real, or a different person signed in on this phone: drop
+  // every job, photo link and material the last login loaded. A login that
+  // only can't reach Terra keeps its screens, so no signal is not a wipe.
+  const lastLogin = useRef<string | null>(null);
+  useEffect(() => {
+    if (session.isPending || unreachable) return;
+    const was = lastLogin.current;
+    if (was && was !== signedInAs && (signedInAs || !sessionError)) {
+      void queryClient.cancelQueries();
+      queryClient.removeQueries({ type: "inactive" });
+      // Screens still open start empty and load again as the new login.
+      void queryClient.resetQueries({ type: "active" });
+    }
+    if (signedInAs || !sessionError) lastLogin.current = signedInAs;
+  }, [signedInAs, session.isPending, unreachable, sessionError]);
+
   useEffect(() => {
     if (session.isPending || inCallback || unreachable) return;
     if (!session.data && !onLogin) router.replace("/login");
