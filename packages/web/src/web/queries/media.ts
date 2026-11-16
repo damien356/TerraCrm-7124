@@ -22,6 +22,8 @@ function useInvalidateJobFile() {
   return () => {
     queryClient.invalidateQueries({ queryKey: orpc.media.key() });
     queryClient.invalidateQueries({ queryKey: orpc.areas.key() });
+    // Which crew sees what counts the files too (Damien, 16 Nov 2026).
+    queryClient.invalidateQueries({ queryKey: orpc.jobs.crewView.key() });
   };
 }
 

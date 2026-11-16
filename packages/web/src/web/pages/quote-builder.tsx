@@ -1272,7 +1272,10 @@ export default function QuoteBuilderPage() {
                     </div>
                   ))}
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Its own lines, at cost + {q.supplierChargesPct ?? 15}%. The client copy spreads them into that supplier&apos;s lines.
+                    Its own lines, at cost + {q.supplierChargesPct ?? 15}%.{" "}
+                    {q.chargesCopy?.value === "lines" && q.layoutUsed === "itemised"
+                      ? "The client copy shows each one on its own line."
+                      : "The client copy spreads them into that supplier's lines."}
                   </p>
                 </div>
               ) : null}

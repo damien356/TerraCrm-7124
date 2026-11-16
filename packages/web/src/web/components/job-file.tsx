@@ -286,8 +286,8 @@ export function JobFile({ jobId, isCallback = false }: { jobId: number; isCallba
 
       {bucket === "area" ? <AreaManager jobId={jobId} /> : null}
 
-      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <p className="text-xs text-muted-foreground">{meta.blurb}</p>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <p className="min-w-[10rem] flex-1 text-xs text-muted-foreground">{meta.blurb}</p>
         <div className="flex flex-wrap items-center justify-end gap-2">
           {busy ? <Spinner /> : null}
           {crew.multiCrew && bucket !== "access" && bucket !== "signed" ? (

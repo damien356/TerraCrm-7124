@@ -3,7 +3,7 @@ import { nextJobNumber } from "../lib/job-number";
 import { z } from "zod";
 import { assertSupervisor } from "../lib/supervisors";
 import { checkNewRecords, createNewRecords, newCompanyInput, newContactInput, newSiteInput } from "../lib/job-new-records";
-import { and, asc, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, like, ne, notInArray, or, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import { syncJobValue } from "../lib/job-value";
@@ -14,7 +14,8 @@ import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
 import { addJobPerson, customerTag, personInput, removeJobTag, updateJobPerson } from "../lib/job-people";
 import { PERSON_TAGS, legacyRoleToTag, parseTags } from "../lib/person-tags";
 import { installerForStaff, taskForStaff } from "../lib/staff-view";
-import { assertTaskOnJob, jobScopeOf, needsDispatch, scopeWords } from "../lib/task-scope";
+import { assertTaskOnJob, crewViewOf, jobScope, jobScopeOf, needsDispatch, scopeWords } from "../lib/task-scope";
+import { OFFICE_ONLY_BUCKETS } from "../lib/file-access";
 
 const tagList = z.array(z.enum(PERSON_TAGS));
 
@@ -732,6 +733,37 @@ export const jobs = {
       const [row] = await db.insert(schema.jobMaterials).values(input).returning();
       return row;
     }),
+
+  /**
+   * Which crew sees what (Damien, 16 Nov 2026). For the office card on the
+   * job page: each person on the work, and each dispatch nobody is on yet,
+   * with the materials and files their phone shows. Same rules as the phone.
+   */
+  crewView: staffOnly.input(z.object({ jobId: z.number() })).handler(async ({ input }) => {
+    const m = schema.jobMedia;
+    const [scope, materials, media] = await Promise.all([
+      jobScope(input.jobId),
+      db
+        .select({ id: schema.jobMaterials.id, taskId: schema.jobMaterials.taskId, crewShared: schema.jobMaterials.crewShared })
+        .from(schema.jobMaterials)
+        .where(eq(schema.jobMaterials.jobId, input.jobId)),
+      db
+        .select({ id: m.id, taskId: m.taskId, crewShared: m.crewShared, bucket: m.bucket, uploadedByInstallerId: m.uploadedByInstallerId, visibility: m.visibility, classifiedAt: m.classifiedAt })
+        .from(m)
+        .where(and(eq(m.jobId, input.jobId), isNull(m.archivedAt), ne(m.sensitivity, "restricted"), notInArray(m.bucket, [...OFFICE_ONLY_BUCKETS]))),
+    ]);
+    const view = crewViewOf(
+      scope,
+      materials,
+      // Cleared for crew, or an old crew upload from before the file check (lib/file-access.ts).
+      media.map((f) => ({ ...f, crewVisible: f.visibility === "crew" || (f.uploadedByInstallerId != null && !f.classifiedAt) })),
+    );
+    const ids = view.crews.map((c) => c.installerId).filter((n): n is number => n != null);
+    const names = ids.length
+      ? await db.select({ id: schema.installers.id, name: schema.installers.name }).from(schema.installers).where(inArray(schema.installers.id, ids))
+      : [];
+    return { ...view, crews: view.crews.map((c) => ({ ...c, name: names.find((n) => n.id === c.installerId)?.name ?? null })) };
+  }),
 
   updateMaterial: staffOnly
     .input(

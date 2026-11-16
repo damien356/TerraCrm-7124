@@ -175,3 +175,56 @@ export async function scopeWords(row: { taskId: number | null; crewShared: boole
   if (row.taskId != null) return `dispatch ${await dispatchRef(row.taskId)}`;
   return "no dispatch (office only while more than one crew is on the job)";
 }
+
+/* ---------------------------------------------------------------------------
+ * Which crew sees what (Damien, 16 Nov 2026): "make it easy to show whom sees
+ * what, so a dummy can work it out". The office card on the job page reads
+ * this. It runs the exact same rules as the phone (crewGets, crewGetsFile),
+ * once for each person on the work, and once for each dispatch nobody is on
+ * yet, as if that person were already on it.
+ * ------------------------------------------------------------------------- */
+
+export type CrewViewMaterial = { id: number; taskId: number | null; crewShared: boolean | null };
+/** crewVisible: the file itself is cleared for crew (lib/file-access.ts crewMaySee). An uncleared one only reaches the installer who took it. */
+export type CrewViewFile = { id: number; taskId: number | null; crewShared: boolean | null; bucket: string; uploadedByInstallerId: number | null; crewVisible: boolean };
+
+export type CrewViewCrew = {
+  /** The person, or null for a dispatch nobody is on yet. */
+  installerId: number | null;
+  /** His work dispatches on this job. */
+  taskIds: number[];
+  materials: { id: number; shared: boolean }[];
+  files: { id: number; bucket: string; shared: boolean }[];
+};
+
+/** Pure. Files: not archived, not restricted, not an office only bucket. */
+export function crewViewOf(job: JobScope, materials: CrewViewMaterial[], files: CrewViewFile[]) {
+  const viewers: { installerId: number | null; v: ViewerScope }[] = [];
+  const people = [...new Set(job.work.flatMap((t) => [t.assignedInstallerId, t.secondInstallerId]).filter((n): n is number => n != null))];
+  for (const p of people) viewers.push({ installerId: p, v: viewerScopeOf(job, p) });
+  for (const t of job.work) {
+    if (t.assignedInstallerId != null || t.secondInstallerId != null) continue;
+    // Nobody on it yet: what its installer will see once the office puts someone on.
+    viewers.push({ installerId: null, v: { ...job, installerId: -1, mine: new Set([t.id]), coversAll: job.work.every((w) => w.id === t.id) } });
+  }
+  const crews: CrewViewCrew[] = viewers.map(({ installerId, v }) => ({
+    installerId,
+    taskIds: job.work.filter((t) => v.mine.has(t.id)).map((t) => t.id),
+    materials: materials.filter((m) => crewGets(v, m)).map((m) => ({ id: m.id, shared: Boolean(m.crewShared) || !job.multiCrew })),
+    files: files
+      .filter((f) => (f.crewVisible || f.uploadedByInstallerId === v.installerId) && crewGetsFile(v, f))
+      .map((f) => ({ id: f.id, bucket: f.bucket, shared: Boolean(f.crewShared) || (SHARED_BUCKETS as readonly string[]).includes(f.bucket) })),
+  }));
+  const seen = (pick: (c: CrewViewCrew) => { id: number }[]) => new Set(crews.flatMap((c) => pick(c).map((x) => x.id)));
+  const seenM = seen((c) => c.materials);
+  const seenF = seen((c) => c.files);
+  return {
+    multiCrew: job.multiCrew,
+    crews,
+    nobody: {
+      materials: materials.filter((m) => !seenM.has(m.id)).map((m) => m.id),
+      // Only files cleared for crew: an office only file is waiting on "Show to crew", not on a dispatch.
+      files: files.filter((f) => f.crewVisible && !seenF.has(f.id)).map((f) => ({ id: f.id, bucket: f.bucket })),
+    },
+  };
+}

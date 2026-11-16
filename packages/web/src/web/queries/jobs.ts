@@ -17,6 +17,11 @@ export function useJob(id: number | null) {
   );
 }
 
+/** Which crew sees what on a job with more than one crew (Damien, 16 Nov 2026). Under jobs.key(), so a material or file change refreshes it. */
+export function useCrewView(jobId: number, enabled: boolean) {
+  return useQuery(orpc.jobs.crewView.queryOptions({ input: { jobId }, enabled: enabled && jobId > 0, staleTime: 10_000 }));
+}
+
 /*
  * One options object per hook. A shared helper indexed by a name union gave
  * every hook a union input type, which tsc resolved differently from build to

@@ -35,7 +35,7 @@ import { customerCandidates, SAID_DETAILS_NOTE, spokenForQuote, UNMATCHED_NOTE }
 import { forgetNames } from "../lib/memo-context";
 import { normaliseMobile } from "../lib/sms";
 import { createContact } from "./contacts";
-import { bundlesFor, copyBundles } from "./quoteBundles";
+import { bundlesFor, chargesCopyFor, copyBundles } from "./quoteBundles";
 import { leadToQuotedOnSend } from "../lib/job-stage";
 import { addJobPerson, addQuotePerson, copyQuotePeople, personInput } from "../lib/job-people";
 import { UNSET_SOURCE } from "../lib/lead-codes";
@@ -529,6 +529,7 @@ export async function reviseQuoteRecord(
       terms: quote.terms,
       bundleMode: quote.bundleMode,
       layout: quote.layout,
+      chargesOnCopy: quote.chargesOnCopy,
       copiedFromQuoteId: quote.copiedFromQuoteId,
     })
     .returning();
@@ -767,6 +768,8 @@ export const quotes = {
       /** Item 1: the layout the client gets now, and the rows when itemised. */
       layoutUsed: bundleView.layout,
       itemRows: bundleView.items,
+      /** Damien, 16 Nov 2026 (Q188104): supplier charges combined or on their own lines, and whether it can change. */
+      chargesCopy: await chargesCopyFor(row.quote),
       /** Only for Admin, or Office with the cost switch on. Never expose these through field.ts. */
       estimatedCost: showCosts ? round2(cost) : null,
       /** Notes 18.33: the supplier charge lines per supplier, and what the client copy spreads. Cost viewers only. */

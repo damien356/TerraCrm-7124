@@ -98,3 +98,49 @@ export function foldCharges<T extends FoldLine>(lines: T[]): { lines: T[]; share
   }
   return { lines: out, shares };
 }
+
+/* ---------------------------------------------------------------------------
+ * Damien, 16 Nov 2026 (Q188104). The office can show each supplier charge
+ * on its own row of the itemised client copy instead of spreading it in.
+ *
+ *   "Supplier charge: Karndean, Fuel Surcharge (61.84 m²)"  ->  "Karndean, Fuel Surcharge"
+ *   "Supplier freight: Karndean"                             ->  "Freight, Karndean"
+ *
+ * The count comes off because the qty column already shows it. A percent or
+ * flat note stays ("(2.1%)"), the row reads 1 each there. A description the
+ * office typed over is kept as typed. Freight is a delivery row, so it prints
+ * last. A whole order charge reads 1 each, not 1 order. Same total, nothing
+ * spread, so every line keeps its own price.
+ * ------------------------------------------------------------------------- */
+
+export const CHARGES_ON_COPY = ["combined", "lines"] as const;
+export type ChargesOnCopy = (typeof CHARGES_ON_COPY)[number];
+
+export const CHARGES_ON_COPY_LABELS: Record<ChargesOnCopy, string> = {
+  combined: "Combined into the product price",
+  lines: "Each on its own line",
+};
+
+const BUILT = /^\s*Supplier (charge|freight)\s*:\s*/i;
+const COUNT = /\s*\(\d[\d.,]*\s+[^()%$]+\)\s*$/;
+
+/** What the client reads for one charge line, on its own row. */
+export function chargeClientText(description: string): { text: string; freight: boolean } {
+  const m = description.match(BUILT);
+  if (!m) return { text: description.trim() || "Supplier charge", freight: /^\s*(?:delivery|freight|cartage)\b/i.test(description) };
+  const freight = m[1]!.toLowerCase() === "freight";
+  const rest = description.slice(m[0].length).replace(COUNT, "").trim();
+  if (freight) return { text: rest ? `Freight, ${rest}` : "Freight", freight };
+  return { text: rest || "Supplier charge", freight };
+}
+
+/** The lines as the client reads them with each charge on its own row. */
+export function chargesAsLines<T extends FoldLine>(lines: T[]): T[] {
+  return lines.map((l) => {
+    if (!isChargeLine(l)) return l;
+    const { text, freight } = chargeClientText(l.description);
+    // "1 order at $92.00" reads oddly to a client. A whole order charge is 1 each.
+    const unit = (l as { unit?: string }).unit === "order" ? { unit: "each" } : {};
+    return { ...l, ...unit, kind: freight ? DELIVERY : "other", description: text, chargeSupplierId: null };
+  });
+}

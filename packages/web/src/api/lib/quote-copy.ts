@@ -459,7 +459,7 @@ export async function copyCreate(input: CopyCreateInput, actor: Actor) {
     same ? { noAccessNotes: true } : { waitForClient: true },
   );
 
-  await db.update(schema.quotes).set({ copiedFromQuoteId: src.id, layout: src.layout, updatedAt: new Date() }).where(eq(schema.quotes.id, created.id));
+  await db.update(schema.quotes).set({ copiedFromQuoteId: src.id, layout: src.layout, chargesOnCopy: src.chargesOnCopy, updatedAt: new Date() }).where(eq(schema.quotes.id, created.id));
 
   const ordered = lines.map((l) => {
     const v = values.get(l.id)!;

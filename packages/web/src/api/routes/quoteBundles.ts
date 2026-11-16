@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, ne } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -23,9 +23,10 @@ import { depositInvoiceFor } from "../lib/client-invoices";
 import { linkForQuote, quoteUrl } from "../lib/quote-links";
 import { itemRows, LAYOUT_LABELS, layoutUsed, QUOTE_LAYOUTS, type ItemRow } from "../lib/quote-layout";
 import { cardPaymentsOn, owingOn, payUrl } from "../lib/stripe";
-import { foldCharges } from "../lib/charge-fold";
+import { CHARGES_ON_COPY, CHARGES_ON_COPY_LABELS, chargesAsLines, foldCharges, isChargeLine } from "../lib/charge-fold";
 import { foldFee } from "../lib/referral-fold";
 import { quoteFee } from "../lib/referral-fees";
+import { emailedAtFor } from "../lib/invoice-emailed";
 
 /**
  * Client bundles on a quote: the mode, which bundle each line sits in, and
@@ -48,6 +49,14 @@ async function quoteRow(id: number, editable: boolean | "wording") {
     throw new ORPCError("BAD_REQUEST", { message: "This quote is locked. Make a new version to change it." });
   }
   return q;
+}
+
+/**
+ * Damien, 16 Nov 2026 (Q188104). Each supplier charge on its own row: only on
+ * the itemised layout. Sections always combine, a section has no rows.
+ */
+export function chargesShownAsLines(q: { layout?: string | null; chargesOnCopy?: string | null } | undefined, lines: { kind: string }[]) {
+  return !!q && q.chargesOnCopy === "lines" && layoutUsed(q.layout, lines) === "itemised";
 }
 
 /**
@@ -88,8 +97,11 @@ async function clientLines(quoteId: number) {
     .leftJoin(schema.products, eq(schema.products.id, schema.quoteItems.productId))
     .where(eq(schema.quoteItems.quoteId, quoteId))
     .orderBy(asc(schema.quoteItems.sortOrder), asc(schema.quoteItems.id));
+  // Damien, 16 Nov 2026 (Q188104): itemised, and the office picked Each on its own line.
+  const [q] = await db.select({ layout: schema.quotes.layout, chargesOnCopy: schema.quotes.chargesOnCopy }).from(schema.quotes).where(eq(schema.quotes.id, quoteId));
+  const charged = chargesShownAsLines(q, rows) ? chargesAsLines(rows) : foldCharges(rows).lines;
   // Notes 18.47: then the referral fee, spread over every line by its price. No fee line, no footer line.
-  return foldFee(foldCharges(rows).lines, await quoteFee(quoteId)).lines;
+  return foldFee(charged, await quoteFee(quoteId)).lines;
 }
 
 /** Lines in the shape the bundle maths needs, with each product's category. */
@@ -264,6 +276,45 @@ export async function clientPdfFor(quoteId: number, signed?: QuotePdfInput["sign
   };
 }
 
+/**
+ * Damien, 16 Nov 2026 (Q188104). The Supplier charges choice on What the
+ * client sees: what it is now, whether the quote has any charge lines, and
+ * whether it can change. It changes while the quote can. A price record from
+ * Sell products is accepted but no customer saw it, so it can change until
+ * its invoice is emailed or in Xero: after that the client has their copy.
+ */
+export async function chargesCopyFor(quote: typeof schema.quotes.$inferSelect) {
+  const items = await db
+    .select({ kind: schema.quoteItems.kind, chargeSupplierId: schema.quoteItems.chargeSupplierId })
+    .from(schema.quoteItems)
+    .where(eq(schema.quoteItems.quoteId, quote.id));
+  const value = quote.chargesOnCopy === "lines" ? "lines" : "combined";
+  const hasCharges = items.some(isChargeLine);
+  const sections = layoutUsed(quote.layout, items) === "sections";
+  let reason: string | null = null;
+  if (LOCKED.includes(quote.status)) {
+    const [sale] = await db
+      .select({ id: schema.productSales.id })
+      .from(schema.productSales)
+      .where(and(eq(schema.productSales.quoteId, quote.id), eq(schema.productSales.mode, "invoice")))
+      .limit(1);
+    if (!sale || quote.status !== "accepted") reason = "This quote is locked. Make a new version to change it.";
+    else {
+      const invs = quote.jobId
+        ? await db
+            .select({ id: schema.invoices.id, number: schema.invoices.number, quoteId: schema.invoices.quoteId, snap: schema.invoices.issuedSnapshot, xero: schema.invoices.xeroInvoiceId })
+            .from(schema.invoices)
+            .where(and(eq(schema.invoices.jobId, quote.jobId), ne(schema.invoices.status, "void")))
+        : [];
+      const mine = invs.filter((i) => i.quoteId == null || i.quoteId === quote.id);
+      const emailed = await emailedAtFor(mine.map((i) => i.id));
+      const gone = mine.find((i) => i.snap || i.xero || emailed.has(i.id));
+      if (gone) reason = `${gone.number} has gone to the customer${gone.xero ? " (it is in Xero)" : ""}, so their copy can not change now.`;
+    }
+  }
+  return { value, hasCharges, sections, canSet: !reason, reason };
+}
+
 export const quoteBundles = {
   get: staffOnly.input(z.object({ quoteId: z.number() })).handler(async ({ input }) => {
     const quote = await quoteRow(input.quoteId, false);
@@ -285,6 +336,20 @@ export const quoteBundles = {
       }
       const { bundles, layout, layoutSetting, items } = await bundlesFor({ ...quote, layout: input.layout });
       return { mode: quote.bundleMode, bundles, layout, layoutSetting, items };
+    }),
+
+  /** Damien, 16 Nov 2026 (Q188104): supplier charges combined into the product price, or each on its own line. */
+  setChargesOnCopy: staffOnly
+    .input(z.object({ quoteId: z.number(), value: z.enum(CHARGES_ON_COPY) }))
+    .handler(async ({ input, context }) => {
+      const quote = await quoteRow(input.quoteId, false);
+      const now = await chargesCopyFor(quote);
+      if (!now.canSet) throw new ORPCError("BAD_REQUEST", { message: now.reason ?? "This quote is locked." });
+      if (quote.chargesOnCopy !== input.value) {
+        await db.update(schema.quotes).set({ chargesOnCopy: input.value, updatedAt: new Date() }).where(eq(schema.quotes.id, quote.id));
+        await logActivity(quote, "bundles", `Supplier charges on the client copy: ${CHARGES_ON_COPY_LABELS[input.value]}`, context.actor);
+      }
+      return chargesCopyFor({ ...quote, chargesOnCopy: input.value });
     }),
 
   /** The client PDF. Warnings come back with it: sections with no wording, or wording written for other lines. */

@@ -1890,6 +1890,13 @@ export const quotes = sqliteTable(
      */
     layout: text("layout").notNull().default("auto"),
     /**
+     * Damien, 16 Nov 2026 (Q188104). Supplier charges (freight, baling,
+     * Resiloop) on the itemised client copy: combined (spread into that
+     * supplier's product lines, notes 18.33) or lines (each on its own row).
+     * The sections layout always combines.
+     */
+    chargesOnCopy: text("charges_on_copy").notNull().default("combined"),
+    /**
      * Copy from previous job (16 Oct). The quote this one was copied from.
      * Same client reads "Follow-on from", another client "Copied from".
      * No FK on purpose: the original going leaves the copy as it is.

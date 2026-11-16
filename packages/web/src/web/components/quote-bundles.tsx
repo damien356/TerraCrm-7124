@@ -8,10 +8,12 @@ import { openPdf } from "./purchase-orders";
 import { CATEGORY_LABELS, LINE_CATEGORIES } from "../../api/lib/bundleCatalog";
 import { isSupplyOnly, LAYOUT_LABELS, QUOTE_LAYOUTS, type QuoteLayout } from "../../api/lib/quote-layout";
 import { QuoteItemRows, type QuoteItemRow } from "./quote-item-rows";
+import { CHARGES_ON_COPY, CHARGES_ON_COPY_LABELS, type ChargesOnCopy } from "../../api/lib/charge-fold";
 import {
   useQuotePdf,
   useRegenerateBundle,
   useSetBundleMode,
+  useSetChargesOnCopy,
   useSetLineCategory,
   useSetQuoteLayout,
   useUpdateBundle,
@@ -268,6 +270,43 @@ function LayoutSelect({ value, used, disabled, onChange }: { value: string; used
   );
 }
 
+type ChargesCopy = { value: string; hasCharges: boolean; sections: boolean; canSet: boolean; reason: string | null };
+
+/**
+ * Damien, 16 Nov 2026 (Q188104). Freight, baling and levies like Resiloop:
+ * spread into the product price (the client sees one line per product), or
+ * each on its own line. Only the itemised layout has lines to show them on.
+ */
+function ChargesSelect({ quoteId, copy, onError }: { quoteId: number; copy: ChargesCopy; onError: (e: string | null) => void }) {
+  const set = useSetChargesOnCopy();
+  const hint = copy.sections
+    ? "Sections always combine them. Pick Itemised in Layout to show each charge on its own line."
+    : (copy.reason ?? "Freight, baling and levies like Resiloop. Combined: spread into that supplier's product lines. Own line: one row each.");
+  return (
+    <label className="flex items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground" title={hint}>
+      Supplier charges
+      <Select
+        aria-label="Supplier charges on the client copy"
+        className="h-7 w-auto py-0 text-xs"
+        value={copy.sections ? "combined" : copy.value}
+        disabled={copy.sections || !copy.canSet || set.isPending}
+        onChange={(e) =>
+          set
+            .mutateAsync({ quoteId, value: e.target.value as ChargesOnCopy })
+            .then(() => onError(null))
+            .catch((err) => onError(errText(err)))
+        }
+      >
+        {CHARGES_ON_COPY.map((v) => (
+          <option key={v} value={v}>
+            {CHARGES_ON_COPY_LABELS[v]}
+          </option>
+        ))}
+      </Select>
+    </label>
+  );
+}
+
 function PreviewTotals({ subtotal, gst, total }: { subtotal: number; gst: number; total: number }) {
   return (
     <div className="ml-auto mt-2 flex w-56 flex-col gap-1 text-[13px]">
@@ -335,6 +374,8 @@ export function QuoteBundlesCard({
     subtotal: number;
     gst: number;
     total: number;
+    /** Damien, 16 Nov 2026 (Q188104). Missing on an older server reply. */
+    chargesCopy?: ChargesCopy;
   };
   locked: boolean;
   wordingOpen?: boolean;
@@ -376,7 +417,7 @@ export function QuoteBundlesCard({
         title="What the client sees"
         subtitle={
           itemised
-            ? "Itemised: one row per line with qty, unit, rate and total, ex GST. Delivery prints last."
+            ? `Itemised: one row per line with qty, unit, rate and total, ex GST. ${quote.chargesCopy?.hasCharges ? (quote.chargesCopy.value === "lines" ? "Each supplier charge has its own line. " : "Supplier charges are in the product price. ") : ""}Delivery prints last.`
             : "Section titles, wording and totals only. Never qty, m², rates or line prices."
         }
         action={
@@ -392,6 +433,7 @@ export function QuoteBundlesCard({
                   .catch((e) => setError(errText(e)))
               }
             />
+            {quote.chargesCopy?.hasCharges ? <ChargesSelect quoteId={quote.id} copy={quote.chargesCopy} onError={setError} /> : null}
             {itemised ? null : (
             <ModeToggle
               mode={quote.bundleMode}

@@ -19,6 +19,11 @@ export function useSetQuoteLayout() {
   const onSuccess = useRefresh();
   return useMutation(orpc.quoteBundles.setLayout.mutationOptions({ onSuccess }));
 }
+/** Damien, 16 Nov 2026 (Q188104): supplier charges combined into the product price, or each on its own line. */
+export function useSetChargesOnCopy() {
+  const onSuccess = useRefresh();
+  return useMutation(orpc.quoteBundles.setChargesOnCopy.mutationOptions({ onSuccess }));
+}
 export function useSetLineCategory() {
   const onSuccess = useRefresh();
   return useMutation(orpc.quoteBundles.setLineCategory.mutationOptions({ onSuccess }));
