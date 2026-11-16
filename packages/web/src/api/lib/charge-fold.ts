@@ -121,6 +121,10 @@ export const CHARGES_ON_COPY_LABELS: Record<ChargesOnCopy, string> = {
   lines: "Each on its own line",
 };
 
+/** Settings, Supplier charges card: where a new quote starts. "combined" when unset (Damien, 16 Nov 2026). */
+export const CHARGES_ON_COPY_DEFAULT_KEY = "charges_on_copy_default";
+export const chargesOnCopyOf = (v: string | null | undefined): ChargesOnCopy => ((CHARGES_ON_COPY as readonly string[]).includes(v ?? "") ? (v as ChargesOnCopy) : "combined");
+
 const BUILT = /^\s*Supplier (charge|freight)\s*:\s*/i;
 const COUNT = /\s*\(\d[\d.,]*\s+[^()%$]+\)\s*$/;
 

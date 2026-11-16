@@ -19,6 +19,7 @@ import { customerCandidates, spokenCustomer, strongMatch } from "../lib/quote-cu
 import { lineTypeOfKind } from "../lib/line-kinds";
 import { createJobForQuote } from "../lib/quote-convert";
 import { UNSET_SOURCE } from "../lib/lead-codes";
+import { chargesOnCopyDefault } from "../lib/quote-freight";
 
 /**
  * Damien records a rough job note on site, this turns it into a draft quote.
@@ -330,6 +331,8 @@ export async function buildQuoteFromTranscript(
       ...depositFieldsFor(await cardOf(billTo)),
       validUntil,
       notes: notesParts.join("\n\n"),
+      // Settings, Supplier charges (Damien, 16 Nov 2026).
+      chargesOnCopy: await chargesOnCopyDefault(),
     })
     .returning();
   if (!quoteRow) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Quote not created" });

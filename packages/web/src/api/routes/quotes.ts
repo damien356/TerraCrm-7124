@@ -73,7 +73,7 @@ import { followPrepArea, placePrep, prepPlan, settlePrep } from "../lib/prep-lin
 import { assertDefaultsResolved } from "../lib/quote-default-gate";
 import { isSheetUnderlay } from "../lib/pack-name";
 import { isUnderlayCategory, lengthUnitPrice, supplyForInstalled, underlayName } from "../lib/order-sizes";
-import { foldForClient, quoteFreightView, refreshQuoteFreight, supplierChargesMarkupPct } from "../lib/quote-freight";
+import { chargesOnCopyDefault, foldForClient, quoteFreightView, refreshQuoteFreight, supplierChargesMarkupPct } from "../lib/quote-freight";
 import { isChargeLine } from "../lib/charge-fold";
 import { fromPhoneApp, PHONE_PRICE_MESSAGE } from "../lib/phone-app";
 import { copyLinksFor } from "../lib/quote-copy-links";
@@ -405,6 +405,8 @@ export async function createQuoteRecord(
       validUntil,
       notes: input.notes ?? null,
       terms: input.terms ?? settingRow?.value ?? null,
+      // Settings, Supplier charges (Damien, 16 Nov 2026).
+      chargesOnCopy: await chargesOnCopyDefault(),
     })
     .returning();
 

@@ -37,7 +37,7 @@ import {
   useUpdateStatus,
 } from "../queries/settings";
 import { useCreateSupplier, useSuppliers } from "../queries/suppliers";
-import { SUPPLIER_CHARGES_MARKUP_DEFAULT, SUPPLIER_CHARGES_MARKUP_KEY } from "../../api/lib/charge-fold";
+import { CHARGES_ON_COPY, CHARGES_ON_COPY_DEFAULT_KEY, CHARGES_ON_COPY_LABELS, chargesOnCopyOf, SUPPLIER_CHARGES_MARKUP_DEFAULT, SUPPLIER_CHARGES_MARKUP_KEY } from "../../api/lib/charge-fold";
 import { DISPOSAL_COST_KEY, DISPOSAL_MARKUP_KEY } from "../../api/lib/quote-default-rules";
 import { UNDERLAY_UPGRADES_KEY } from "../../api/lib/underlay-pairs";
 import { autoSoldAs, boxM2Of, FLOOR_TYPE_LABELS, FLOOR_TYPES, wastageKey } from "../../api/lib/flooring-qty";
@@ -1481,7 +1481,7 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
       <Card>
         <CardHeader
           title="Supplier charges"
-          subtitle="Freight and fees from a supplier go on a quote as their own lines. The client copy spreads them into that supplier's lines."
+          subtitle="Freight and fees from a supplier go on a quote as their own lines. Pick below how the client copy shows them."
         />
         <div className="space-y-4 px-4 py-4">
           <Field label="Supplier charges markup (%)" hint="What the client pays over cost. 15% turns $110 freight into $126.50. New quotes only. Accepted and closed quotes keep what they had.">
@@ -1500,6 +1500,27 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
                 className="tabular w-24"
               />
               {tick(SUPPLIER_CHARGES_MARKUP_KEY)}
+            </div>
+          </Field>
+          {/* Damien, 16 Nov 2026: where a new quote starts. Each quote can still change it. */}
+          <Field
+            label="On the client copy"
+            hint="Where new quotes start. It applies to itemised quotes. Sections always combine. You can still change it on each quote under What the client sees. Quotes made before keep what they have."
+          >
+            <div className="flex items-center gap-2">
+              <Select
+                aria-label="Supplier charges on the client copy"
+                value={chargesOnCopyOf(draft[CHARGES_ON_COPY_DEFAULT_KEY])}
+                onChange={(e) => commit(CHARGES_ON_COPY_DEFAULT_KEY, e.target.value)}
+                className="sm:max-w-[18rem]"
+              >
+                {CHARGES_ON_COPY.map((v) => (
+                  <option key={v} value={v}>
+                    {CHARGES_ON_COPY_LABELS[v]}
+                  </option>
+                ))}
+              </Select>
+              {tick(CHARGES_ON_COPY_DEFAULT_KEY)}
             </div>
           </Field>
         </div>
@@ -1653,6 +1674,7 @@ function BusinessTab({ settings }: { settings: Record<string, string> }) {
                   QUOTE_EMAIL_BODY_KEY,
                   // Edited on the Supplier charges card.
                   SUPPLIER_CHARGES_MARKUP_KEY,
+                  CHARGES_ON_COPY_DEFAULT_KEY,
                   // Edited on the Carpet disposal card.
                   DISPOSAL_COST_KEY,
                   DISPOSAL_MARKUP_KEY,

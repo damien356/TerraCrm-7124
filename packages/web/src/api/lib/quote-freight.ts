@@ -6,7 +6,7 @@ import { ordersByRoll, rollOrder } from "./order-sizes";
 import { lmForQty, m2ForQty, resolveSupplierCharges, todayISO, type ResolvedCharge, type SupplierChargeRule } from "./pricing";
 import { feeAppliesTo } from "./purchase-orders";
 import { SUPPLIER_CHARGE } from "./line-kinds";
-import { foldCharges, isChargeLine, SUPPLIER_CHARGES_MARKUP_DEFAULT, SUPPLIER_CHARGES_MARKUP_KEY } from "./charge-fold";
+import { CHARGES_ON_COPY_DEFAULT_KEY, chargesOnCopyOf, foldCharges, isChargeLine, SUPPLIER_CHARGES_MARKUP_DEFAULT, SUPPLIER_CHARGES_MARKUP_KEY, type ChargesOnCopy } from "./charge-fold";
 
 export { SUPPLIER_CHARGES_MARKUP_DEFAULT, SUPPLIER_CHARGES_MARKUP_KEY };
 
@@ -298,6 +298,12 @@ export async function supplierChargesMarkupPct(): Promise<number> {
   const [r] = await db.select().from(schema.settings).where(eq(schema.settings.key, SUPPLIER_CHARGES_MARKUP_KEY));
   const n = r ? Number(r.value) : NaN;
   return Number.isFinite(n) && n >= 0 && n <= 1000 ? n : SUPPLIER_CHARGES_MARKUP_DEFAULT;
+}
+
+/** Settings, Supplier charges: how a new quote starts on the client copy. Combined when unset (Damien, 16 Nov 2026). */
+export async function chargesOnCopyDefault(): Promise<ChargesOnCopy> {
+  const [r] = await db.select().from(schema.settings).where(eq(schema.settings.key, CHARGES_ON_COPY_DEFAULT_KEY));
+  return chargesOnCopyOf(r?.value);
 }
 
 async function loadFor(quoteId: number) {
