@@ -9,6 +9,7 @@ import type { Actor } from "../middleware/auth";
 import { checkQuote, type CheckLine } from "../lib/quote-check";
 import { liveSellFor } from "../lib/live-sell";
 import { sellExGstWithMarkup, markupOf } from "../lib/pricing";
+import { todayLocal } from "../lib/local-date";
 import { discountLimit, discountPercentOf, markupBelowStandard } from "../routes/quotes";
 import { bundlesFor } from "../routes/quoteBundles";
 import { quoteRef } from "../lib/refs";
@@ -138,7 +139,7 @@ export async function describeAction(a: ProposalAction, state: QuoteState, actor
 }
 
 async function standardRate(itemId: number) {
-  const on = new Date().toISOString().slice(0, 10);
+  const on = todayLocal(); // Damien, 17 Nov 2026: Gold Coast date, as the rate book saves.
   const rates = await db
     .select()
     .from(schema.labourRates)
@@ -343,7 +344,7 @@ export async function searchLabour(query: string, actor: Pick<Actor, "role">, li
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
   const ids = scored.map((x) => x.it.id);
-  const on = new Date().toISOString().slice(0, 10);
+  const on = todayLocal(); // Damien, 17 Nov 2026: Gold Coast date, as the rate book saves.
   const rates = ids.length
     ? await db
         .select()

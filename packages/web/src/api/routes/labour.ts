@@ -5,6 +5,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, authed, installerOnly } from "../middleware/auth";
 import { sellExGstWithMarkup } from "../lib/pricing";
+import { todayLocal } from "../lib/local-date";
 import { hourlyRateCard } from "../lib/hourly-crew";
 import { accessHistory, accessOn, itemOpenTo } from "../lib/rate-access";
 
@@ -30,7 +31,9 @@ const UNITS = ["m2", "lm", "each", "step", "hour", "day", "job", "percent", "km"
 const GROUPS = ["carpet", "resilient", "timber", "prep", "demolition", "trades", "surcharge", "other"] as const;
 const KINDS = ["work", "surcharge", "allowance"] as const;
 
-const today = () => new Date().toISOString().slice(0, 10);
+// Damien, 17 Nov 2026: Gold Coast date, not UTC. Settings saves a new rate from
+// today on the Gold Coast, so a UTC "today" hid it from quotes until 10 am.
+const today = () => todayLocal();
 
 /**
  * An item under a skill always sits in that skill's section, so the price book,

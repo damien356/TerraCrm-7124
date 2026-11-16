@@ -8,6 +8,7 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { markupPctUsed, sellExGstWithMarkup } from "./pricing";
+import { todayLocal } from "./local-date";
 import {
   defaultInstall,
   FLOOR_TYPE_LABELS,
@@ -50,7 +51,8 @@ export async function standardLabour(itemId: number, qty: number) {
   const [item] = await db.select().from(schema.labourRateItems).where(eq(schema.labourRateItems.id, itemId));
   if (!item) throw new ORPCError("NOT_FOUND", { message: "That work item is not in the rate book" });
 
-  const on = new Date().toISOString().slice(0, 10);
+  // Damien, 17 Nov 2026: Gold Coast date, the same day the rate book saves with.
+  const on = todayLocal();
   const rates = await db
     .select()
     .from(schema.labourRates)
