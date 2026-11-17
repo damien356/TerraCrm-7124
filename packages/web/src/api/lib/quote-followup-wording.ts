@@ -47,7 +47,9 @@ export const INSURANCE_STEP_PURPOSE: Partial<Record<FollowupStep, string>> = {
   10: "Anything outstanding for the insurer?",
   21: "Approval status. Last one",
 };
-export function purposeFor(audience: FollowupAudience, step: number) {
+export function purposeFor(audience: FollowupAudience, step: number, work?: string | null) {
+  /* Damien, 17 Nov 2026: Day 3 only asks about colour when the quote supplies flooring. */
+  if (audience === "homeowner" && step === 3 && work && !["supply_install", "supply_only", "mixed"].includes(work)) return "Came through okay? Any questions";
   const m = audience === "insurance" ? INSURANCE_STEP_PURPOSE : audience === "trade" ? TRADE_STEP_PURPOSE : STEP_PURPOSE;
   return m[step as FollowupStep] ?? `Day ${step}`;
 }
@@ -312,6 +314,8 @@ export function renderFollowup(step: FollowupStep, f: FollowupFacts, weeksSinceS
     const suppliesFloors = work === "supply_install" || work === "supply_only" || work === "mixed";
     const scope = clean(f.scope);
     const forScope = scope && work !== "unclear" ? ` for ${scope}` : "";
+    /* Damien, 17 Nov 2026: a deck is worded as a deck. */
+    const deck = /\bdeck/i.test(scope);
     if (step === 3) {
       if (!floors.length || !suppliesFloors) {
         notes.push(
@@ -356,7 +360,9 @@ export function renderFollowup(step: FollowupStep, f: FollowupFacts, weeksSinceS
       subject = `Quote ${f.quoteRef}: the ${topic === "prep or removal" ? "prep and removal" : topic} we've allowed for`;
       paras = [
         `A quick note on one part of ${ref}. ${prepSentence(f.prepLines, f.prepProductsOnly)}${provisionalSentence(f.prepLines)}`,
-        `${topic === "removal" ? "Removing the old floor" : topic === "prep" ? "Prep" : "Prep and removal"} ${topic === "prep or removal" ? "are the parts" : "is the part"} of a flooring quote people most often have questions about, and it's easier to talk it through now than on the day.`,
+        work === "prep"
+          ? `${topic === "removal" ? "Removing the old floor" : topic === "prep" ? "Prep" : "Prep and removal"} can raise questions once you see it on paper, and it's easier to talk it through now than on the day.`
+          : `${topic === "removal" ? "Removing the old floor" : topic === "prep" ? "Prep" : "Prep and removal"} ${topic === "prep or removal" ? "are the parts" : "is the part"} of a flooring quote people most often have questions about, and it's easier to talk it through now than on the day.`,
         `Is there anything about the ${topic} you'd like me to explain?`,
       ];
     } else if (step === 14) {
@@ -365,10 +371,11 @@ export function renderFollowup(step: FollowupStep, f: FollowupFacts, weeksSinceS
       const touchFor = work === "supply_install" && floors.length ? ` for ${floorWords(floors)}` : scope ? forScope : ` for ${floorWords(floors)}`;
       const timeframe: Record<string, string> = {
         repairs: "Do you have a rough timeframe in mind for getting the repairs done?",
-        sand_coat: "Do you have a rough timeframe in mind for getting the sanding and coating done?",
-        supply_install: "Do you have a rough timeframe in mind for getting the new floors in?",
-        install_only: "Do you have a rough timeframe in mind for getting the floors installed?",
+        sand_coat: `Do you have a rough timeframe in mind for getting ${deck ? scope : "the sanding and coating"} done?`,
+        supply_install: `Do you have a rough timeframe in mind for getting the new ${deck ? "decking" : "floors"} in?`,
+        install_only: `Do you have a rough timeframe in mind for getting the ${deck ? "decking" : "floors"} installed?`,
         supply_only: "Do you have a rough idea of when you'd like to have the order?",
+        prep: "Do you have a rough timeframe in mind for getting the work done?",
       };
       if (f.startDate) {
         notes.push("A start date is already on the job, so it does not ask about timing.");
@@ -389,7 +396,7 @@ export function renderFollowup(step: FollowupStep, f: FollowupFacts, weeksSinceS
       subject = `Quote ${f.quoteRef}: still considering?`;
       paras = [
         `It's been about ${weeksSinceSent} weeks since I sent ${ref}, so this is the last time I'll follow it up.`,
-        `No pressure either way. Plans change, and ${work === "supply_install" || work === "install_only" || (work === "mixed" && floors.length) ? "a flooring project is a big decision" : "it's your call on timing"}.${f.validUntil ? ` The quote is valid until ${f.validUntil}.` : ""}`,
+        `No pressure either way. Plans change, and ${(work === "supply_install" || work === "install_only") && deck ? "a new deck is a big decision" : work === "supply_install" || work === "install_only" || (work === "mixed" && floors.length) ? "a flooring project is a big decision" : "it's your call on timing"}.${f.validUntil ? ` The quote is valid until ${f.validUntil}.` : ""}`,
         `Are you still considering it, or would you like me to pause things for now? A one word reply like "still keen" or "pause" is plenty.`,
       ];
     }

@@ -1537,7 +1537,7 @@ export function bootQuoteFollowups() {
 
 /* ------------------------------ what the office sees --------------------- */
 
-const purposeOf = (audience: string, step: number) => purposeFor(audience as FollowupAudience, step);
+const purposeOf = (audience: string, step: number, work?: string | null) => purposeFor(audience as FollowupAudience, step, work);
 
 /** The follow-ups card: every step, its date, its wording, why it is held, and what went. */
 export async function followupView(quoteId: number, now: Date = new Date()) {
@@ -1580,7 +1580,7 @@ export async function followupView(quoteId: number, now: Date = new Date()) {
       const expiresFirst = !!qf?.validUntilDate && p.status === "scheduled" && p.dueDate >= qf.validUntilDate;
       return {
         ...p,
-        purpose: purposeOf(qf?.audience ?? "homeowner", p.step),
+        purpose: purposeOf(qf?.audience ?? "homeowner", p.step, qf?.facts.work),
         subject: r?.subject ?? null,
         text: r?.text ?? null,
         words: r?.words ?? null,
@@ -1621,7 +1621,7 @@ export async function followupView(quoteId: number, now: Date = new Date()) {
     out.push({
       id: st.id,
       step: st.step,
-      purpose: purposeOf(seq.audience, st.step),
+      purpose: purposeOf(seq.audience, st.step, qf?.facts.work),
       dueDate: st.dueDate,
       dueAt: st.dueAt,
       dateAgreed: st.dateAgreed,
