@@ -702,8 +702,15 @@ function PoEditor({
                   // Item 14: each fee says which orders it goes on (warehouse, site or both).
                   // Pickup (9 Nov 2026): a delivery fee never goes on. A charge set for warehouse or site only can be ticked on if the supplier charges it at the counter.
                   const pickupOneWay = deliverTo === "pickup" && r.kind !== "delivery" && (r.appliesTo === "warehouse" || r.appliesTo === "site");
+                  // Damien, 17 Nov 2026: "all" means every order, pickups too, so it is never off.
                   const off =
-                    deliverTo === "pickup" ? r.kind === "delivery" : r.appliesTo === "warehouse" || r.appliesTo === "site" ? r.appliesTo !== deliverTo : false;
+                    r.appliesTo === "all"
+                      ? false
+                      : deliverTo === "pickup"
+                        ? r.kind === "delivery"
+                        : r.appliesTo === "warehouse" || r.appliesTo === "site"
+                          ? r.appliesTo !== deliverTo
+                          : false;
                   const byTick = !r.autoApply || pickupOneWay;
                   const checked = byTick ? picked.has(r.id) : !skipped.has(r.id);
                   // Damien, 12 Nov 2026: on a percentage charge the amount is its maximum per order.

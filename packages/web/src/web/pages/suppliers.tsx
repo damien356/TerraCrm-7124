@@ -191,9 +191,11 @@ function NewSupplierModal({ open, onClose }: { open: boolean; onClose: () => voi
 /* ------------------------------- new fee --------------------------------- */
 
 /** Item 14 (11 Oct): where an order is going decides which charges go on it. */
-const APPLIES_TO = ["both", "warehouse", "site"] as const;
+/** Damien, 17 Nov 2026: "all" also goes on pickups, for a supplier that charges it on every order (Airlay's $95). */
+const APPLIES_TO = ["both", "all", "warehouse", "site"] as const;
 const APPLIES_LABEL: Record<string, string> = {
   both: "Every order, warehouse or site",
+  all: "Every order, pickups too",
   warehouse: "Warehouse orders only",
   site: "Site orders only",
 };
@@ -250,7 +252,7 @@ function NewFeeModal({ supplierId, open, onClose }: { supplierId: number; open: 
       autoApply: form.autoApply,
       effectiveFrom: form.effectiveFrom || null,
       effectiveUntil: form.effectiveUntil || null,
-      appliesTo: form.appliesTo as "both",
+      appliesTo: form.appliesTo as (typeof APPLIES_TO)[number],
       condition: form.condition,
       notes: form.notes,
       sortOrder: 0,
@@ -1103,8 +1105,8 @@ export default function SuppliersPage() {
                             <Field label="Goes on">
                               <Select
                                 className="h-8"
-                                value={f.appliesTo === "warehouse" || f.appliesTo === "site" ? f.appliesTo : "both"}
-                                onChange={(e) => feeUpdate.mutate({ id: f.id, appliesTo: e.target.value as "both" })}
+                                value={f.appliesTo === "warehouse" || f.appliesTo === "site" || f.appliesTo === "all" ? f.appliesTo : "both"}
+                                onChange={(e) => feeUpdate.mutate({ id: f.id, appliesTo: e.target.value as (typeof APPLIES_TO)[number] })}
                               >
                                 {APPLIES_TO.map((a) => (
                                   <option key={a} value={a}>

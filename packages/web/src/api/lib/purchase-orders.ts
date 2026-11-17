@@ -112,10 +112,15 @@ export type PricedPo = {
 const isHurfords = (name: string) => /hurford/i.test(name);
 
 export type DeliverTo = "warehouse" | "site";
-/** Where a fee rule goes on: warehouse, site or both. Anything else reads as both. */
+/** Where a fee rule goes on: warehouse, site or both. Anything else reads as both ("all" too, it adds pickups). */
 export function feeAppliesTo(appliesTo: string | null | undefined, deliverTo: DeliverTo): boolean {
   return appliesTo !== "warehouse" && appliesTo !== "site" ? true : appliesTo === deliverTo;
 }
+/**
+ * A fee the supplier charges on every order, pickups too (Damien, 17 Nov 2026).
+ * Airlay charge their $95 bundling fee even when Terra collects.
+ */
+export const feeOnPickups = (appliesTo: string | null | undefined) => appliesTo === "all";
 /** Whether a supplier will send an order there. Anything but warehouse or site reads as both. */
 export function supplierDeliversTo(deliversTo: string | null | undefined, deliverTo: DeliverTo): boolean {
   return deliversTo !== "warehouse" && deliversTo !== "site" ? true : deliversTo === deliverTo;
@@ -303,7 +308,8 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
     // Everything else (handling, baling, cutting, fuel, levies) stays as the
     // supplier's rules say, and anything that may be about delivery is flagged
     // to check with the supplier, never guessed.
-    const delivery = rules.filter((r) => r.kind === "delivery");
+    // Damien, 17 Nov 2026: a fee set for "Every order, pickups too" stays on, delivery or not, with no check note.
+    const delivery = rules.filter((r) => r.kind === "delivery" && !feeOnPickups(r.appliesTo));
     const oneWay = rules.filter((r) => r.kind !== "delivery" && (r.appliesTo === "warehouse" || r.appliesTo === "site"));
     const deliveryOn = delivery.filter((r) => r.autoApply || picked.has(r.id));
     if (deliveryOn.length) notes.push(`Not charged on a pickup: ${deliveryOn.map((r) => r.name).join(", ")}.`);
@@ -311,8 +317,10 @@ export async function pricePo(input: PoPricingInput, today = todayISO()): Promis
     for (const r of oneWay.filter((x) => !picked.has(x.id) && x.autoApply)) {
       review.push(`${r.name} is set for ${r.appliesTo === "site" ? "site" : "warehouse"} orders only, so it is off this pickup. Tick it on if ${supplier.name} charge it when you collect.`);
     }
-    rules = rules.filter((r) => r.kind !== "delivery" && (!oneWay.includes(r) || picked.has(r.id)));
-    for (const r of rules.filter((x) => (x.autoApply || picked.has(x.id)) && (x.kind === "fuel" || /freight|deliver|cartage|truck|crane/i.test(x.name)))) {
+    rules = rules.filter((r) => !delivery.includes(r) && (!oneWay.includes(r) || picked.has(r.id)));
+    for (const r of rules.filter(
+      (x) => !feeOnPickups(x.appliesTo) && (x.autoApply || picked.has(x.id)) && (x.kind === "fuel" || /freight|deliver|cartage|truck|crane/i.test(x.name)),
+    )) {
       review.push(`${r.name} stays on this pickup. Check with ${supplier.name} that it applies when you collect.`);
     }
     if (manualFreight) review.push(`A freight line is typed on this pickup. Check with ${supplier.name} that it applies when you collect.`);

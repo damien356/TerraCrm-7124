@@ -74,8 +74,8 @@ const feeInput = z.object({
   effectiveFrom: dateOnly,
   /** Null = until further notice, which is how a supplier words a fuel levy. */
   effectiveUntil: dateOnly,
-  /** Item 14: which purchase orders the fee goes on, by where the order is going. */
-  appliesTo: z.enum(["warehouse", "site", "both"]).default("both"),
+  /** Item 14: which purchase orders the fee goes on, by where the order is going. "all" also goes on pickups (Damien, 17 Nov 2026). */
+  appliesTo: z.enum(["warehouse", "site", "both", "all"]).default("both"),
   condition: z.string().default(""),
   notes: z.string().default(""),
   sortOrder: z.number().int().default(0),
@@ -99,7 +99,7 @@ const feePatch = z.object({
   autoApply: z.boolean().optional(),
   effectiveFrom: dateOnly.unwrap().optional(),
   effectiveUntil: dateOnly.unwrap().optional(),
-  appliesTo: z.enum(["warehouse", "site", "both"]).optional(),
+  appliesTo: z.enum(["warehouse", "site", "both", "all"]).optional(),
   condition: z.string().optional(),
   notes: z.string().optional(),
   sortOrder: z.number().int().optional(),
