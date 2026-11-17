@@ -1897,6 +1897,12 @@ export const quotes = sqliteTable(
      */
     chargesOnCopy: text("charges_on_copy").notNull().default("combined"),
     /**
+     * Damien, 17 Nov 2026. Supply only: how the order gets to the client, set
+     * on the Send screen. pickup · delivery. Null: worked out from the quote
+     * lines, then the job's purchase order.
+     */
+    fulfilment: text("fulfilment"),
+    /**
      * Copy from previous job (16 Oct). The quote this one was copied from.
      * Same client reads "Follow-on from", another client "Copied from".
      * No FK on purpose: the original going leaves the copy as it is.

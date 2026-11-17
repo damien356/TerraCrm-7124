@@ -11,6 +11,16 @@ export function useQuoteLink(quoteId: number) {
   return useQuery(orpc.quoteSend.link.queryOptions({ input: { quoteId }, staleTime: 15_000 }));
 }
 
+/** Damien, 17 Nov 2026: supply only, Pickup or Delivery on the Send screen. The draft is worded again after. */
+export function useSetQuoteFulfilment() {
+  const queryClient = useQueryClient();
+  return useMutation(
+    orpc.quoteSend.setFulfilment.mutationOptions({
+      onSuccess: () => queryClient.invalidateQueries({ queryKey: orpc.quoteSend.key() }),
+    }),
+  );
+}
+
 export function useSendQuoteEmail() {
   const queryClient = useQueryClient();
   return useMutation(

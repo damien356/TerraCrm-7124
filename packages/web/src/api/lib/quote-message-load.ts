@@ -93,6 +93,14 @@ export async function quoteMessageFacts(quote: Quote): Promise<MessageFacts> {
     );
   const coloursChosen = [...new Set(picked.map((c) => (c.colour ?? "").trim()).filter(Boolean))];
 
+  /* Damien, 17 Nov 2026: the job's POs say pickup or delivery on a supply only quote. Cancelled ones never count. */
+  const pos = quote.jobId
+    ? await db
+        .select({ deliverTo: schema.purchaseOrders.deliverTo, pickupName: schema.purchaseOrders.pickupName, pickupAddress: schema.purchaseOrders.pickupAddress })
+        .from(schema.purchaseOrders)
+        .where(and(eq(schema.purchaseOrders.jobId, quote.jobId), ne(schema.purchaseOrders.status, "cancelled")))
+    : [];
+
   return {
     lines,
     photosReceived: photos.length > 0,
@@ -103,6 +111,8 @@ export async function quoteMessageFacts(quote: Quote): Promise<MessageFacts> {
     depositPaid,
     coloursChosen,
     trade: !!(quote.companyId ?? job?.companyId),
+    fulfilment: quote.fulfilment === "pickup" || quote.fulfilment === "delivery" ? quote.fulfilment : null,
+    pos,
   };
 }
 

@@ -5,7 +5,7 @@ import * as schema from "../database/schema";
 import { clientPdfFor } from "../routes/quoteBundles";
 import { pickedFiles, sendJobEmail, type MailUpload } from "./job-mail";
 import { ensureForQuote, logMessage, subjectWithRef } from "./conversations";
-import { depositValue } from "./quote-message-context";
+import { arrangementText, depositValue, quoteMessageContext } from "./quote-message-context";
 import { quoteMessageContextFor, subjectTagFor } from "./quote-message-load";
 import { linkForQuote, quoteUrl } from "./quote-links";
 import { SENDER_NAME } from "./material-selection";
@@ -158,6 +158,22 @@ export async function quoteEmailDraft(quote: Quote, _ref: string) {
     work: ctx.work,
     workLabel: ctx.workLabel,
     subjectTag,
+    /**
+     * Damien, 17 Nov 2026: supply only gets a Pickup or delivery pick. auto is
+     * what it says when nothing is picked, and where that came from.
+     */
+    fulfilment:
+      ctx.work === "supply_only"
+        ? (() => {
+            const auto = quoteMessageContext({ ...facts, fulfilment: null });
+            return {
+              value: facts.fulfilment ?? null,
+              now: arrangementText(ctx),
+              auto: arrangementText(auto),
+              autoFrom: auto.arrangementFrom === "lines" ? "from the quote lines" : auto.arrangementFrom === "po" ? "from the PO" : "",
+            };
+          })()
+        : null,
   };
 }
 

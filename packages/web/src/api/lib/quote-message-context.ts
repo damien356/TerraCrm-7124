@@ -13,7 +13,11 @@
  *     confirmed on the quote.
  *   - Supply and install: colour is only asked about when it is not settled.
  *   - Install only: never says we will order the flooring.
- *   - Supply only: pickup or delivery. No install, no dates.
+ *   - Supply only: pickup or delivery. No install, no dates. Which one
+ *     (Damien, 17 Nov 2026): the office's pick on the Send screen, then a
+ *     delivery or pickup line, then the job's purchase order (pickup: collect
+ *     from the depot on it, warehouse: collect from our warehouse, site: we
+ *     deliver). Cancelled POs never count.
  *   - Mixed: a short combination. New timber with sanding reads as one job:
  *     "the supply, installation, sanding and coating of your new timber
  *     flooring".
@@ -56,6 +60,19 @@ export type MessageFacts = {
   coloursChosen: string[];
   /** A builder, property manager or other company. */
   trade: boolean;
+  /** Supply only: set by the office on the Send screen. Null or missing: worked out. */
+  fulfilment?: Fulfilment | null;
+  /** The job's purchase orders, cancelled ones left out. */
+  pos?: MessagePo[];
+};
+
+export type Fulfilment = "pickup" | "delivery";
+export type MessagePo = {
+  /** warehouse · site · pickup */
+  deliverTo: string;
+  /** Pickup only: the depot, "Mainfreight Transport Canberra". */
+  pickupName?: string | null;
+  pickupAddress?: string | null;
 };
 
 export type WorkType = "repairs" | "sand_coat" | "supply_install" | "install_only" | "supply_only" | "mixed" | "prep" | "unclear";
@@ -96,6 +113,10 @@ export type MessageContext = {
   /** Supply and install: we order the flooring once accepted. */
   ordersFlooring: boolean;
   arrangement: Arrangement;
+  /** Pickup only: "our warehouse", "Mainfreight Transport Canberra", or "" when not known. */
+  pickupFrom: string;
+  /** Where the pickup or delivery came from: the office's pick, a quote line, the PO, or nothing. */
+  arrangementFrom: "office" | "lines" | "po" | "none";
   /** On the signed copy and the accept page, after they have accepted. */
   afterAccept: (depositDue: boolean) => string;
   /** Under the bank details: "We order your flooring once the deposit lands." or "". */
@@ -426,9 +447,28 @@ export function quoteMessageContext(f: MessageFacts): MessageContext {
   if (smsScope.length > 150) smsScope = `the quoted work${at}`;
 
   /* How it gets to them. */
-  const arrangement: Arrangement = by.pickup.length ? "pickup" : by.delivery.length ? "delivery" : "unknown";
   const supplyOnly = work === "supply_only";
-  if (supplyOnly && arrangement === "unknown") review.push("Supply only, with no delivery or pickup line, so it says pickup or delivery. Change it if you know which.");
+  const po = poArrangement(f.pos ?? []);
+  const fromLines: Arrangement = by.pickup.length ? "pickup" : by.delivery.length ? "delivery" : "unknown";
+  const office = supplyOnly && (f.fulfilment === "pickup" || f.fulfilment === "delivery") ? f.fulfilment : null;
+  const fromPo: Arrangement = supplyOnly && po.kind ? (po.kind === "site" ? "delivery" : "pickup") : "unknown";
+  const arrangement: Arrangement = office ?? (fromLines !== "unknown" ? fromLines : fromPo);
+  const arrangementFrom: MessageContext["arrangementFrom"] = office ? "office" : fromLines !== "unknown" ? "lines" : fromPo !== "unknown" ? "po" : "none";
+  /* Where they collect from: only the PO knows. A PO going to their site says nothing about a pickup. */
+  const pickupFrom = supplyOnly && arrangement === "pickup" && po.kind !== "site" ? po.from : "";
+  if (supplyOnly) {
+    if (arrangement === "unknown") {
+      review.push(
+        po.mixed
+          ? "Supply only. The POs on this job do not agree (some pickup, some warehouse or site), so it says pickup or delivery. Set Pickup or delivery below if you know which."
+          : "Supply only, with no delivery or pickup line and no PO, so it says pickup or delivery. Set Pickup or delivery below if you know which.",
+      );
+    } else if (arrangement === "pickup" && po.kind === "site") {
+      review.push("It says pickup, but the PO is going to the client's site. Check which it is.");
+    } else if (arrangement === "pickup" && po.kind === "pickup" && !po.from) {
+      review.push(po.depots > 1 ? "The pickup POs name more than one depot, so it does not say where to collect from." : "The pickup PO has no depot name yet, so it does not say where to collect from.");
+    }
+  }
 
   /* Colour and finish: only when the quote leaves them open. */
   const floorPart = flooring === "supply_install" || flooring === "supply_only";
@@ -458,7 +498,7 @@ export function quoteMessageContext(f: MessageFacts): MessageContext {
   }
   let arrange: string;
   if (work === "unclear") arrange = "contact you about the next steps";
-  else if (supplyOnly) arrange = arrangement === "pickup" ? "let you know when it's ready to collect" : arrangement === "delivery" ? "contact you to arrange delivery" : "contact you to arrange pickup or delivery";
+  else if (supplyOnly) arrange = arrangement === "pickup" ? `let you know when it's ready to collect${at_(pickupFrom)}` : arrangement === "delivery" ? "contact you to arrange delivery" : "contact you to arrange pickup or delivery";
   else if (times.length === 1 && times[0] === "the installation") arrange = "contact you to arrange a suitable installation time";
   else arrange = `contact you to arrange a suitable time for ${andList(times)}`;
   const order = ordersFlooring ? [`order ${orderWhat}`] : supplyOnly ? ["place your order"] : [];
@@ -473,7 +513,8 @@ export function quoteMessageContext(f: MessageFacts): MessageContext {
 
   /* After the accept: the deposit note covers the order, so this is the rest. */
   const afterAccept = (depositDue: boolean) => {
-    if (supplyOnly && arrangement === "pickup") return depositDue ? "We'll let you know when your order is ready to collect." : "We'll place your order and let you know when it's ready to collect.";
+    if (supplyOnly && arrangement === "pickup")
+      return depositDue ? `We'll let you know when your order is ready to collect${at_(pickupFrom)}.` : `We'll place your order and let you know when it's ready to collect${at_(pickupFrom)}.`;
     if (work === "unclear") return "We'll be in touch about the next steps.";
     const rest = arrange.replace(/^contact you to /, "");
     const what = andList([...confirms, rest]);
@@ -539,10 +580,39 @@ export function quoteMessageContext(f: MessageFacts): MessageContext {
     finishOutstanding,
     ordersFlooring,
     arrangement,
+    pickupFrom,
+    arrangementFrom,
     afterAccept,
     depositNote,
     review,
   };
+}
+
+/* ------------------------- pickup or delivery ---------------------------- */
+
+/** " from our warehouse", or "" when the place is not known. */
+const at_ = (from: string) => (from ? ` from ${from}` : "");
+
+/**
+ * What the job's POs say (Damien, 17 Nov 2026). All one kind or nothing:
+ * POs that disagree say nothing. A pickup names its depot only when every
+ * pickup PO names the same one.
+ */
+export function poArrangement(pos: MessagePo[]) {
+  const kindOf = (p: MessagePo) => (p.deliverTo === "pickup" ? "pickup" : p.deliverTo === "site" ? "site" : "warehouse");
+  const kinds = [...new Set(pos.map(kindOf))];
+  const depotsNamed = [...new Set(pos.filter((p) => kindOf(p) === "pickup").map((p) => clean(p.pickupName) || clean(p.pickupAddress)))];
+  const depots = depotsNamed.filter(Boolean).length;
+  if (kinds.length !== 1) return { kind: null, from: "", mixed: kinds.length > 1, depots };
+  const kind = kinds[0] as "pickup" | "site" | "warehouse";
+  const from = kind === "warehouse" ? "our warehouse" : kind === "pickup" && depotsNamed.length === 1 ? depotsNamed[0] : "";
+  return { kind, from, mixed: false, depots };
+}
+
+/** For the Send screen: "Pickup from our warehouse", "Delivery", "Not set". */
+export function arrangementText(ctx: Pick<MessageContext, "arrangement" | "pickupFrom">) {
+  if (ctx.arrangement === "pickup") return `Pickup${at_(ctx.pickupFrom)}`;
+  return ctx.arrangement === "delivery" ? "Delivery" : "Not known, says pickup or delivery";
 }
 
 /** The deposit figure for the email: "$1,458.60", "$1,458.60 received, thank you", or "" for none. */

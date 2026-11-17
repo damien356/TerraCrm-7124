@@ -532,6 +532,7 @@ export async function reviseQuoteRecord(
       bundleMode: quote.bundleMode,
       layout: quote.layout,
       chargesOnCopy: quote.chargesOnCopy,
+      fulfilment: quote.fulfilment,
       copiedFromQuoteId: quote.copiedFromQuoteId,
     })
     .returning();

@@ -6,7 +6,7 @@ import { Button } from "./ui/button";
 import { Field, Input, Select, Textarea } from "./ui/field";
 import { Modal } from "./ui/modal";
 import { moneyExact } from "../lib/money";
-import { useQuoteEmailDraft, useQuoteLink, useSendQuoteEmail } from "../queries/quoteSend";
+import { useQuoteEmailDraft, useQuoteLink, useSendQuoteEmail, useSetQuoteFulfilment } from "../queries/quoteSend";
 import { needsScope, SCOPE_FILL } from "../../api/lib/quote-email-template";
 import { EmailInput } from "./email-input";
 import { CcList, EmailAttachments, NO_ATTACHMENTS, type MailAttachments } from "./email-attachments";
@@ -68,6 +68,7 @@ export function EmailQuoteButton({
 function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClose: () => void; onSent?: (msg: string) => void }) {
   const draft = useQuoteEmailDraft(quoteId, true);
   const send = useSendQuoteEmail();
+  const setFulfilment = useSetQuoteFulfilment();
   const [to, setTo] = React.useState<string | null>(null);
   const [subject, setSubject] = React.useState<string | null>(null);
   const [body, setBody] = React.useState<string | null>(null);
@@ -328,6 +329,35 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
             </div>
           ) : null}
           {!d.resend && d.workLabel ? <p className="text-xs text-muted-foreground">Worded for: {d.workLabel}</p> : null}
+          {/* Damien, 17 Nov 2026: supply only says pickup or delivery. Picking one words the message again. */}
+          {!d.resend && d.fulfilment ? (
+            <Field label="Pickup or delivery">
+              <Select
+                value={d.fulfilment.value ?? ""}
+                disabled={setFulfilment.isPending || draft.isFetching}
+                onChange={(e) => {
+                  const v = e.target.value === "pickup" || e.target.value === "delivery" ? e.target.value : null;
+                  if (body !== null && !window.confirm("This words the message again for the new choice. Anything you typed in the message goes. Carry on?")) return;
+                  setError(null);
+                  setFulfilment.mutate(
+                    { quoteId, fulfilment: v },
+                    {
+                      onSuccess: () => setBody(null),
+                      onError: (err) => setError(err.message),
+                    },
+                  );
+                }}
+              >
+                <option value="">
+                  Work it out: {d.fulfilment.auto}
+                  {d.fulfilment.autoFrom ? ` (${d.fulfilment.autoFrom})` : ""}
+                </option>
+                <option value="pickup">Pickup</option>
+                <option value="delivery">Delivery</option>
+              </Select>
+            </Field>
+          ) : null}
+          {!d.resend && d.fulfilment?.value ? <p className="-mt-2 text-xs text-muted-foreground">Set by the office: {d.fulfilment.now}.</p> : null}
           <EmailAttachments jobId={d.jobId} value={files} onChange={setFiles} note="The quote PDF is attached already. Add anything else here." />
           <p className="text-xs text-muted-foreground">
             The quote link is added at the bottom if you take it out: {d.url}

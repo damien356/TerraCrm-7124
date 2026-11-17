@@ -71,6 +71,19 @@ export const quoteSend = {
   }),
 
   /**
+   * Damien, 17 Nov 2026: supply only, pickup or delivery, picked on the Send
+   * screen before it goes. Null goes back to working it out from the lines
+   * and the PO. Only this column changes: the quote's price and lines are left alone.
+   */
+  setFulfilment: staffOnly
+    .input(z.object({ quoteId: z.number(), fulfilment: z.enum(["pickup", "delivery"]).nullable() }))
+    .handler(async ({ input }) => {
+      const quote = await editableQuoteOrThrow(input.quoteId);
+      await db.update(schema.quotes).set({ fulfilment: input.fulfilment }).where(eq(schema.quotes.id, quote.id));
+      return { fulfilment: input.fulfilment };
+    }),
+
+  /**
    * Send it: the email as before, and a text with the link unless turned off
    * (30 Oct, after 188048). Each channel has its own result. Marked sent once
    * either has actually gone. The same sendKey twice sends once.
