@@ -506,8 +506,9 @@ export async function priceRepair(id: number, marcPrice: number, note: string, a
 
 /**
  * Approve: email the quote the same way the Email quote dialog does, with the
- * online accept, sign and Pay by card link. The "[what the quote is for]" gap
- * in the email template is filled with the repair type.
+ * online accept, sign and Pay by card link. The wording comes from the quote's
+ * lines (Damien, 17 Nov 2026). A saved template that still has the
+ * "[what the quote is for]" gap gets the repair type in it.
  */
 export async function approveRepairQuote(id: number, actor: Actor) {
   const [req] = await db.select().from(schema.repairRequests).where(eq(schema.repairRequests.id, id));

@@ -5,8 +5,8 @@ import * as schema from "../database/schema";
 import { clientPdfFor } from "../routes/quoteBundles";
 import { pickedFiles, sendJobEmail, type MailUpload } from "./job-mail";
 import { ensureForQuote, logMessage, subjectWithRef } from "./conversations";
-import { depositSplit, quotePercent } from "./deposits";
-import { isSupplyOnly } from "./quote-layout";
+import { depositValue } from "./quote-message-context";
+import { quoteMessageContextFor, subjectTagFor } from "./quote-message-load";
 import { linkForQuote, quoteUrl } from "./quote-links";
 import { SENDER_NAME } from "./material-selection";
 import { TERRA_PRINT } from "./quotePdf";
@@ -22,6 +22,7 @@ import {
   QUOTE_EMAIL_BODY_KEY,
   QUOTE_EMAIL_SUBJECT_KEY,
   SCOPE_FILL,
+  upgradeTemplate,
   type QuoteEmailValues,
 } from "./quote-email-template";
 
@@ -112,34 +113,51 @@ export async function quoteEmailProblem(quote: Quote, emails: string[]): Promise
 async function templates() {
   const rows = await db.select().from(schema.settings).where(inArray(schema.settings.key, [QUOTE_EMAIL_SUBJECT_KEY, QUOTE_EMAIL_BODY_KEY]));
   const get = (k: string) => rows.find((r) => r.key === k)?.value?.trim() || "";
-  return { subject: get(QUOTE_EMAIL_SUBJECT_KEY) || DEFAULT_QUOTE_EMAIL_SUBJECT, body: get(QUOTE_EMAIL_BODY_KEY) || DEFAULT_QUOTE_EMAIL_BODY };
+  return upgradeTemplate({ subject: get(QUOTE_EMAIL_SUBJECT_KEY) || DEFAULT_QUOTE_EMAIL_SUBJECT, body: get(QUOTE_EMAIL_BODY_KEY) || DEFAULT_QUOTE_EMAIL_BODY });
 }
 
-/** The email the dialog opens with, from the Settings wording. The office can change any of it. */
+/**
+ * The email the dialog opens with, from the Settings wording. The office can
+ * change any of it. What the quote is for, the opening and the next steps come
+ * from the quote's own lines (Damien, 17 Nov 2026), so nothing is left to type.
+ */
 export async function quoteEmailDraft(quote: Quote, _ref: string) {
   const recipients = await quoteRecipients(quote);
   const first = recipients[0]?.name.split(" ")[0] || "there";
   const link = await linkForQuote(quote.id);
   const url = quoteUrl(link.token);
-  const { deposit } = depositSplit(quote.total, quotePercent(quote));
+  const { ctx, facts } = await quoteMessageContextFor(quote);
+  const subjectTag = await subjectTagFor(quote);
   const values: QuoteEmailValues = {
     first_name: first,
     quote_number: String(quote.number),
-    scope: SCOPE_FILL,
+    quote_title: ctx.title,
+    suburb: ctx.suburb,
+    opening: ctx.opening,
+    scope: ctx.scope,
+    review_line: ctx.reviewLine,
     link: url,
     total: money(quote.total),
-    deposit: quotePercent(quote) > 0 && deposit > 0 ? money(deposit) : "",
+    deposit: depositValue(ctx.depositState, facts.depositAmount),
     valid_until: longDate(quote.validUntil),
+    next_steps: ctx.nextSteps,
   };
   const t = await templates();
-  const kinds = await db.select({ kind: schema.quoteItems.kind }).from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quote.id));
   const body = fillQuoteTemplate(t.body, values);
+  let subject = fillQuoteTemplate(t.subject, values).replace(/\s*\n\s*/g, " ");
+  /* The tag carries the number, so a saved subject with #{quote_number} does not show it twice. */
+  if (subjectTag.includes(String(quote.number))) subject = subject.replace(new RegExp(`\\s*(quote\\s*)?#\\s*${quote.number}\\b`, "i"), (m) => (/quote/i.test(m) ? " quote" : "")).trim();
   return {
     recipients,
     to: recipients[0]?.email ?? "",
-    subject: fillQuoteTemplate(t.subject, values).replace(/\s*\n\s*/g, " "),
-    body: isSupplyOnly(kinds) ? forSupplyOnly(body) : body,
+    subject,
+    body: ctx.work === "supply_only" ? forSupplyOnly(body) : body,
     url,
+    /** Damien, 17 Nov 2026: for the Send screen. Never blocks sending. */
+    review: ctx.review,
+    work: ctx.work,
+    workLabel: ctx.workLabel,
+    subjectTag,
   };
 }
 
@@ -223,6 +241,14 @@ export async function sendSignedCopy(args: {
   const key = `quotes/${args.quote.number}/${args.quote.id}/signed-${stamp()}.pdf`;
   const conv = await ensureForQuote(args.quote.id);
   const first = args.signerName.split(" ")[0] || "there";
+  /* Damien, 17 Nov 2026: what happens next comes from the quote's lines. A read
+     that fails falls back to plain wording, it never stops the copy going. */
+  const ctx = await quoteMessageContextFor(args.quote)
+    .then((r) => r.ctx)
+    .catch((e) => {
+      console.error("[quote] signed copy wording:", String((e as Error)?.message ?? e).slice(0, 200));
+      return null;
+    });
   const lines = [
     `Hi ${first},`,
     "",
@@ -238,11 +264,10 @@ export async function sendSignedCopy(args: {
       `BSB: ${TERRA_PRINT.bank.bsb}`,
       `Account: ${TERRA_PRINT.bank.account}`,
       "",
-      "We order your flooring once the deposit lands.",
-      "",
     );
+    if (ctx?.depositNote) lines.push(ctx.depositNote, "");
   }
-  lines.push("We will be in touch to book your job in.", "", "Kind regards,", "Damien", "Terra Flooring");
+  lines.push(ctx ? ctx.afterAccept(!!args.deposit) : "We'll be in touch about the next steps.", "", "Kind regards,", "Damien", "Terra Flooring");
   const body = lines.join("\n");
   const subject = subjectWithRef(`Quote ${args.ref} accepted, your signed copy`, conv.ref);
 

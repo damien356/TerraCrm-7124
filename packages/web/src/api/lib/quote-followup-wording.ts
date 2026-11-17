@@ -80,6 +80,14 @@ export type FollowupFacts = {
   prepProductsOnly: boolean;
   /** Picked on the selection form, so not asked again. */
   coloursChosen: string[];
+  /**
+   * Damien, 17 Nov 2026: what the quote is for, from its lines
+   * (quote-message-context.ts). A repair quote is never asked about colour.
+   * Left out, it reads as a flooring quote, as before.
+   */
+  work?: string;
+  /** "the timber floor repairs". */
+  scope?: string;
   /** "26 November": the valid-until date on the quote, when there is one. */
   validUntil: string | null;
   /** A start date already on the job. Timing is not asked again. */
@@ -299,12 +307,21 @@ export function renderFollowup(step: FollowupStep, f: FollowupFacts, weeksSinceS
 
   if (!trade) {
     const floors = f.floors.slice(0, 3);
+    /* Damien, 17 Nov 2026: colour and new floors only for quotes that supply flooring. */
+    const work = f.work ?? "supply_install";
+    const suppliesFloors = work === "supply_install" || work === "supply_only" || work === "mixed";
+    const scope = clean(f.scope);
+    const forScope = scope && work !== "unclear" ? ` for ${scope}` : "";
     if (step === 3) {
-      if (!floors.length) {
-        notes.push("No flooring product on the quote, so it asks a general question instead of about colour.");
+      if (!floors.length || !suppliesFloors) {
+        notes.push(
+          floors.length
+            ? "The quote does not supply flooring, so it asks a general question instead of about colour."
+            : "No flooring product on the quote, so it asks a general question instead of about colour.",
+        );
         subject = `Your Terra Flooring quote ${f.quoteRef}`;
         paras = [
-          `Just checking that ${ref}, sent on ${f.sentOn}, came through okay and made sense.`,
+          `Just checking that ${ref}${forScope}, sent on ${f.sentOn}, came through okay and made sense.`,
           "Quotes can be a lot to take in, so if any part of it isn't clear, I'm happy to explain how it's put together.",
           "Is there anything in it you'd like me to go over?",
         ];
@@ -344,26 +361,35 @@ export function renderFollowup(step: FollowupStep, f: FollowupFacts, weeksSinceS
       ];
     } else if (step === 14) {
       subject = `Quote ${f.quoteRef}: timing`;
+      /* Flooring keeps "the carpet and hybrid". Other work names itself. */
+      const touchFor = work === "supply_install" && floors.length ? ` for ${floorWords(floors)}` : scope ? forScope : ` for ${floorWords(floors)}`;
+      const timeframe: Record<string, string> = {
+        repairs: "Do you have a rough timeframe in mind for getting the repairs done?",
+        sand_coat: "Do you have a rough timeframe in mind for getting the sanding and coating done?",
+        supply_install: "Do you have a rough timeframe in mind for getting the new floors in?",
+        install_only: "Do you have a rough timeframe in mind for getting the floors installed?",
+        supply_only: "Do you have a rough idea of when you'd like to have the order?",
+      };
       if (f.startDate) {
         notes.push("A start date is already on the job, so it does not ask about timing.");
         paras = [
-          `Just touching base on ${ref} for ${floorWords(floors)}${where}.`,
+          `Just touching base on ${ref}${touchFor}${where}.`,
           `We've got ${f.startDate} noted as the date you're working towards.`,
           "If it would help to talk anything through before you decide, I'm happy to go over the quote with you by phone or email.",
           "Is there anything still holding you back that I can help with?",
         ];
       } else {
         paras = [
-          `Just touching base on ${ref} for ${floorWords(floors)}${where}.`,
+          `Just touching base on ${ref}${touchFor}${where}.`,
           "If you're weighing it up, I'm happy to go through the quote with you by phone or email, so you can decide with all the details in front of you.",
-          "Do you have a rough timeframe in mind for getting the new floors in?",
+          timeframe[work] ?? "Do you have a rough timeframe in mind for getting the work done?",
         ];
       }
     } else {
       subject = `Quote ${f.quoteRef}: still considering?`;
       paras = [
         `It's been about ${weeksSinceSent} weeks since I sent ${ref}, so this is the last time I'll follow it up.`,
-        `No pressure either way. Plans change, and a flooring project is a big decision.${f.validUntil ? ` The quote is valid until ${f.validUntil}.` : ""}`,
+        `No pressure either way. Plans change, and ${work === "supply_install" || work === "install_only" || (work === "mixed" && floors.length) ? "a flooring project is a big decision" : "it's your call on timing"}.${f.validUntil ? ` The quote is valid until ${f.validUntil}.` : ""}`,
         `Are you still considering it, or would you like me to pause things for now? A one word reply like "still keen" or "pause" is plenty.`,
       ];
     }

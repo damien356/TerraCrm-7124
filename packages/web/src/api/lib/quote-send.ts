@@ -2,6 +2,7 @@ import { ORPCError } from "@orpc/server";
 import { and, desc, eq, gte, inArray, isNull, like, ne, or } from "drizzle-orm";
 import { db, inDemo } from "../database";
 import * as schema from "../database/schema";
+import { quoteMessageContextFor } from "./quote-message-load";
 import { addParticipant, contactByMobile, ensureForQuote, logMessage } from "./conversations";
 import { leadToQuotedOnSend } from "./job-stage";
 import type { MailUpload } from "./job-mail";
@@ -143,7 +144,8 @@ export async function quoteSmsDraft(quote: Quote, resend: boolean) {
     const w = await emailWarnFor(r.contactId, r.email);
     if (w) emailWarn[r.email.toLowerCase()] = w;
   }
-  const [job] = quote.jobId ? await db.select({ title: schema.jobs.title }).from(schema.jobs).where(eq(schema.jobs.id, quote.jobId)) : [];
+  /* Damien, 17 Nov 2026: what the quote is for comes from its lines, never the job title. */
+  const { ctx } = await quoteMessageContextFor(quote);
   const { list, option } = await quoteOptionOf(quote);
   return {
     /** Off for a wording re-send, on for every normal send. */
@@ -152,7 +154,7 @@ export async function quoteSmsDraft(quote: Quote, resend: boolean) {
     byEmail,
     fallback,
     emailWarn,
-    description: (job?.title ?? "").trim(),
+    description: ctx.smsScope,
     option,
     others: list,
   };

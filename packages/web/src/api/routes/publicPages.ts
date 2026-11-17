@@ -16,6 +16,7 @@ import { publicOffers } from "../lib/underlay-upgrade";
 import { todayISO } from "../lib/pricing";
 import { acceptQuote } from "../lib/quote-accept";
 import { EMAIL_RE, sendSignedCopy } from "../lib/quote-email";
+import { quoteMessageContextFor } from "../lib/quote-message-load";
 import { linkByToken, linkForQuote, quoteUrl, recordQuoteView } from "../lib/quote-links";
 import { quoteRefOf } from "../lib/quote-number";
 import { TERRA_PRINT } from "../lib/quotePdf";
@@ -289,7 +290,21 @@ const quotePage = {
         }
       }
       await rebuildForecast().catch((e) => console.error("[cashflow] rebuild after online accept failed:", e));
-      return { ref: out.ref, deposit, bank: bank(), emailedTo: email };
+      /* Damien, 17 Nov 2026: what happens next, from the quote's lines. The accept page has plain wording if this read fails. */
+      const msg = await quoteMessageContextFor(out.quote)
+        .then((r) => r.ctx)
+        .catch((e) => {
+          console.error("[quote] accept page wording:", String((e as Error)?.message ?? e).slice(0, 200));
+          return null;
+        });
+      return {
+        ref: out.ref,
+        deposit,
+        bank: bank(),
+        emailedTo: email,
+        afterAccept: msg ? msg.afterAccept(!!deposit) : null,
+        depositNote: msg?.depositNote ?? null,
+      };
     }),
 };
 

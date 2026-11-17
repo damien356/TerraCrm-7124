@@ -107,15 +107,16 @@ export default function PublicQuotePage() {
             </span>
             <h1 className="text-xl font-bold tracking-[-0.015em]">Thank you, quote {done.ref} is accepted</h1>
             <p className="mt-1 max-w-md text-sm text-muted-foreground">
-              {done.emailedTo ? `Your signed copy is on its way to ${done.emailedTo}.` : "You can download your signed copy below."} We will be in
-              touch to book your job in.
+              {done.emailedTo ? `Your signed copy is on its way to ${done.emailedTo}.` : "You can download your signed copy below."}{" "}
+              {/* Damien, 17 Nov 2026: what happens next comes from the quote's lines. */}
+              {done.afterAccept || "We'll be in touch about the next steps."}
             </p>
           </div>
           {done.deposit ? (
             <div className="mx-auto max-w-md">
               <p className="mb-2 text-center text-sm">
                 Your deposit invoice is <span className="font-semibold">{done.deposit.ref}</span> for{" "}
-                <span className="font-semibold">{moneyExact(done.deposit.total)}</span>. We order your flooring once it lands.
+                <span className="font-semibold">{moneyExact(done.deposit.total)}</span>.{done.depositNote ? ` ${done.depositNote}` : ""}
               </p>
               {done.deposit.payUrl ? <PayByCard url={done.deposit.payUrl} amount={done.deposit.total} /> : null}
               <BankDetails bank={done.bank} reference={done.deposit.ref} amount={done.deposit.total} />

@@ -297,6 +297,7 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
           <Field label="Subject">
             <Input value={subjectValue} onChange={(e) => setSubject(e.target.value)} />
           </Field>
+          {d.subjectTag ? <p className="-mt-2 text-xs text-muted-foreground">{d.subjectTag} is added to the end of the subject when it goes.</p> : null}
           <Field label="Message">
             <Textarea
               ref={bodyRef}
@@ -315,6 +316,18 @@ function EmailQuoteDialog({ quoteId, onClose, onSent }: { quoteId: number; onClo
               What the quote is for is filled in from the text message: "{textWords}". Change it in the message if you like.
             </p>
           ) : null}
+          {/* Damien, 17 Nov 2026: the wording is worked out from the quote's lines. Notes here never stop it going. */}
+          {!d.resend && d.review?.length ? (
+            <div className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <p className="font-medium">Check before sending</p>
+              <ul className="mt-1 list-disc pl-5">
+                {d.review.map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {!d.resend && d.workLabel ? <p className="text-xs text-muted-foreground">Worded for: {d.workLabel}</p> : null}
           <EmailAttachments jobId={d.jobId} value={files} onChange={setFiles} note="The quote PDF is attached already. Add anything else here." />
           <p className="text-xs text-muted-foreground">
             The quote link is added at the bottom if you take it out: {d.url}

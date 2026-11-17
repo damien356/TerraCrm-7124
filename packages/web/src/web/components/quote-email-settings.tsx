@@ -9,36 +9,51 @@ import {
   fillQuoteTemplate,
   QUOTE_EMAIL_BODY_KEY,
   QUOTE_EMAIL_SUBJECT_KEY,
-  SCOPE_FILL,
+  upgradeTemplate,
   type QuoteEmailValues,
 } from "../../api/lib/quote-email-template";
 
-/** What each {placeholder} turns into, for the list on the card. */
+/** What each {placeholder} turns into, for the list on the card. Damien, 17 Nov 2026: most now come from the quote's lines. */
 const FIELD_HELP: { key: keyof QuoteEmailValues; meaning: string }[] = [
   { key: "first_name", meaning: "The client's first name" },
-  { key: "quote_number", meaning: "The quote number, e.g. 188000" },
-  { key: "scope", meaning: `Left as ${SCOPE_FILL} for you to type in each time` },
+  { key: "quote_number", meaning: "The quote number, e.g. 188000. The send adds it to the end of the subject anyway" },
+  { key: "quote_title", meaning: "What the quote is for, short, e.g. timber floor repair" },
+  { key: "suburb", meaning: "The job's suburb. Left out when there is none" },
+  { key: "opening", meaning: "The thank you and what the quote is for, from the quote's lines" },
+  { key: "scope", meaning: "What the quote is for, e.g. the timber floor repairs" },
+  { key: "review_line", meaning: "The line before the link, e.g. You can review the repair work included…" },
   { key: "link", meaning: "The link to view and accept online" },
   { key: "total", meaning: "The quote total incl. GST" },
-  { key: "deposit", meaning: "The deposit in dollars. Left out when there is none" },
+  { key: "deposit", meaning: "The deposit in dollars, or that it is paid. Left out when there is none" },
   { key: "valid_until", meaning: "The valid until date. Left out when there is none" },
+  { key: "next_steps", meaning: "What happens once they accept, from the quote's lines and deposit" },
 ];
 
 const SAMPLE: QuoteEmailValues = {
-  first_name: "Natalia",
+  first_name: "Steven",
   quote_number: "188000",
-  scope: "carpet to 3 bedrooms and lounge",
+  quote_title: "timber floor repair",
+  suburb: "Highgate Hill",
+  opening: "Thank you for sending through the photos. Please find your quote for the timber floor repairs at your Highgate Hill property.",
+  scope: "the timber floor repairs",
+  review_line: "You can review the repair work included and accept your quote using the link below:",
   link: "https://ops.terraflooring.com.au/q/…",
-  total: "$5,003.14",
-  deposit: "$1,500.94",
-  valid_until: "9 November 2026",
+  total: "$2,917.20",
+  deposit: "$1,458.60",
+  valid_until: "17 December 2026",
+  next_steps: "Once you have accepted the quote and paid the deposit, we'll contact you to arrange a suitable time for the repairs.",
 };
 
 /** Settings, Business tab: the wording the Email quote dialog opens with (fix list item 11). */
 export function QuoteEmailCard({ settings }: { settings: Record<string, string> }) {
   const save = useSetSetting();
-  const savedSubject = settings[QUOTE_EMAIL_SUBJECT_KEY]?.trim() || DEFAULT_QUOTE_EMAIL_SUBJECT;
-  const savedBody = settings[QUOTE_EMAIL_BODY_KEY]?.trim() || DEFAULT_QUOTE_EMAIL_BODY;
+  /* A copy saved before 17 Nov 2026 is shown as the email will use it. */
+  const saved = upgradeTemplate({
+    subject: settings[QUOTE_EMAIL_SUBJECT_KEY]?.trim() || DEFAULT_QUOTE_EMAIL_SUBJECT,
+    body: settings[QUOTE_EMAIL_BODY_KEY]?.trim() || DEFAULT_QUOTE_EMAIL_BODY,
+  });
+  const savedSubject = saved.subject.trim();
+  const savedBody = saved.body.trim();
   const [subject, setSubject] = React.useState(savedSubject);
   const [body, setBody] = React.useState(savedBody);
   const [note, setNote] = React.useState<string | null>(null);
@@ -115,7 +130,7 @@ export function QuoteEmailCard({ settings }: { settings: Record<string, string> 
               ))}
             </ul>
             <p className="mt-2 text-xs text-muted-foreground">
-              A part of a line split with " · " is left out when its placeholder has nothing to show.
+              A part of a line split with " · " or " — " is left out when its placeholder has nothing to show. The sample is a repair quote; the real wording follows each quote's lines.
             </p>
           </div>
           <div>

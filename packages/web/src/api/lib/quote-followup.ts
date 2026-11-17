@@ -12,6 +12,7 @@ import { paperworkProblem } from "./paperwork";
 import { EMAIL_RE, quoteEmailProblem } from "./quote-email";
 import { blockFor, commsEvent, customerTypeOf, jobComms, snapshotChange, snapshotOf, type JobCommsContext } from "./comms-people";
 import { quoteUrl } from "./quote-links";
+import { quoteMessageContextFor } from "./quote-message-load";
 import { isLiveServer } from "./runtime";
 import {
   FLOOR_CATEGORIES,
@@ -408,6 +409,13 @@ export async function quoteFacts(
   const timeZone = timeZoneForPostcode(site?.postcode);
   const sentDate = dateIn(timeZone, quote.sentAt ?? quote.createdAt);
   const siteLine = ctx?.siteAddress || (site ? [site.address, site.suburb].map((x) => (x ?? "").trim()).filter(Boolean).join(", ") : "");
+  /* Damien, 17 Nov 2026: what the quote is for, from its lines. A failed read keeps the old flooring wording. */
+  const msg = await quoteMessageContextFor(quote)
+    .then((r) => r.ctx)
+    .catch((e) => {
+      console.error("[followup] quote wording:", String((e as Error)?.message ?? e).slice(0, 200));
+      return null;
+    });
   const facts: FollowupFacts = {
     audience,
     tradeRole,
@@ -418,12 +426,14 @@ export async function quoteFacts(
     quoteRef: quoteRefOf(quote),
     sentOn: longDay(sentDate),
     link: url,
-    suburb: (site?.suburb ?? "").trim() || null,
+    suburb: (site?.suburb ?? "").trim() || msg?.suburb || null,
     floors,
     rooms,
     prepLines,
     prepProductsOnly: prepProducts,
     coloursChosen,
+    work: msg?.work,
+    scope: msg?.scope,
     validUntil: quote.validUntil ? longDay(dateIn(timeZone, quote.validUntil)) : null,
     startDate: job?.scheduledStart ? startDay(job.scheduledStart) : null,
     signature: { name: assigned.name.split(" ")[0] || assigned.name, phone: FOLLOWUP_PHONE, email: SEND_FROM },

@@ -40,6 +40,8 @@ async function resendDraft(quote: typeof schema.quotes.$inferSelect, ref: string
   const first = base.recipients[0]?.name.split(" ")[0] || "there";
   return {
     ...base,
+    /* The wording notes are for the quote email, not this one. */
+    review: [] as string[],
     subject: `Updated copy of your Terra Flooring quote ${ref}`,
     body: [
       `Hi ${first},`,
