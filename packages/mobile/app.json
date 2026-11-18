@@ -101,7 +101,17 @@
         }
       ],
       "./plugins/terra-siri/app.plugin.js",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true
+          }
+        }
+      ],
+      "./plugins/android-r8-optimize/app.plugin.js"
     ],
     "owner": "terra-flooring",
     "updates": {
