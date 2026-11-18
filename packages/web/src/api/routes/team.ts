@@ -268,6 +268,8 @@ export const team = {
    * The invite goes straight after. If it does not go, the person is kept
    * (there is nothing anyone can sign in with) and the reason comes back, so
    * the office can fix the mobile or email and press Send invite again.
+   * "none" saves without sending, so a new hourly person's pay terms can go on
+   * before the invite picks their handbook (Damien, 18 Nov 2026).
    */
   addPerson: adminOnly
     .input(

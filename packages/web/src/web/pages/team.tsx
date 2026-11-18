@@ -130,7 +130,8 @@ export default function TeamPage() {
             Add person makes the login and sends an invite by text or email. The invite has the app download link and a
             one-time link where they choose their own password, so nobody in the office ever sees it. The link works
             once and runs out after 48 hours. Contractors also get a handbook link: the hourly handbook if they have
-            hourly pay terms set today, otherwise the app handbook. Employees and office logins get no handbook. Sending a new invite stops the older one working. There is no public
+            hourly pay terms set today, otherwise the app handbook. Employees and office logins get no handbook. For a new
+            hourly person, use Save without sending, add their hourly pay terms, then send the invite from their row. Sending a new invite stops the older one working. There is no public
             sign-up. Only an Admin can make a login or send an invite. "Switch off" only blocks login. It never deletes
             anything.
           </li>
@@ -663,7 +664,7 @@ function AddPersonModal({ open, onClose }: { open: boolean; onClose: () => void 
     }));
   }
 
-  async function submit(sendBy: "sms" | "email") {
+  async function submit(sendBy: "sms" | "email" | "none") {
     setError(null);
     try {
       const r = await add.mutateAsync({
@@ -675,6 +676,15 @@ function AddPersonModal({ open, onClose }: { open: boolean; onClose: () => void 
         sendBy,
       });
       const who = form.name.trim();
+      // Damien, 18 Nov 2026: saved with no invite, so hourly terms can go on first and the invite picks the hourly handbook.
+      if (sendBy === "none") {
+        setDone(
+          form.role === "field"
+            ? `${who} is added. No invite was sent. If they work hourly, add their hourly pay terms first (Hourly time, then the Pay terms tab). Then use Send invite on their row here, and it will include the hourly handbook.`
+            : `${who} is added. No invite was sent. Use Send invite on their row when you are ready.`,
+        );
+        return;
+      }
       if (r.invite?.ok) {
         const book = r.invite.handbook ? ` It has the ${HANDBOOK_LABEL[r.invite.handbook]} link.` : "";
         setDone(`${who} is added. Their invite was ${sendBy === "sms" ? "texted" : "emailed"} to ${r.invite.to}. It runs out in 48 hours.${book}`);
@@ -700,9 +710,13 @@ function AddPersonModal({ open, onClose }: { open: boolean; onClose: () => void 
         done ? (
           <Button onClick={close}>Done</Button>
         ) : (
-          <>
+          <div className="flex w-full flex-wrap justify-end gap-2">
             <Button variant="ghost" onClick={close}>
               Cancel
+            </Button>
+            <Button variant="ghost" onClick={() => submit("none")} disabled={!ready || add.isPending}>
+              {add.isPending && add.variables?.sendBy === "none" ? <Spinner className="border-foreground/20 border-t-foreground" /> : null}
+              Save without sending
             </Button>
             <Button variant="ghost" onClick={() => submit("email")} disabled={!ready || add.isPending}>
               {add.isPending && add.variables?.sendBy === "email" ? <Spinner className="border-foreground/20 border-t-foreground" /> : null}
@@ -712,7 +726,7 @@ function AddPersonModal({ open, onClose }: { open: boolean; onClose: () => void 
               {add.isPending && add.variables?.sendBy === "sms" ? <Spinner className="border-white/40 border-t-white" /> : null}
               Add and send invite by SMS
             </Button>
-          </>
+          </div>
         )
       }
     >
