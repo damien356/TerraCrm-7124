@@ -5,6 +5,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { normaliseRole } from "../middleware/auth";
 import { emailConfigured, sendEmail } from "./email";
+import { termsFor } from "./hourly";
 import { OPS_URL } from "./notify";
 import { normaliseMobile, sendSms, smsConfigured } from "./sms";
 
@@ -34,30 +35,142 @@ export const downloadUrl = () => `${OPS_URL}/app`;
 export const setupUrl = (token: string) => `${OPS_URL}/setup/${token}`;
 const firstName = (name: string, email: string) => (name.trim().split(/\s+/)[0] || email.split("@")[0] || "there").trim();
 
-/** The text, word for word as Damien wrote it. */
-export function inviteSmsText(a: { firstName: string; email: string; token: string }) {
+/* ------------------------------ Handbooks ------------------------------- */
+
+/**
+ * Damien, 18 Nov 2026. The invite carries a handbook link:
+ *   hourly:  pay terms by the hour in effect today (the same check the app uses
+ *            for the timer). Hourly people get the hourly handbook only, even if
+ *            some jobs pay per m2.
+ *   general: other crew logins with an installer card (per m2, per job, by the
+ *            day, or not classified yet).
+ *   none:    employees, office and admin logins, and anyone whose card is
+ *            missing or archived.
+ * Never worked out from a job title or an ABN. The PDFs live in
+ * public/handbook/. A new version gets a new file name; keep the old file so
+ * links already sent keep working.
+ */
+export type HandbookKind = "hourly" | "general";
+export const HANDBOOK_FILES: Record<HandbookKind, string> = {
+  hourly: "Terra-Crew-Hourly-Handbook-v1.0.pdf",
+  general: "Terra-Crew-App-Handbook-v1.0.pdf",
+};
+export const handbookUrl = (kind: HandbookKind) => `${OPS_URL}/handbook/${HANDBOOK_FILES[kind]}`;
+
+/** The rule itself, kept free of the database so it can be tested. */
+export function pickHandbook(a: {
+  role: string;
+  installerId: number | null;
+  card: { workerType: string | null; archived: boolean } | null;
+  hourlyToday: boolean;
+}): HandbookKind | null {
+  if (normaliseRole(a.role) !== "field") return null;
+  if (a.installerId == null || !a.card || a.card.archived) return null;
+  if ((a.card.workerType ?? "").trim().toLowerCase() === "employee") return null;
+  return a.hourlyToday ? "hourly" : "general";
+}
+
+/** Which handbook each of these people would get in an invite sent today. */
+export async function handbooksFor(profiles: { id: number; role: string; installerId: number | null }[]) {
+  const out = new Map<number, HandbookKind | null>();
+  const ids = [...new Set(profiles.map((p) => p.installerId).filter((x): x is number => x != null))];
+  const cards = ids.length
+    ? await db
+        .select({ id: schema.installers.id, workerType: schema.installers.workerType, archivedAt: schema.installers.archivedAt })
+        .from(schema.installers)
+        .where(inArray(schema.installers.id, ids))
+    : [];
+  const byId = new Map(cards.map((c) => [c.id, c]));
+  const hourly = ids.length ? await termsFor(ids) : new Map();
+  for (const p of profiles) {
+    const c = p.installerId != null ? byId.get(p.installerId) : undefined;
+    out.set(
+      p.id,
+      pickHandbook({
+        role: p.role,
+        installerId: p.installerId,
+        card: c ? { workerType: c.workerType, archived: c.archivedAt != null } : null,
+        hourlyToday: p.installerId != null && hourly.has(p.installerId),
+      }),
+    );
+  }
+  return out;
+}
+
+const HANDBOOK_SMS: Record<HandbookKind, string> = {
+  hourly: "Your hourly handbook is here: ",
+  general: "Your Terra app handbook is here: ",
+};
+
+/**
+ * The text, word for word as Damien wrote it. With a handbook, one sentence
+ * with its link goes in before the office number (Damien, 18 Nov 2026).
+ */
+export function inviteSmsText(a: { firstName: string; email: string; token: string; handbook?: HandbookKind | null }) {
+  const book = a.handbook ? `${HANDBOOK_SMS[a.handbook]}${handbookUrl(a.handbook)}. ` : "";
   return (
     `Hi ${a.firstName}, welcome to Terra Flooring. Download the Terra app here: ${downloadUrl()}. ` +
     `Then set up your login here: ${setupUrl(a.token)}. Your username is ${a.email}. ` +
+    book +
     `Any questions, call the office on ${OFFICE_PHONE}.`
   );
 }
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** The same words by email, for people who'd rather have it there. */
-export function inviteEmail(a: { firstName: string; email: string; token: string }) {
-  const subject = "Welcome to Terra Flooring: set up your login";
+/** The handbook box in the email. Words from the v0.2 preview Damien signed off. */
+const HANDBOOK_BOX: Record<HandbookKind, { subject: string; heading: string; body: string; link: string; note: string }> = {
+  hourly: {
+    subject: "Welcome to Terra Flooring: set up your login and read the hourly handbook",
+    heading: "YOUR HOURLY HANDBOOK",
+    body:
+      "You are set up as an hourly subcontractor. This guide shows how to clock on and off on each job, how the office checks your hours, " +
+      "and how you get paid. If a job says Rate to confirm, ring the office before you start.",
+    link: "Download the hourly handbook here:",
+    note: "This handbook link is the same for every hourly subcontractor. It does not log you in.",
+  },
+  general: {
+    subject: "Welcome to Terra Flooring: set up your login and read the app handbook",
+    heading: "YOUR APP HANDBOOK",
+    body:
+      "This guide shows how to use the Terra app on the job, step by step. It covers your jobs and offers, the SWMS, photos, " +
+      "finishing a visit, your pay and invoices.",
+    link: "Download the app handbook here:",
+    note: "This handbook link is the same for every contractor. It does not log you in.",
+  },
+};
+
+/**
+ * The same words by email, for people who'd rather have it there. With a
+ * handbook the email adds the handbook box and "It is only for you. Don't
+ * forward it." after the 48 hour line (Damien, 18 Nov 2026). Without one it is
+ * word for word as before.
+ */
+export function inviteEmail(a: { firstName: string; email: string; token: string; handbook?: HandbookKind | null }) {
+  const box = a.handbook ? HANDBOOK_BOX[a.handbook] : null;
+  const bookUrl = a.handbook ? handbookUrl(a.handbook) : "";
+  const subject = box ? box.subject : "Welcome to Terra Flooring: set up your login";
+  const onlyYou = box ? " It is only for you. Don't forward it." : "";
   const text =
     `Hi ${a.firstName},\n\n` +
     `Welcome to Terra Flooring.\n\n` +
     `Download the Terra app here: ${downloadUrl()}\n\n` +
     `Then set up your login here: ${setupUrl(a.token)}\n` +
-    `This link works once and runs out after ${INVITE_HOURS} hours.\n\n` +
+    `This link works once and runs out after ${INVITE_HOURS} hours.${onlyYou}\n\n` +
     `Your username is ${a.email}.\n\n` +
+    (box ? `${box.heading}\n${box.body}\n${box.link} ${bookUrl}\n${box.note}\n\n` : "") +
     `Any questions, call the office on ${OFFICE_PHONE}.\n\n` +
     `Terra Flooring`;
   const link = (href: string) => `<a href="${esc(href)}" style="color:#8a6a2f;">${esc(href)}</a>`;
+  const boxHtml = box
+    ? `
+  <div style="margin:24px 0;padding:16px 18px;background:#ffffff;border:1px solid #e4dfd8;border-left:4px solid #bc9558;border-radius:6px;">
+    <div style="font-size:13px;font-weight:700;letter-spacing:0.06em;color:#8a6a2f;padding-bottom:6px;">${esc(box.heading)}</div>
+    <p style="margin:0 0 10px;">${esc(box.body)}</p>
+    <p style="margin:0 0 10px;">${esc(box.link)} ${link(bookUrl)}</p>
+    <p style="margin:0;font-size:13px;color:#6b655f;">${esc(box.note)}</p>
+  </div>`
+    : "";
   const html = `<!doctype html>
 <html><body style="margin:0;padding:0;background:#f5f4f2;">
 <div style="max-width:560px;margin:0 auto;padding:32px 24px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:16px;line-height:1.6;color:#1f1d1b;">
@@ -65,8 +178,8 @@ export function inviteEmail(a: { firstName: string; email: string; token: string
   <p>Hi ${esc(a.firstName)},</p>
   <p>Welcome to Terra Flooring.</p>
   <p>Download the Terra app here: ${link(downloadUrl())}</p>
-  <p>Then set up your login here: ${link(setupUrl(a.token))}<br><span style="font-size:13px;color:#6b655f;">This link works once and runs out after ${INVITE_HOURS} hours.</span></p>
-  <p>Your username is <strong>${esc(a.email)}</strong>.</p>
+  <p>Then set up your login here: ${link(setupUrl(a.token))}<br><span style="font-size:13px;color:#6b655f;">This link works once and runs out after ${INVITE_HOURS} hours.${esc(onlyYou)}</span></p>
+  <p>Your username is <strong>${esc(a.email)}</strong>.</p>${boxHtml}
   <p>Any questions, call the office on ${OFFICE_PHONE}.</p>
   <p style="margin-top:28px;">Terra Flooring</p>
 </div>
@@ -140,6 +253,7 @@ export async function sendInvite(profileId: number, channel: InviteChannel, byNa
   const email = person.email.trim().toLowerCase();
   const name = person.profile.name || person.userName || "";
   const first = firstName(name, email);
+  const handbook = (await handbooksFor([person.profile])).get(person.profile.id) ?? null;
 
   let to = "";
   if (channel === "sms") {
@@ -177,11 +291,11 @@ export async function sendInvite(profileId: number, channel: InviteChannel, byNa
   let reason = "";
   try {
     if (channel === "sms") {
-      const sent = await sendSms({ to, body: inviteSmsText({ firstName: first, email, token }), sender: "auto" });
+      const sent = await sendSms({ to, body: inviteSmsText({ firstName: first, email, token, handbook }), sender: "auto" });
       ok = sent.ok;
       if (!sent.ok) reason = sent.reason;
     } else {
-      const mail = inviteEmail({ firstName: first, email, token });
+      const mail = inviteEmail({ firstName: first, email, token, handbook });
       const sent = await sendEmail({ to, subject: mail.subject, text: mail.text, html: mail.html });
       ok = sent.ok;
       if (!sent.ok) reason = sent.reason;
@@ -199,7 +313,7 @@ export async function sendInvite(profileId: number, channel: InviteChannel, byNa
         .set({ voidedAt: done, updatedAt: done })
         .where(and(eq(schema.invites.profileId, profileId), ne(schema.invites.id, inviteId), isNull(schema.invites.usedAt), isNull(schema.invites.voidedAt))),
     ]);
-    return { ok: true as const, inviteId, channel, to, expiresAt: expiresAt.toISOString() };
+    return { ok: true as const, inviteId, channel, to, expiresAt: expiresAt.toISOString(), handbook };
   }
   await db
     .update(schema.invites)

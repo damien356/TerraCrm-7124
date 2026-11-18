@@ -4,7 +4,7 @@ import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import { emailConfigured } from "../lib/email";
-import { hasPasswordFor, inviteLog, sendInvite } from "../lib/invites";
+import { handbooksFor, hasPasswordFor, inviteLog, sendInvite } from "../lib/invites";
 import { normaliseMobile, smsConfigured } from "../lib/sms";
 import * as schema from "../database/schema";
 import { adminOnly, ensureInstallerCard, normaliseRole } from "../middleware/auth";
@@ -97,6 +97,7 @@ export const team = {
 
     const log = await inviteLog(rows.map((r) => r.profile.id));
     const withPassword = await hasPasswordFor(rows.map((r) => r.profile.userId));
+    const handbooks = await handbooksFor(rows.map((r) => r.profile));
     return rows.map((r) => ({
       id: r.profile.id,
       userId: r.profile.userId,
@@ -118,6 +119,8 @@ export const team = {
       lastSeenAt: r.lastSeenAt ? new Date(Number(r.lastSeenAt)).toISOString() : null,
       hasPassword: withPassword.has(r.profile.userId),
       invites: log.get(r.profile.id) ?? [],
+      /** The handbook an invite sent today would link to (Damien, 18 Nov 2026). */
+      handbook: handbooks.get(r.profile.id) ?? null,
     }));
   }),
 
@@ -341,7 +344,7 @@ export const team = {
         return {
           ok: true as const,
           profileId,
-          invite: sent.ok ? { ok: true as const, to: sent.to } : { ok: false as const, reason: sent.reason },
+          invite: sent.ok ? { ok: true as const, to: sent.to, handbook: sent.handbook } : { ok: false as const, reason: sent.reason },
         };
       } catch (e) {
         return { ok: true as const, profileId, invite: { ok: false as const, reason: (e as Error).message || "Not sent" } };

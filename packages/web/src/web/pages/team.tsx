@@ -129,7 +129,8 @@ export default function TeamPage() {
           <li>
             Add person makes the login and sends an invite by text or email. The invite has the app download link and a
             one-time link where they choose their own password, so nobody in the office ever sees it. The link works
-            once and runs out after 48 hours. Sending a new invite stops the older one working. There is no public
+            once and runs out after 48 hours. Contractors also get a handbook link: the hourly handbook if they have
+            hourly pay terms set today, otherwise the app handbook. Employees and office logins get no handbook. Sending a new invite stops the older one working. There is no public
             sign-up. Only an Admin can make a login or send an invite. "Switch off" only blocks login. It never deletes
             anything.
           </li>
@@ -372,6 +373,9 @@ function CardsWithoutLogin({ onOpen }: { onOpen: (id: number) => void }) {
 }
 
 type Person = NonNullable<ReturnType<typeof useLogins>["data"]>[number];
+
+/** Damien, 18 Nov 2026: which handbook the invite links to. */
+const HANDBOOK_LABEL = { hourly: "hourly handbook", general: "app handbook" } as const;
 type InviteRow = Person["invites"][number];
 
 const INVITE_STATE: Record<InviteRow["state"], { label: string; colour: string | null }> = {
@@ -418,12 +422,13 @@ function InviteCell({ row, onError }: { row: Person; onError: (m: string | null)
       return;
     }
     const lines = [`${channel === "sms" ? "Text" : "Email"} an invite to ${who} at ${to}?`];
+    if (row.handbook) lines.push(`It includes the ${HANDBOOK_LABEL[row.handbook]} link.`);
     if (row.hasPassword) lines.push("They already have a password. Setting up from the new link replaces it.");
     if (latest?.state === "waiting") lines.push("The invite they already have stops working.");
     if (!window.confirm(lines.join("\n\n"))) return;
     try {
       const r = await send.mutateAsync({ profileId: row.id, channel });
-      setSentNote(`${channel === "sms" ? "Texted" : "Emailed"} to ${r.to}.`);
+      setSentNote(`${channel === "sms" ? "Texted" : "Emailed"} to ${r.to}.${r.handbook ? ` With the ${HANDBOOK_LABEL[r.handbook]}.` : ""}`);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     }
@@ -671,7 +676,8 @@ function AddPersonModal({ open, onClose }: { open: boolean; onClose: () => void 
       });
       const who = form.name.trim();
       if (r.invite?.ok) {
-        setDone(`${who} is added. Their invite was ${sendBy === "sms" ? "texted" : "emailed"} to ${r.invite.to}. It runs out in 48 hours.`);
+        const book = r.invite.handbook ? ` It has the ${HANDBOOK_LABEL[r.invite.handbook]} link.` : "";
+        setDone(`${who} is added. Their invite was ${sendBy === "sms" ? "texted" : "emailed"} to ${r.invite.to}. It runs out in 48 hours.${book}`);
       } else {
         setDone(
           `${who} is added, but the invite did not go (${r.invite?.reason ?? "not sent"}). Fix the ${sendBy === "sms" ? "mobile" : "email"} if needed, then use Send invite on their row.`,
