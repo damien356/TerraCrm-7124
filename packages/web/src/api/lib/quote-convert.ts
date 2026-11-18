@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { depositSplit, quotePercent } from "./deposits";
+import { quoteDeposit } from "./deposits";
 import { billToFields, quoteBillTo } from "./bill-to";
 import { syncDeliveryCosts } from "./delivery-cost";
 import { syncDisposalCosts } from "./disposal-cost";
@@ -157,7 +157,7 @@ export async function createJobForQuote(
       accessNotes: opts.noAccessNotes ? null : (site?.accessNotes ?? null),
       value: quote.total,
       // The deposit the customer accepted. Drives the forecast and the deposit invoice.
-      depositAmount: depositSplit(quote.total ?? 0, quotePercent(quote)).deposit,
+      depositAmount: quoteDeposit(quote).deposit,
     })
     .returning();
 

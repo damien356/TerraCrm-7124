@@ -128,8 +128,9 @@ export function PaymentTermsCard({
             <Fact label="Deposit">
               {qd ? (
                 <>
-                  {qd.percent > 0 ? `${qd.percent}% on quote ${qd.quoteRef}` : `None on quote ${qd.quoteRef}`}
-                  {qd.percent > 0 && qd.amount > 0 ? (
+                  {/* Damien, 18 Nov 2026: a fixed $ deposit on the quote shows as the amount. */}
+                  {qd.fixed ? `${moneyExact(qd.fixed)} fixed on quote ${qd.quoteRef}` : qd.percent > 0 ? `${qd.percent}% on quote ${qd.quoteRef}` : `None on quote ${qd.quoteRef}`}
+                  {!qd.fixed && qd.percent > 0 && qd.amount > 0 ? (
                     <span className="block text-xs text-muted-foreground">
                       {moneyExact(qd.amount)}
                       {qd.paid ? ", paid" : ""}
@@ -317,7 +318,7 @@ function TermsModal({
   companyId: number | null;
   jobId: number | null;
   /** Set on a job with an accepted quote. Its deposit is fixed until a new version is accepted. */
-  quoteDeposit?: { percent: number; amount: number; paid: boolean; quoteRef: string } | null;
+  quoteDeposit?: { percent: number; fixed?: number | null; amount: number; paid: boolean; quoteRef: string } | null;
   current: {
     structure: string;
     depositPercent: number;
@@ -409,7 +410,7 @@ function TermsModal({
 
         {quoteDeposit && form.structure !== "progress_claims" ? (
           <div className="rounded-md bg-muted px-3 py-2 text-sm sm:col-span-2">
-            Deposit: {quoteDeposit.percent > 0 ? `${quoteDeposit.percent}%` : "none"}, set by the accepted quote {quoteDeposit.quoteRef}. It only
+            Deposit: {quoteDeposit.fixed ? `${moneyExact(quoteDeposit.fixed)} (fixed)` : quoteDeposit.percent > 0 ? `${quoteDeposit.percent}%` : "none"}, set by the accepted quote {quoteDeposit.quoteRef}. It only
             changes when the client accepts a new version of the quote.
           </div>
         ) : form.structure === "deposit_balance" ? (

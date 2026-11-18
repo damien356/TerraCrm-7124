@@ -8,7 +8,7 @@ import { withUser, type Actor } from "../middleware/auth";
 import { bundlesFor, clientPdfFor } from "./quoteBundles";
 import { rebuildForecast } from "../lib/cashflow";
 import { depositInvoiceFor } from "../lib/client-invoices";
-import { depositSplit, quotePercent } from "../lib/deposits";
+import { quoteDeposit } from "../lib/deposits";
 import { auDate } from "../lib/invoice-match";
 import { selectionForJob, submitSelection } from "../lib/material-selection";
 import { isProductForm, lockState, publicSections, submitProductSelection } from "../lib/selection-colours";
@@ -159,7 +159,7 @@ const quotePage = {
     const ref = await quoteRefOf(quote);
     const to = await addressedTo(quote);
     const { bundles, layout, items } = await bundlesFor(quote);
-    const { deposit, balance } = depositSplit(quote.total, quotePercent(quote));
+    const dep = quoteDeposit(quote);
     return {
       state,
       /** Admin or Office looking at a quote that has not gone out yet. */
@@ -176,9 +176,12 @@ const quotePage = {
       subtotal: quote.subtotal,
       gst: quote.gst,
       total: quote.total,
-      depositPercent: quotePercent(quote),
-      deposit,
-      balance,
+      depositPercent: dep.percent,
+      /** Damien, 18 Nov 2026: set when the quote has a fixed $ deposit in place of a %. */
+      depositFixed: dep.fixed,
+      depositWords: dep.words,
+      deposit: dep.deposit,
+      balance: dep.balance,
       terms: { version: SUPPLY_TERMS_VERSION, title: SUPPLY_TERMS_TITLE, items: SUPPLY_TERMS },
       bank: bank(),
       cardPayments: cardPaymentsOn(),

@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
-import { depositDefaultOf } from "./deposits";
+import { depositDefaultOf, quoteDeposit } from "./deposits";
 import { CHARGES_DROPPED_NOTE } from "./expected-costs";
 import { quoteRef } from "./refs";
 import { isTestJob } from "./lead-codes";
@@ -243,11 +243,19 @@ export async function acceptedQuoteDeposits(jobIds: number[]): Promise<Map<numbe
   const out = new Map<number, number>();
   if (!jobIds.length) return out;
   const rows = await db
-    .select({ jobId: schema.quotes.jobId, version: schema.quotes.version, depositPercent: schema.quotes.depositPercent })
+    .select({
+      jobId: schema.quotes.jobId,
+      version: schema.quotes.version,
+      total: schema.quotes.total,
+      depositPercent: schema.quotes.depositPercent,
+      depositSource: schema.quotes.depositSource,
+      depositFixed: schema.quotes.depositFixed,
+    })
     .from(schema.quotes)
     .where(and(inArray(schema.quotes.jobId, jobIds), eq(schema.quotes.status, "accepted")))
     .orderBy(asc(schema.quotes.version), asc(schema.quotes.id));
-  for (const r of rows) if (r.jobId != null) out.set(r.jobId, r.depositPercent ?? 0);
+  // Damien, 18 Nov 2026: a fixed $ deposit counts as its real % of the quote.
+  for (const r of rows) if (r.jobId != null) out.set(r.jobId, quoteDeposit(r).percent);
   return out;
 }
 

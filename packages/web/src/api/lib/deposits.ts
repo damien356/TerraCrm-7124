@@ -45,3 +45,35 @@ export function depositSplit(total: number, percent: number) {
   const deposit = Math.round(total * percent) / 100;
   return { deposit, balance: Math.round((total - deposit) * 100) / 100 };
 }
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const moneyText = (n: number) => `$${n.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+export type QuoteDepositInput = {
+  total: number | null;
+  depositPercent: number | null;
+  depositSource?: string | null;
+  depositFixed?: number | null;
+};
+
+/**
+ * Damien, 18 Nov 2026. A quote's deposit, as a % of the total or a fixed $
+ * amount (GST inclusive) typed for that quote. Every figure the customer and
+ * the office see comes from here, so the PDF, the link, the emails, the
+ * deposit invoice and the forecast always agree.
+ *
+ * A fixed amount over the total is capped at the total. percent is the real
+ * % for a fixed deposit (to 2 places), for anything that works in percent,
+ * like stock holds. words is how the quote says it: "50%" or "$1,000.00".
+ */
+export function quoteDeposit(q: QuoteDepositInput) {
+  const total = round2(q.total ?? 0);
+  if (q.depositSource !== "none" && q.depositFixed != null && q.depositFixed > 0) {
+    const deposit = round2(Math.max(0, Math.min(q.depositFixed, total)));
+    const percent = total > 0 ? Math.round((deposit / total) * 10000) / 100 : 0;
+    return { deposit, balance: round2(total - deposit), percent, fixed: deposit as number | null, words: moneyText(deposit) };
+  }
+  const percent = quotePercent(q);
+  const { deposit, balance } = depositSplit(total, percent);
+  return { deposit, balance, percent, fixed: null as number | null, words: `${percent}%` };
+}

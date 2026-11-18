@@ -15,7 +15,7 @@ import {
 } from "../lib/bundles";
 import { draftBundleWording } from "../agent/bundle-wording";
 import { renderQuotePdf, type QuotePdfInput } from "../lib/quotePdf";
-import { depositSplit, quotePercent } from "../lib/deposits";
+import { quoteDeposit } from "../lib/deposits";
 import { todayISO } from "../lib/pricing";
 import { auDate } from "../lib/invoice-match";
 import { quoteRefOf } from "../lib/quote-number";
@@ -200,7 +200,7 @@ const fullName = (c: { firstName: string; lastName: string } | null | undefined)
 /** Everything the client PDF needs. Bundles only: no line, qty, rate or cost leaves this function. */
 /** Pay by card on the PDF: the deposit's pay link once accepted, else the quote's online link. */
 async function cardPayForPdf(quote: typeof schema.quotes.$inferSelect) {
-  if (!cardPaymentsOn() || !(quotePercent(quote) > 0)) return null;
+  if (!cardPaymentsOn() || !(quoteDeposit(quote).deposit > 0)) return null;
   const dep = await depositInvoiceFor(quote.id);
   if (dep && owingOn(dep) > 0) return { url: payUrl(dep.id), note: `Pay deposit ${dep.number} online. No card surcharge.` };
   if (dep) return null;
@@ -235,7 +235,7 @@ export async function clientPdfFor(quoteId: number, signed?: QuotePdfInput["sign
     ? [site.address, [site.suburb, site.state, site.postcode].filter(Boolean).join(" ")].filter(Boolean).join(", ")
     : null;
   const isoDay = (d: Date) => todayISO(d);
-  const { deposit, balance } = depositSplit(quote.total, quotePercent(quote));
+  const { deposit, balance, percent, fixed } = quoteDeposit(quote);
 
   const ref = await quoteRefOf(quote);
   const pdf = await renderQuotePdf({
@@ -257,7 +257,8 @@ export async function clientPdfFor(quoteId: number, signed?: QuotePdfInput["sign
     subtotal: quote.subtotal,
     gst: quote.gst,
     total: quote.total,
-    depositPercent: quotePercent(quote),
+    depositPercent: percent,
+    depositFixed: fixed != null,
     deposit,
     balance,
     cardPay: await cardPayForPdf(quote),

@@ -73,6 +73,7 @@ export async function quoteStartForJob(jobId: number) {
       status: schema.quotes.status,
       depositPercent: schema.quotes.depositPercent,
       depositSource: schema.quotes.depositSource,
+      depositFixed: schema.quotes.depositFixed,
       total: schema.quotes.total,
       billToType: schema.quotes.billToType,
       billToContactId: schema.quotes.billToContactId,
@@ -98,6 +99,7 @@ export async function quoteStartForJob(jobId: number) {
           status: latest.status,
           depositPercent: latest.depositPercent,
           depositSource: latest.depositSource,
+          depositFixed: latest.depositFixed,
           total: latest.total,
           billTo: quoteBillTo(latest),
         }

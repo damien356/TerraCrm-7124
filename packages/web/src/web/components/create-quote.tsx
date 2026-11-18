@@ -55,7 +55,9 @@ function CreateQuoteModal({ jobId, onClose }: { jobId: number; onClose: () => vo
   const typed = deposit.trim() !== "";
   const hint = typed
     ? "Typed for this quote only. The card stays."
-    : mode === "copy" && s?.latest?.depositSource === "quote"
+    : mode === "copy" && s?.latest?.depositFixed
+      ? `${s.latest.ref} had a fixed $ deposit. The new version goes back to the card %. Type a % here, or set a $ amount on the new quote.`
+      : mode === "copy" && s?.latest?.depositSource === "quote"
       ? `${s.latest.ref} had ${s.latest.depositPercent}% typed for it only. Leave blank to use the card %.`
       : "Leave blank to use the Bill to's card %.";
 

@@ -3,7 +3,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { depositInvoiceFor } from "./client-invoices";
 import { jobRef, quoteRef, tagFromRef } from "./conversations";
-import { depositSplit, quotePercent } from "./deposits";
+import { quoteDeposit } from "./deposits";
 import { tagForJob } from "./job-mail";
 import { quoteMessageContext, type MessageFacts, type MessageLine } from "./quote-message-context";
 
@@ -77,7 +77,7 @@ export async function quoteMessageFacts(quote: Quote): Promise<MessageFacts> {
   }
   if (!suburb) suburb = (rr?.suburb ?? "").trim();
 
-  const { deposit } = depositSplit(quote.total, quotePercent(quote));
+  const { deposit } = quoteDeposit(quote);
   const invoice = await depositInvoiceFor(quote.id);
   const depositPaid = invoice?.status === "paid" || !!job?.depositPaid;
 
@@ -107,7 +107,7 @@ export async function quoteMessageFacts(quote: Quote): Promise<MessageFacts> {
     siteVisitDone: visits.length > 0,
     suburb: suburb || null,
     repair: rr ? { type: rr.repairType, floorType: rr.floorType } : null,
-    depositAmount: quotePercent(quote) > 0 ? deposit : 0,
+    depositAmount: deposit,
     depositPaid,
     coloursChosen,
     trade: !!(quote.companyId ?? job?.companyId),

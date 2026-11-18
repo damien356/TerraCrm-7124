@@ -105,9 +105,27 @@ export async function assertCard(b: BillTo) {
  * from the card is for this quote only. No typed % and no card % means asked.
  */
 export function depositFieldsFor(card: Card | null, typed?: number | null) {
-  if (typed != null) return { depositPercent: typed, depositSource: card?.percent === typed ? "card" : "quote" };
-  if (card?.percent != null) return { depositPercent: card.percent, depositSource: "card" };
-  return { depositPercent: 0, depositSource: "none" };
+  // Damien, 18 Nov 2026: any % (typed or the card's) clears a fixed $ deposit.
+  if (typed != null) return { depositPercent: typed, depositSource: card?.percent === typed ? "card" : "quote", depositFixed: null };
+  if (card?.percent != null) return { depositPercent: card.percent, depositSource: "card", depositFixed: null };
+  return { depositPercent: 0, depositSource: "none", depositFixed: null };
+}
+
+/**
+ * Damien, 18 Nov 2026. A fixed $ deposit (GST inclusive) for one quote.
+ * Source "quote", so a card change leaves it alone. The % column keeps the
+ * real % of today's total for anything that reads it raw. An amount over the
+ * total is refused while the quote has a total.
+ */
+export function fixedDepositFields(amount: number, total: number) {
+  const cents = Math.round(amount * 100) / 100;
+  const t = Math.round((total ?? 0) * 100) / 100;
+  if (t > 0 && cents > t) {
+    const money = `$${t.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    throw new ORPCError("BAD_REQUEST", { message: `The deposit can't be more than the quote total (${money}).` });
+  }
+  const percent = t > 0 ? Math.round((cents / t) * 10000) / 100 : 0;
+  return { depositPercent: percent, depositSource: "quote", depositFixed: cents };
 }
 
 /**
@@ -264,15 +282,17 @@ export async function cardsMissingDeposit() {
 
 /**
  * Put a Bill to on a quote. A draft that follows the card (or was waiting
- * for a %) takes the new card's figure. A typed % stays, unless fromCard
- * says to follow the card again. Returns the updated quote.
+ * for a %) takes the new card's figure. A typed % or fixed $ deposit stays,
+ * unless fromCard says to follow the card again. Returns the updated quote.
  */
-export async function quoteBillToPatch(quoteId: number, b: BillTo | null, typed?: number, fromCard?: boolean) {
+export async function quoteBillToPatch(quoteId: number, b: BillTo | null, typed?: number, fromCard?: boolean, fixed?: number) {
   const [q] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, quoteId));
   if (!q) throw new ORPCError("NOT_FOUND", { message: "Quote not found" });
   const card = b ? await assertCard(b) : null;
   const patch: Partial<typeof schema.quotes.$inferInsert> = billToFields(b);
-  if (typed != null) Object.assign(patch, depositFieldsFor(card, typed));
+  // Damien, 18 Nov 2026: a fixed $ deposit for this quote only.
+  if (fixed != null) Object.assign(patch, fixedDepositFields(fixed, q.total));
+  else if (typed != null) Object.assign(patch, depositFieldsFor(card, typed));
   else if (DRAFT.includes(q.status) && (fromCard || q.depositSource !== "quote")) Object.assign(patch, depositFieldsFor(card));
   const [row] = await db.update(schema.quotes).set({ ...patch, updatedAt: new Date() }).where(eq(schema.quotes.id, quoteId)).returning();
   if (q.jobId) await syncJobValue(q.jobId);

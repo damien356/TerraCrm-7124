@@ -46,6 +46,8 @@ export type QuotePdfInput = {
   gst: number;
   total: number;
   depositPercent: number;
+  /** Damien, 18 Nov 2026: a fixed $ deposit, so the PDF does not show a %. */
+  depositFixed?: boolean;
   deposit: number;
   balance: number;
   /**
@@ -316,8 +318,8 @@ function totals(ctx: Ctx) {
   ctx.page.drawLine({ start: { x: lx, y: ctx.y + 9 }, end: { x: W - M, y: ctx.y + 9 }, thickness: 0.8, color: RULE });
   ctx.y -= 2;
   line("Grand Total (inc GST)", money(input.total), true);
-  if (input.depositPercent > 0) {
-    line(`Deposit required (${input.depositPercent}%)`, money(input.deposit));
+  if (input.depositPercent > 0 || input.deposit > 0) {
+    line(input.depositFixed ? "Deposit required" : `Deposit required (${input.depositPercent}%)`, money(input.deposit));
     line("Balance on completion", money(input.balance));
   }
   ctx.y -= 8;

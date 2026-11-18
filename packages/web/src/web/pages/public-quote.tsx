@@ -260,10 +260,11 @@ export default function PublicQuotePage() {
             <dt>Total inc GST</dt>
             <dd className="tabular">{moneyExact(q.total)}</dd>
           </div>
-          {q.depositPercent > 0 ? (
+          {q.depositPercent > 0 || q.deposit > 0 ? (
             <>
               <div className="mt-1 flex justify-between">
-                <dt className="text-muted-foreground">{q.depositPercent}% deposit on acceptance</dt>
+                {/* Damien, 18 Nov 2026: a fixed $ deposit shows as the amount, with no %. */}
+                <dt className="text-muted-foreground">{q.depositFixed ? "Deposit on acceptance" : `${q.depositPercent}% deposit on acceptance`}</dt>
                 <dd className="tabular">{moneyExact(q.deposit)}</dd>
               </div>
               <div className="flex justify-between">
@@ -334,7 +335,11 @@ export default function PublicQuotePage() {
               <Checkbox checked={agreed} onChange={(e) => setAgreed(e.target.checked)} disabled={q.preview} className="mt-0.5" />
               <span>
                 I have read and agree to the {q.terms.title}, and I accept quote {q.ref} for {moneyExact(q.total)} including GST.
-                {q.depositPercent > 0 ? ` I understand a ${q.depositPercent}% deposit of ${moneyExact(q.deposit)} is due now.` : ""}
+                {q.depositPercent > 0 || q.deposit > 0
+                  ? q.depositFixed
+                    ? ` I understand a deposit of ${moneyExact(q.deposit)} is due now.`
+                    : ` I understand a ${q.depositPercent}% deposit of ${moneyExact(q.deposit)} is due now.`
+                  : ""}
               </span>
             </label>
             {error ? <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p> : null}
@@ -342,7 +347,7 @@ export default function PublicQuotePage() {
               {accept.isPending ? <Spinner /> : <Check className="size-4" />}
               Accept quote
             </Button>
-            {q.depositPercent > 0 ? (
+            {q.depositPercent > 0 || q.deposit > 0 ? (
               <p className="text-xs text-muted-foreground">
                 After you accept you can pay the deposit {q.cardPayments ? "by card or by bank transfer" : "by bank transfer"}.
               </p>

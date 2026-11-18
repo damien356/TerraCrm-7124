@@ -1225,3 +1225,14 @@ Tested: API test t-abn.body.ts 133 pass on a copy of live with a canned register
 - One Save: both card forms follow the saved card (web/hooks/use-synced-form.ts) and Save sends only the fields edited. Before, each form was filled once when the card opened and sent every field, so a save on one tab could be undone by a save on the other (for example an ABN saved on Invoicing put back by Save card). Save card now stays open, takes the saved card back and shows "Saved.". A blank short name is refused.
 - Bills: no change when the ABN has a lookup (legal name, t/a business name). With no lookup yet the fallback is trading name, else full name, else short name.
 Tested: t-name.body.ts 57 pass and t-abn.body.ts 133 pass on copies with a canned register. Screens checked on a copy with Pedro Silva's live lookup: red on short name only, green as soon as the full name is typed, one Save saves it, an Invoicing save survives a later Save card.
+
+### 18.67 Deposit as a % or a fixed $ amount on one quote (18 Nov)
+Damien's request and design. Quote builder, Totals, Deposit has a % / $ toggle.
+- quotes.deposit_fixed (REAL, nullable, $ inc GST, sql/2026-12-14-quote-deposit-fixed.sql). Null means the % is used. Applied live 18 Nov with Damien's OK, after backup.
+- The $ amount is for that quote only. Company and contact cards and job payment terms stay % only.
+- A fixed amount saves with deposit_source "quote", so a card % change (cardDepositChanged, card and none only) leaves it alone. deposit_percent keeps the real % of the total at the time, for anything that reads it raw.
+- Typing a %, or "Use the card %", clears the fixed amount (depositFieldsFor always sets deposit_fixed null). A new version (reviseQuoteRecord) goes back to the card %, same as a typed %.
+- An amount over the quote total is refused while the quote has a total: "The deposit can't be more than the quote total ($X)." If the total later drops below it, the deposit is capped at the total when read, and the builder says so.
+- One function, lib/deposits.ts quoteDeposit(q), gives deposit, balance, percent, fixed and words ("50%" or "$1,000.00"). Every reader goes through it: quote get, the online quote, the PDF ("Deposit required" with no %), quote emails, the deposit invoice on acceptance ("Deposit $1,000.00 on quote ..."), job value, convert to job, cashflow (the real %), the payment terms card ("$X fixed on quote ..."), and the stock workflow (required deposit frozen at the $ amount, % is the real %).
+- lib/product-sale.ts (stock sales) is unchanged and % only.
+Tested: pure unit test terra-apply/2026-11-deposit-fixed/test-deposit.ts 15 pass (under, over and capped, source none, % mode, words, zero total, over total refused, % clears fixed). Scratch tsc on the changed API libs and routes clean. The deposit rows rendered for % from card, fixed, and fixed over total.

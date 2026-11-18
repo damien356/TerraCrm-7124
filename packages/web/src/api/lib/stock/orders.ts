@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, ne } from "drizzle-orm";
 import { db } from "../../database";
 import * as schema from "../../database/schema";
 import { cardOf, jobBillTo } from "../bill-to";
+import { quoteDeposit } from "../deposits";
 import { AWAITING_CONFIRM, bad, cardCheck, forbid, isLive, money, notFound, type PermActor, r2, type SwitchKey, switches } from "./core";
 
 /* ---------------------------------------------------------------------------
@@ -67,7 +68,8 @@ export async function ensureOrder(jobId: number) {
   return syncTerms((await orderOfJob(jobId))!);
 }
 
-export type TermsFacts = { accepted: boolean; percent: number | null; total: number; invoiceId: number | null; acceptedAt: Date | null; acceptedBeforeSwitch: boolean };
+// Damien, 18 Nov 2026: required is the $ deposit when the quote has a fixed amount, so it is not rounded through the %.
+export type TermsFacts = { accepted: boolean; percent: number | null; total: number; invoiceId: number | null; acceptedAt: Date | null; acceptedBeforeSwitch: boolean; required?: number | null };
 
 /**
  * Whether the order has been agreed, and on what terms, worked out from the
@@ -93,7 +95,7 @@ export async function termsFromFacts(jobId: number, kind: OrderKind, cutoff?: Da
     const at = inv.createdAt ?? null;
     const [sq] = await db.select().from(schema.quotes).where(eq(schema.quotes.jobId, jobId)).orderBy(asc(schema.quotes.id)).limit(1);
     // The sale's own quote carries the typed % (or the card %). Source "none" means blank, so the card is the only fallback.
-    const pct = sq && sq.depositSource !== "none" ? sq.depositPercent : ((await cardOfJob(jobId))?.percent ?? null);
+    const pct = sq && sq.depositSource !== "none" ? quoteDeposit(sq).percent : ((await cardOfJob(jobId))?.percent ?? null);
     return { accepted: true, percent: pct, total: r2(inv.total), invoiceId: inv.id, acceptedAt: at, acceptedBeforeSwitch: !!(since && at && at < since) };
   }
   const [q] = await db
@@ -104,7 +106,9 @@ export async function termsFromFacts(jobId: number, kind: OrderKind, cutoff?: Da
     .limit(1);
   if (!q) return none;
   const at = q.acceptedAt ?? null;
-  return { accepted: true, percent: q.depositSource === "none" ? null : q.depositPercent, total: r2(q.total), invoiceId: null, acceptedAt: at, acceptedBeforeSwitch: !!(since && at && at < since) };
+  const dep = quoteDeposit(q);
+  const percent = q.depositSource === "none" ? null : dep.percent;
+  return { accepted: true, percent, total: r2(q.total), invoiceId: null, acceptedAt: at, acceptedBeforeSwitch: !!(since && at && at < since), required: dep.fixed };
 }
 
 /** A planned order whose quote or invoice is agreed gets its terms frozen. Brought-in orders were frozen when brought in. */
@@ -112,7 +116,7 @@ export async function syncTerms(o: Order) {
   if (o.status !== "planned") return o;
   const f = await termsFromFacts(o.jobId, o.kind as OrderKind, o.joinedVia === "brought_in" ? null : undefined);
   if (!f.accepted || f.acceptedBeforeSwitch) return o;
-  return (await freezeTerms(o.jobId, { percent: f.percent, total: f.total, invoiceId: f.invoiceId })) ?? o;
+  return (await freezeTerms(o.jobId, { percent: f.percent, total: f.total, invoiceId: f.invoiceId, required: f.required })) ?? o;
 }
 
 /**
@@ -120,12 +124,13 @@ export async function syncTerms(o: Order) {
  * pressed. A blank % stays blank ("Deposit % to complete"), never 0.
  * Running it again on an active order changes nothing.
  */
-export async function freezeTerms(jobId: number, args: { percent: number | null; total: number; invoiceId?: number | null }) {
+export async function freezeTerms(jobId: number, args: { percent: number | null; total: number; invoiceId?: number | null; required?: number | null }) {
   const o = await orderOfJob(jobId);
   if (!o) return null;
   if (o.status !== "planned") return o;
   const pct = args.percent == null || !Number.isFinite(args.percent) ? null : args.percent;
-  const required = pct == null ? null : r2((args.total * pct) / 100);
+  // A fixed $ deposit on the quote is used as typed. Otherwise it is the % of the total.
+  const required = pct == null ? null : args.required != null ? r2(args.required) : r2((args.total * pct) / 100);
   const [row] = await db
     .update(schema.stockOrders)
     .set({
@@ -330,14 +335,15 @@ export async function bringIntoWorkflow(jobId: number, actor: PermActor) {
   const [inv] = kind === "sale_invoice" ? await db.select().from(schema.invoices).where(eq(schema.invoices.jobId, jobId)).orderBy(asc(schema.invoices.id)) : [];
   if (!q && !inv) throw bad("There is no accepted quote or invoice on this job.");
   const pos = await startPosition(jobId);
-  const percent = q ? (q.depositSource === "none" ? null : q.depositPercent) : ((await cardOfJob(jobId))?.percent ?? null);
+  const qDep = q ? quoteDeposit(q) : null;
+  const percent = q ? (q.depositSource === "none" ? null : qDep!.percent) : ((await cardOfJob(jobId))?.percent ?? null);
   const total = q?.total ?? inv?.total ?? 0;
   if (!seen) await db.insert(schema.stockOrders).values({ jobId, saleId, kind, status: "planned" }).onConflictDoNothing();
   await db
     .update(schema.stockOrders)
     .set({ joinedVia: "brought_in", broughtInByName: actor.name, broughtInAt: new Date(), startPosition: JSON.stringify(pos), updatedAt: new Date() })
     .where(eq(schema.stockOrders.jobId, jobId));
-  const o = await freezeTerms(jobId, { percent, total, invoiceId: inv?.id ?? null });
+  const o = await freezeTerms(jobId, { percent, total, invoiceId: inv?.id ?? null, required: qDep?.fixed ?? null });
   await db.insert(schema.activityLog).values({
     entityType: "job",
     entityId: jobId,

@@ -10,6 +10,7 @@ import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { cardDepositChanged, quoteBillTo } from "../lib/bill-to";
+import { quoteDeposit as quoteDepositOf } from "../lib/deposits";
 import { adminOnly } from "../middleware/auth";
 import { costCashOut, costHasGst, exGst } from "../lib/gst";
 import { termsOf } from "../lib/supplier-terms";
@@ -365,7 +366,7 @@ export const finance = {
       let contactId: number | null = null;
       // The accepted quote's deposit is the job's deposit (Damien 2026-10-09). It only
       // changes when a new version of the quote is accepted, never from the terms card.
-      let quoteDeposit: { percent: number; amount: number; paid: boolean; quoteRef: string } | null = null;
+      let quoteDeposit: { percent: number; fixed: number | null; amount: number; paid: boolean; quoteRef: string } | null = null;
       if (input.jobId) {
         const [job] = await db
           .select({
@@ -382,7 +383,10 @@ export const finance = {
           .select({
             number: schema.quotes.number,
             version: schema.quotes.version,
+            total: schema.quotes.total,
             depositPercent: schema.quotes.depositPercent,
+            depositSource: schema.quotes.depositSource,
+            depositFixed: schema.quotes.depositFixed,
             billToType: schema.quotes.billToType,
             billToContactId: schema.quotes.billToContactId,
             billToCompanyId: schema.quotes.billToCompanyId,
@@ -399,8 +403,11 @@ export const finance = {
           if (!input.companyId) companyId = null;
         }
         if (job && accepted) {
+          // Damien, 18 Nov 2026: fixed is the $ deposit typed on the quote, or null for a %.
+          const dep = quoteDepositOf(accepted);
           quoteDeposit = {
-            percent: accepted.depositPercent ?? 0,
+            percent: dep.percent,
+            fixed: dep.fixed,
             amount: job.depositAmount ?? 0,
             paid: !!job.depositPaid,
             quoteRef: quoteRef(accepted.number, accepted.version),

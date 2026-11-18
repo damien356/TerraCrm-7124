@@ -1914,6 +1914,12 @@ export const quotes = sqliteTable(
      * quote is asked and cannot go out).
      */
     depositSource: text("deposit_source").notNull().default("none"),
+    /**
+     * Damien, 18 Nov 2026. A fixed $ deposit (GST inclusive) typed for this
+     * quote only, in place of the %. Null means the deposit is the %. Set
+     * with depositSource "quote", so card changes leave it alone.
+     */
+    depositFixed: real("deposit_fixed"),
     /** Notes 18.54. Who pays this quote: contact or company. Each quote has its own, which can differ from the job's. */
     billToType: text("bill_to_type"),
     billToContactId: integer("bill_to_contact_id").references(() => contacts.id, { onDelete: "set null" }),

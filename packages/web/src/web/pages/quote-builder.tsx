@@ -1197,6 +1197,8 @@ export default function QuoteBuilderPage() {
                 card={q.billToCard}
                 deposit={q.deposit}
                 balance={q.balance}
+                fixed={q.depositFixed ?? null}
+                total={q.total}
                 locked={locked}
                 onError={setError}
               />
@@ -1211,7 +1213,7 @@ export default function QuoteBuilderPage() {
               <CardHeader title="Deposit due" subtitle="What the customer pays before we order and book in" />
               <div className="flex flex-col gap-1.5 px-4 py-3 text-sm">
                 <div className="flex justify-between text-base font-semibold">
-                  <span>{q.depositPercent}% deposit</span>
+                  <span>{q.depositFixed ? "Deposit" : `${q.depositPercent}% deposit`}</span>
                   <span className="tabular">{money(q.deposit)}</span>
                 </div>
                 <div className="flex justify-between">

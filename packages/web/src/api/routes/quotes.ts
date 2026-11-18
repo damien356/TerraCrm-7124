@@ -15,7 +15,7 @@ import { db } from "../database";
 import * as schema from "../database/schema";
 import { adminOnly, staffOnly, type Actor } from "../middleware/auth";
 import { markupOf, markupPctUsed, sellAtMarkup } from "../lib/pricing";
-import { depositSplit, quotePercent } from "../lib/deposits";
+import { quoteDeposit } from "../lib/deposits";
 import {
   assertBillToReady,
   assertCard,
@@ -523,7 +523,7 @@ export async function reviseQuoteRecord(
       supervisorContactId: quote.supervisorContactId,
       siteId: quote.siteId,
       status: "draft",
-      // Notes 18.54: a new version keeps its Bill to and takes the card's % (or the one typed now).
+      // Notes 18.54: a new version keeps its Bill to and takes the card's % (or the one typed now). Damien, 18 Nov 2026: a fixed $ deposit is not carried, same as a typed %.
       ...billToFields(revBillTo),
       ...depositFieldsFor(revCard, opts.depositPercent),
       validUntil: quote.validUntil,
@@ -744,6 +744,7 @@ export const quotes = {
     const needsApproval = discountPercent > limit && discountPercent > row.quote.discountApprovedPercent;
 
     const jobRefText = row.job?.id ? row.job.number : null;
+    const dep = quoteDeposit(row.quote);
     return {
       ...row.quote,
       ref: quoteRef(row.quote.number, row.quote.version, jobRefText),
@@ -759,7 +760,8 @@ export const quotes = {
       items: showCosts
         ? mine.map((i) => ({ ...i, markupPercent: i.markupPercent ?? markupOf(i.unitCost, i.unitPrice), belowStandard: markupBelowStandard(i), area: areas[i.id] ?? null, size: sizes[i.id] ?? null, rollFlag: rollFlags[i.id] ?? null }))
         : shown.map((i) => ({ ...i, unitCost: null, markupPercent: null, freightUnitCost: null, belowStandard: null, area: areas[i.id] ?? null, size: sizes[i.id] ?? null, rollFlag: rollFlags[i.id] ?? null })),
-      ...depositSplit(row.quote.total, quotePercent(row.quote)),
+      // Damien, 18 Nov 2026: % or fixed $ deposit. depositWords is "50%" or "$1,000.00".
+      deposit: dep.deposit, balance: dep.balance, depositWords: dep.words,
       /** Notes 18.54: who pays this quote and the % on their card. */
       billToCard: await cardOf(quoteBillTo(row.quote)),
       activity,
@@ -850,6 +852,8 @@ export const quotes = {
         billTo: billToInput.optional(),
         /** Follow the Bill to's card % again after one was typed. */
         depositFromCard: z.boolean().optional(),
+        /** Damien, 18 Nov 2026: a fixed $ deposit (GST inclusive) for this quote only, in place of the %. */
+        depositFixed: z.number().positive().max(10_000_000).optional(),
         validUntil: z.date().nullable().optional(),
         notes: z.string().nullable().optional(),
         terms: z.string().nullable().optional(),
@@ -857,7 +861,7 @@ export const quotes = {
     )
     .handler(async ({ input }) => {
       if (input.jobId) await assertBillable(input.jobId);
-      const { id, billTo, depositFromCard, depositPercent, ...rest } = input;
+      const { id, billTo, depositFromCard, depositPercent, depositFixed, ...rest } = input;
       const current = await quoteOrThrow(id);
       if (rest.status === "sent" || rest.status === "accepted") {
         throw new ORPCError("BAD_REQUEST", { message: "Use Send or Accepted on the quote, so the checks run." });
@@ -878,7 +882,7 @@ export const quotes = {
         }
       }
       const onlyStatus =
-        Object.entries(rest).every(([k, v]) => k === "status" || v === undefined) && billTo === undefined && depositPercent === undefined && !depositFromCard;
+        Object.entries(rest).every(([k, v]) => k === "status" || v === undefined) && billTo === undefined && depositPercent === undefined && !depositFromCard && depositFixed === undefined;
       if (LOCKED_STATUSES.includes(current.status) && !onlyStatus) {
         throw new ORPCError("BAD_REQUEST", { message: "This quote is locked. Make a new version to change it." });
       }
@@ -902,8 +906,8 @@ export const quotes = {
       // Notes 18.54: the Bill to and its %. A quote with nobody billed yet bills who it is now for.
       const own = quoteBillTo(current);
       const fill = !own && (rest.companyId || rest.contactId) ? { type: rest.companyId ? "company" : "contact", id: (rest.companyId ?? rest.contactId)! } as const : null;
-      if (billTo || fill || depositPercent !== undefined || depositFromCard) {
-        row = await quoteBillToPatch(id, billTo ?? fill ?? own, depositPercent, depositFromCard);
+      if (billTo || fill || depositPercent !== undefined || depositFromCard || depositFixed !== undefined) {
+        row = await quoteBillToPatch(id, billTo ?? fill ?? own, depositPercent, depositFromCard, depositFixed);
       }
       // A job made with the quote takes the customer, company and site it is missing.
       const touchesJob = rest.contactId !== undefined || rest.companyId !== undefined || rest.supervisorContactId !== undefined || rest.siteId !== undefined;
