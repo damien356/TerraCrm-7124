@@ -1511,6 +1511,8 @@ export const quotes = {
           if (before.measuredM2 == null && row.measuredM2 != null && (addInstall || hasInstall)) await applyFloorDefaults(row.id, product);
         }
         if (areaTouched && product) await followPrepArea(before, row);
+        // An install-only line is the area its prep follows: a new qty moves that prep too (Damien, 19 Nov 2026, quote 188105).
+        else if (!product && row.lineType === "labour" && input.qty !== undefined && before.qty !== row.qty) await followPrepArea(before, row);
         await afterLineEdit(before, row, { qty: input.qty, unitPrice: input.unitPrice, unitCost: input.unitCost });
         if (input.qty !== undefined) await settlePrep(row.id);
       }

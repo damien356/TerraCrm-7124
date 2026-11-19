@@ -18,6 +18,8 @@ const when = (d: Date | string) =>
  * Area prep (10 Nov, job 188016). Under a grinding or other m2 prep line:
  * the floor area it follows, and when the qty does not match, Follow area or
  * Confirm partial (a qty and a reason, never just a click).
+ * Install only quotes (client supplies the floor) follow the install line's m2
+ * (Damien, 19 Nov 2026, quote 188105).
  */
 export function PrepAreaStrip({ item, locked, onNotice }: { item: PrepLine; locked: boolean; onNotice: (t: string) => void }) {
   const links = usePrepLinks(item.quoteId);
@@ -61,7 +63,7 @@ export function PrepAreaStrip({ item, locked, onNotice }: { item: PrepLine; lock
               {chosen ? null : <option value="">Pick the floor area</option>}
               {floors.map((f) => (
                 <option key={f.id} value={f.id}>
-                  {f.name} ({Math.round(f.m2 * 100) / 100} m2)
+                  {f.name} ({Math.round(f.m2 * 100) / 100} m2{f.installOnly ? ", install only" : ""})
                 </option>
               ))}
             </Select>

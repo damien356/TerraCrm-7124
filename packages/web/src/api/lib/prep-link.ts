@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import {
@@ -53,10 +53,53 @@ export async function prepItemOf(rateItemId: number | null | undefined) {
   return i && isAreaPrepItem(i) ? i : null;
 }
 
-/** Floor lines on the quote with a measured area: the areas prep can follow. */
+/*
+ * Install only (Damien, 19 Nov 2026, quote 188105). When the client supplies
+ * the floor there is no floor line, only the install labour by the m2 (cork
+ * install, 94 m2). That install line is the area prep follows, at its qty.
+ * Only an install that stands on its own counts: an install linked to a
+ * supplied floor is that floor's install, and the floor is the area.
+ */
+const INSTALL_GROUPS = new Set(["carpet", "resilient", "timber"]);
+const isM2 = (u: string | null | undefined) => /^(m2|m²|sqm)$/i.test((u ?? "").trim());
+const suppliedFloor = (l: Line) => l.productId != null && l.lineType !== "labour" && l.measuredM2 != null && l.measuredM2 > 0;
+const installShape = (l: Line) =>
+  l.lineType === "labour" && l.productId == null && l.rateItemId != null && l.labourForItemId == null && l.defaultForItemId == null && isM2(l.unit) && l.qty > 0;
+
+/** Rate book items that are laying a floor by the m2 (carpet, resilient, timber), of the ones asked about. */
+async function installItemIds(ids: number[]) {
+  const unique = [...new Set(ids)];
+  if (!unique.length) return new Set<number>();
+  const rows = await db
+    .select({ id: schema.labourRateItems.id, unit: schema.labourRateItems.unit, groupName: schema.labourRateItems.groupName })
+    .from(schema.labourRateItems)
+    .where(inArray(schema.labourRateItems.id, unique));
+  return new Set(rows.filter((r) => isM2(r.unit) && INSTALL_GROUPS.has((r.groupName ?? "").trim().toLowerCase())).map((r) => r.id));
+}
+
+export type FloorArea = Line & { area: number; installOnly: boolean };
+
+/** The areas prep can follow, from a quote's lines: supplied floors at their measured m2, install-only lines at their qty. */
+async function floorsOf(lines: Line[]): Promise<FloorArea[]> {
+  const installs = await installItemIds(lines.filter(installShape).map((l) => l.rateItemId!));
+  const out: FloorArea[] = [];
+  for (const l of lines) {
+    if (suppliedFloor(l)) out.push({ ...l, area: l.measuredM2!, installOnly: false });
+    else if (installShape(l) && installs.has(l.rateItemId!)) out.push({ ...l, area: l.qty, installOnly: true });
+  }
+  return out;
+}
+
+/** Floor lines on the quote with a measured area, and install-only lines: the areas prep can follow. */
 export async function measuredFloors(quoteId: number) {
-  const lines = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quoteId));
-  return lines.filter((l) => l.productId != null && l.lineType !== "labour" && l.measuredM2 != null && l.measuredM2 > 0);
+  return floorsOf(await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quoteId)));
+}
+
+/** The area of the line a prep line follows, or null when it is not an area any more. */
+async function areaOfFloor(floor: Line | null) {
+  if (!floor) return null;
+  const [f] = await floorsOf([floor]);
+  return f?.area ?? null;
 }
 
 /**
@@ -69,7 +112,7 @@ export async function prepPlan(quoteId: number, rateItemId: number, floorItemId?
   if (!item) return null;
   const floors = await measuredFloors(quoteId);
   const floor = floorItemId != null ? (floors.find((f) => f.id === floorItemId) ?? null) : floors.length === 1 ? floors[0]! : null;
-  if (floor) return { qty: floor.measuredM2!, floor, key: prepKey(item.id), flag: null as string | null };
+  if (floor) return { qty: floor.area, floor, key: prepKey(item.id), flag: null as string | null };
   return { qty: 0, floor: null, key: prepKey(item.id), flag: prepPickFlag(item.name, floors.length) };
 }
 
@@ -93,7 +136,7 @@ export async function settlePrep(lineId: number) {
   const applied = appliedOf(line.defaultsApplied);
   let partial = partialOf(applied);
   const floor = line.defaultForItemId != null ? await lineOf(line.defaultForItemId) : null;
-  const area = floor?.measuredM2 != null && floor.measuredM2 > 0 ? floor.measuredM2 : null;
+  const area = await areaOfFloor(floor);
   let flag: string | null = null;
   if (area == null) {
     flag = prepPickFlag(item.name, (await measuredFloors(line.quoteId)).length);
@@ -125,13 +168,18 @@ export async function settlePrep(lineId: number) {
 /** A floor's measured area changed: prep that followed the old area follows the new one. Partials stay, flagged when questionable. */
 export async function followPrepArea(before: Line, after: Line) {
   const kids = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.defaultForItemId, after.id));
+  if (!kids.length) return 0;
+  // A supplied floor's area is its measured m2; an install-only line's is its qty (Damien, 19 Nov 2026).
+  const install = after.productId == null;
+  const was = install ? before.qty : before.measuredM2;
+  const now = await areaOfFloor(after);
   let moved = 0;
   for (const k of kids) {
     if (!isPrepKey(k.defaultKey) || !(await prepItemOf(k.rateItemId))) continue;
     const partial = partialOf(appliedOf(k.defaultsApplied));
-    const followed = before.measuredM2 != null && same(k.qty, before.measuredM2);
-    if (!partial && followed && after.measuredM2 != null && after.measuredM2 > 0 && !same(k.qty, after.measuredM2)) {
-      const qty = after.measuredM2;
+    const followed = was != null && same(k.qty, was);
+    if (!partial && followed && now != null && !same(k.qty, now)) {
+      const qty = now;
       await db.update(schema.quoteItems).set({ qty, total: r2(qty * k.unitPrice), updatedAt: new Date() }).where(eq(schema.quoteItems.id, k.id));
       moved++;
     }
@@ -149,8 +197,8 @@ export async function followArea(lineId: number, floorItemId?: number | null) {
   const floors = await measuredFloors(line.quoteId);
   const floorId = floorItemId ?? line.defaultForItemId ?? (floors.length === 1 ? floors[0]!.id : null);
   const floor = floors.find((f) => f.id === floorId);
-  if (!floor) throw new Error(floors.length ? "Pick the floor area this is for." : "No floor line on this quote has a measured area yet.");
-  const qty = floor.measuredM2!;
+  if (!floor) throw new Error(floors.length ? "Pick the floor area this is for." : "No floor or install line on this quote has an area yet.");
+  const qty = floor.area;
   const keys = appliedOf(line.defaultsApplied).filter((k) => !k.startsWith("prep:partial:"));
   const moved = line.defaultForItemId !== floor.id;
   await db
@@ -181,9 +229,9 @@ export async function confirmPartial(lineId: number, qty: number, reason: string
   const floors = await measuredFloors(line.quoteId);
   const floorId = floorItemId ?? line.defaultForItemId ?? (floors.length === 1 ? floors[0]!.id : null);
   const floor = floors.find((f) => f.id === floorId);
-  if (!floor) throw new Error(floors.length ? "Pick the floor area this is part of." : "Enter the floor's measured m2 first.");
+  if (!floor) throw new Error(floors.length ? "Pick the floor area this is part of." : "Enter the floor's measured m2, or the install line's m2, first.");
   const keys = appliedOf(line.defaultsApplied).filter((k) => !k.startsWith("prep:partial:"));
-  keys.push(partialKey(qty, floor.measuredM2!));
+  keys.push(partialKey(qty, floor.area));
   const at = new Date();
   await db
     .update(schema.quoteItems)
@@ -196,7 +244,7 @@ export async function confirmPartial(lineId: number, qty: number, reason: string
       flagReason: withoutPrepFlags(line.flagReason),
       defaultReviewedBy: by,
       defaultReviewedAt: at,
-      defaultReviewNote: `Partial area ${m2Text(qty)} of ${m2Text(floor.measuredM2!)}: ${why}`.slice(0, 500),
+      defaultReviewNote: `Partial area ${m2Text(qty)} of ${m2Text(floor.area)}: ${why}`.slice(0, 500),
       updatedAt: at,
     })
     .where(eq(schema.quoteItems.id, line.id));
@@ -208,7 +256,7 @@ export async function confirmPartial(lineId: number, qty: number, reason: string
 /** What the builder shows under each prep line. Read only. */
 export async function prepLinks(quoteId: number) {
   const lines = await db.select().from(schema.quoteItems).where(eq(schema.quoteItems.quoteId, quoteId));
-  const floors = lines.filter((l) => l.productId != null && l.lineType !== "labour" && l.measuredM2 != null && l.measuredM2 > 0);
+  const floors = await floorsOf(lines);
   const bundles = await db.select({ wording: schema.quoteBundles.wording }).from(schema.quoteBundles).where(eq(schema.quoteBundles.quoteId, quoteId));
   const out: Array<{
     id: number;
@@ -226,7 +274,7 @@ export async function prepLinks(quoteId: number) {
     const floor = l.defaultForItemId != null ? (floors.find((f) => f.id === l.defaultForItemId) ?? null) : null;
     const partial = partialOf(appliedOf(l.defaultsApplied));
     const linked = isPrepKey(l.defaultKey) || l.defaultForItemId != null;
-    const area = floor?.measuredM2 ?? null;
+    const area = floor?.area ?? null;
     const mode = !linked ? "unlinked" : area != null && same(l.qty, area) && !partial ? "follows" : partial && same(partial.qty, l.qty) && area != null && same(partial.floorM2, area) ? "partial" : "open";
     out.push({
       id: l.id,
@@ -235,11 +283,18 @@ export async function prepLinks(quoteId: number) {
       floorName: floor?.description ?? null,
       floorM2: area,
       mode,
-      label: mode === "follows" && area != null ? followsAreaLabel(area) : mode === "partial" && area != null ? `Partial area: ${m2Text(l.qty)} of ${m2Text(area)}` : null,
+      label:
+        mode === "follows" && area != null
+          ? floor?.installOnly
+            ? `Follows the install area: ${m2Text(area)}`
+            : followsAreaLabel(area)
+          : mode === "partial" && area != null
+            ? `Partial area: ${m2Text(l.qty)} of ${m2Text(area)}`
+            : null,
       wordingNote: wordingClash([l.description, ...bundles.map((b) => b.wording)], item.name, l.qty),
     });
   }
-  return { floors: floors.map((f) => ({ id: f.id, name: f.description, m2: f.measuredM2! })), lines: out };
+  return { floors: floors.map((f) => ({ id: f.id, name: f.description, m2: f.area, installOnly: f.installOnly })), lines: out };
 }
 
 /**

@@ -379,8 +379,8 @@ export const PREP_PICK_MARK = "Pick the floor area for";
 const PREP_PICK_END = "confirm a partial area with a reason.";
 export const prepPickFlag = (name: string, floors: number) =>
   floors === 0
-    ? `${PREP_PICK_MARK} ${name}: no floor line on this quote has a measured area yet. Enter the floor's measured m2, then follow it, or ${PREP_PICK_END}`
-    : `${PREP_PICK_MARK} ${name}: this quote has ${floors} measured floor areas. Pick the one it is for, or ${PREP_PICK_END}`;
+    ? `${PREP_PICK_MARK} ${name}: no floor line on this quote has a measured area, and no install line has an m2 qty yet. Enter the floor's measured m2 or the install m2, then follow it, or ${PREP_PICK_END}`
+    : `${PREP_PICK_MARK} ${name}: this quote has ${floors} floor areas. Pick the one it is for, or ${PREP_PICK_END}`;
 export const PREP_PARTIAL_MARK = "Check the partial area:";
 const PREP_PARTIAL_END = "or remove it if it is not needed.";
 export const prepPartialReviewFlag = (name: string, qty: number, wasM2: number, nowM2: number) =>

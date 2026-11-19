@@ -90,7 +90,7 @@ export const quoteDefaults = {
         quote,
         context.actor,
         "prep_partial_confirmed",
-        `Partial area confirmed on "${line.description}": ${m2Text(res.qty)} of the ${m2Text(res.floor.measuredM2 ?? 0)} floor "${res.floor.description}" (was ${m2Text(res.was)}). Reason: ${res.reason}`,
+        `Partial area confirmed on "${line.description}": ${m2Text(res.qty)} of the ${m2Text(res.floor.area)} ${res.floor.installOnly ? "install" : "floor"} "${res.floor.description}" (was ${m2Text(res.was)}). Reason: ${res.reason}`,
       );
       return { item: res.row, totals: await recalc(line.quoteId) };
     }),
