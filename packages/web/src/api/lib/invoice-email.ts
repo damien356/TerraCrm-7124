@@ -9,6 +9,7 @@ import { pickedFiles, sendJobEmail, type MailUpload } from "./job-mail";
 import { INVOICE_KIND_LABEL } from "./client-invoices";
 import { SENDER_NAME } from "./material-selection";
 import { assertPaperwork, paperworkProblem } from "./paperwork";
+import { revisionSendBlocker } from "./price-revision";
 import { TERRA_PRINT } from "./quotePdf";
 import { cardPaymentsOn, owingOn, payUrl } from "./stripe";
 
@@ -80,6 +81,9 @@ export async function sendInvoiceEmail(args: {
   if (!inv.jobId) throw bad("This invoice is not on a job.");
   const owing = owingOn(inv);
   if (!(owing > 0)) throw bad(inv.status === "void" ? "This invoice is void." : "Nothing is owing on this invoice.");
+  // Damien, 18 Nov 2026: not while it bills a revised price the builder only called a budget or allowance.
+  const held = await revisionSendBlocker(inv);
+  if (held) throw bad(held);
   const found = await invoiceRecipient(inv);
   const to = args.to?.trim() || found?.email || "";
   if (!EMAIL_RE.test(to)) throw bad(to ? `"${to}" is not an email address.` : "No one on this job is ticked for Invoices with an email on file. Tick someone under Who gets what on the job, then send.");

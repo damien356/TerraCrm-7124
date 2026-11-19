@@ -35,6 +35,7 @@ import {
 } from "../lib/xero-invoices";
 import { contraAccountProblem } from "../lib/contras";
 import { emailedAtFor } from "../lib/invoice-emailed";
+import { revisionSendBlocker } from "../lib/price-revision";
 
 /**
  * Settings, Xero. Connect the Terra Ops Xero app, pick the organisation, and
@@ -232,7 +233,8 @@ export const xero = {
     const [inv] = await db.select().from(schema.invoices).where(eq(schema.invoices.id, input.invoiceId));
     if (!inv) throw new ORPCError("NOT_FOUND", { message: "Invoice not found" });
     const ready = Boolean(await xeroReady());
-    return { ready, blocker: ready ? pushBlocker(inv) : "Xero is not connected." };
+    // Damien, 18 Nov 2026: a revised price not yet confirmed holds it back too.
+    return { ready, blocker: ready ? (pushBlocker(inv) ?? (await revisionSendBlocker(inv))) : "Xero is not connected." };
   }),
 
   /** Read Xero now instead of waiting for the 30 minute round. */

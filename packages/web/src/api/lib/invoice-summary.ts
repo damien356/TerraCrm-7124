@@ -2,6 +2,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { INVOICE_KINDS } from "./client-invoices";
+import { activeRevision, laterVariations } from "./price-revision";
 import { quoteRefOf } from "./quote-number";
 import { acceptedQuoteFor, COUNTED_STATUSES } from "./variations";
 
@@ -23,10 +24,15 @@ import { acceptedQuoteFor, COUNTED_STATUSES } from "./variations";
  * than the contract, a credit or an invoice type it cannot show, or the
  * invoice bills a quote version that is not the accepted one. The office is
  * told why (lib/invoice-email.ts).
+ *
+ * On an agreed price revision (lib/price-revision.ts, Damien, 18 Nov 2026)
+ * the contract is the agreed fixed price plus any variation approved after
+ * it, and a voided invoice this one replaces is named at $0.00 so the client
+ * sees nothing is owing on it. It is always shown then.
  * ------------------------------------------------------------------------- */
 
 export type SummaryLine = {
-  kind: "quote" | "variation" | "contract" | "previous" | "since" | "this" | "remaining";
+  kind: "quote" | "agreed" | "variation" | "contract" | "replaced" | "previous" | "since" | "this" | "remaining";
   label: string;
   amount: number;
 };
@@ -40,7 +46,18 @@ export type BillingSummary =
 export const ISSUED_STATUSES = ["sent", "part_paid", "paid", "overdue"] as const;
 const LEFT_OUT = new Set(["void", "draft"]);
 
-type Inv = { id: number; number: string; seq: number; status: string; kind: string; label: string; total: number; quoteId: number | null };
+type Inv = {
+  id: number;
+  number: string;
+  seq: number;
+  status: string;
+  kind: string;
+  label: string;
+  total: number;
+  quoteId: number | null;
+  /** Damien, 18 Nov 2026: the voided invoice this one replaces. */
+  replacesInvoiceId?: number | null;
+};
 
 export type SummaryInput = {
   invoice: Inv;
@@ -51,6 +68,11 @@ export type SummaryInput = {
   jobValue: number;
   /** Every other invoice on the job, any status. */
   others: Inv[];
+  /**
+   * The agreed price revision this invoice bills (Damien, 18 Nov 2026). Then
+   * `variations` are only the ones approved after it, which still add on.
+   */
+  revision?: { toTotal: number } | null;
 };
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -84,13 +106,13 @@ export function summarise(input: SummaryInput): BillingSummary {
     }
     counted.push(o);
   }
-  const contract = r2(quote.total + input.variations.reduce((s, v) => s + v.total, 0));
+  const rev = input.revision ?? null;
+  const base = rev ? rev.toTotal : quote.total;
+  const contract = r2(base + input.variations.reduce((s, v) => s + v.total, 0));
+  const what = rev ? "the agreed fixed price and any variations approved after it" : `quote ${quote.ref} and its approved variations`;
   const jobValue = r2(input.jobValue);
   if (Math.abs(jobValue - contract) > 0.005) {
-    return {
-      state: "withheld",
-      reason: `The job value is ${money(jobValue)}, but quote ${quote.ref} and its approved variations come to ${money(contract)}.`,
-    };
+    return { state: "withheld", reason: `The job value is ${money(jobValue)}, but ${what} come to ${money(contract)}.` };
   }
   const previous = counted.filter((o) => o.seq < inv.seq).sort((a, b) => a.seq - b.seq);
   const since = counted.filter((o) => o.seq > inv.seq).sort((a, b) => a.seq - b.seq);
@@ -99,17 +121,23 @@ export function summarise(input: SummaryInput): BillingSummary {
   if (remaining < -0.005) {
     return {
       state: "withheld",
-      reason: `Invoices on this job come to ${money(-remaining)} more than quote ${quote.ref} and its approved variations (${money(contract)}).`,
+      reason: `Invoices on this job come to ${money(-remaining)} more than ${what} (${money(contract)}).`,
     };
   }
-  if (!previous.length && !since.length && !input.variations.length && remaining <= 0.005) {
+  const replaced = inv.replacesInvoiceId ? (input.others.find((o) => o.id === inv.replacesInvoiceId) ?? null) : null;
+  if (!rev && !previous.length && !since.length && !input.variations.length && remaining <= 0.005) {
     return { state: "hidden", reason: "One invoice for the whole quote. The quote total says it all." };
   }
-  const lines: SummaryLine[] = [{ kind: "quote", label: `Quote ${quote.ref}`, amount: r2(quote.total) }];
+  const lines: SummaryLine[] = rev
+    ? [{ kind: "agreed", label: "Agreed fixed price for the job", amount: r2(rev.toTotal) }]
+    : [{ kind: "quote", label: `Quote ${quote.ref}`, amount: r2(quote.total) }];
   for (const v of input.variations) {
     lines.push({ kind: "variation", label: `Approved variation ${v.ref}${firstLine(v.description) ? `: ${firstLine(v.description)}` : ""}`, amount: r2(v.total) });
   }
-  if (input.variations.length) lines.push({ kind: "contract", label: "Quote and approved variations", amount: contract });
+  if (input.variations.length) lines.push({ kind: "contract", label: rev ? "Agreed fixed price and approved variations" : "Quote and approved variations", amount: contract });
+  if (replaced && replaced.status === "void") {
+    lines.push({ kind: "replaced", label: `${replaced.number} cancelled and replaced by this invoice. Nothing is owing on it.`, amount: 0 });
+  }
   for (const p of previous) lines.push({ kind: "previous", label: invLabel(p), amount: r2(p.total) });
   for (const s of since) lines.push({ kind: "since", label: invLabel(s), amount: r2(s.total) });
   lines.push({ kind: "this", label: `This invoice ${inv.number}`, amount: r2(inv.total) });
@@ -140,11 +168,16 @@ export async function billingSummaryFor(inv: typeof schema.invoices.$inferSelect
     label: i.label,
     total: i.total,
     quoteId: i.quoteId,
+    replacesInvoiceId: i.replacesInvoiceId,
   });
+  // Damien, 18 Nov 2026: an invoice on the agreed revised price, while that price still stands on the accepted quote.
+  const rev = inv.priceRevisionId && quote ? await activeRevision(inv.jobId, quote.id) : null;
+  const onRev = rev && rev.id === inv.priceRevisionId ? rev : null;
   return summarise({
     invoice: shape(inv),
     quote: quote ? { id: quote.id, ref: await quoteRefOf(quote), total: quote.total } : null,
-    variations,
+    variations: onRev ? await laterVariations(inv.jobId, onRev) : variations,
+    revision: onRev ? { toTotal: onRev.toTotal } : null,
     jobValue: Number(job.value ?? 0),
     others: rows.filter((r) => r.id !== inv.id).map(shape),
   });

@@ -6,6 +6,7 @@ import { snapshotFor, type IssuedSnapshot } from "./clientInvoicePdf";
 import { markInvoicePaid } from "./client-invoices";
 import { rebuildForecast } from "./cashflow";
 import { localDate } from "./local-date";
+import { revisionSendBlocker } from "./price-revision";
 import { isLiveServer } from "./runtime";
 import { logXero, XeroError, XeroNotConnected, xeroApi, xeroDate, xeroReady, xeroRow } from "./xero";
 
@@ -342,6 +343,9 @@ export async function pushInvoiceToXero(invoiceId: number, byName: string, actor
     if (inv.xeroInvoiceId) return { ok: true, how: "already", xeroInvoiceId: inv.xeroInvoiceId, status: inv.xeroStatus };
     const blocked = pushBlocker(inv);
     if (blocked) return { ok: false, reason: blocked };
+    // Damien, 18 Nov 2026: an invoice on a revised price the builder has not confirmed stays out of Xero.
+    const held = await revisionSendBlocker(inv);
+    if (held) return { ok: false, reason: held };
 
     // 1. Is that number already in Xero? Then link, never a second invoice.
     const existing = await xeroApi<{ Invoices?: XInvoice[] }>("Invoices", { query: { InvoiceNumbers: inv.number } });

@@ -18,6 +18,7 @@ import { PurchaseOrdersCard } from "../components/purchase-orders";
 import { StockPanelCard } from "../components/stock-panel";
 import { PaymentTermsCard } from "../components/payment-terms";
 import { ClientInvoicesCard, MaterialSelectionCard } from "../components/client-invoices";
+import { AgreedPriceCard } from "../components/agreed-price";
 import { CrewScopeSelect, CrewViewCard, NeedsDispatchBanner, parseScope, scopeValue, useCrewScope } from "../components/crew-scope";
 import { StagesCard } from "../components/stages-card";
 import { DeliveryCard } from "../components/delivery";
@@ -660,6 +661,9 @@ export default function JobDetailPage() {
           <div id={STEP_ANCHOR.invoice} className="scroll-mt-4 transition-shadow">
             <ClientInvoicesCard jobId={j.id} />
           </div>
+
+          {/* an agreed whole-job price revision, its approval and balance (Damien, 18 Nov 2026) */}
+          <AgreedPriceCard jobId={j.id} />
 
           {/* a job done in parts: planned stages, or work held part way (Damien, 12 Nov 2026) */}
           {supplyOnly || productSale || isCallback ? null : <StagesCard jobId={j.id} />}

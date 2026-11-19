@@ -24,6 +24,7 @@ import {
   useVoidInvoice,
 } from "../queries/clientInvoices";
 import { usePushToXero, useXeroReady } from "../queries/xero";
+import { RecordAgreedPriceLink } from "./agreed-price";
 
 /**
  * THE MONEY-IN SIDE OF A JOB (spec section 2).
@@ -598,13 +599,14 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
       />
       {bill && bill.jobValue > 0 ? (
         <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
-          Job value {moneyExact(bill.jobValue)} inc GST, accepted variations included.{" "}
+          {/* Damien, 18 Nov 2026: on an agreed price revision the value is that price, not the quote. */}
+          Job value {moneyExact(bill.jobValue)} inc GST, {bill.revision ? "the agreed revised price" : "accepted variations included"}.{" "}
           {bill.toBill > 0.005 ? (
             <span className="font-medium text-foreground">Not billed yet {moneyExact(bill.toBill)}.</span>
           ) : (
             "All of it is billed."
           )}
-          {bill.reason && bill.toBill > 0.005 ? ` ${bill.reason}` : ""}
+          {bill.reason && bill.toBill > 0.005 ? ` ${bill.reason}` : ""} <RecordAgreedPriceLink jobId={jobId} />
         </p>
       ) : null}
       {notice ? <p className="border-b border-border px-4 py-2 text-xs text-[var(--success)]">{notice}</p> : null}
@@ -662,6 +664,12 @@ export function ClientInvoicesCard({ jobId }: { jobId: number }) {
                       {r.amountPaid > 0 && r.status !== "void" ? `. ${moneyExact(r.amountPaid)} received` : ""}
                       {r.outstanding > 0 ? `, ${moneyExact(r.outstanding)} owing` : ""}
                     </p>
+                    {r.replacesInvoiceId || r.priceRevisionId ? (
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {r.priceRevisionId ? "On the agreed revised price." : ""}
+                        {r.replacesInvoiceId ? ` Replaces ${rows.find((x) => x.id === r.replacesInvoiceId)?.ref ?? "a voided invoice"}.` : ""}
+                      </p>
+                    ) : null}
                     {r.status !== "void" ? (
                       <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground" data-testid={`sales-category-${r.id}`}>
                         <span>

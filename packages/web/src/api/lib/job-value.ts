@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { quoteDeposit } from "./deposits";
+import { activeRevision, revisedJobValue } from "./price-revision";
 import { approvedVariationsTotal } from "./variations";
 
 /**
@@ -14,6 +15,10 @@ import { approvedVariationsTotal } from "./variations";
  *  - no accepted quote: the job's latest quote (the newest one made), total and
  *    deposit. A draft, a sent quote and a new version all count.
  *  - no quote at all: the value typed on the job stays.
+ *
+ *  - an accepted quote with an agreed price revision (lib/price-revision.ts,
+ *    Damien, 18 Nov 2026): the revised figure, plus any variation approved
+ *    after it. The quote itself is not touched.
  *
  * The old rule kept a hand typed value on a job that was made first and quoted
  * later, which is how jobs made on the New job screen sat at $0 with a quote.
@@ -39,7 +44,12 @@ export async function jobValuePlan(jobId: number) {
   const quote = quoteThatCounts(rows);
   if (!quote) return null;
   const accepted = quote.status === "accepted";
-  const value = accepted ? r2(Number(quote.total ?? 0) + (await approvedVariationsTotal(jobId))) : r2(Number(quote.total ?? 0));
+  const revision = accepted ? await activeRevision(jobId, quote.id) : null;
+  const value = revision
+    ? await revisedJobValue(jobId, revision)
+    : accepted
+      ? r2(Number(quote.total ?? 0) + (await approvedVariationsTotal(jobId)))
+      : r2(Number(quote.total ?? 0));
   // A paid deposit is history, and an accepted job's deposit was set by its first accept.
   const keepDeposit = accepted || job.depositPaid;
   const depositAmount = keepDeposit ? Number(job.depositAmount ?? 0) : quoteDeposit({ ...quote, total: value }).deposit;

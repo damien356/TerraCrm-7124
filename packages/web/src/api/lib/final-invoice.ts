@@ -7,6 +7,7 @@ import { raiseInvoice } from "./client-invoices";
 import { loadDepositMaps, loadTermsMaps, resolveTerms, settleDate, termsLabel, today } from "./cashflow";
 import { quoteRefOf } from "./quote-number";
 import { jobText } from "./refs";
+import { activeRevision } from "./price-revision";
 import { openStaging } from "./staged-guard";
 
 /* ---------------------------------------------------------------------------
@@ -46,9 +47,10 @@ export async function acceptedQuoteOf(jobId: number) {
 }
 
 /** Where the invoice email goes by default: the billed contact, else the company's accounts email. */
-async function recipientFor(job: typeof schema.jobs.$inferSelect, quote: typeof schema.quotes.$inferSelect | null) {
+async function recipientFor(job: typeof schema.jobs.$inferSelect, quote: typeof schema.quotes.$inferSelect | null, revised = false) {
   // Notes 18.54: the accepted quote's Bill to is who pays, else the job's.
-  const payer = (quote ? quoteBillTo(quote) : null) ?? jobBillTo(job);
+  // Damien, 18 Nov 2026: on an agreed price revision the job's Bill to pays (lib/client-invoices.ts).
+  const payer = revised ? (jobBillTo(job) ?? (quote ? quoteBillTo(quote) : null)) : ((quote ? quoteBillTo(quote) : null) ?? jobBillTo(job));
   if (payer?.type === "company") {
     const id = payer.id;
     const [co] = await db.select({ email: schema.companies.email, name: schema.companies.name }).from(schema.companies).where(eq(schema.companies.id, id));
@@ -93,7 +95,8 @@ export async function billingOnJob(jobId: number) {
   const quoteRef = quote ? await quoteRefOf(quote) : null;
   const statusName = (status[0]?.name ?? "").trim().toLowerCase();
   const { dueDay, termsText } = await dueFor(job, today());
-  const recipient = await recipientFor(job, quote);
+  const revision = await activeRevision(jobId, quote?.id ?? null);
+  const recipient = await recipientFor(job, quote, !!revision);
 
   let reason: string | null = null;
   if (job.parentJobId && job.callbackChargeable === false) reason = "This callback is not chargeable. Nothing is billed.";
@@ -113,13 +116,30 @@ export async function billingOnJob(jobId: number) {
     canRaise: reason === null,
     reason,
     jobRef: jobText(job),
+    /** The agreed revised price the next invoice bills, if there is one. */
+    revision: revision
+      ? { id: revision.id, toTotal: revision.toTotal, confirmed: revision.builderPosition === "confirmed" }
+      : null,
   };
 }
 
 export const RAISE_KINDS = ["final", "stage"] as const;
 
-export function defaultInvoiceLabel(kind: (typeof RAISE_KINDS)[number], ref: string) {
+export function defaultInvoiceLabel(kind: (typeof RAISE_KINDS)[number], ref: string, revised = false, jobRef = "") {
+  // Damien, 18 Nov 2026: a revised price is billed as the agreed fixed price for the job, not as the quote.
+  if (revised) return kind === "final" ? `Final invoice, agreed fixed price, job ${jobRef}` : `Progress invoice, agreed fixed price, job ${jobRef}`;
   return kind === "final" ? `Final invoice, ${ref}` : `Progress invoice, ${ref}`;
+}
+
+/** The newest voided final on the job that no later invoice replaced yet. */
+async function voidFinalToReplace(jobId: number) {
+  const rows = await db
+    .select({ id: schema.invoices.id, kind: schema.invoices.kind, status: schema.invoices.status, replaces: schema.invoices.replacesInvoiceId })
+    .from(schema.invoices)
+    .where(eq(schema.invoices.jobId, jobId))
+    .orderBy(desc(schema.invoices.seq));
+  const replaced = new Set(rows.map((r) => r.replaces).filter((x): x is number => !!x));
+  return rows.find((r) => r.kind === "final" && r.status === "void" && !replaced.has(r.id))?.id ?? null;
 }
 
 /**
@@ -157,8 +177,11 @@ export async function raiseJobInvoice(args: {
   const dueDay = settleDate(from, terms.termsDays, terms.endOfMonth);
 
   const ref = bill.quoteRef ? `quote ${bill.quoteRef}` : `job ${bill.jobRef}`;
-  const label = args.label?.trim() || defaultInvoiceLabel(args.kind, ref);
+  const label = args.label?.trim() || defaultInvoiceLabel(args.kind, ref, !!bill.revision, bill.jobRef);
+  // Damien, 18 Nov 2026: a final raised after the last one was voided says it replaces it.
+  const replacesInvoiceId = args.kind === "final" ? await voidFinalToReplace(job.id) : null;
   return raiseInvoice({
+    replacesInvoiceId,
     jobId: job.id,
     quoteId: bill.quoteId,
     kind: args.kind,

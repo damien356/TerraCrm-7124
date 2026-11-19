@@ -4,6 +4,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "../database";
 import * as schema from "../database/schema";
 import { jobBillTo, quoteBillTo } from "./bill-to";
+import { activeRevision } from "./price-revision";
 import { invoiceRef } from "./refs";
 
 const money = (n: number) => `$${n.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -71,6 +72,8 @@ export interface RaiseInvoice {
   /** admin · office · customer · system, as activity_log uses them. */
   actorRole: string;
   dueDate?: Date | null;
+  /** The voided invoice this one is raised to replace (Damien, 18 Nov 2026). */
+  replacesInvoiceId?: number | null;
 }
 
 /**
@@ -86,7 +89,12 @@ export async function raiseInvoice(args: RaiseInvoice) {
   const { subtotal, gst } = gstSplit(total);
   // Notes 18.54: an invoice from a quote bills that quote's Bill to, else the job's.
   const [quote] = args.quoteId ? await db.select().from(schema.quotes).where(eq(schema.quotes.id, args.quoteId)) : [];
-  const payer = (quote ? quoteBillTo(quote) : null) ?? jobBillTo(job);
+  // Damien, 18 Nov 2026: with an agreed price revision on the job, the job's
+  // Bill to is who pays, so a payer changed on the job reaches the invoice.
+  // The accepted quote and its Bill to stay as they were sent.
+  const revision = await activeRevision(job.id);
+  const onRevision = revision && (!args.quoteId || !revision.quoteId || revision.quoteId === args.quoteId) ? revision : null;
+  const payer = onRevision ? (jobBillTo(job) ?? (quote ? quoteBillTo(quote) : null)) : ((quote ? quoteBillTo(quote) : null) ?? jobBillTo(job));
   // Sell products (Damien, 30 Oct): a sale to an installer goes to Installer materials (204), on every invoice the job raises.
   const [sale] = await db
     .select({ salesCategory: schema.productSales.salesCategory })
@@ -122,6 +130,8 @@ export async function raiseInvoice(args: RaiseInvoice) {
           total,
           dueDate: args.dueDate ?? new Date(),
           createdByName: args.createdByName,
+          priceRevisionId: onRevision?.id ?? null,
+          replacesInvoiceId: args.replacesInvoiceId ?? null,
         })
         .returning();
     } catch (e) {
@@ -136,11 +146,16 @@ export async function raiseInvoice(args: RaiseInvoice) {
     entityType: "invoice",
     entityId: row.id,
     action: "invoice_raised",
-    detail: `Invoice ${row.number} raised, ${INVOICE_KIND_LABEL[row.kind] ?? row.kind}, ${money(total)}`,
+    detail: `Invoice ${row.number} raised, ${INVOICE_KIND_LABEL[row.kind] ?? row.kind}, ${money(total)}${onRevision ? `, on the agreed revised price` : ""}${args.replacesInvoiceId ? `, replacing ${(await replacedNumber(args.replacesInvoiceId)) ?? "a voided invoice"}` : ""}`,
     actorName: args.createdByName,
     actorRole: args.actorRole,
   });
   return row;
+}
+
+async function replacedNumber(id: number) {
+  const [r] = await db.select({ number: schema.invoices.number }).from(schema.invoices).where(eq(schema.invoices.id, id));
+  return r?.number ?? null;
 }
 
 export type InvoiceRow = typeof schema.invoices.$inferSelect;
@@ -167,6 +182,9 @@ export function shapeInvoice(i: InvoiceRow) {
     voidReason: i.voidReason,
     quoteId: i.quoteId,
     createdAt: i.createdAt,
+    /** Damien, 18 Nov 2026: billed on the job's agreed revised price, and the voided invoice it replaced. */
+    priceRevisionId: i.priceRevisionId,
+    replacesInvoiceId: i.replacesInvoiceId,
     /** Task H: customer (200) or installer_materials (204). Set by New materials invoice or by hand, never from an installer link. */
     salesCategory: i.salesCategory === "installer_materials" ? ("installer_materials" as const) : ("customer" as const),
     /** The account the sale line went to in Xero. Null until sent, or when it was linked to one already there. */

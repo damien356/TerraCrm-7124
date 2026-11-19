@@ -72,6 +72,7 @@ import { places } from "./routes/places";
 import { callbacks } from "./routes/callbacks";
 import { quoteSend } from "./routes/quoteSend";
 import { clientInvoices } from "./routes/clientInvoices";
+import { priceRevisions } from "./routes/priceRevisions";
 import { stages } from "./routes/stages";
 import { delivery } from "./routes/delivery";
 import { productSales } from "./routes/productSales";
@@ -278,6 +279,8 @@ export const router = {
   quoteSend,
   /** IQ invoices to the client: deposit, variations, final. Admin and Office mark paid, Admin voids. */
   clientInvoices,
+  /** Agreed whole-job price revision: original, new figure, reason, builder's position (Damien, 18 Nov 2026). */
+  priceRevisions,
   /** Staged jobs and progress payments: split into stages, progress invoices, stage pay claims (Damien, 12 Nov 2026). */
   stages,
   delivery,

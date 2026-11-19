@@ -2278,6 +2278,13 @@ export const invoices = sqliteTable(
     salesCategory: text("sales_category").notNull().default("customer"),
     /** The Xero account code the sale line went to when it was sent. Null until then. */
     xeroSalesAccount: text("xero_sales_account"),
+    /**
+     * Damien, 18 Nov 2026 (2026-12-15-job-price-revisions.sql): the agreed
+     * price revision this invoice bills on. Null for an ordinary invoice.
+     */
+    priceRevisionId: integer("price_revision_id"),
+    /** The earlier invoice this one cancels and replaces (that one is void). Null when none. */
+    replacesInvoiceId: integer("replaces_invoice_id"),
     ...timestamps,
   },
   (t) => [
@@ -2749,6 +2756,52 @@ export const variationItems = sqliteTable(
     ...timestamps,
   },
   (t) => [index("variation_items_variation_idx").on(t.variationId)],
+);
+
+/**
+ * Damien, 18 Nov 2026 (job 188070, 2026-12-15-job-price-revisions.sql): one
+ * agreed figure for the whole job in place of the accepted quote plus the
+ * variations it covers. Quote, variations and sent documents stay untouched.
+ * While active, the job value is the revised figure (plus any variation
+ * approved later), the final invoice is one fixed price line to the job's
+ * Bill to, and nothing on it is emailed until builder_position is confirmed.
+ */
+export const jobPriceRevisions = sqliteTable(
+  "job_price_revisions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    jobId: integer("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    /** The accepted quote it replaces the figure of. */
+    quoteId: integer("quote_id").references(() => quotes.id, { onDelete: "set null" }),
+    /** The quote plus the included variations, as they were. */
+    fromSubtotal: real("from_subtotal").notNull().default(0),
+    fromTotal: real("from_total").notNull().default(0),
+    toSubtotal: real("to_subtotal").notNull().default(0),
+    toGst: real("to_gst").notNull().default(0),
+    toTotal: real("to_total").notNull().default(0),
+    diffSubtotal: real("diff_subtotal").notNull().default(0),
+    diffTotal: real("diff_total").notNull().default(0),
+    reason: text("reason").notNull().default(""),
+    scopeUnchanged: integer("scope_unchanged", { mode: "boolean" }).notNull().default(true),
+    /** budget_allowance (not confirmed, the start) · confirmed */
+    builderPosition: text("builder_position").notNull().default("budget_allowance"),
+    builderNote: text("builder_note"),
+    confirmedAt: integer("confirmed_at", { mode: "timestamp" }),
+    confirmedByName: text("confirmed_by_name"),
+    /** The scope words the client reads on the invoice. */
+    invoiceWording: text("invoice_wording").notNull().default(""),
+    /** Variation ids the revised figure already covers. JSON array. */
+    includedVariationIds: text("included_variation_ids").notNull().default("[]"),
+    /** active · withdrawn */
+    status: text("status").notNull().default("active"),
+    withdrawnAt: integer("withdrawn_at", { mode: "timestamp" }),
+    withdrawnByName: text("withdrawn_by_name"),
+    createdByName: text("created_by_name").notNull().default(""),
+    ...timestamps,
+  },
+  (t) => [index("job_price_revisions_job_idx").on(t.jobId)],
 );
 
 /** A client's signed approval of one variation online. */

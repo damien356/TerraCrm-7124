@@ -67,6 +67,12 @@ export type InvoiceWorks = {
   subtotal: number;
   gst: number;
   total: number;
+  /**
+   * Damien, 18 Nov 2026: billed on an agreed whole-job price revision. One
+   * fixed price line with the scope words, headed and totalled as the agreed
+   * price rather than as the quote.
+   */
+  agreed?: boolean;
 };
 
 /** What an invoice said when it was first emailed. A re-send draws from this. */
@@ -212,7 +218,7 @@ export async function renderClientInvoicePdf(input: ClientInvoicePdfInput): Prom
   const works = input.works;
   if (works) {
     need(60);
-    text(cur.page, `WORKS AS QUOTED, QUOTE ${works.quoteRef}`, M, cur.y, bold, 7.5, LABEL);
+    text(cur.page, works.agreed ? "WORKS, AGREED FIXED PRICE" : `WORKS AS QUOTED, QUOTE ${works.quoteRef}`, M, cur.y, bold, 7.5, LABEL);
     cur.y -= 16;
     cur = drawQuoteWorks({ doc, reg, bold, page: cur.page, y: cur.y, running }, works);
     need(56);
@@ -222,11 +228,11 @@ export async function renderClientInvoicePdf(input: ClientInvoicePdfInput): Prom
       textRight(cur.page, value, right, cur.y, big ? bold : reg, big ? 10.5 : 9.5);
       cur.y -= big ? 18 : 14;
     };
-    qline("Quote Sub Total (ex GST)", money(works.subtotal));
+    qline(works.agreed ? "Agreed price Sub Total (ex GST)" : "Quote Sub Total (ex GST)", money(works.subtotal));
     qline("GST", money(works.gst));
     cur.page.drawLine({ start: { x: lx, y: cur.y + 9 }, end: { x: W - M, y: cur.y + 9 }, thickness: 0.8, color: RULE });
     cur.y -= 2;
-    qline("Quote total (inc GST)", money(works.total), true);
+    qline(works.agreed ? "Agreed price total (inc GST)" : "Quote total (inc GST)", money(works.total), true);
     cur.y -= 10;
   }
 
@@ -252,13 +258,15 @@ export async function renderClientInvoicePdf(input: ClientInvoicePdfInput): Prom
         cur.page.drawLine({ start: { x: M + 8, y: cur.y + 10 }, end: { x: W - M, y: cur.y + 10 }, thickness: 0.5, color: RULE });
         cur.y -= 2;
       }
-      const strong = b.kind === "this" || b.kind === "remaining" || b.kind === "contract";
+      const strong = b.kind === "this" || b.kind === "remaining" || b.kind === "contract" || b.kind === "agreed";
+      // Damien, 18 Nov 2026: the cancelled invoice an agreed price replaces reads as a note, not a charge.
+      const muted = b.kind === "replaced";
       const indent = b.kind === "previous" || b.kind === "since" ? 14 : 0;
       const lines = wrap(b.label, strong ? bold : reg, 9.5, CW * 0.72 - indent);
       need(lines.length * 12 + 6);
-      textRight(cur.page, money(b.amount), right, cur.y, strong ? bold : reg, 9.5);
+      textRight(cur.page, money(b.amount), right, cur.y, strong ? bold : reg, 9.5, muted ? MUTED : INK);
       for (const l of lines) {
-        text(cur.page, l, M + 8 + indent, cur.y, strong ? bold : reg, 9.5);
+        text(cur.page, l, M + 8 + indent, cur.y, strong ? bold : reg, 9.5, muted ? MUTED : INK);
         cur.y -= 12;
       }
       cur.y -= 2;
@@ -383,6 +391,21 @@ async function worksFor(inv: InvoiceRow) {
   if (!inv.quoteId) return null;
   const [quote] = await db.select().from(schema.quotes).where(eq(schema.quotes.id, inv.quoteId));
   if (!quote) return null;
+  // Damien, 18 Nov 2026: on an agreed price revision the works are the one fixed price, with the scope words recorded on it.
+  if (inv.priceRevisionId) {
+    const [rev] = await db.select().from(schema.jobPriceRevisions).where(eq(schema.jobPriceRevisions.id, inv.priceRevisionId));
+    if (rev && rev.status === "active") {
+      const works: InvoiceWorks = {
+        quoteRef: await quoteRefOf(quote),
+        bundles: [{ title: "Flooring supply and installation", wording: rev.invoiceWording, total: rev.toSubtotal }],
+        subtotal: rev.toSubtotal,
+        gst: rev.toGst,
+        total: rev.toTotal,
+        agreed: true,
+      };
+      return { quote, works };
+    }
+  }
   const { bundles, layout, items } = await bundlesFor(quote);
   if (!bundles.length && !items.length) return null;
   const works: InvoiceWorks = {
