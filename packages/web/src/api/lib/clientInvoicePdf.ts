@@ -35,7 +35,12 @@ export type ClientInvoicePdfInput = {
   number: string;
   date: string;
   dueDate: string | null;
-  to: { name: string; company: string | null; address: string | null; email: string | null };
+  /**
+   * `abn` is the billed company's ABN, printed under the address (Damien, 19 Nov
+   * 2026: a tax invoice of $1,000 or more names the buyer or their ABN). Snapshots
+   * saved before it simply have none.
+   */
+  to: { name: string; company: string | null; address: string | null; email: string | null; abn?: string | null };
   siteAddress: string | null;
   jobRef: string;
   description: string;
@@ -176,7 +181,7 @@ export async function renderClientInvoicePdf(input: ClientInvoicePdfInput): Prom
   const top = y;
   text(page, "BILL TO", M, y, bold, 7.5, LABEL);
   y -= 14;
-  for (const l of [input.to.name, input.to.company, input.to.address, input.to.email].filter((x): x is string => Boolean(x && x.trim()))) {
+  for (const l of [input.to.name, input.to.company, input.to.address, input.to.abn ? `ABN ${input.to.abn}` : null, input.to.email].filter((x): x is string => Boolean(x && x.trim()))) {
     for (const w of wrap(l, reg, 9.5, CW * 0.5)) {
       text(page, w, M, y, l === input.to.name ? bold : reg, 9.5);
       y -= 12.5;
@@ -448,6 +453,7 @@ async function freshSnapshot(inv: InvoiceRow): Promise<IssuedSnapshot> {
       company: company?.name && fullName(contact) ? company.name : null,
       address: company?.billingAddress || contact?.address || siteAddress,
       email: contact?.email || company?.email || null,
+      abn: company?.abn?.trim() || null,
     },
     siteAddress,
     jobRef: job ? String(job.displayNumber || job.number) : String(inv.jobNumber),

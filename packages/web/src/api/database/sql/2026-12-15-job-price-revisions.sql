@@ -15,6 +15,8 @@
 -- Additive: one new empty table and two new nullable columns. Nothing
 -- existing is changed. Fails harmlessly with "table already exists" or
 -- "duplicate column name" if it has run.
+--
+-- Applied live 19 Nov 2026 with Damien's OK, after a backup.
 CREATE TABLE `job_price_revisions` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`job_id` integer NOT NULL,
