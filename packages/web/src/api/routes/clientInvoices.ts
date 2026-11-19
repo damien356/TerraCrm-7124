@@ -10,7 +10,7 @@ import { createSelection, selectionForJob, sendSelection } from "../lib/material
 import { isProductForm, lockState, staffSections } from "../lib/selection-colours";
 import { staffOffers } from "../lib/underlay-upgrade";
 import { EMAIL_RE } from "../lib/quote-email";
-import { sendInvoiceEmail } from "../lib/invoice-email";
+import { invoiceEmailOptions, sendInvoiceEmail } from "../lib/invoice-email";
 import { uploadInput } from "../lib/job-mail";
 import { cardPaymentsOn, payUrl } from "../lib/stripe";
 import { billingOnJob, RAISE_KINDS, raiseJobInvoice } from "../lib/final-invoice";
@@ -176,6 +176,9 @@ export const clientInvoices = {
       await rebuild();
       return shapeInvoice(row);
     }),
+
+  /** Who the Email window sends to by default, and who it offers as CC. Damien, 19 Nov 2026. */
+  emailOptions: staffOnly.input(z.object({ id: z.number().int() })).handler(({ input }) => invoiceEmailOptions(input.id)),
 
   /** Email the invoice to the client with its Pay by card link and the bank details. */
   email: staffOnly

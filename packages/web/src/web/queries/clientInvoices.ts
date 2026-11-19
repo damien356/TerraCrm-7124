@@ -48,6 +48,11 @@ export function useSendSelection() {
 }
 
 /** Email the invoice with its Pay by card link and the bank details. */
+/** Default To and CC suggestions for the Email invoice window. Damien, 19 Nov 2026. */
+export function useInvoiceEmailOptions(id: number | null | undefined) {
+  return useQuery(orpc.clientInvoices.emailOptions.queryOptions({ input: { id: id ?? 0 }, enabled: !!id, staleTime: 5_000 }));
+}
+
 export function useEmailInvoice() {
   const queryClient = useQueryClient();
   return useMutation(

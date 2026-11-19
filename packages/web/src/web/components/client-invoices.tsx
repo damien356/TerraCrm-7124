@@ -15,6 +15,7 @@ import { CcList, EmailAttachments, NO_ATTACHMENTS, type MailAttachments } from "
 import {
   useClientInvoices,
   useEmailInvoice,
+  useInvoiceEmailOptions,
   useJobBilling,
   useMarkInvoicePaid,
   useRaiseInvoice,
@@ -37,6 +38,7 @@ import { RecordAgreedPriceLink } from "./agreed-price";
 
 function EmailInvoiceModal({ invoice, jobId, onClose }: { invoice: Invoice | null; jobId: number; onClose: () => void }) {
   const send = useEmailInvoice();
+  const opts = useInvoiceEmailOptions(invoice?.id);
   const [to, setTo] = React.useState("");
   const [cc, setCc] = React.useState<string[]>([]);
   const [files, setFiles] = React.useState<MailAttachments>(NO_ATTACHMENTS);
@@ -56,11 +58,18 @@ function EmailInvoiceModal({ invoice, jobId, onClose }: { invoice: Invoice | nul
         <p className="text-sm text-muted-foreground">
           Sends {moneyExact(invoice.outstanding)} owing with the invoice PDF, the Pay by card link and our bank details, from team@. Logged on the job's thread.
         </p>
-        <Field label="Send to (leave empty for the client's email on file)">
-          <EmailInput value={to} onValueChange={setTo} placeholder="client@example.com" />
+        <Field label={opts.data?.defaultTo ? `Send to (leave empty for ${opts.data.defaultTo})` : "Send to (leave empty for the client's email on file)"}>
+          <EmailInput value={to} onValueChange={setTo} placeholder={opts.data?.defaultTo ?? "client@example.com"} />
         </Field>
-        <Field label="CC">
-          <CcList value={cc} onChange={setCc} />
+        {/* Damien, 19 Nov 2026: people ticked for Invoices on the job are offered as CC. One click adds each. */}
+        <Field label="CC" hint={opts.data?.ccSuggestions.length ? "Suggested: people on this job ticked for Invoices. Click a name to copy them in." : undefined}>
+          <CcList
+            value={cc}
+            onChange={setCc}
+            suggestions={(opts.data?.ccSuggestions ?? [])
+              .filter((s) => s.email !== to.trim().toLowerCase())
+              .map((s) => ({ email: s.email, name: s.roleLabel ? `${s.name} (${s.roleLabel})` : s.name }))}
+          />
         </Field>
         <EmailAttachments jobId={jobId} value={files} onChange={setFiles} note="The invoice PDF is attached already. Add anything else here." />
         {error ? <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p> : null}

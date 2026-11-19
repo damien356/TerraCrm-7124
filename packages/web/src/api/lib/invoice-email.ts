@@ -8,7 +8,7 @@ import { ensureForJob } from "./conversations";
 import { pickedFiles, sendJobEmail, type MailUpload } from "./job-mail";
 import { INVOICE_KIND_LABEL } from "./client-invoices";
 import { SENDER_NAME } from "./material-selection";
-import { assertPaperwork, paperworkProblem } from "./paperwork";
+import { allowedFor, assertPaperwork, paperworkProblem } from "./paperwork";
 import { revisionSendBlocker } from "./price-revision";
 import { TERRA_PRINT } from "./quotePdf";
 import { cardPaymentsOn, owingOn, payUrl } from "./stripe";
@@ -40,6 +40,32 @@ export async function invoiceRecipient(inv: typeof schema.invoices.$inferSelect)
     if (co?.email?.trim() && (await allowed(co.email.trim()))) return { email: co.email.trim(), first: "", contact: null };
   }
   return null;
+}
+
+/**
+ * What the Email invoice window offers (Damien, 19 Nov 2026): who it goes to
+ * when Send to is left empty, and CC suggestions. A suggestion is a person on
+ * the job ticked for Invoices under Who gets what, with an email, who is not
+ * already the To. The office still clicks to add each one. Nothing is CC'd
+ * on its own.
+ */
+export async function invoiceEmailOptions(invoiceId: number) {
+  const [inv] = await db.select().from(schema.invoices).where(eq(schema.invoices.id, invoiceId));
+  if (!inv) throw bad("Invoice not found");
+  if (!inv.jobId) return { defaultTo: null as string | null, ccSuggestions: [] as Array<{ email: string; name: string; roleLabel: string }> };
+  const found = await invoiceRecipient(inv);
+  const to = (found?.email ?? "").toLowerCase();
+  const rows = await allowedFor(inv.jobId, "invoice");
+  const seen = new Set<string>(to ? [to] : []);
+  const ccSuggestions: Array<{ email: string; name: string; roleLabel: string }> = [];
+  for (const r of rows) {
+    if (r.kind !== "person") continue;
+    const e = (r.email ?? "").trim().toLowerCase();
+    if (!e || !EMAIL_RE.test(e) || seen.has(e)) continue;
+    seen.add(e);
+    ccSuggestions.push({ email: e, name: r.name, roleLabel: r.roleLabel });
+  }
+  return { defaultTo: found?.email ?? null, ccSuggestions };
 }
 
 export function invoiceEmailBody(args: { first: string; ref: string; label: string; owing: number; url: string | null; depositLine?: string | null; payBlocked?: boolean }) {
