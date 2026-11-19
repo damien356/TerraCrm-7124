@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ActivityIndicator, Image, Platform, Pressable, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Image, Linking, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
@@ -36,6 +36,23 @@ const CALLBACK_ONLY = ["client_reported", "original"] as const;
 
 /** Longest side a job photo is kept at. Sharp on any screen, about a fifth of the size. */
 const MAX_EDGE = 2048;
+
+/*
+ * Camera permission (Damien, 19 Nov 2026, Pedro's iPhone). The picker never
+ * asks for the camera itself: it refuses with MissingCameraPermissionException,
+ * and iPhone only lists Camera under Settings > Terra once the app has asked.
+ * So ask first, and when the answer is no, say how to turn it on.
+ */
+const CAMERA_OFF =
+  "Terra isn't allowed to use the camera. Tap Open Settings and turn on Camera. Or take the shot with your phone's camera and add it with the gallery button.";
+
+async function cameraAllowed(): Promise<boolean> {
+  const now = await ImagePicker.getCameraPermissionsAsync().catch(() => null);
+  if (now?.granted) return true;
+  if (now && !now.canAskAgain) return false;
+  const asked = await ImagePicker.requestCameraPermissionsAsync().catch(() => null);
+  return Boolean(asked?.granted);
+}
 
 /**
  * Phone cameras shoot 4000px and up. Shrink to MAX_EDGE and save as JPEG
@@ -78,6 +95,7 @@ export function JobFileSection({
   const [bucket, setBucket] = useState<BucketKey>("area");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cameraOff, setCameraOff] = useState(false);
   /** The open viewer: its category and the file it opened on. */
   const [viewing, setViewing] = useState<{ bucket: BucketKey; index: number } | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -154,8 +172,14 @@ export function JobFileSection({
     const target = into ?? bucket;
     if (isReadOnly(target)) return;
     setError(null);
+    setCameraOff(false);
     try {
       const fromLibrary = !(source === "camera" && Platform.OS !== "web");
+      if (!fromLibrary && !(await cameraAllowed())) {
+        setCameraOff(true);
+        setError(CAMERA_OFF);
+        return;
+      }
       const opts: ImagePicker.ImagePickerOptions = {
         mediaTypes: video ? ["videos"] : ["images"],
         // Photos are shrunk here before upload, so take them at full quality.
@@ -172,7 +196,11 @@ export function JobFileSection({
       if (res.canceled || res.assets.length === 0) return;
       await uploadAll(res.assets, video, target as CrewBucket);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "That didn't upload. Try again when you've got signal.");
+      const msg = e instanceof Error ? e.message : "";
+      if (/camera/i.test(msg) && /permission/i.test(msg)) {
+        setCameraOff(true);
+        setError(CAMERA_OFF);
+      } else setError(msg || "That didn't upload. Try again when you've got signal.");
     }
   }
 
@@ -350,7 +378,15 @@ export function JobFileSection({
       {error ? (
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 8 }}>
           <Text style={{ flex: 1, fontFamily: Fonts.medium, fontSize: 12.5, color: c.destructive }}>{error}</Text>
-          {failed && !busy ? (
+          {cameraOff ? (
+            <Pressable
+              onPress={() => void Linking.openSettings()}
+              style={{ borderWidth: 1, borderColor: c.destructive, borderRadius: 9, paddingHorizontal: 12, paddingVertical: 7 }}
+            >
+              <Text style={{ fontFamily: Fonts.bold, fontSize: 12.5, color: c.destructive }}>Open Settings</Text>
+            </Pressable>
+          ) : null}
+          {failed && !busy && !cameraOff ? (
             <Pressable
               onPress={() => {
                 const f = failed;
