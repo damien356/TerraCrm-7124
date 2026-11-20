@@ -78,6 +78,7 @@ import { delivery } from "./routes/delivery";
 import { productSales } from "./routes/productSales";
 import { stock } from "./routes/stock";
 import { stockSupply } from "./routes/stockSupply";
+import { stockOffcuts } from "./routes/stockOffcuts";
 import { siteFill } from "./routes/siteFill";
 import { emailCheck } from "./routes/emailCheck";
 import { productFind } from "./routes/productFind";
@@ -289,6 +290,8 @@ export const router = {
   stock,
   /** Low-stock alerts and warehouse orders (S6). Admin only. */
   stockSupply,
+  /** Underlay offcuts: recorded back from one job, held for the next (Damien, 20 Nov 2026). */
+  stockOffcuts,
   /** A quote with a delivery line and no site asks for one, and a job with no site offers one (188001 list item 12). */
   siteFill,
   emailCheck,

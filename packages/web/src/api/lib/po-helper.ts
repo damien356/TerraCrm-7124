@@ -133,6 +133,13 @@ const jobLocks = new Map<number, Promise<unknown>>();
 async function draftPosForJobNow(args: { jobId: number; quoteRef: string }): Promise<PoHelperResult> {
   const out: PoHelperResult = { drafted: [], skipped: 0 };
   try {
+    // Damien, 20 Nov 2026: hold any underlay offcut first, so the PO only orders the rest.
+    try {
+      const { autoApplyOffcuts } = await import("./stock/offcuts");
+      await autoApplyOffcuts(args.jobId);
+    } catch (e) {
+      console.error("[po-helper] offcuts:", (e as Error).message);
+    }
     const open = await openMaterials(args.jobId);
     if (!open.length) return out;
 

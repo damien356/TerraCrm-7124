@@ -1,6 +1,6 @@
 import { jobNumberSql } from "../lib/job-ref";
 import { z } from "zod";
-import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, like, ne } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { db } from "../database";
 import * as schema from "../database/schema";
@@ -412,6 +412,20 @@ export const purchasing = {
       materials.filter((m) => m.status === "to_order").map((m) => ({ id: m.id, kind: "goods", productId: m.productId, description: m.description })),
     );
 
+    const { stockAllocatedByMaterial } = await import("../lib/stock/costs");
+    const stockByMat = await stockAllocatedByMaterial(input.jobId);
+    const offcutHolds = await db
+      .select({ jobMaterialId: schema.stockReservations.jobMaterialId, orderedQty: schema.stockReservations.orderedQty, code: schema.stockItems.code })
+      .from(schema.stockReservations)
+      .innerJoin(schema.stockItems, eq(schema.stockItems.id, schema.stockReservations.stockItemId))
+      .where(
+        and(
+          eq(schema.stockReservations.jobId, input.jobId),
+          like(schema.stockReservations.requestKey, "offcut:%"),
+          inArray(schema.stockReservations.status, ["reserved", "issued"]),
+        ),
+      );
+
     return {
       siteAddress: await siteAddressFor(input.jobId),
       warehouseAddress: WAREHOUSE_ADDRESS,
@@ -423,7 +437,14 @@ export const purchasing = {
         invoices: invoices.filter((i) => i.poId === p.id),
         productMismatch: identity.get(p.id) ?? [],
       })),
-      materials: materials.map((m) => ({ ...m, onPo: onPo.get(m.id) ?? null, productMismatch: matIssues.find((x) => x.lineId === m.id)?.text ?? null })),
+      materials: materials.map((m) => {
+        // Underlay offcuts (Damien, 20 Nov 2026): what stock already covers is not ordered again.
+        const fromStock = Math.round((stockByMat.get(m.id) ?? 0) * 10000) / 10000;
+        const orderQty = Math.max(0, Math.round((m.qty - fromStock) * 10000) / 10000);
+        const oc = offcutHolds.filter((h) => h.jobMaterialId === m.id);
+        const offcutText = oc.length ? oc.map((h) => `${Math.round((h.orderedQty ?? 0) * 100) / 100} ${m.unit === "m2" ? "m²" : m.unit} from offcut ${h.code}`).join(", ") : null;
+        return { ...m, onPo: onPo.get(m.id) ?? null, productMismatch: matIssues.find((x) => x.lineId === m.id)?.text ?? null, fromStock, orderQty, offcutText };
+      }),
       suppliers,
     };
   }),
@@ -441,6 +462,7 @@ export const purchasing = {
         autoApply: schema.supplierFeeRules.autoApply,
         condition: schema.supplierFeeRules.condition,
         appliesTo: schema.supplierFeeRules.appliesTo,
+        unitBlock: schema.supplierFeeRules.unitBlock,
       })
       .from(schema.supplierFeeRules)
       .where(and(eq(schema.supplierFeeRules.supplierId, input.supplierId), eq(schema.supplierFeeRules.active, true)))

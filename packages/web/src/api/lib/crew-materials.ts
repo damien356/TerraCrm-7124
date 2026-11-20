@@ -178,16 +178,35 @@ const sameUnit = (a: string | null | undefined, b: string | null | undefined) =>
  * Stock held for these lines. Terra Stock owns the table, so it is read plainly
  * and an empty list comes back if it isn't there.
  */
-async function reservedFor(ids: number[]): Promise<{ jobMaterialId: number | null; status: string; qty: number; lineUnit: string | null }[]> {
+async function reservedFor(
+  ids: number[],
+): Promise<{ jobMaterialId: number | null; status: string; qty: number; lineUnit: string | null; holdQty: number; code: string | null; type: string | null }[]> {
   if (ids.length === 0) return [];
   try {
-    const rows = await db.all<{ job_material_id: number | null; status: string; qty: number | null; ordered_qty: number | null; line_unit: string | null }>(
-      sql`select job_material_id, status, qty, ordered_qty, line_unit from stock_reservations where job_material_id in (${sql.join(
+    // Damien, 20 Nov 2026: the stock piece's code and type too, so an underlay offcut can say which one to take.
+    const rows = await db.all<{
+      job_material_id: number | null;
+      status: string;
+      qty: number | null;
+      ordered_qty: number | null;
+      line_unit: string | null;
+      code: string | null;
+      type: string | null;
+    }>(
+      sql`select r.job_material_id, r.status, r.qty, r.ordered_qty, r.line_unit, i.code, i.type from stock_reservations r left join stock_items i on i.id = r.stock_item_id where r.job_material_id in (${sql.join(
         ids.map((i) => sql`${i}`),
         sql`, `,
       )})`,
     );
-    return rows.map((r) => ({ jobMaterialId: r.job_material_id, status: r.status, qty: Number(r.ordered_qty ?? r.qty ?? 0), lineUnit: r.line_unit }));
+    return rows.map((r) => ({
+      jobMaterialId: r.job_material_id,
+      status: r.status,
+      qty: Number(r.ordered_qty ?? r.qty ?? 0),
+      lineUnit: r.line_unit,
+      holdQty: Number(r.qty ?? 0),
+      code: r.code,
+      type: r.type,
+    }));
   } catch {
     return [];
   }
@@ -252,6 +271,15 @@ export async function crewMaterials(jobId: number, parentJobId: number | null, v
   // Only stock firmly held in the warehouse for the job. Planned, awaiting a deposit, temporary and short holds are not the crew's yet.
   const firm = reserved.filter((r) => IN_WAREHOUSE.has(r.status));
   const held = new Set(firm.map((r) => r.jobMaterialId!));
+  /**
+   * An offcut held for the line (Damien, 20 Nov 2026): the crew is told which
+   * piece to take, not just "warehouse". Null when the line has no offcut.
+   */
+  const offcutLabel = (id: number): string | null => {
+    const hs = firm.filter((r) => r.jobMaterialId === id);
+    if (!hs.length || hs.some((r) => r.type !== "remnant" || !r.code)) return null;
+    return hs.map((r) => `Take ${r2(r.holdQty)} m offcut ${r.code}`).join("\n");
+  };
   /** How much of the line is firmly in the warehouse, in the line's unit. Null when a hold is in another unit and cannot be compared. */
   const heldQty = (id: number, unit: string): number | null => {
     const hs = firm.filter((r) => r.jobMaterialId === id);
@@ -274,8 +302,11 @@ export async function crewMaterials(jobId: number, parentJobId: number | null, v
       if (hq != null && hq < m.qty - 1e-6) {
         where = rest;
         // Two lines: the app's badge does not wrap, so one long line would be cut off on a phone.
-        split = `${WHERE_LABEL.warehouse}: ${crewQty(hq, m.unit, p).count}\n${restLabel}: ${crewQty(r2(m.qty - hq), m.unit, p).count}`;
-      } else where = "warehouse";
+        split = `${offcutLabel(m.id) ?? `${WHERE_LABEL.warehouse}: ${crewQty(hq, m.unit, p).count}`}\n${restLabel}: ${crewQty(r2(m.qty - hq), m.unit, p).count}`;
+      } else {
+        where = "warehouse";
+        split = offcutLabel(m.id);
+      }
     } else where = rest;
     const q = crewQty(m.qty, m.unit, p);
     const product = productName(p, m.description);

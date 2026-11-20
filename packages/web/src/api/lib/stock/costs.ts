@@ -97,6 +97,7 @@ export async function poOverlapLines(jobId: number, poId?: number): Promise<PoOv
       unit: schema.purchaseOrderLines.unit,
       materialId: schema.purchaseOrderLines.jobMaterialId,
       materialQty: schema.jobMaterials.qty,
+      productId: schema.jobMaterials.productId,
       description: schema.purchaseOrderLines.description,
       poId: schema.purchaseOrders.id,
       number: schema.purchaseOrders.number,
@@ -113,11 +114,21 @@ export async function poOverlapLines(jobId: number, poId?: number): Promise<PoOv
         ...(poId != null ? [eq(schema.purchaseOrders.id, poId)] : []),
       ),
     );
+  // Damien, 20 Nov 2026 (underlay offcuts): a roll good is ordered in whole rolls. A 9 m offcut
+  // leaves 11 m² to buy, which is one 12 m roll, so 12 m² on the PO is right, not an overlap.
+  const prodIds = [...new Set(lines.map((l) => l.productId).filter((x): x is number => x != null))];
+  const prods = prodIds.length ? await db.select().from(schema.products).where(inArray(schema.products.id, prodIds)) : [];
+  const { ordersByRoll, rollOrder } = await import("../order-sizes");
+  const wholeRolls = (productId: number | null, unit: string, still: number) => {
+    const p = prods.find((x) => x.id === productId);
+    if (!p || still <= 0 || unit !== p.unit || p.heldInWarehouse || !ordersByRoll(p)) return still;
+    return rollOrder(p, still)?.qty ?? still;
+  };
   const out: PoOverlap[] = [];
   for (const l of lines) {
     const stock = fromStock.get(l.materialId!) ?? 0;
     const still = Math.max(0, Math.round((l.materialQty - stock) * 10_000) / 10_000);
-    if (l.lineQty <= still + 0.0001) continue;
+    if (l.lineQty <= wholeRolls(l.productId, l.unit, still) + 0.0001) continue;
     const u = unitText(l.unit);
     const need = still > 0 ? `Stock now covers ${stock} ${u}, so only ${still} ${u} is still needed.` : `Stock now covers all ${stock} ${u}, so this line is not needed.`;
     const text =

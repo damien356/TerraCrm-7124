@@ -16,6 +16,7 @@ import { HourlyJobCard } from "../components/hourly-job";
 import { JobCashCard } from "../components/job-cash";
 import { PurchaseOrdersCard } from "../components/purchase-orders";
 import { StockPanelCard } from "../components/stock-panel";
+import { MaterialOffcutsRow, useOffcutsOnJob } from "../components/underlay-offcuts";
 import { PaymentTermsCard } from "../components/payment-terms";
 import { ClientInvoicesCard, MaterialSelectionCard } from "../components/client-invoices";
 import { AgreedPriceCard } from "../components/agreed-price";
@@ -340,6 +341,7 @@ export default function JobDetailPage() {
   const delivery = useDeliveryStatus(Number.isFinite(id) ? id : 0);
   const saleQ = useSaleForJob(Number.isFinite(id) ? id : 0);
   const crew = useCrewScope(Number.isFinite(id) ? id : 0);
+  const offcuts = useOffcutsOnJob(Number.isFinite(id) ? id : 0);
 
   // The inbox deep-links straight at the thread: /jobs/12?tab=conversation.
   const searchString = useSearch();
@@ -435,6 +437,10 @@ export default function JobDetailPage() {
                     >
                       <Trash2 className="size-3.5" />
                     </button>
+                    {/* Underlay offcuts (Damien, 20 Nov 2026). Only while the stock switch S1 is on. */}
+                    {offcuts.data?.on ? (
+                      <MaterialOffcutsRow data={offcuts.data.materials.find((x) => x.materialId === m.id)} unit={m.unit} keepMinM={offcuts.data.keepMinM} />
+                    ) : null}
                   </li>
                 ))}
               </ul>

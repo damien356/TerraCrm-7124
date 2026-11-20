@@ -7,6 +7,7 @@ import { Checkbox, Field, Input, Select } from "../components/ui/field";
 import {
   newRequestKey,
   type StockOverview,
+  useApproveItem,
   useOpeningStock,
   useReceivable,
   useReceive,
@@ -89,8 +90,20 @@ function SwitchStrip({ o }: { o: StockOverview }) {
 }
 
 function StockList({ o, q, setQ }: { o: StockOverview; q: string; setQ: (s: string) => void }) {
+  const approve = useApproveItem();
+  const [msg, setMsg] = React.useState<string | null>(null);
+  const approveOne = async (id: number, code: string) => {
+    setMsg(null);
+    try {
+      await approve.mutateAsync({ id });
+      setMsg(`${code} approved. It can now be used.`);
+    } catch (e) {
+      setMsg(errText(e));
+    }
+  };
   return (
     <div className="grid gap-4">
+      {msg ? <p className="text-sm">{msg}</p> : null}
       <Card>
         <CardHeader
           title={`Stock (${o.items.length})`}
@@ -122,7 +135,11 @@ function StockList({ o, q, setQ }: { o: StockOverview; q: string; setQ: (s: stri
                         {it.code}
                       </Link>
                     </td>
-                    <td className="px-4 py-2">{it.product}</td>
+                    <td className="px-4 py-2">
+                      {it.product}
+                      {/* Damien, 20 Nov 2026: underlay offcuts say where they came from. */}
+                      {it.underlayOffcut && it.originJobNumber ? <div className="text-xs text-muted-foreground">Underlay offcut from Job {it.originJobNumber}</div> : null}
+                    </td>
                     <td className="px-4 py-2">{it.batch ?? "unknown"}</td>
                     <td className="px-4 py-2 text-right">
                       {it.qty} {it.unitLabel}
@@ -133,6 +150,11 @@ function StockList({ o, q, setQ }: { o: StockOverview; q: string; setQ: (s: stri
                     <td className="px-4 py-2">
                       {it.status === "to_check" ? "To check" : it.status}
                       {it.condition !== "good" ? ` · ${it.conditionLabel}` : ""}
+                      {it.status === "to_check" && o.perms.approve ? (
+                        <Button size="sm" variant="outline" className="ml-2 h-7" disabled={approve.isPending} onClick={() => approveOne(it.id, it.code)}>
+                          Approve
+                        </Button>
+                      ) : null}
                     </td>
                     <td className="px-4 py-2">{it.location ?? ""}</td>
                     {o.perms.viewCosts ? <td className={`px-4 py-2 ${it.costUnknown || it.costReview ? "text-amber-700" : ""}`}>{it.costLabel}</td> : null}
@@ -428,6 +450,9 @@ function SettingsTab({ o }: { o: StockOverview }) {
           </Field>
           <Field label="Warn before it ends (hours)">
             <Input value={r.warnHours} onChange={(e) => setR({ ...r, warnHours: Number(e.target.value) })} />
+          </Field>
+          <Field label="Underlay: keep offcuts from (m)">
+            <Input value={r.underlayKeepMinM} onChange={(e) => setR({ ...r, underlayKeepMinM: Number(e.target.value) })} />
           </Field>
         </div>
         {admin ? (

@@ -349,14 +349,15 @@ function linesFrom(po: Po | null, data: ForJob, supplierId: number | null): Line
       }));
   }
   return data.materials
-    .filter((m) => !m.onPo && supplierId != null && m.supplierId === supplierId)
+    // Damien, 20 Nov 2026: what stock or an offcut already covers is not ordered again.
+    .filter((m) => !m.onPo && supplierId != null && m.supplierId === supplierId && m.orderQty > 0)
     .map((m) => ({
       key: nextKey(),
       kind: "goods" as const,
       jobMaterialId: m.id,
       productId: m.productId,
       description: m.description,
-      qty: String(m.qty ?? 0),
+      qty: String(m.orderQty),
       unit: m.unit || "m2",
       cost: "",
     }));
@@ -364,7 +365,7 @@ function linesFrom(po: Po | null, data: ForJob, supplierId: number | null): Line
 
 function guessSupplier(data: ForJob): number | null {
   const counts = new Map<number, number>();
-  for (const m of data.materials) if (!m.onPo && m.supplierId) counts.set(m.supplierId, (counts.get(m.supplierId) ?? 0) + 1);
+  for (const m of data.materials) if (!m.onPo && m.orderQty > 0 && m.supplierId) counts.set(m.supplierId, (counts.get(m.supplierId) ?? 0) + 1);
   const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
   return best?.[0] ?? null;
 }
@@ -462,7 +463,7 @@ function PoEditor({
     if (!on) return setLines((ls) => ls.filter((l) => l.jobMaterialId !== m.id));
     setLines((ls) => [
       ...ls,
-      { key: nextKey(), kind: "goods", jobMaterialId: m.id, productId: m.productId, description: m.description, qty: String(m.qty ?? 0), unit: m.unit || "m2", cost: "" },
+      { key: nextKey(), kind: "goods", jobMaterialId: m.id, productId: m.productId, description: m.description, qty: String(m.orderQty), unit: m.unit || "m2", cost: "" },
     ]);
   };
 
@@ -602,14 +603,23 @@ function PoEditor({
                   const line = lines.find((l) => l.jobMaterialId === m.id);
                   const otherPo = m.onPo && m.onPo !== po?.number ? m.onPo : null;
                   const otherSupplier = m.supplierId && m.supplierId !== supplierId ? data.suppliers.find((s) => s.id === m.supplierId)?.name : null;
+                  const fullyStock = m.fromStock > 0 && m.orderQty <= 0;
                   return (
                     <li key={m.id} className="px-3 py-2">
                       <label htmlFor={`po_mat_${m.id}`} className="flex cursor-pointer items-start gap-2.5">
-                        <Checkbox id={`po_mat_${m.id}`} className="mt-0.5" checked={!!line} onChange={(e) => toggleMaterial(m, e.target.checked)} />
+                        <Checkbox
+                          id={`po_mat_${m.id}`}
+                          className="mt-0.5"
+                          checked={!!line}
+                          disabled={fullyStock && !line}
+                          onChange={(e) => toggleMaterial(m, e.target.checked)}
+                        />
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-sm">{m.description}</span>
                           <span className="block text-xs text-muted-foreground">
                             {qtyUnit(m.qty, m.unit)}
+                            {fullyStock ? " · From stock" : m.fromStock > 0 ? ` · order ${qtyUnit(m.orderQty, m.unit)}` : ""}
+                            {m.offcutText ? ` · ${m.offcutText}` : ""}
                             {otherPo ? ` · already on ${otherPo}` : ""}
                             {otherSupplier ? ` · price book: ${otherSupplier}` : ""}
                             {!m.productId ? " · not in the price book" : ""}

@@ -25,7 +25,7 @@ import {
   switches,
   type SwitchKey,
 } from "../lib/stock/core";
-import { approveCount, approveItem, createItem, ITEM_TYPES, itemById, movementsOf, recordCount, setItemCost, writeOff } from "../lib/stock/items";
+import { approveCount, createItem, ITEM_TYPES, itemById, movementsOf, recordCount, setItemCost, writeOff } from "../lib/stock/items";
 import { allocate, availableOn, cutHold, extendHold, holdsOfOrder, holdsOnItem, outstanding, pickHold, releaseHold, replaceItem, takeOut } from "../lib/stock/holds";
 import { bringIntoWorkflow, completePercent, confirmForStock, depositState, kindOfJob, orderOfJob, startPosition, stockLinesOf, switchFor } from "../lib/stock/orders";
 import { recheckAfterPayment, recheckAll, recheckOrder, reserveStatus } from "../lib/stock/recheck";
@@ -35,6 +35,7 @@ import { approveFree, declineFree } from "../lib/stock/remainders";
 import { generalStockValue, jobMaterialTotal } from "../lib/stock/costs";
 import { assertSetUp, conversionText, singular, unitWord } from "../lib/stock/replenish";
 import { jobShortages } from "../lib/stock/shortage";
+import { isUnderlayCategory } from "../lib/order-sizes";
 
 /* ---------------------------------------------------------------------------
  * Warehouse stock (v3 + amendment A1). Thin: every rule, permission tick and
@@ -74,6 +75,10 @@ async function itemView(it: typeof schema.stockItems.$inferSelect, showCost: boo
     costUnknown: it.costStatus === "unknown",
     /** The supplier bill is not the PO amount, or PO freight is not in the cost. Kept at the PO rate, for review. */
     costReview: hasCostFlag(it.purchaseCostNote),
+    /* Damien, 20 Nov 2026: an underlay offcut back from a job shows which job, for the Admin approving it. */
+    originJobId: it.originJobId,
+    originJobNumber: it.originJobId ? ((await db.select({ number: schema.jobs.number }).from(schema.jobs).where(eq(schema.jobs.id, it.originJobId)))[0]?.number ?? null) : null,
+    underlayOffcut: it.type === "remnant" && isUnderlayCategory(p?.category),
   };
 }
 
@@ -191,7 +196,9 @@ export const stock = {
       );
     }),
 
-  approveItem: adminOnly.input(z.object({ id: z.number().int() })).handler(({ input, context }) => approveItem(input.id, context.actor)),
+  // Damien, 20 Nov 2026: approving a returned item from its own page credits the job too, the same as Approve on the list.
+  // creditReturn skips anything that did not come back from a job.
+  approveItem: adminOnly.input(z.object({ id: z.number().int() })).handler(async ({ input, context }) => (await approveReturn(input.id, context.actor)).item),
 
   setCost: adminOnly
     .input(z.object({ id: z.number().int(), unitCost: z.number().positive().nullable(), costStatus: z.enum(["final", "provisional", "estimate", "unknown"]), note: z.string().trim().min(3).max(300) }))
@@ -389,7 +396,7 @@ export const stock = {
     .handler(({ input, context }) => setSwitch(input.key, input.state, context.actor)),
   setCardCheck: adminOnly.input(z.object({ done: z.boolean(), note: z.string().trim().max(300) })).handler(({ input, context }) => setCardCheck(input.done, input.note, context.actor)),
   saveRules: adminOnly
-    .input(z.object({ carpetKeepMinM: z.number().optional(), vinylFreeMaxM: z.number().optional(), holdHours: z.number().optional(), warnHours: z.number().optional() }))
+    .input(z.object({ carpetKeepMinM: z.number().optional(), vinylFreeMaxM: z.number().optional(), holdHours: z.number().optional(), warnHours: z.number().optional(), underlayKeepMinM: z.number().optional() }))
     .handler(({ input }) => saveStockRules(input)),
   permissions: adminOnly.handler(async () => {
     const people = await db.select().from(schema.profiles).where(and(eq(schema.profiles.active, true), isNull(schema.profiles.archivedAt)));

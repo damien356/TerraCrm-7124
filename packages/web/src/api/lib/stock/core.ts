@@ -122,14 +122,15 @@ function parse<T>(raw: string | null, fallback: T): T {
   }
 }
 
-export type StockRules = { carpetKeepMinM: number; vinylFreeMaxM: number; holdHours: number; warnHours: number };
-export const DEFAULT_RULES: StockRules = { carpetKeepMinM: 2.7, vinylFreeMaxM: 2, holdHours: 48, warnHours: 4 };
+/** underlayKeepMinM: underlay offcuts this long or longer go back into stock (Damien, 20 Nov 2026). */
+export type StockRules = { carpetKeepMinM: number; vinylFreeMaxM: number; holdHours: number; warnHours: number; underlayKeepMinM: number };
+export const DEFAULT_RULES: StockRules = { carpetKeepMinM: 2.7, vinylFreeMaxM: 2, holdHours: 48, warnHours: 4, underlayKeepMinM: 2 };
 export const RULES_KEY = "stock_rules";
 export const stockRules = async () => parse<StockRules>(await readSetting(RULES_KEY), DEFAULT_RULES);
 export async function saveStockRules(r: Partial<StockRules>) {
   const next = { ...(await stockRules()), ...r };
-  if (!(next.carpetKeepMinM > 0 && next.vinylFreeMaxM >= 0 && next.holdHours >= 1 && next.warnHours >= 0 && next.warnHours < next.holdHours)) {
-    throw bad("Check the stock rules: cutoffs over 0, hold at least 1 hour, warning shorter than the hold.");
+  if (!(next.carpetKeepMinM > 0 && next.underlayKeepMinM > 0 && next.vinylFreeMaxM >= 0 && next.holdHours >= 1 && next.warnHours >= 0 && next.warnHours < next.holdHours)) {
+    throw bad("Check the stock rules: cutoffs over 0 (carpet and underlay offcuts), hold at least 1 hour, warning shorter than the hold.");
   }
   await writeSetting(RULES_KEY, JSON.stringify(next));
   return next;
